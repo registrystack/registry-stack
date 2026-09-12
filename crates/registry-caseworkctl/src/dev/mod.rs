@@ -10,6 +10,8 @@ mod private;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use config::principal as local_principal;
+
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;
@@ -472,8 +474,9 @@ fn bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
 }
 
 #[derive(Debug)]
-/// Everything the retained session is pinned to: the authored policy the
-/// supervised runtime serves, and the local clients bound to it.
+/// Everything the retained session is pinned to: the authored policy and
+/// imported source descriptions the supervised runtime serves, and the local
+/// clients bound to them.
 struct Captured {
     clients: Clients,
     digest: String,
@@ -547,6 +550,12 @@ fn capture(
     for bytes in [project_bytes.as_slice(), client_bytes] {
         hasher.update((bytes.len() as u64).to_be_bytes());
         hasher.update(bytes);
+    }
+    for source in &policy.sources {
+        let path = crate::project::project_input_path(project, &source.description)?;
+        let description = bounded(&path, &format!("source description {}", source.id))?;
+        hasher.update((description.len() as u64).to_be_bytes());
+        hasher.update(description);
     }
     // Records retained for one registry project must not be served over
     // another: the registry each source binds is part of the pinned inputs.

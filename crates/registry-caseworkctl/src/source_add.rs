@@ -749,14 +749,18 @@ fn human_dev_client(
         let authority = authority.context(
             "a Casework staff or supervisor dev client has no reviewer authority to bind",
         )?;
-        let principal = claims
-            .get(casework_principal_claim)
-            .cloned()
-            .with_context(|| {
-                format!(
-                    "Casework dev client {id} has no string value for its configured principal claim"
-                )
-            })?;
+        let principal = if casework_principal_claim == "sub" {
+            crate::dev::local_principal(id)
+        } else {
+            claims
+                .get(casework_principal_claim)
+                .cloned()
+                .with_context(|| {
+                    format!(
+                        "Casework dev client {id} has no string value for its configured principal claim"
+                    )
+                })?
+        };
         match claims.get(READER_PRINCIPAL_CLAIM) {
             Some(existing) if existing != &principal => bail!(
                 "Casework dev client {id} sets a BReg reviewer principal that conflicts with its configured Casework principal"
@@ -920,6 +924,20 @@ fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Va
     }
     if existing.len() > MAX_BREG_DEV_CLIENTS {
         bail!("merged BReg dev-clients.yaml exceeds the local clients v1 32-client bound");
+    }
+    let mut bound_profiles = BTreeSet::new();
+    for client in existing {
+        let profiles = client["accessProfiles"]
+            .as_array()
+            .context("each BReg dev client must declare accessProfiles as an array")?;
+        for profile in profiles {
+            let profile = profile
+                .as_str()
+                .context("each BReg dev client access profile must be a string")?;
+            if !bound_profiles.insert(profile) {
+                bail!("BReg access profile {profile} is bound to more than one local client");
+            }
+        }
     }
     Ok(Value::Array(changes))
 }
@@ -1459,6 +1477,32 @@ mod tests {
     }
 
     #[test]
+    fn dev_clients_plan_refuses_a_duplicate_breg_profile_binding() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = serde_json::to_vec(&json!({
+            "version": 1,
+            "clients": [{
+                "id": "existing-reader",
+                "accessProfiles": [READER_CLIENT_ID],
+                "scopes": [READER_SCOPE],
+                "claims": {}
+            }]
+        }))
+        .unwrap();
+        let path = registry.path().join("dev-clients.yaml");
+        fs::write(&path, &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        let error = plan_breg_dev_clients(registry.path(), &project, &authored, &request)
+            .expect_err("one BReg access profile cannot bind two local clients");
+        assert!(format!("{error:#}").contains(READER_CLIENT_ID));
+        assert_eq!(fs::read(path).unwrap(), original);
+    }
+
+    #[test]
     fn dev_clients_plan_registers_requester_with_no_breg_authority() {
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("project");
@@ -1762,6 +1806,26 @@ mod tests {
         assert!(message.contains("staff"), "{message}");
         assert!(!message.contains("employee-123"), "{message}");
         assert!(!message.contains("other-person"), "{message}");
+    }
+
+    #[test]
+    fn human_dev_client_derives_the_mint_subject_for_breg_review() {
+        let authority = ReviewerAuthority {
+            scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
+            purpose: None,
+        };
+        let client = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"registry_actor_kind":"human"}
+        });
+
+        let merged = human_dev_client(&client, "staff", "sub", Some(&authority)).unwrap();
+        assert_eq!(
+            merged["claims"][READER_PRINCIPAL_CLAIM],
+            crate::dev::local_principal("staff")
+        );
+        assert!(merged["claims"].get("sub").is_none());
     }
 
     #[test]

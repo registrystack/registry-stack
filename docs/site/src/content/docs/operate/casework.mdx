@@ -169,8 +169,9 @@ mode that serves an authored project with no manifest beside it. Apply HSTS on t
 responses; the runtime adds its remaining security headers and `Cache-Control: no-store` to every
 response it returns.
 
-`scopeClaim` defaults to `scope`, matching Registry Mint and Registry Stack local development, and
-carries every required scope for the selected profile. `humanIdentity` defaults to the claim
+`scopeClaim` defaults to `registry_scopes` for compatibility with earlier deployments. When the
+issuer is Registry Mint, set `scopeClaim: scope` explicitly so its OAuth `scope` values carry every
+required scope for the selected profile. `humanIdentity` defaults to the claim
 `registry_actor_kind` with the value `human`, must
 differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
 Each access profile names its own `principalClaim`; there is no runtime-wide principal claim.

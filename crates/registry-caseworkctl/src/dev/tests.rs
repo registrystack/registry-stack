@@ -546,6 +546,7 @@ fn a_project_declaring_sources_needs_a_registry_project_for_each() {
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
+    describe_professional_register(&project);
     let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
     let refusal = format!(
         "{:#}",
@@ -1028,6 +1029,36 @@ fn the_source_digest_pins_the_project_and_its_clients() {
 }
 
 #[test]
+fn the_source_digest_pins_imported_source_descriptions() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    describe_professional_register(&project);
+    let registry = root.path().join("registry");
+    fs::create_dir(&registry).unwrap();
+    let source = [registry.display().to_string()];
+    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let first = capture(&project, &clients, &source, &BTreeMap::new())
+        .unwrap()
+        .digest;
+
+    let description_path = project.join("sources/professional-register.json");
+    let mut description: Value =
+        serde_json::from_slice(&fs::read(&description_path).unwrap()).unwrap();
+    description["sourceRevision"] = json!("sha256:changed-source-revision");
+    fs::write(&description_path, serde_json::to_vec(&description).unwrap()).unwrap();
+    assert_ne!(
+        first,
+        capture(&project, &clients, &source, &BTreeMap::new())
+            .unwrap()
+            .digest
+    );
+
+    fs::remove_file(&description_path).unwrap();
+    assert!(capture(&project, &clients, &source, &BTreeMap::new()).is_err());
+}
+
+#[test]
 fn redaction_hides_every_run_of_a_secret() {
     let secret = b"pa55word-long-enough";
     let hidden = redact(
@@ -1345,6 +1376,7 @@ fn an_active_source_backed_session_refuses_a_recreated_registry_session() {
     let workspace = tempfile::tempdir().unwrap();
     let project = workspace.path().join("project");
     crate::project::init(&project, "professional-review").unwrap();
+    describe_professional_register(&project);
     let project = fs::canonicalize(project).unwrap();
     let registry = RegistrySession::new();
     let clients_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();

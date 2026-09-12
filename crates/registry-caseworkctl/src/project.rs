@@ -592,7 +592,7 @@ fn read_package_input(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).with_context(|| format!("reading package input {}", path.display()))
 }
 
-fn project_input_path(project: &Path, relative: &str) -> Result<PathBuf> {
+pub(super) fn project_input_path(project: &Path, relative: &str) -> Result<PathBuf> {
     let path = Path::new(relative);
     if relative.is_empty()
         || path.is_absolute()

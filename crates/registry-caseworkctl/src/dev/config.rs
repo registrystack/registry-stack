@@ -322,7 +322,7 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
 
 /// The Mint principal a local client speaks as. It is a local teaching
 /// identity, never a deployment identity.
-pub(super) fn principal(client_id: &str) -> String {
+pub(crate) fn principal(client_id: &str) -> String {
     format!("urn:casework:dev:{client_id}")
 }
 
