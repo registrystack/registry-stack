@@ -20,7 +20,7 @@ use thiserror::Error;
 use tokio_postgres::{Config as PgConfig, Row};
 use uuid::Uuid;
 
-use crate::DatabaseConfig;
+use crate::{describe_secret_failure, DatabaseConfig};
 
 const MIGRATION: &str = include_str!("../migrations/0001_casework.sql");
 const HOSTED_MIGRATION: &str = include_str!("../migrations/0002_hosted_casework.sql");
@@ -102,24 +102,35 @@ impl PostgresStore {
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
-        Self::connect_reference(config, secrets, &config.runtime_url_ref)
+        Self::connect_reference(
+            config,
+            secrets,
+            "database.runtimeUrlRef",
+            &config.runtime_url_ref,
+        )
     }
 
     pub fn connect_migration(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
     ) -> Result<Self, StoreError> {
-        Self::connect_reference(config, secrets, &config.migration_url_ref)
+        Self::connect_reference(
+            config,
+            secrets,
+            "database.migrationUrlRef",
+            &config.migration_url_ref,
+        )
     }
 
     fn connect_reference(
         config: &DatabaseConfig,
         secrets: &SecretResolver,
+        field: &'static str,
         reference: &str,
     ) -> Result<Self, StoreError> {
-        let protected = secrets
-            .resolve(reference)
-            .map_err(|_| StoreError::Configuration)?;
+        let protected = secrets.resolve(reference).map_err(|error| {
+            StoreError::SecretConfiguration(describe_secret_failure(field, reference, &error))
+        })?;
         let url = std::str::from_utf8(protected.expose_secret())
             .map_err(|_| StoreError::Configuration)?;
         let mut postgres = PgConfig::from_str(url).map_err(|_| StoreError::Configuration)?;
@@ -2854,9 +2865,13 @@ fn tls_connector(
         return Err(StoreError::Configuration);
     }
     if let Some(reference) = &config.trusted_root_certificate_ref {
-        let certificate = secrets
-            .resolve(reference)
-            .map_err(|_| StoreError::Configuration)?;
+        let certificate = secrets.resolve(reference).map_err(|error| {
+            StoreError::SecretConfiguration(describe_secret_failure(
+                "database.trustedRootCertificateRef",
+                reference,
+                &error,
+            ))
+        })?;
         let mut roots = rustls::RootCertStore::empty();
         use rustls::pki_types::pem::PemObject as _;
         let mut count = 0usize;
@@ -3562,6 +3577,8 @@ impl From<serde_json::Error> for AttemptSettlementError {
 pub enum StoreError {
     #[error("the Casework database configuration is invalid")]
     Configuration,
+    #[error("the Casework database configuration is invalid: {0}")]
+    SecretConfiguration(String),
     #[error("the Casework database is unavailable")]
     Unavailable,
     #[error("the requested resource was not found")]

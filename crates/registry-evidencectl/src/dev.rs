@@ -1026,6 +1026,8 @@ fn start_detached(
 
     recover_retained_stopped_session(&project, &dev_root, &retained_root)?;
 
+    preflight_retained_stopped_session(&project, &dev_root, &retained_root)?;
+
     // A refused restart must leave the stopped session intact so its selected
     // ports remain available to the next attempt. The services bind again
     // after this probe, so this is an actionable preflight rather than a lock.
@@ -1145,6 +1147,7 @@ fn retain_completed_dev_root(
         Ok(_) => bail!("a retained stopped session already exists from an interrupted restart"),
         Err(error) => return Err(error.into()),
     }
+    validate_removable_tree(dev_root)?;
     fs::rename(dev_root, retained_root).context("failed to retain the stopped local session")?;
     sync_directory(
         dev_root
@@ -1152,6 +1155,27 @@ fn retain_completed_dev_root(
             .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
     )?;
     Ok(true)
+}
+
+/// Prove that a stopped session can be retained and removed before a restart
+/// crosses either the listener or process boundary.
+fn preflight_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => validate_private_directory_metadata(dev_root, &metadata)?,
+        Err(error) => return Err(error).context("failed to inspect local development state"),
+    }
+    validate_completed_dev_root(project, dev_root)?;
+    match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("a retained stopped session already exists from an interrupted restart"),
+        Err(error) => return Err(error.into()),
+    }
+    validate_removable_tree(dev_root)
 }
 
 fn recover_retained_stopped_session(
@@ -2440,6 +2464,11 @@ fn cleanup_new_dev_root(dev_root: &Path) -> Result<()> {
 }
 
 fn make_tree_removable(root: &Path) -> Result<()> {
+    validate_removable_tree(root)?;
+    make_validated_tree_removable(root)
+}
+
+fn validate_removable_tree(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -2448,7 +2477,24 @@ fn make_tree_removable(root: &Path) -> Result<()> {
             bail!("incomplete local state contains a symlink");
         }
         if metadata.is_dir() {
-            make_tree_removable(&path)?;
+            validate_removable_tree(&path)?;
+        } else if !metadata.is_file() {
+            bail!("incomplete local state contains an unexpected entry");
+        }
+    }
+    Ok(())
+}
+
+fn make_validated_tree_removable(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        require_owner(&metadata, "incomplete local state")?;
+        if metadata.file_type().is_symlink() {
+            bail!("incomplete local state contains a symlink");
+        }
+        if metadata.is_dir() {
+            make_validated_tree_removable(&path)?;
             fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
         } else if metadata.is_file() {
             fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
@@ -2662,6 +2708,29 @@ mod tests {
         let link = root.path().join("link");
         symlink(&private, &link).expect("symlink");
         assert!(validate_private_directory(&link).is_err());
+    }
+
+    #[test]
+    fn removable_tree_never_follows_a_symlink_outside_its_root() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path().join("retained");
+        create_private_directory(&root).expect("retained root");
+        let outside = temporary.path().join("outside");
+        drop(create_private_file(&outside).expect("outside file"));
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o400))
+            .expect("seal outside file");
+        symlink(&outside, root.join("planted-link")).expect("planted symlink");
+
+        assert!(make_tree_removable(&root).is_err());
+        assert_eq!(
+            fs::metadata(&outside)
+                .expect("outside metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400,
+            "a rejected tree must not chmod a symlink target"
+        );
     }
 
     #[test]

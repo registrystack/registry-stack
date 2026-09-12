@@ -6,13 +6,55 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject};
-use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
+use registry_platform_config::{
+    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+};
 use registry_platform_oidc::{
     fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
+
+/// Explain one refused secret reference without disclosing what it protects.
+///
+/// A startup refusal reaches an operator as a single line, and the resolver
+/// reports only which rule broke. A valid reference is safe and useful to name,
+/// but invalid operator-authored text might itself be a literal credential, so
+/// only its field is named. The resolved bytes and opened path never appear.
+pub(crate) fn describe_secret_failure(
+    field: &'static str,
+    reference: &str,
+    error: &SecretError,
+) -> String {
+    let reason = match error {
+        SecretError::InvalidReference => {
+            "it is not an exact secret:env/NAME or secret:file/name reference".to_owned()
+        }
+        SecretError::ProviderDisabled => "its provider is not enabled for this runtime".to_owned(),
+        SecretError::InvalidProviderConfiguration => {
+            "the secret provider configuration is invalid".to_owned()
+        }
+        SecretError::Unavailable => {
+            "no readable secret of that name exists under the configured provider".to_owned()
+        }
+        SecretError::UnsafeFile => concat!(
+            "the secret file must be a regular file owned by the runtime user, ",
+            "with mode 0400 or 0600, and exactly one hard link"
+        )
+        .to_owned(),
+        SecretError::Read => "the secret could not be read".to_owned(),
+        SecretError::InvalidValue => format!(
+            "the secret value must be non-empty text of at most {MAX_SECRET_BYTES} bytes \
+             without NUL bytes"
+        ),
+    };
+    if error == &SecretError::InvalidReference {
+        format!("the secret reference configured at {field} could not be resolved: {reason}")
+    } else {
+        format!("the secret reference {reference} could not be resolved: {reason}")
+    }
+}
 
 pub const POLICY_PACKAGE_API_VERSION: &str =
     "registry.registrystack.org/casework-policy-package/v1alpha1";
@@ -635,9 +677,13 @@ impl RuntimeConfig {
                 JwksFetcher::new(discovery.jwks_uri, JwksFetcherConfig::defaults())
             }
             OidcJwksSource::Static { document_ref } => {
-                let document = secrets
-                    .resolve(document_ref)
-                    .map_err(|_| RuntimeConfigError::Oidc)?;
+                let document = secrets.resolve(document_ref).map_err(|error| {
+                    RuntimeConfigError::OidcJwksSecret(describe_secret_failure(
+                        "authentication.oidc.jwksSource.documentRef",
+                        document_ref,
+                        &error,
+                    ))
+                })?;
                 let jwks = parse_static_jwks(document.expose_secret())?;
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
@@ -798,8 +844,12 @@ sources:
     }
 
     fn operator_document(package: &Path, tls: &str) -> String {
+        serde_norway::to_string(&operator_value(package, tls)).unwrap()
+    }
+
+    fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
         let root = package.parent().expect("package parent");
-        serde_norway::to_string(&serde_json::json!({
+        serde_json::json!({
             "apiVersion": RUNTIME_CONFIG_API_VERSION,
             "kind": RUNTIME_CONFIG_KIND,
             "package": {"root": package},
@@ -823,8 +873,7 @@ sources:
                 "webhookSecretRef": "secret:file/webhook",
                 "eventSource": "urn:registrystack:registry:professional:instance:pilot"
             }}
-        }))
-        .unwrap()
+        })
     }
 
     #[test]
@@ -836,6 +885,82 @@ sources:
         for invalid in [br#"{}"#.as_slice(),br#"{"keys":[]}"#,br#"{"keys":[{"kty":"oct","kid":"one","k":"AA"}]}"#,br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"},{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,b"not-json"] {
             assert!(parse_static_jwks(invalid).is_err());
         }
+    }
+
+    /// The commented alternative in the operator example must be loadable
+    /// exactly as written, and its refusal must name the reference an operator
+    /// has to go and fix.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_static_jwks_source_loads_and_names_its_reference_when_refused() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let secrets_root = root.path().join("secrets");
+        std::fs::create_dir(&secrets_root).unwrap();
+        std::fs::write(
+            secrets_root.join("jwks.json"),
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            secrets_root.join("jwks.json"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .unwrap();
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+        let operator = root.path().join("operator.yaml");
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+
+        let mut config = RuntimeConfig::load(&operator).expect("static JWKS source is accepted");
+        assert!(matches!(
+            &config.authentication.oidc.jwks_source,
+            OidcJwksSource::Static { document_ref } if document_ref == "secret:file/jwks.json"
+        ));
+
+        let secrets = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            &secrets_root,
+        )
+        .unwrap();
+        let message = config
+            .oidc_verifier(&secrets)
+            .await
+            .map(|_| ())
+            .expect_err("a group-readable JWKS document is refused")
+            .to_string();
+        assert!(
+            message.contains("secret:file/jwks.json") && message.contains("0400 or 0600"),
+            "the failure does not name the reference and the mode rule: {message}"
+        );
+
+        let literal_secret = "literal-jwks-credential-canary";
+        let OidcJwksSource::Static { document_ref } = &mut config.authentication.oidc.jwks_source
+        else {
+            panic!("configured static JWKS source changed kind")
+        };
+        *document_ref = literal_secret.to_owned();
+        let message = config
+            .oidc_verifier(&secrets)
+            .await
+            .map(|_| ())
+            .expect_err("a literal credential is not a secret reference")
+            .to_string();
+        assert!(
+            message.contains("authentication.oidc.jwksSource.documentRef")
+                && message.contains("secret:env/NAME or secret:file/name"),
+            "the failure does not name the field and reference grammar: {message}"
+        );
+        assert!(
+            !message.contains(literal_secret),
+            "the failure renders the literal credential: {message}"
+        );
     }
 
     #[test]
@@ -1146,6 +1271,8 @@ pub enum RuntimeConfigError {
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
+    #[error("the static OIDC signing keys could not be loaded: {0}")]
+    OidcJwksSecret(String),
 }
 
 impl RuntimeConfigError {
@@ -1161,6 +1288,7 @@ impl RuntimeConfigError {
             Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
             Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
+            Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
             Self::InvalidListener => "listener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",

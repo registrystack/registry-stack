@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///
@@ -24,7 +24,7 @@ pub(crate) const DELEGATED_RUN_DEADLINE: Duration = Duration::from_secs(600);
 ///
 /// The runtime prints one line and exits, so thirty seconds bounds a binary
 /// that hangs before evidencectl has handed it any work.
-const VERSION_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const VERSION_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The most `evidence --version` may print before evidencectl stops reading.
 ///
@@ -34,6 +34,19 @@ const MAX_VERSION_OUTPUT_BYTES: u64 = 64 * 1024;
 
 /// How often a delegated run is checked while it is still running.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+#[derive(Debug)]
+pub(crate) struct DelegatedRunBoundError {
+    message: String,
+}
+
+impl std::fmt::Display for DelegatedRunBoundError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DelegatedRunBoundError {}
 
 /// Resolve an explicit binary, `EVIDENCE_BIN`, or the first executable on
 /// `PATH`, in that order.
@@ -78,6 +91,15 @@ fn operational_error(message: impl Into<String>) -> anyhow::Error {
 pub(crate) fn resolve_matching(explicit: Option<&Path>) -> Result<PathBuf> {
     let evidence_bin = resolve(explicit)?;
     ensure_matching_version(&evidence_bin)?;
+    Ok(evidence_bin)
+}
+
+pub(crate) fn resolve_matching_within(
+    explicit: Option<&Path>,
+    deadline: Duration,
+) -> Result<PathBuf> {
+    let evidence_bin = resolve(explicit)?;
+    ensure_matching_version_within(&evidence_bin, deadline)?;
     Ok(evidence_bin)
 }
 
@@ -171,11 +193,17 @@ pub(crate) fn wait_bounded(
         }
         if over_limit() {
             terminate_child(child);
-            bail!("{what} output exceeded its byte limit");
+            return Err(DelegatedRunBoundError {
+                message: format!("{what} output exceeded its byte limit"),
+            }
+            .into());
         }
         if started.elapsed() > deadline {
             terminate_child(child);
-            bail!("{what} did not finish within its {deadline:?} deadline");
+            return Err(DelegatedRunBoundError {
+                message: format!("{what} did not finish within its {deadline:?} deadline"),
+            }
+            .into());
         }
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -199,7 +227,10 @@ pub(crate) fn drain_capture(file: &mut File, limit: u64, what: &str) -> Result<V
     file.rewind()?;
     file.take(limit + 1).read_to_end(&mut captured)?;
     if captured.len() as u64 > limit {
-        bail!("{what} output exceeded its byte limit");
+        return Err(DelegatedRunBoundError {
+            message: format!("{what} output exceeded its byte limit"),
+        }
+        .into());
     }
     Ok(captured)
 }

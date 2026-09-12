@@ -75,17 +75,23 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         let binding = config
             .sources
             .get(&source.id)
-            .ok_or(RuntimeError::SourceConfiguration)?;
+            .ok_or_else(|| RuntimeError::SourceConfiguration(source.id.clone()))?;
         let adapter = binding
             .build_adapter(source, project_root, &secrets)
-            .map_err(|_| RuntimeError::SourceConfiguration)?;
+            .map_err(|_| RuntimeError::SourceConfiguration(source.id.clone()))?;
         store
             .register_source_generation(&source.id, adapter.binding_generation())
             .await?;
         adapters.push(Arc::new(adapter));
     }
     if config.sources.len() != adapters.len() {
-        return Err(RuntimeError::SourceConfiguration);
+        let unmatched = config
+            .sources
+            .keys()
+            .find(|id| !project.sources.iter().any(|source| &&source.id == id))
+            .cloned()
+            .unwrap_or_default();
+        return Err(RuntimeError::SourceConfiguration(unmatched));
     }
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
@@ -97,9 +103,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     ));
     let service = CaseworkService::new(store.clone(), project.clone(), adapters)?;
 
-    let audit_secret = secrets
-        .resolve(&config.audit.hash_key_ref)
-        .map_err(|_| RuntimeError::Audit)?;
+    let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
@@ -274,6 +278,24 @@ async fn worker_stop(mut stopped: mpsc::Receiver<&'static str>) {
     }
 }
 
+/// Resolve the audit journal's keying secret, naming the reference on refusal.
+///
+/// The journal is keyed before the listener binds, so this refusal is the
+/// first line an operator sees on a mis-provisioned deployment. It carries a
+/// valid configured reference and the rule that broke, never the key bytes.
+fn resolve_audit_secret(
+    secrets: &SecretResolver,
+    reference: &str,
+) -> Result<registry_platform_config::ProtectedSecret, RuntimeError> {
+    secrets.resolve(reference).map_err(|error| {
+        RuntimeError::AuditSecret(crate::describe_secret_failure(
+            "audit.hashKeyRef",
+            reference,
+            &error,
+        ))
+    })
+}
+
 pub fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver, RuntimeError> {
     let mut providers = Vec::new();
     if config.secret_providers.file.is_some() {
@@ -439,6 +461,60 @@ mod tests {
 
     use super::*;
     use crate::service::AuditPublisherHealth;
+
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_audit_secret_names_its_reference_and_the_rule_it_broke() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().expect("temporary secret root");
+        std::fs::write(root.path().join("casework-audit-key"), b"key-material")
+            .expect("write audit secret");
+        std::fs::set_permissions(
+            root.path().join("casework-audit-key"),
+            std::fs::Permissions::from_mode(0o644),
+        )
+        .expect("set mode");
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
+
+        let error = resolve_audit_secret(&secrets, "secret:file/casework-audit-key")
+            .expect_err("a group-readable audit secret is refused");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("secret:file/casework-audit-key"),
+            "the failure does not name the reference: {message}"
+        );
+        assert!(
+            message.contains("0400 or 0600"),
+            "the failure does not name the mode rule: {message}"
+        );
+        assert!(
+            !message.contains("key-material"),
+            "the failure echoes the resolved secret: {message}"
+        );
+    }
+
+    #[test]
+    fn a_literal_audit_secret_is_redacted_while_the_field_and_grammar_are_named() {
+        let root = tempfile::tempdir().expect("temporary secret root");
+        let secrets = SecretResolver::new([SecretProvider::File], root.path()).expect("resolver");
+        let literal_secret = "literal-audit-credential-canary";
+
+        let error = resolve_audit_secret(&secrets, literal_secret)
+            .expect_err("a literal credential is not a secret reference");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("audit.hashKeyRef")
+                && message.contains("secret:env/NAME or secret:file/name"),
+            "the failure does not name the field and reference grammar: {message}"
+        );
+        assert!(
+            !message.contains(literal_secret),
+            "the failure renders the literal credential: {message}"
+        );
+    }
 
     struct FakeAuditPublisher {
         state: Mutex<FakeAuditPublisherState>,
@@ -750,12 +826,17 @@ pub enum RuntimeError {
     Config(#[from] crate::RuntimeConfigError),
     #[error("the Casework project is invalid")]
     Project(#[from] registry_casework_core::ConfigLoadError),
-    #[error("the Casework secret-provider configuration is invalid")]
+    #[error(
+        "the Casework secret-provider configuration is invalid; \
+         secretProviders.file.root must be an absolute path"
+    )]
     SecretConfiguration,
-    #[error("the Casework source binding is invalid")]
-    SourceConfiguration,
+    #[error("the Casework source binding for source {0} is invalid")]
+    SourceConfiguration(String),
     #[error("the Casework audit journal could not be initialized")]
     Audit,
+    #[error("the Casework audit journal could not be initialized: {0}")]
+    AuditSecret(String),
     #[error(transparent)]
     Store(#[from] crate::StoreError),
     #[error(transparent)]

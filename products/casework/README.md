@@ -69,11 +69,19 @@ rejected values.
 
 A human Staff or Supervisor profile listed by the hosted kind uses the existing
 work-item list, read, claim, and release routes without a source-profile header,
-reads the retained hosted lifecycle history including requester notes, then
-posts a declared outcome to the hosted-decision route. Current team service is
-also required. Casework pins the kind version, policy digest, display, and
-outcome vocabulary when it accepts the item, so a later configuration change
-does not rewrite existing work.
+reads the retained hosted lifecycle history including requester notes through
+`GET /v1/work-items/{itemId}/hosted-history`, then posts a declared outcome to
+the hosted-decision route. Current team service is also required. Casework pins
+the kind version, policy digest, display, and outcome vocabulary when it accepts
+the item, so a later configuration change does not rewrite existing work.
+
+`GET /v1/work-items/{itemId}/history` is the separate source-scoped history
+read. It requires a `Registry-Source-Profile` header and answers from the
+source, so hosted work has no usable answer there and a call without that
+header returns `request.invalid` with HTTP 400. `hosted-history` is the
+staff-readable route for hosted work and refuses a source-profile header for the
+same reason. A profile with no source, such as every profile in the
+`standalone-decision` starter, therefore reads `hosted-history`.
 
 Requester terminal results are ordered by terminal time and stable event id.
 Each result is either a completed outcome with an opaque `actorRef`, or a
@@ -314,15 +322,24 @@ Casework. Activating a new package does not rewrite running clock occurrences;
 each keeps its pinned clock policy and calculation. Holiday changes use the
 Administrator preview-and-apply flow described above.
 
-After the operator supplies the separate runtime configuration and credentials,
-the local workflow is:
+The source-backed starter cannot run under `caseworkctl dev`: every declared
+source needs a running source system and a reader credential that the local
+supervisor cannot create. Follow
+[Deploy Registry Casework](../../docs/site/src/content/docs/operate/casework.mdx)
+to install the package, runtime configuration, and credentials. The deployment
+runtime applies migrations and serves the package through the `casework`
+binary:
 
 ```sh
-caseworkctl db migrate ./casework --runtime-config ./casework/runtime.yaml
-caseworkctl dev start ./casework --runtime-config ./casework/runtime.yaml
-caseworkctl doctor --runtime-config /absolute/path/to/casework/runtime.yaml
-caseworkctl dev events ./casework
-caseworkctl dev stop ./casework
+casework --runtime-config /etc/registry-casework/runtime.yaml migrate
+casework --runtime-config /etc/registry-casework/runtime.yaml serve
+```
+
+After the Administrator establishes the directory, check the same deployed
+package and runtime configuration:
+
+```sh
+caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
 Doctor distinguishes configuration, database, source, issuer, and directory
@@ -337,6 +354,24 @@ Each provider is explicitly enabled. A `secret:env/NAME` reference resolves
 only when `secretProviders.environment: {}` is also declared. The maintained
 example is [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml);
 the complete field contract is in [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md).
+
+Every credential in the runtime file is an exact `secret:env/NAME` or
+`secret:file/name` reference. Casework reads no other form and accepts no
+inline value. A file reference names one path component under
+`secretProviders.file.root`, and the opened file must be a regular file owned by
+the runtime user, with mode `0400` or `0600`, and exactly one hard link. Every
+resolved value, from either provider, must be non-empty text of at most 64 KiB
+containing no NUL byte, so binary key material has to be encoded as text before
+it is stored. Generate the audit journal secret as hexadecimal text:
+
+```sh
+umask 077
+printf '%s' "$(openssl rand -hex 32)" > secrets/casework-audit-key
+chmod 0400 secrets/casework-audit-key
+```
+
+A refused reference names itself and the rule it broke. It never carries the
+resolved value.
 
 The `casework` runtime serves plain HTTP behind operator-controlled TLS
 termination. Runtime configuration must declare
@@ -379,6 +414,25 @@ claim is refused for a human role even when the token has valid Casework scopes
 and names a directory member. Casework does not infer a human actor from a
 subject, client identifier, or scope. This boundary relies on the configured
 trusted issuer to classify sessions correctly.
+
+`authentication.oidc.jwksSource` defaults to discovery: Casework reads the
+issuer's metadata document at startup and follows its `jwks_uri`. Declare the
+static alternative instead when the runtime cannot reach that document, when the
+deployment is air-gapped, or when a test issuer's keys are pinned by hand:
+
+```yaml
+authentication:
+  oidc:
+    jwksSource:
+      kind: static
+      documentRef: secret:file/jwks.json
+```
+
+The referenced document is an ordinary JWKS holding uniquely named asymmetric
+keys. A symmetric key, an empty key set, a missing or repeated `kid`, and a
+document that is not JSON are all refused at startup. A static source performs
+no rotation of its own, so rolling a signing key means replacing the referenced
+document and restarting Casework.
 
 The generated source reader has only BReg `get` and `list`, reads the target
 record reference plus explicitly configured routing and display reference

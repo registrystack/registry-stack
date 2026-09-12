@@ -1633,13 +1633,14 @@ jobs:
               sha256sum -- \
                 "casework-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 "caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
+                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 > SHA256SUMS
             )
             casework_install_dir="${RUNNER_TEMP}/candidate-casework-install"
             CASEWORK_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
             CASEWORK_INSTALL_DIR="${casework_install_dir}" \
               bash "candidate/bundle-root/${casework_installer}"
-            for casework_binary in casework caseworkctl; do
+            for casework_binary in casework caseworkctl mint; do
               observed="$("${casework_install_dir}/${casework_binary}" --version)"
               test "${observed}" = \
                 "${casework_binary} ${{ needs.validate.outputs.version }}"

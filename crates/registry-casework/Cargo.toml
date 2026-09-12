@@ -56,6 +56,7 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+jsonschema.workspace = true
 registry-casework-client.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true

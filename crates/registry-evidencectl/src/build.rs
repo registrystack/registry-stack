@@ -149,13 +149,19 @@ impl TargetGovernance {
 
 pub(crate) fn run_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
-    run_inner(args, &interruption, format)
+    run_inner(args, &interruption, format, false)
+}
+
+pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
+    let interruption = BuildInterruption::install()?;
+    run_inner(args, &interruption, format, true)
 }
 
 fn run_inner(
     args: BuildArgs,
     interruption: &BuildInterruption,
     format: OutputFormat,
+    require_deployable_assurance: bool,
 ) -> Result<ExitCode> {
     interruption.check()?;
     reject_existing_output(&args.output)?;
@@ -172,6 +178,21 @@ fn run_inner(
         bail!("candidate output must remain outside the editable project");
     }
     let target = read_target_documents(&args.target)?;
+    if require_deployable_assurance
+        && target
+            .governed_bundle
+            .get("assuranceProfile")
+            .and_then(Value::as_str)
+            == Some("local")
+    {
+        return Err(TargetDocumentDiagnostic {
+            code: "evidence.package.production-profile-required",
+            path: "governance.yaml:/assuranceProfile".to_owned(),
+            message:
+                "evidencectl package requires a production or evidence-grade deployment target",
+        }
+        .into());
+    }
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
     interruption.check()?;

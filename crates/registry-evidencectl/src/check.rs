@@ -6,12 +6,17 @@
 
 use std::{
     collections::BTreeSet,
-    fs, io,
-    os::unix::fs::PermissionsExt as _,
+    ffi::{OsStr, OsString},
+    fs::{self, File},
+    io::{self, Read as _},
+    os::unix::{
+        ffi::{OsStrExt as _, OsStringExt as _},
+        fs::{symlink, DirBuilderExt as _, MetadataExt as _, PermissionsExt as _},
+    },
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{bail, Context as _, Result};
 use jsonschema::{Draft, JSONSchema};
 use registry_evidence_authoring::{parse_project_marker, PROJECT_MARKER_FILE};
 use serde_json::{json, Value};
@@ -42,6 +47,21 @@ pub(crate) fn check(
     production: bool,
     deny_findings: bool,
 ) -> Result<Value> {
+    Ok(check_and_capture_target(project, target, production, deny_findings)?.report)
+}
+
+struct CheckOutcome {
+    report: Value,
+    project_snapshot: ProjectSnapshot,
+    target_documents: Option<build::TargetDocuments>,
+}
+
+fn check_and_capture_target(
+    project: &Path,
+    target: Option<&Path>,
+    production: bool,
+    deny_findings: bool,
+) -> Result<CheckOutcome> {
     if production && target.is_none() {
         return Err(DeniedFindings(vec![diagnostic(
             "error",
@@ -54,8 +74,16 @@ pub(crate) fn check(
         .into());
     }
 
-    let mut findings = project_identity_findings(project)?;
-    let inventory = match inspect_project(project) {
+    let project_snapshot = capture_project(project).map_err(|error| {
+        if is_operational(&error) {
+            error
+        } else {
+            unreadable_project(error, "check")
+        }
+    })?;
+    let captured_project = project_snapshot.root();
+    let mut findings = project_identity_findings(captured_project)?;
+    let inventory = match inspect_project(captured_project) {
         Ok(inventory) => Some(inventory),
         Err(error) => {
             if is_operational(&error) {
@@ -91,13 +119,13 @@ pub(crate) fn check(
         ));
     }
     if let Some(inventory) = inventory.as_ref() {
-        match declared_asset_findings(project, inventory) {
+        match declared_asset_findings(captured_project, inventory) {
             Ok(asset_findings) => findings.extend(asset_findings),
             Err(error) if is_operational(&error) => return Err(error),
             Err(error) => return Err(compiler_refusal(error, "authoring_project")),
         }
         if !inventory.questions.is_empty() {
-            if let Err(error) = authoring::validate_offline_local_access(project) {
+            if let Err(error) = authoring::validate_offline_local_access(captured_project) {
                 return Err(classify_compiler_error(error, "authoring_project"));
             }
         } else if inventory.local_access["policies"]
@@ -115,6 +143,7 @@ pub(crate) fn check(
         }
     }
 
+    let mut target_documents = None;
     let mut assurance_profile = None;
     let mut bundle_revision = None;
     if let Some(target) = target {
@@ -128,6 +157,7 @@ pub(crate) fn check(
                 if let Err(error) = validate_runtime_structure(&documents.runtime) {
                     return Err(DeniedFindings(vec![target_finding(target, error)]).into());
                 }
+                target_documents = Some(documents);
             }
             Err(error) => {
                 if is_operational(&error) {
@@ -148,26 +178,41 @@ pub(crate) fn check(
         }
     }
     if findings.is_empty() {
-        if let Err(error) = authoring::validate_source_artifact_graph(project) {
-            return Err(classify_compiler_error(error, "authoring_project"));
-        }
-        let checked = match target {
-            Some(target) => check_with_target(project, target),
-            None => check_project_only(project),
+        let target_bound_sources = match authoring::target_bound_sources(captured_project) {
+            Ok(sources) => sources,
+            Err(error) => return Err(classify_compiler_error(error, "authoring_project")),
         };
-        match checked {
-            Ok(checked) => {
-                bundle_revision = Some(checked.bundle_revision);
-            }
-            Err(error) => {
-                return Err(classify_compiler_error(
-                    error,
-                    if target.is_some() {
-                        "deployment_target"
-                    } else {
-                        "authoring_project"
-                    },
-                ))
+        if target_documents.is_none() {
+            findings.extend(target_bound_sources.into_iter().map(|source| {
+                diagnostic(
+                    "finding",
+                    "evidence.target.source-connection-required",
+                    "authored_source",
+                    &format!("sources/{}.yaml:/connection", source.source_id),
+                    "the source connection can be resolved only against an explicit deployment target",
+                    "Pass --target TARGET naming governance that declares the source connection.",
+                )
+            }));
+        }
+        if findings.is_empty() {
+            let checked = match target_documents.as_ref() {
+                Some(documents) => check_with_target(captured_project, project, documents),
+                None => check_project_only(captured_project, project),
+            };
+            match checked {
+                Ok(checked) => {
+                    bundle_revision = Some(checked.bundle_revision);
+                }
+                Err(error) => {
+                    return Err(classify_compiler_error(
+                        error,
+                        if target.is_some() {
+                            "deployment_target"
+                        } else {
+                            "authoring_project"
+                        },
+                    ));
+                }
             }
         }
     }
@@ -194,13 +239,23 @@ pub(crate) fn check(
     if (production || deny_findings) && !findings.is_empty() {
         return Err(DeniedFindings(findings).into());
     }
-    Ok(report)
+    Ok(CheckOutcome {
+        report,
+        project_snapshot,
+        target_documents,
+    })
 }
 
 /// Explain authored inventory and, when supplied, target-owned governance.
 pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Value> {
-    let validation = check(project, target, false, false)?;
-    let mut inventory = inspect_project(project).map_err(|error| {
+    let checked = check_and_capture_target(project, target, false, false)?;
+    explain_captured(project, target, checked)
+}
+
+fn explain_captured(project: &Path, target: Option<&Path>, checked: CheckOutcome) -> Result<Value> {
+    let validation = checked.report;
+    let captured_project = checked.project_snapshot.root();
+    let mut inventory = inspect_project(captured_project).map_err(|error| {
         if is_operational(&error) {
             error
         } else {
@@ -237,7 +292,7 @@ pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Value> {
         }
         Vec::new()
     } else {
-        authoring::validate_offline_local_access(project)
+        authoring::validate_offline_local_access(captured_project)
             .map_err(|error| classify_compiler_error(error, "authoring_project"))?
     };
     inventory.local_access = json!({
@@ -249,19 +304,10 @@ pub(crate) fn explain(project: &Path, target: Option<&Path>) -> Result<Value> {
         })).collect::<Vec<_>>(),
         "clients": inventory.local_access["clients"],
     });
-    let target_governance = if let Some(target) = target {
-        let documents = match build::read_target_documents(target) {
-            Ok(documents) => documents,
-            Err(error) if is_operational(&error) => return Err(error),
-            Err(error) => return Err(DeniedFindings(vec![target_finding(target, error)]).into()),
-        };
-        if let Err(error) = validate_runtime_structure(&documents.runtime) {
-            return Err(DeniedFindings(vec![target_finding(target, error)]).into());
-        }
-        Some(explain_governance(&documents.governed_bundle))
-    } else {
-        None
-    };
+    let target_governance = checked
+        .target_documents
+        .as_ref()
+        .map(|documents| explain_governance(&documents.governed_bundle));
     Ok(json!({
         "ok": true,
         "command": "explain",
@@ -451,7 +497,7 @@ struct CheckedBundle {
     bundle_revision: String,
 }
 
-fn check_project_only(project: &Path) -> Result<CheckedBundle> {
+fn check_project_only(project: &Path, display_project: &Path) -> Result<CheckedBundle> {
     let evidence_bin = evidence_binary::resolve_matching(None)?;
     let staging = tempfile::Builder::new()
         .prefix("evidencectl-check-")
@@ -460,15 +506,18 @@ fn check_project_only(project: &Path) -> Result<CheckedBundle> {
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
         .context("setting private authoring-check staging permissions")?;
     let compiled = authoring::compile_check_project(project, staging.path(), &evidence_bin)?;
-    let report = build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, project)?;
+    let report =
+        build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, display_project)?;
     Ok(CheckedBundle {
         bundle_revision: report.bundle_revision,
     })
 }
 
-fn check_with_target(project: &Path, target: &Path) -> Result<CheckedBundle> {
-    let documents = build::read_target_documents(target)?;
-    validate_runtime_structure(&documents.runtime)?;
+fn check_with_target(
+    project: &Path,
+    display_project: &Path,
+    documents: &build::TargetDocuments,
+) -> Result<CheckedBundle> {
     let evidence_bin = evidence_binary::resolve_matching(None)?;
     let staging = tempfile::Builder::new()
         .prefix("evidencectl-target-check-")
@@ -476,8 +525,9 @@ fn check_with_target(project: &Path, target: &Path) -> Result<CheckedBundle> {
         .context("creating private target-check staging")?;
     fs::set_permissions(staging.path(), fs::Permissions::from_mode(0o700))
         .context("setting private target-check staging permissions")?;
-    let compiled = build::compile_with_target(project, &documents, staging.path(), &evidence_bin)?;
-    let report = build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, project)?;
+    let compiled = build::compile_with_target(project, documents, staging.path(), &evidence_bin)?;
+    let report =
+        build::check_compiled_bundle(&evidence_bin, &compiled.bundle_path, display_project)?;
     Ok(CheckedBundle {
         bundle_revision: report.bundle_revision,
     })
@@ -606,6 +656,299 @@ impl std::fmt::Display for RuntimeStructureDiagnostic {
 
 impl std::error::Error for RuntimeStructureDiagnostic {}
 
+struct ProjectSnapshot {
+    _temporary: tempfile::TempDir,
+    root: PathBuf,
+    directories: Vec<PathBuf>,
+}
+
+impl ProjectSnapshot {
+    fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+impl Drop for ProjectSnapshot {
+    fn drop(&mut self) {
+        for directory in &self.directories {
+            let _ = fs::set_permissions(directory, fs::Permissions::from_mode(0o700));
+        }
+    }
+}
+
+fn capture_project(project: &Path) -> Result<ProjectSnapshot> {
+    let metadata = fs::symlink_metadata(project)
+        .with_context(|| format!("inspecting project root {}", project.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("project root must be a plain directory");
+    }
+    let temporary_root = std::env::temp_dir()
+        .canonicalize()
+        .context("resolving the private project snapshot parent")?;
+    capture_project_in(project, &temporary_root)
+}
+
+fn capture_project_in(project: &Path, temporary_root: &Path) -> Result<ProjectSnapshot> {
+    use rustix::fs::{Mode, OFlags};
+
+    let project_descriptor = rustix::fs::open(
+        project,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)
+    .context("opening the authoring project without following links")?;
+    let temporary = tempfile::Builder::new()
+        .prefix("evidencectl-project-snapshot-")
+        .tempdir_in(temporary_root)
+        .context("creating private project snapshot")?;
+    let root = temporary.path().join("project");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&root)
+        .context("creating private project snapshot root")?;
+    let mut directories = vec![root.clone()];
+
+    for (relative, maximum) in [
+        (PROJECT_MARKER_FILE, authoring::MAX_PROJECT_MARKER_BYTES),
+        (authoring::OPENAPI_FILE, authoring::MAX_OPENAPI_BYTES),
+    ] {
+        capture_snapshot_entry_at(
+            &project_descriptor,
+            &root,
+            OsStr::new(relative),
+            Path::new(relative),
+            maximum,
+            &mut directories,
+        )?;
+    }
+    for (relative, maximum) in [
+        ("questions", authoring::MAX_QUESTION_BYTES),
+        ("sources", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("selectors", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("derivations", authoring::MAX_DERIVATION_BYTES),
+        ("schemas", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("fixtures", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("adapters", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("queries", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+        ("codelists", authoring::MAX_SOURCE_ARTIFACT_BYTES),
+    ] {
+        capture_flat_directory_at(
+            &project_descriptor,
+            &root,
+            OsStr::new(relative),
+            Path::new(relative),
+            maximum,
+            &mut directories,
+        )?;
+    }
+    capture_access(&project_descriptor, &root, &mut directories)?;
+
+    directories.sort_by_key(|path| std::cmp::Reverse(path.components().count()));
+    let snapshot = ProjectSnapshot {
+        _temporary: temporary,
+        root,
+        directories,
+    };
+    for directory in &snapshot.directories {
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o500)).with_context(|| {
+            format!("sealing project snapshot directory {}", directory.display())
+        })?;
+    }
+    Ok(snapshot)
+}
+
+fn capture_access(
+    project: &rustix::fd::OwnedFd,
+    snapshot: &Path,
+    directories: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let relative = Path::new("access");
+    let Some(access) = open_snapshot_directory(project, OsStr::new("access"), relative)? else {
+        return Ok(());
+    };
+    let destination = snapshot.join(relative);
+    fs::DirBuilder::new().mode(0o700).create(&destination)?;
+    directories.push(destination);
+    capture_flat_directory_at(
+        &access,
+        snapshot,
+        OsStr::new("policies"),
+        Path::new("access/policies"),
+        authoring::MAX_ACCESS_POLICY_BYTES,
+        directories,
+    )?;
+    capture_flat_directory_at(
+        &access,
+        snapshot,
+        OsStr::new("clients"),
+        Path::new("access/clients"),
+        authoring::MAX_SOURCE_ARTIFACT_BYTES,
+        directories,
+    )
+}
+
+fn capture_flat_directory_at(
+    parent: &rustix::fd::OwnedFd,
+    snapshot: &Path,
+    name: &OsStr,
+    relative: &Path,
+    maximum: u64,
+    directories: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let Some(directory) = open_snapshot_directory(parent, name, relative)? else {
+        return Ok(());
+    };
+    let destination = snapshot.join(relative);
+    fs::DirBuilder::new().mode(0o700).create(&destination)?;
+    directories.push(destination);
+    capture_directory_contents(&directory, snapshot, relative, maximum, directories)
+}
+
+fn capture_directory_contents(
+    directory: &rustix::fd::OwnedFd,
+    snapshot: &Path,
+    relative: &Path,
+    maximum: u64,
+    directories: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let mut entries = rustix::fs::Dir::read_from(directory)
+        .map_err(io::Error::from)?
+        .map(|entry| {
+            entry
+                .map(|entry| OsString::from_vec(entry.file_name().to_bytes().to_vec()))
+                .map_err(io::Error::from)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.retain(|name| name != "." && name != "..");
+    entries.sort();
+    for name in entries {
+        let entry_relative = relative.join(&name);
+        capture_snapshot_entry_at(
+            directory,
+            snapshot,
+            &name,
+            &entry_relative,
+            maximum,
+            directories,
+        )?;
+    }
+    Ok(())
+}
+
+fn open_snapshot_directory(
+    parent: &rustix::fd::OwnedFd,
+    name: &OsStr,
+    relative: &Path,
+) -> Result<Option<rustix::fd::OwnedFd>> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+
+    let metadata = match rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => metadata,
+        Err(rustix::io::Errno::NOENT) => return Ok(None),
+        Err(error) => {
+            return Err(io::Error::from(error)).context("inspecting project snapshot directory")
+        }
+    };
+    if !FileType::from_raw_mode(metadata.st_mode).is_dir() {
+        return Err(InspectionDiagnostic {
+            path: relative.to_string_lossy().into_owned(),
+        }
+        .into());
+    }
+
+    match rustix::fs::openat(
+        parent,
+        name,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+        Mode::empty(),
+    ) {
+        Ok(directory) => Ok(Some(directory)),
+        Err(error) => Err(snapshot_open_error(error, relative, "directory")),
+    }
+}
+
+fn snapshot_open_error(
+    error: rustix::io::Errno,
+    relative: &Path,
+    input_kind: &str,
+) -> anyhow::Error {
+    if snapshot_open_race(error) {
+        InspectionDiagnostic {
+            path: relative.to_string_lossy().into_owned(),
+        }
+        .into()
+    } else {
+        anyhow::Error::new(io::Error::from(error)).context(format!(
+            "opening project snapshot {input_kind} {}",
+            relative.display()
+        ))
+    }
+}
+
+fn snapshot_open_race(error: rustix::io::Errno) -> bool {
+    matches!(
+        error,
+        rustix::io::Errno::NOENT | rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR
+    )
+}
+
+fn capture_snapshot_entry_at(
+    parent: &rustix::fd::OwnedFd,
+    snapshot: &Path,
+    name: &OsStr,
+    relative: &Path,
+    maximum: u64,
+    directories: &mut Vec<PathBuf>,
+) -> Result<()> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
+
+    let metadata = match rustix::fs::statat(parent, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(metadata) => metadata,
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => {
+            return Err(io::Error::from(error)).context("inspecting project snapshot input")
+        }
+    };
+    let destination = snapshot.join(relative);
+    let file_type = FileType::from_raw_mode(metadata.st_mode);
+    if file_type.is_symlink() {
+        let target = rustix::fs::readlinkat(parent, name, Vec::new()).map_err(io::Error::from)?;
+        symlink(OsStr::from_bytes(target.to_bytes()), &destination)?;
+    } else if file_type.is_dir() {
+        fs::DirBuilder::new().mode(0o700).create(&destination)?;
+        directories.push(destination);
+    } else if file_type.is_file() {
+        let descriptor = match rustix::fs::openat(
+            parent,
+            name,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+            Mode::empty(),
+        ) {
+            Ok(descriptor) => descriptor,
+            Err(error) => return Err(snapshot_open_error(error, relative, "input")),
+        };
+        let bytes = match read_bounded_descriptor(descriptor, maximum) {
+            Ok(bytes) => bytes,
+            Err(error) if is_operational(&error) => return Err(error),
+            Err(_) => {
+                return Err(InspectionDiagnostic {
+                    path: relative.to_string_lossy().into_owned(),
+                }
+                .into())
+            }
+        };
+        fs::write(&destination, bytes)?;
+        fs::set_permissions(&destination, fs::Permissions::from_mode(0o400))?;
+    } else {
+        return Err(InspectionDiagnostic {
+            path: relative.to_string_lossy().into_owned(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 fn project_identity_findings(project: &Path) -> Result<Vec<Value>> {
     let path = project.join(PROJECT_MARKER_FILE);
     if let Ok(metadata) = fs::symlink_metadata(&path) {
@@ -670,6 +1013,23 @@ impl std::fmt::Display for InspectionDiagnostic {
 }
 
 impl std::error::Error for InspectionDiagnostic {}
+
+fn unreadable_project(error: anyhow::Error, command: &str) -> anyhow::Error {
+    let path = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<InspectionDiagnostic>())
+        .map(|diagnostic| diagnostic.path.as_str())
+        .unwrap_or(".");
+    DeniedFindings(vec![diagnostic(
+        "error",
+        "evidence.authoring.unreadable",
+        "authoring_project",
+        path,
+        "the authored project contains an unreadable or malformed artifact",
+        &format!("Correct the named project artifact, then run evidencectl {command} again."),
+    )])
+    .into()
+}
 
 fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Result<Vec<Value>> {
     let source_ids = inventory
@@ -971,8 +1331,26 @@ fn yaml_inventory(
     describe: impl Fn(&str, &Value) -> Value,
 ) -> Result<Vec<Value>> {
     let mut entries = Vec::new();
+    let maximum = match directory {
+        "questions" => authoring::MAX_QUESTION_BYTES,
+        "access/policies" => authoring::MAX_ACCESS_POLICY_BYTES,
+        _ => authoring::MAX_SOURCE_ARTIFACT_BYTES,
+    };
     for path in regular_files(project, directory, "yaml")? {
-        let bytes = fs::read(&path).with_context(|| format!("reading {}", path.display()))?;
+        let bytes = match read_bounded_plain_file(&path, maximum) {
+            Ok(bytes) => bytes,
+            Err(error) if is_operational(&error) => return Err(error),
+            Err(_) => {
+                return Err(InspectionDiagnostic {
+                    path: path
+                        .strip_prefix(project)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned(),
+                }
+                .into())
+            }
+        };
         let value: Value = serde_norway::from_slice(&bytes).map_err(|_| InspectionDiagnostic {
             path: path
                 .strip_prefix(project)
@@ -987,6 +1365,36 @@ fn yaml_inventory(
         entries.push(describe(id, &value));
     }
     Ok(entries)
+}
+
+fn read_bounded_plain_file(path: &Path, maximum: u64) -> Result<Vec<u8>> {
+    use rustix::fs::{Mode, OFlags};
+
+    let descriptor = rustix::fs::open(
+        path,
+        OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::NONBLOCK,
+        Mode::empty(),
+    )
+    .map_err(io::Error::from)
+    .with_context(|| format!("opening {}", path.display()))?;
+    read_bounded_descriptor(descriptor, maximum)
+}
+
+fn read_bounded_descriptor(descriptor: rustix::fd::OwnedFd, maximum: u64) -> Result<Vec<u8>> {
+    let mut file = File::from(descriptor);
+    let metadata = file.metadata().context("inspecting authored input")?;
+    if !metadata.is_file() || metadata.nlink() != 1 || metadata.len() > maximum {
+        bail!("authored input is not a bounded plain file");
+    }
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(maximum.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .context("reading authored input")?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > maximum {
+        bail!("authored input exceeds its byte limit");
+    }
+    Ok(bytes)
 }
 
 fn file_inventory(project: &Path, directory: &str, extension: &str) -> Result<Vec<Value>> {
@@ -1140,6 +1548,81 @@ mod tests {
     }
 
     #[test]
+    fn target_bound_source_is_valid_authoring_with_incomplete_target_closure() {
+        let temporary = temporary();
+        copy_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join("templates/sqlite-extract"),
+            temporary.path(),
+        );
+        put_marker(temporary.path());
+        fs::write(
+            temporary.path().join("sources/record-status.yaml"),
+            r#"transport: http-json
+connection: records
+posture: field-projected
+request:
+  method: GET
+  pathTemplate: /records/{record_reference}
+  pathBindings:
+    record_reference: {from: selector, role: subject, profile: record-reference-v1, field: record_reference}
+  fixedHeaders: [{name: Accept, value: application/json}]
+  selectorInputs:
+    - role: subject
+      alternatives:
+        - {profile: record-reference-v1, fields: [record_reference]}
+  prepareScript: adapters/record-status-prepare.rhai
+  adapterParameters: {}
+  adapterParametersSchema: schemas/record-status-parameters.schema.yaml
+  preparationLimits: {query: allowed, jsonBody: forbidden, maximumNormalizedBytes: 4096}
+  projection: [/rows/*/qualifying_record_count]
+  redirects: deny
+  timeoutMilliseconds: 2000
+  maximumResponseBytes: 8192
+responseSchema: schemas/record-status-response.schema.yaml
+extractScript: adapters/record-status-extract.rhai
+factSchema: schemas/record-status-facts.schema.yaml
+"#,
+        )
+        .unwrap();
+        fs::write(
+            temporary.path().join("adapters/record-status-prepare.rhai"),
+            "fn prepare(selectors, context) { #{query: [], body: ()} }\n",
+        )
+        .unwrap();
+        fs::write(
+            temporary
+                .path()
+                .join("schemas/record-status-parameters.schema.yaml"),
+            "type: object\nadditionalProperties: false\nrequired: []\nproperties: {}\n",
+        )
+        .unwrap();
+
+        let report = check(temporary.path(), None, false, false)
+            .expect("a valid authored connection reference is not refused");
+
+        assert_eq!(report["status"], "incomplete");
+        assert_eq!(report["proof"], "authoring");
+        assert_eq!(report["bundleRevision"], Value::Null);
+        assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            report["findings"][0]["code"],
+            "evidence.target.source-connection-required"
+        );
+        assert_eq!(
+            report["findings"][0]["path"],
+            "sources/record-status.yaml:/connection"
+        );
+        assert!(!report["findings"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("records"));
+
+        let denied = check(temporary.path(), None, false, true)
+            .expect_err("--deny-findings refuses incomplete target closure");
+        assert!(denied.downcast_ref::<DeniedFindings>().is_some());
+    }
+
+    #[test]
     fn malformed_question_is_a_domain_refusal_for_an_ordinary_check() {
         let temporary = temporary();
         put_marker(temporary.path());
@@ -1170,6 +1653,156 @@ mod tests {
         assert_eq!(denied.0[0]["severity"], "error");
         assert_eq!(denied.0[0]["code"], "evidence.authoring.unreadable");
         assert_eq!(denied.0[0]["path"], "sources/broken.yaml");
+    }
+
+    #[test]
+    fn oversized_authored_yaml_is_a_bounded_field_addressed_refusal() {
+        for (relative, maximum) in [
+            ("questions/oversized.yaml", authoring::MAX_QUESTION_BYTES),
+            (
+                "sources/oversized.yaml",
+                authoring::MAX_SOURCE_ARTIFACT_BYTES,
+            ),
+            (
+                "selectors/oversized.yaml",
+                authoring::MAX_SOURCE_ARTIFACT_BYTES,
+            ),
+            (
+                "access/policies/oversized.yaml",
+                authoring::MAX_ACCESS_POLICY_BYTES,
+            ),
+        ] {
+            let temporary = temporary();
+            put_marker(temporary.path());
+            let path = temporary.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(
+                &path,
+                vec![b'x'; usize::try_from(maximum).unwrap().saturating_add(1)],
+            )
+            .unwrap();
+
+            let error = check(temporary.path(), None, false, false).unwrap_err();
+            let denied = error.downcast_ref::<DeniedFindings>().unwrap();
+            assert_eq!(denied.0[0]["code"], "evidence.authoring.unreadable");
+            assert_eq!(denied.0[0]["path"], relative);
+        }
+    }
+
+    #[test]
+    fn project_snapshot_cleanup_removes_sealed_success_and_partial_refusal_trees() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        put_marker(&project);
+
+        let snapshot = capture_project_in(&project, temporary.path()).unwrap();
+        let snapshot_path = snapshot._temporary.path().to_path_buf();
+        assert!(snapshot_path.exists());
+        drop(snapshot);
+        assert!(!snapshot_path.exists());
+
+        fs::write(
+            project.join("questions/oversized.yaml"),
+            vec![
+                b'x';
+                usize::try_from(authoring::MAX_QUESTION_BYTES)
+                    .unwrap()
+                    .saturating_add(1)
+            ],
+        )
+        .unwrap();
+        assert!(capture_project_in(&project, temporary.path()).is_err());
+        assert!(fs::read_dir(temporary.path()).unwrap().all(|entry| !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("evidencectl-project-snapshot-")));
+    }
+
+    #[test]
+    fn symlinked_access_parent_cannot_disclose_external_client_names() {
+        const CANARY: &str = "EXTERNAL_CLIENT_NAME_CANARY";
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        let outside = temporary.path().join("outside");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        fs::create_dir_all(outside.join("clients")).unwrap();
+        put_marker(&project);
+        fs::write(outside.join(format!("clients/{CANARY}.yaml")), CANARY).unwrap();
+        symlink(&outside, project.join("access")).unwrap();
+
+        let error = check(&project, None, false, false).unwrap_err();
+        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
+        assert_eq!(denied.0[0]["path"], "access");
+        assert!(!serde_json::to_string(&denied.0).unwrap().contains(CANARY));
+    }
+
+    #[test]
+    fn snapshot_open_errors_preserve_custody_and_operational_classification() {
+        for error in [
+            rustix::io::Errno::NOENT,
+            rustix::io::Errno::LOOP,
+            rustix::io::Errno::NOTDIR,
+        ] {
+            let error = snapshot_open_error(error, Path::new("questions"), "directory");
+            assert!(!is_operational(&error));
+            assert!(error.downcast_ref::<InspectionDiagnostic>().is_some());
+        }
+
+        for error in [rustix::io::Errno::ACCESS, rustix::io::Errno::IO] {
+            let error = snapshot_open_error(error, Path::new("questions"), "directory");
+            assert!(is_operational(&error));
+            assert!(error.downcast_ref::<InspectionDiagnostic>().is_none());
+        }
+    }
+
+    #[test]
+    fn opened_directory_snapshot_cannot_escape_after_path_replacement() {
+        use rustix::fs::{Mode, OFlags};
+
+        const CANARY: &str = "EXTERNAL_DIRECTORY_CANARY";
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        let outside = temporary.path().join("outside");
+        let snapshot = temporary.path().join("snapshot");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::create_dir_all(snapshot.join("questions")).unwrap();
+        fs::write(project.join("questions/captured.yaml"), "id: captured\n").unwrap();
+        fs::write(outside.join(format!("{CANARY}.yaml")), CANARY).unwrap();
+        let project_descriptor = rustix::fs::open(
+            &project,
+            OFlags::RDONLY | OFlags::CLOEXEC | OFlags::NOFOLLOW | OFlags::DIRECTORY,
+            Mode::empty(),
+        )
+        .unwrap();
+        let questions = open_snapshot_directory(
+            &project_descriptor,
+            OsStr::new("questions"),
+            Path::new("questions"),
+        )
+        .unwrap()
+        .unwrap();
+        fs::rename(
+            project.join("questions"),
+            project.join("captured-questions"),
+        )
+        .unwrap();
+        symlink(&outside, project.join("questions")).unwrap();
+
+        let mut directories = vec![snapshot.clone(), snapshot.join("questions")];
+        capture_directory_contents(
+            &questions,
+            &snapshot,
+            Path::new("questions"),
+            authoring::MAX_QUESTION_BYTES,
+            &mut directories,
+        )
+        .unwrap();
+
+        assert!(snapshot.join("questions/captured.yaml").exists());
+        assert!(!snapshot.join(format!("questions/{CANARY}.yaml")).exists());
     }
 
     #[test]
@@ -1436,6 +2069,64 @@ mod tests {
         }));
         let unchanged = fs::read_to_string(target.join("governance.yaml")).unwrap();
         assert!(unchanged.contains("assuranceProfile: local"));
+    }
+
+    #[test]
+    fn target_report_and_explanation_share_the_captured_documents() {
+        let temporary = temporary();
+        let project = temporary.path().join("project");
+        let target = temporary.path().join("target");
+        fs::create_dir_all(project.join("questions")).unwrap();
+        put_marker(&project);
+        copy_tree(
+            &Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../products/evidence/reference/deployment-targets/environments/production/evidence",
+            ),
+            &target,
+        );
+
+        let checked = check_and_capture_target(&project, Some(&target), false, false).unwrap();
+        let governance_path = target.join("governance.yaml");
+        let replacement = fs::read_to_string(&governance_path).unwrap().replace(
+            "assuranceProfile: evidence-grade",
+            "assuranceProfile: local",
+        );
+        fs::write(&governance_path, replacement).unwrap();
+
+        let captured = checked.target_documents.as_ref().unwrap();
+        assert_eq!(checked.report["assuranceProfile"], "evidence-grade");
+        assert_eq!(
+            explain_governance(&captured.governed_bundle)["assuranceProfile"],
+            "evidence-grade"
+        );
+        assert_eq!(
+            build::read_target_documents(&target)
+                .unwrap()
+                .governed_bundle["assuranceProfile"],
+            "local"
+        );
+    }
+
+    #[test]
+    fn explanation_reuses_the_captured_project_after_replacement() {
+        let temporary = temporary();
+        fs::create_dir(temporary.path().join("questions")).unwrap();
+        put_marker(temporary.path());
+
+        let checked = check_and_capture_target(temporary.path(), None, false, false).unwrap();
+        fs::write(
+            temporary.path().join("questions/replacement.yaml"),
+            "id: replacement\n",
+        )
+        .unwrap();
+
+        let report = explain_captured(temporary.path(), None, checked).unwrap();
+        assert_eq!(report["status"], "incomplete");
+        assert_eq!(report["questions"], json!([]));
+        assert_eq!(
+            inspect_project(temporary.path()).unwrap().questions.len(),
+            1
+        );
     }
 
     #[test]

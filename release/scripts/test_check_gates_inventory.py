@@ -1306,6 +1306,33 @@ class GateInventoryTest(unittest.TestCase):
             self.module.missing_gates(self.workflow, classifier),
         )
 
+    def test_missing_casework_tutorial_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "bash docs/site/scripts/check-casework-tutorial.sh",
+                "true # Registry Casework tutorial replay disabled",
+                "Registry Casework tutorial replay",
+            ),
+            (
+                "run: npm run check:tutorial:casework:dry-run",
+                "run: true # Registry Casework tutorial dry run disabled",
+                "Registry Casework tutorial command drift",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_casework_tutorial_path_filter_is_reported(self) -> None:
+        classifier = self.classifier.replace(
+            '"docs/site/scripts/check-casework-tutorial.sh",',
+            '"docs/site/scripts/unrouted-casework-tutorial.sh",',
+        )
+        self.assertIn(
+            "Registry Casework tutorial path filter",
+            self.module.missing_gates(self.workflow, classifier),
+        )
+
     def test_missing_released_docset_selector_gate_is_reported(self) -> None:
         policy_texts = self.module.policy_file_texts(
             ROOT,

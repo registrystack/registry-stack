@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Document the secret reference grammar, the owner-only file rules, and the
+  requirement that every resolved secret value be non-empty NUL-free text of at
+  most 64 KiB, with a command that generates the audit journal secret.
+- Document the static `authentication.oidc.jwksSource` alternative to issuer
+  discovery, when to prefer it, and that it performs no rotation of its own.
+- Name `GET /v1/work-items/{itemId}/hosted-history` as the staff hosted
+  lifecycle history read, and say that `GET /v1/work-items/{itemId}/history` is
+  the source-scoped variant that requires a `Registry-Source-Profile` header.
+- Name the failing secret reference and the rule it broke when the database
+  connection, the audit journal, or a static OIDC JWKS document cannot resolve
+  its secret at startup, and name the source whose binding was refused. The
+  refusal never carries the resolved secret value.
 - Version the runtime configuration as `casework-runtime/v1alpha1`, select the
   fixed `casework.yaml` through an absolute `package.root`, move listener fields
   under `listener` with port 8100, require explicit secret providers, adopt
@@ -61,8 +73,12 @@
 
 This checkpoint does not include bulk decisions, consultation, automatic
 outcomes, or outbound delivery. Clock policies compute due reminder and
-escalation occurrences and expose them for review; an Administrator applies a
-reviewed recompute, and the service neither acts nor notifies on its own.
+escalation occurrences. When one falls due, the runtime confirms the item with a
+fresh source read, then records the reminder in the item's history or, for a
+due step, releases the holder and moves the item to the queue the step names,
+under the `system:clock` actor. A clock decides no outcome, changes nothing at
+the source, and sends nothing outward; an Administrator applies a reviewed
+recompute after a policy change.
 
 These changes are unreleased. The workspace version alone does not identify a
 published client package containing Casework; the demo builds a matching local

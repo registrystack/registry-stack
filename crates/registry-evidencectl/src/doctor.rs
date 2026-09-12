@@ -41,7 +41,7 @@ use std::{
     process::ExitCode,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
@@ -86,6 +86,23 @@ pub struct DoctorArgs {
     pub json: bool,
 }
 
+#[derive(Debug)]
+pub(crate) struct DoctorDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) artifact: String,
+    pub(crate) path: String,
+    pub(crate) message: String,
+    pub(crate) suggested_action: String,
+}
+
+impl std::fmt::Display for DoctorDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DoctorDiagnostic {}
+
 /// One artifact this walk refuses, and why.
 #[derive(Debug, Serialize)]
 struct Finding {
@@ -126,7 +143,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     let project = args.project.as_path();
     let runtime_path = project.join("runtime.yaml");
     if !runtime_path.is_file() {
-        bail!(missing_runtime_message(project, &runtime_path));
+        return Err(missing_runtime_diagnostic(project, &runtime_path).into());
     }
     let runtime = read_yaml(&runtime_path)?;
     let bundle_directory = resolve_bundle_directory(&runtime, &runtime_path, project)?;
@@ -202,6 +219,18 @@ fn missing_runtime_message(project: &Path, runtime_path: &Path) -> String {
             "runtime configuration not found at {}; doctor walks a deployment project, one holding runtime.yaml beside bundle/. Compile a candidate from an editable project with {build}",
             runtime_path.display()
         )
+    }
+}
+
+fn missing_runtime_diagnostic(project: &Path, runtime_path: &Path) -> DoctorDiagnostic {
+    DoctorDiagnostic {
+        code: "evidence.doctor.project-shape",
+        artifact: project.display().to_string(),
+        path: "runtime.yaml".to_owned(),
+        message: missing_runtime_message(project, runtime_path),
+        suggested_action:
+            "Select a deployment project, or use evidencectl package, check, and test to prepare and inspect an editable project."
+                .to_owned(),
     }
 }
 

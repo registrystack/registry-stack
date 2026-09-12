@@ -1,75 +1,128 @@
 ---
 title: Registry Casework overview
-description: Understand the unreleased Registry Casework candidate, its two work sources, and the authority a deployment must provide.
+description: What Registry Casework is, how one piece of human work reaches a team and comes back decided, and which page an author, an operator, or an integrator opens first.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-10"
+last_reviewed: "2026-09-11"
 doc_type: explanation
 locale: en
 standards_referenced: []
 ---
 
-Registry Casework is an unreleased candidate in the current development source.
-It gives a team one accountable inbox for source-owned work and for small human
-decisions requested by another service. Build and evaluate it from a reviewed
-source revision until a future Registry Stack release lists Casework artifacts.
+Registry Casework gives an authorized human team one coordinated inbox: over work a source system
+owns, such as a governed [change request](../../reference/glossary/#change-request) a
+[Base Registry Engine](../../reference/glossary/#base-registry-engine) (BReg) holds, and over
+bounded decisions a calling service submits directly. Casework keeps the coordination: which queue
+a [work item](../../reference/glossary/#work-item) sits in, who holds it, what was drafted, and who
+decided; the source keeps eligibility, current visibility, and the record change itself.
 
-## Choose the work source
+{/* Evidence: crates/registry-casework-core/src/model.rs, WorkItem;
+    crates/registry-casework-core/src/adapter.rs, SourceAdapter and read_for_caller;
+    products/casework/README.md. */}
 
-Casework supports two independent shapes:
+If your team decides on registry change requests, or on decisions another service submits and waits
+for, Casework is where that work is held, routed, and recorded. Staff claim one item at a
+time and record an outcome, Supervisors assign work and cover absence, Administrators maintain the
+[directory](../../reference/glossary/#directory) of teams and served queues, and a Requester
+service reads back only the items it created. The Registry App Kit is a separate project that
+provides a staff interface for BReg-backed work, and a standalone deployment calls the HTTP API
+from its own host.
 
-- A Base Registry Engine (BReg) source contributes governed change requests.
-  Casework keeps assignment, routing, clocks, drafts, and recovery state, then
-  uses the person's token and selected BReg profile for each source decision.
-- A hosted kind lets a Requester service create a bounded item directly in
-  Casework. The requester can read, note, cancel, and poll only its own items.
-  A person completes the item under Casework's team and kind authority.
+{/* Evidence: crates/registry-casework-core/src/config.rs, AccessProfile;
+    crates/registry-casework/src/auth.rs, CaseworkAuthenticator; products/casework/README.md. */}
 
-A project may declare either shape or both. Standalone hosted work needs no
-BReg deployment or source adapter.
+```mermaid
+sequenceDiagram
+    participant R as Requester service
+    participant C as Registry Casework
+    participant S as Staff
+    participant V as Supervisor
 
-{/* Evidence: products/casework/README.md; crates/registry-casework-core/src/{model,policy}.rs;
-    crates/registry-casework/src/{service,hosted}.rs. */}
+    R->>C: Submit one decision under a declared kind
+    C->>C: Pin the kind's display, outcomes, and retention
+    S->>C: Claim the item from a queue the team serves
+    S->>C: Record one declared outcome with a reason
+    R->>C: Poll the terminal feed
+    C-->>R: Return the outcome and an opaque actor reference
+    V->>C: Resolve the deciding person for one outcome
+    Note over C: Casework sends nothing outward; the requester polls
+```
 
-## Keep human and service authority separate
+A [hosted item](../../reference/glossary/#hosted-item) lives in Casework alone, and the policy
+pinned at acceptance fixes what it can become, so publishing a changed policy later shapes new
+items and leaves this one as it was accepted. The Requester reads its own outcomes from the
+[terminal feed](../../reference/glossary/#terminal-feed) and sees an opaque actor reference; a
+Supervisor who leads a serving team resolves the deciding person through a separate audited route.
+A source-backed item follows the same path with the registry in the loop: every field a caller sees
+comes from a read made for that caller, and the decision reaches the registry as an
+[attempt](../../reference/glossary/#attempt) made with the person's own token and selected source
+profile.
 
-Staff and Supervisor are human profiles. Their tokens must contain the exact
-human-identity assertion configured by the operator. Staff work eligible items;
-Supervisors control assignment and caseload for teams they currently lead.
-Administrator is also a human profile, but directory and holiday administration
-grant no item payload access.
+{/* Evidence: crates/registry-casework/src/http.rs, create_hosted_item, decide_hosted_item, and
+    hosted_terminal_items; crates/registry-casework/src/hosted.rs, hosted_accountability;
+    crates/registry-casework-core/src/adapter.rs, prepare_action and execute_prepared. */}
 
-Requester is a service integration profile. It does not require the human
-assertion, cannot claim or decide work, and gains no human authority when its
-token happens to contain that assertion. A source-backed decision also requires
-the caller's explicitly selected source profile. Casework does not choose a more
-privileged source profile to make an operation succeed.
+## Make your first request
 
-{/* Evidence: crates/registry-casework/src/{auth,assignment,service}.rs;
-    crates/registry-casework-core/src/config.rs. */}
+Put a local deployment on your machine:
 
-## Plan the deployment boundary
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+caseworkctl init tutorial-work/casework --template standalone-decision
+caseworkctl dev tutorial-work/casework
+```
 
-One Casework process needs PostgreSQL, one OpenID Connect issuer, a private HTTP
-listener behind operator-controlled TLS, and a keyed audit file. Its versioned
-`runtime.yaml` selects the reviewed policy directory through `package.root` and
-keeps deployment bindings outside that package. Production verifies the
-adjacent manifest before the listener opens. The deployment operator owns
-selecting that package and rolling out or restarting the process. Policy
-replacement does not rewrite running clock occurrences; holiday changes use a
-separate Administrator preview and apply operation.
+The installer verifies the release `SHA256SUMS` before it installs `casework`, `caseworkctl`, and
+`mint` into `~/.local/bin`. The `standalone-decision` template writes a project that declares one
+decision kind and needs no registry behind it. `caseworkctl dev` starts PostgreSQL in a container,
+starts Registry Mint and `casework` against it, seeds the directory, and prints a report carrying a
+ready status, the service URL, the token endpoint, and one credential directory per local client.
 
-The App Kit provides the current staff interface for BReg-backed work. A
-standalone deployment supplies the HTTP API and maintained clients, with no
-stack-provided standalone staff screen.
+[Decide your first work item](../../tutorials/first-casework/) takes it from there: submit one
+decision as a Requester, claim and decide it as Staff, and read the outcome back from the terminal
+feed.
 
-{/* Evidence: crates/registry-casework/src/{config,runtime}.rs;
-    crates/registry-caseworkctl/src/project.rs; products/casework/README.md. */}
+{/* Evidence: crates/registry-casework/install.sh; crates/registry-caseworkctl/src/project.rs, init;
+    crates/registry-caseworkctl/src/dev/mod.rs, start and report. */}
+
+## Choose your role
+
+| What you want to do | Where to start |
+| --- | --- |
+| Author a policy: hosted kinds, sources, routing rules, and clocks | [Author a Casework policy](../../configure/casework/) |
+| Run a deployment: database, runtime file, directory, and recovery | [Deploy Registry Casework](../../operate/casework/) |
+| Understand the model behind an item | [How Registry Casework works](../../explanation/how-casework-works/) |
+| Integrate a Requester service | [Registry Stack client API reference](../../reference/client-api/) and the [Registry Casework API](../../reference/apis/registry-casework/) |
+
+{/* Evidence: crates/registry-caseworkctl/src/lib.rs, Command; crates/registry-casework/src/http.rs, router;
+    crates/registry-casework-client/src/lib.rs. */}
+
+## Where the product stops
+
+Casework decides one item at a time, by one accountable person, against the policy pinned on that
+item. There are no bulk decisions and no automatic outcomes, and a second opinion is a delegation
+or an assignment, both recorded on the item. Clocks do act on a running item: when an authored
+reminder or due step falls due, Casework reads the source afresh, then records the reminder or
+moves the item to the queue the step names, under the actor `system:clock`. Those effects stay
+inside the item, because Casework delivers nothing outward and sends no message to a person or a
+system.
+
+{/* Evidence: crates/registry-casework/src/clocks.rs, process_due_clocks, HistoryKind::ClockReminder,
+    and HistoryKind::ClockStepApplied; products/casework/CHANGELOG.md. */}
+
+Casework serves an API and renders no interface of its own. A browser never calls it directly: a
+staff host calls Casework server to server on a private network, which is why the API enables no
+CORS. It issues no tokens and stores no users, so identity stays with your OpenID Connect provider,
+or with [Registry Mint](../../configure/mint/) when you have none.
+
+{/* Evidence: crates/registry-casework/src/http.rs, router and security_headers;
+    crates/registry-casework/src/auth.rs, CaseworkAuthenticator; products/casework/README.md. */}
 
 ## Next
 
-- [Configure policy and authority](../../configure/casework/)
-- [Run the source candidate](../../operate/casework/)
-- [Read the Casework API](../../reference/apis/registry-casework/)
+- [Decide your first work item](../../tutorials/first-casework/)
+- [How Registry Casework works](../../explanation/how-casework-works/)
+- [Author a Casework policy](../../configure/casework/)
+- [Deploy Registry Casework](../../operate/casework/)

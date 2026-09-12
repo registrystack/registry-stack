@@ -3521,6 +3521,7 @@ dependencies = [
  "deadpool-postgres",
  "futures",
  "http",
+ "jsonschema",
  "jsonwebtoken",
  "registry-casework-breg",
  "registry-casework-client",
@@ -3643,17 +3644,27 @@ name = "registry-caseworkctl"
 version = "0.29.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
+ "getrandom 0.4.3",
+ "p256",
+ "rcgen",
  "registry-casework",
  "registry-casework-core",
  "registry-platform-buildinfo",
+ "registry-platform-config",
+ "reqwest",
+ "rustix 1.1.4",
  "serde",
  "serde_json",
  "serde_norway",
+ "sha2 0.11.0",
+ "signal-hook",
  "tempfile",
  "tokio",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

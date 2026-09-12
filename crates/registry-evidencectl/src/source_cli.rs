@@ -77,36 +77,50 @@ pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCo
         SourceCommand::Add(args) => source_add::run(args, format),
         SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args)),
         SourceCommand::Mock(command) => source_mock::run(command),
-        SourceCommand::Diff(args) => diff(args),
-        SourceCommand::Import(args) | SourceCommand::Update(args) => apply(args),
+        SourceCommand::Diff(args) => diff(args, format),
+        SourceCommand::Import(args) | SourceCommand::Update(args) => apply(args, format),
         SourceCommand::Detach(args) => detach(args),
     }
 }
 
-fn diff(args: SourceImportArgs) -> Result<ExitCode> {
+fn diff(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
     review(
         args.into_import_args(),
         false,
         &mut std::io::stdout().lock(),
+        format,
     )
 }
 
-fn apply(args: SourceImportArgs) -> Result<ExitCode> {
-    review(args.into_import_args(), true, &mut std::io::stdout().lock())
+fn apply(args: SourceImportArgs, format: OutputFormat) -> Result<ExitCode> {
+    review(
+        args.into_import_args(),
+        true,
+        &mut std::io::stdout().lock(),
+        format,
+    )
 }
 
 fn review(
     args: source_import::ImportArgs,
     apply: bool,
     output: &mut impl Write,
+    format: OutputFormat,
 ) -> Result<ExitCode> {
-    review_with_revisions(args, apply, output, build::validated_question_revisions)
+    review_with_revisions_in_format(
+        args,
+        apply,
+        output,
+        format,
+        build::validated_question_revisions,
+    )
 }
 
-fn review_with_revisions(
+fn review_with_revisions_in_format(
     args: source_import::ImportArgs,
     apply: bool,
     output: &mut impl Write,
+    format: OutputFormat,
     mut target_revisions: impl FnMut(&Path, &Path) -> Result<BTreeMap<String, String>>,
 ) -> Result<ExitCode> {
     let lock = source_import::ProjectLock::acquire(&args.project)
@@ -122,10 +136,11 @@ fn review_with_revisions(
     };
     if !candidate.report().conflicts.is_empty() {
         report["validation"] = json!({"kind": validation_kind, "status": "conflict"});
-        print_report(output, &report)?;
         if apply {
+            print_report_before_error(output, &report, format)?;
             bail!("source candidate has unresolved conflicts; choose keep, adopt, or an explicit resolved file");
         }
+        print_report(output, &report)?;
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -139,7 +154,7 @@ fn review_with_revisions(
     });
     if let Err(error) = validation {
         report["validation"] = json!({"kind": validation_kind, "status": "failed"});
-        print_report(output, &report)?;
+        print_report_before_error(output, &report, format)?;
         return Err(error);
     }
     report["validation"] = json!({"kind": validation_kind, "status": "passed"});
@@ -158,13 +173,34 @@ fn review_with_revisions(
     if apply {
         if let Err(error) = candidate.apply(&lock) {
             report["application"] = json!("failed");
-            print_report(output, &report)?;
+            print_report_before_error(output, &report, format)?;
             return Err(error);
         }
         report["application"] = json!("accepted");
     }
     print_report(output, &report)?;
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+fn review_with_revisions(
+    args: source_import::ImportArgs,
+    apply: bool,
+    output: &mut impl Write,
+    target_revisions: impl FnMut(&Path, &Path) -> Result<BTreeMap<String, String>>,
+) -> Result<ExitCode> {
+    review_with_revisions_in_format(args, apply, output, OutputFormat::Human, target_revisions)
+}
+
+fn print_report_before_error(
+    output: &mut impl Write,
+    report: &Value,
+    format: OutputFormat,
+) -> Result<()> {
+    if format == OutputFormat::Human {
+        print_report(output, report)?;
+    }
+    Ok(())
 }
 
 fn print_report(output: &mut impl Write, report: &Value) -> Result<()> {

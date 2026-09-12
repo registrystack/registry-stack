@@ -21,12 +21,7 @@ fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project)]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--openapi <OPENAPI>"));
-    assert!(stderr(&output).contains("--transport <TRANSPORT>"));
-    assert!(stderr(&output).contains("--starter <STARTER>"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 }
 
@@ -36,9 +31,7 @@ fn sqlite_extract_requires_the_explicit_local_profile_before_writing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project), "--transport", "sqlite-extract"]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 }
 
@@ -107,8 +100,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
         "local",
     ]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("cannot be used with"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 
     let starter_project = workspace.path().join("starter-project");
@@ -122,8 +114,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
         "--profile",
         "local",
     ]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("cannot be used with"));
+    assert_safe_usage_failure(&output);
     assert!(!starter_project.exists());
 }
 
@@ -134,9 +125,7 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project), "--openapi", path(&spec)]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 
     let wrong = workspace.path().join("wrong");
@@ -148,8 +137,7 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
         "--profile",
         "production",
     ]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("invalid value 'production'"));
+    assert_safe_usage_failure(&output);
     assert!(!wrong.exists());
 }
 
@@ -348,8 +336,7 @@ fn existing_paths_and_force_are_refused_without_changes() {
 
     let forced = workspace.path().join("forced");
     let output = openapi_new(&forced, path(&spec), &["--force"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("unexpected argument '--force'"));
+    assert_safe_usage_failure(&output);
     assert!(!forced.exists());
     assert_no_staging_directories(workspace.path());
 }
@@ -977,4 +964,13 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn assert_safe_usage_failure(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(output),
+        "error[evidencectl.usage] command line $: The Evidence command line is incomplete or contains conflicting or unsupported arguments.\n  next: Run evidencectl --help or the selected command with --help, then retry using the documented arguments.\n"
+    );
 }

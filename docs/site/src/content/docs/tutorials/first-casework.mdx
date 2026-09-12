@@ -1,0 +1,790 @@
+---
+title: Decide your first work item
+description: Start a local Casework runtime from a generated project, submit a request, claim it, decide it as Staff, read the outcome, and see which requests Casework refuses.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-11"
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+import QuickstartMeta from '../../../components/QuickstartMeta.astro';
+
+If you are evaluating [Registry Casework](../../reference/glossary/#registry-casework) as the
+coordinated inbox for a team that decides professional licence renewals, start with one request and
+one decision.
+You will generate a Casework project, run it on your machine, submit a renewal as a Requester, claim
+and decide it as Staff, read the outcome as the Requester, read the accountability record as a
+Supervisor, and try requests Casework refuses.
+Everything you keep goes into one directory, `tutorial-work`.
+
+<QuickstartMeta
+  outcome="One work item submitted, claimed and decided over HTTP, with its terminal outcome, its accountability record, and three refusals showing profile authority and version checks at work."
+  time="About 20 minutes, plus the image download"
+  level="Local evaluation only"
+  prerequisites={['Linux amd64 or arm64, or macOS on Apple Silicon', 'A Bash or zsh shell', 'Running Docker', 'curl 7.76 or later', 'Python 3, to read JSON responses', 'An editor']}
+/>
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, init();
+    crates/registry-caseworkctl/src/dev/mod.rs, start();
+    crates/registry-mint/src/main.rs. */}
+
+## Install Registry Casework
+
+Install `casework`, `caseworkctl`, and `mint`.
+[Registry Mint](../../reference/glossary/#registry-mint) issues the local access tokens this
+tutorial uses, standing in for the identity provider a deployment would have:
+
+```sh
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
+caseworkctl --version
+mint --version
+```
+
+The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
+`~/.local/bin`, and installs them together or not at all.
+Keep that directory on your `PATH`.
+
+:::note[Before these binaries serve anyone else]
+The URL takes the latest release, and a deployment pins a version instead.
+The command pipes a script from GitHub into `bash`; `| less` in place of `| bash` reads it first.
+Verify the release as described in [OpenSSF and release trust](../../security/openssf-evidence/),
+then rerun the installer with `CASEWORK_ASSET_DIR` pointing at the verified directory.
+:::
+
+{/* Evidence: crates/registry-casework/install.sh, binaries. */}
+
+## Create a project
+
+Open a terminal in a directory of your choice and generate a project.
+Keep this terminal in the same directory for the rest of the tutorial; every path starts with
+`tutorial-work/`.
+
+```sh
+mkdir -p tutorial-work
+caseworkctl --format json init tutorial-work/casework --template standalone-decision
+```
+
+```json
+{
+  "command": "init",
+  "created": [
+    "casework.yaml",
+    "runtime.example.yaml",
+    "dev-clients.yaml",
+    "fixtures/standalone-decision.yaml",
+    "sources/",
+    ".casework/schemas/runtime.schema.json",
+    ".vscode/settings.json"
+  ],
+  "next": [
+    "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
+  ],
+  "ok": true,
+  "project": "tutorial-work/casework",
+  "template": "standalone-decision"
+}
+```
+
+### What init wrote
+
+The `standalone-decision` template declares a Casework deployment that owns the work it coordinates,
+with no source system behind it:
+
+- `casework.yaml`: the access profiles, the `decisions` queue, and one
+  [hosted kind](../../reference/glossary/#hosted-kind) named `decision`
+- `dev-clients.yaml`: the local callers, one per profile, and the team that serves the queue
+- `runtime.example.yaml`: an operator's runtime configuration, for a deployment rather than this
+  tutorial
+- `fixtures/standalone-decision.yaml`: the requests `caseworkctl test` replays
+- `sources/`: where a source descriptor goes when Casework presents work a registry owns
+- `.casework/schemas/runtime.schema.json` and `.vscode/settings.json`: editor validation for the
+  runtime example
+
+The `decision` kind carries a display schema of `summary` and `reference`, two outcomes, `confirmed`
+and `rejected`, and the single profile allowed to decide it, `staff`.
+`rejected` requires a reason and `confirmed` does not, because the template says so; the licence
+renewal in this tutorial is the example you supply, not a built-in type.
+
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, init();
+    crates/registry-casework-core/src/hosted.rs, standalone_decision_starter_kind(). */}
+
+### The four profiles
+
+Casework separates authority by profile rather than by person.
+A Requester submits work and reads its own outcomes, Staff claims and decides work in a served
+queue, a Supervisor reads accountability records over decisions already made, and an Administrator
+maintains the directory.
+Each profile in `casework.yaml` names the token scopes it requires, and `dev-clients.yaml` gives
+each one a local client.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/config.rs;
+    crates/registry-casework/src/http.rs, authenticate(). */}
+
+## Start Casework
+
+:::caution[Use synthetic data only]
+The runtime stores its records in a Docker volume on your machine, and the private keys it generates
+live in `tutorial-work/casework/.casework/dev/`, an owner-only directory that stays out of version
+control.
+Nothing here is configured for anyone else's data.
+:::
+
+Start the project and keep its report:
+
+```sh
+caseworkctl --format json dev tutorial-work/casework | tee tutorial-work/dev-report.json
+```
+
+The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
+The command returns once Casework answers, with `"status": "ready"` in its report.
+`dev` started PostgreSQL in a container, registered the four clients from `dev-clients.yaml` with
+Mint under a fresh key each, wrote an operator file, migrated the database, started `casework`, and
+seeded the [directory](../../reference/glossary/#directory) from the same clients file, which the
+report confirms as `"directory": {"revision": 1, "teams": 1}`.
+
+The report also names the Casework address, the Mint token endpoint, the audience, the runtime
+journal, and the credential file paths for each client.
+The services keep running after the command returns, so this one terminal is enough.
+
+Take the two addresses and the credential directory from the report:
+
+```sh
+casework_url=$(python3 -c 'import json; print(json.load(open("tutorial-work/dev-report.json"))["caseworkUrl"])')
+token_endpoint=$(python3 -c 'import json; print(json.load(open("tutorial-work/dev-report.json"))["tokenEndpoint"])')
+credentials=tutorial-work/casework/.casework/dev/credentials
+```
+
+Reading the addresses from the report rather than typing them keeps the rest of the tutorial correct
+on a machine where the default ports were taken and `dev` used others.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start() and report();
+    crates/registry-caseworkctl/src/dev/config.rs;
+    crates/registry-caseworkctl/tests/dev_lifecycle.rs. */}
+
+## Submit a request as the Requester
+
+Ask Mint for a token as the `requester` client and write it into a file `curl` can send as an
+authorization header:
+
+```sh
+umask 077
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/requester/client-id")" \
+  --key "$credentials/requester/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+```
+
+Success prints nothing.
+`mint token` signs a request with the client's private key and posts it to the token endpoint, the
+way an application would; the token carries the `casework:request` scope and lasts five minutes.
+
+:::caution[Header files hold live tokens]
+`tutorial-work/requester.header` and the other header files written later each hold a bearer token
+that acts as that client until it expires.
+`umask 077` makes them readable only by your user.
+Keep them out of version control, screenshots, and support messages.
+:::
+
+Submit the renewal:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/requester.header \
+  --header 'Registry-Casework-Profile: requester' \
+  --header 'Idempotency-Key: tutorial-renewal-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"kind":"decision","requesterReference":"LIC-2026-0041","display":{"reference":"LIC-2026-0041","summary":"Renewal decision for licence LIC-2026-0041"}}' \
+  --output tutorial-work/requested.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/hosted-items"
+```
+
+```text
+HTTP 201
+```
+
+Every Casework request carries two things beyond the token: `Registry-Casework-Profile` names the
+profile the caller acts under for this request, and a write carries `Idempotency-Key` so a retry
+after a lost response returns the first result instead of creating a second item.
+
+Read the response:
+
+```sh
+python3 -m json.tool tutorial-work/requested.json
+```
+
+```json
+{
+    "itemId": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b",
+    "requesterReference": "LIC-2026-0041",
+    "kind": "decision",
+    "version": "1",
+    "display": {
+        "reference": "LIC-2026-0041",
+        "summary": "Renewal decision for licence LIC-2026-0041"
+    },
+    "state": "open",
+    "revision": 1,
+    "kindPolicyDigest": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+    "createdAt": "2026-09-11T16:16:38.272286Z",
+    "updatedAt": "2026-09-11T16:16:38.272286Z"
+}
+```
+
+Casework generates `itemId` as a random identifier, so yours differs from this one.
+`requesterReference` is the licence reference you chose, and it is how the Requester recognises its
+own request later.
+`kindPolicyDigest` pins the exact `decision` policy this
+[hosted item](../../reference/glossary/#hosted-item) was created under, so a later edit to
+`casework.yaml` cannot change the terms a decision was made on.
+
+{/* Evidence: crates/registry-casework/src/http.rs, create_hosted_item() and idempotency_key();
+    crates/registry-casework/src/hosted.rs, create_hosted_item();
+    crates/registry-casework-core/src/hosted.rs, HostedCreateRequest;
+    crates/registry-mint/src/cli.rs. */}
+
+## Open the inbox as Staff
+
+Mint a second token, this time as the `staff` client:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
+
+List the [work items](../../reference/glossary/#work-item) the Staff client's teams serve:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --header 'Registry-Casework-Profile: staff' \
+  --output tutorial-work/inbox.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items?view=my_teams&queue=decisions&limit=25"
+```
+
+```text
+HTTP 200
+```
+
+Read the inbox:
+
+```sh
+python3 -m json.tool tutorial-work/inbox.json
+```
+
+```json
+{
+    "items": [
+        {
+            "itemId": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b",
+            "subject": {
+                "sourceId": "casework:hosted",
+                "kind": "decision",
+                "id": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b"
+            },
+            "occurrenceKind": "hosted",
+            "binding": {
+                "sourceRevision": "1",
+                "version": "1",
+                "integrity": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+                "generation": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139"
+            },
+            "bindingReference": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+            "state": "open",
+            "queueId": "decisions",
+            "revision": 1,
+            "firstObservedAt": "2026-09-11T16:16:38.272286Z",
+            "updatedAt": "2026-09-11T16:16:38.272286Z",
+            "hosted": {
+                "requesterReference": "LIC-2026-0041",
+                "kind": "decision",
+                "version": "1",
+                "display": {
+                    "reference": "LIC-2026-0041",
+                    "summary": "Renewal decision for licence LIC-2026-0041"
+                },
+                "kindPolicyDigest": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+                "outcomes": [
+                    {
+                        "id": "confirmed",
+                        "label": "Confirm",
+                        "reasonRequired": false
+                    },
+                    {
+                        "id": "rejected",
+                        "label": "Return for correction",
+                        "reasonRequired": true
+                    }
+                ]
+            },
+            "actions": [
+                {
+                    "operation": "claim",
+                    "href": "/v1/work-items/8567158b-6ea5-49c4-ba9f-74ab7f01d83b/claim",
+                    "ifMatch": "\"1\""
+                }
+            ]
+        }
+    ],
+    "status": "complete",
+    "servedQueues": [
+        "decisions"
+    ]
+}
+```
+
+`servedQueues` is the answer to "what may this caller work on": the directory entry seeded from
+`dev-clients.yaml` puts the Staff client on the team that serves `decisions`, and `view=my_teams`
+lists exactly that.
+`actions` is the other half: Casework offers the operations this caller may take on this item right
+now, each with the `href` to send it to and the `ifMatch` value that version of the item answers to.
+An empty `actions` array means the item is visible and no operation is open to you.
+
+{/* Evidence: crates/registry-casework/src/http.rs, list_items() and router();
+    crates/registry-caseworkctl/src/dev/mod.rs, start();
+    products/casework/generated/registry-casework.openapi.json. */}
+
+## Claim the item
+
+A [claim](../../reference/glossary/#claim) makes one Staff member the holder, so two people do not
+decide the same item twice.
+Renew the Staff token before you act, so time spent reading the inbox cannot turn this request into
+an authentication refusal:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
+
+Take the identifier and the offered `ifMatch` value from the inbox rather than typing them:
+
+```sh
+item_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/inbox.json"))["items"][0]["itemId"])')
+claim_match=$(python3 -c 'import json; actions = json.load(open("tutorial-work/inbox.json"))["items"][0]["actions"]; print(next(action["ifMatch"] for action in actions if action["operation"] == "claim"))')
+```
+
+Claim it:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --header 'Registry-Casework-Profile: staff' \
+  --header "If-Match: $claim_match" \
+  --header 'Idempotency-Key: tutorial-claim-1' \
+  --header 'Content-Type: application/json' \
+  --data '{}' \
+  --output tutorial-work/claimed.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items/$item_id/claim"
+```
+
+```text
+HTTP 200
+```
+
+Read the part of the response that changed:
+
+```sh
+python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["item"]; print(json.dumps({key: item[key] for key in ("state", "revision", "holder", "actions")}, indent=2))'
+```
+
+```json
+{
+  "state": "claimed",
+  "revision": 2,
+  "holder": {
+    "issuer": "http://127.0.0.1:8093",
+    "subject": "urn:casework:dev:staff"
+  },
+  "actions": [
+    {
+      "operation": "release",
+      "href": "/v1/work-items/8567158b-6ea5-49c4-ba9f-74ab7f01d83b/release",
+      "ifMatch": "\"2\""
+    },
+    {
+      "operation": "delegate",
+      "href": "/v1/work-items/8567158b-6ea5-49c4-ba9f-74ab7f01d83b/delegate",
+      "ifMatch": "\"2\""
+    },
+    {
+      "operation": "confirmed",
+      "href": "/v1/work-items/8567158b-6ea5-49c4-ba9f-74ab7f01d83b/hosted-decisions",
+      "ifMatch": "\"2\""
+    },
+    {
+      "operation": "rejected",
+      "href": "/v1/work-items/8567158b-6ea5-49c4-ba9f-74ab7f01d83b/hosted-decisions",
+      "ifMatch": "\"2\""
+    }
+  ]
+}
+```
+
+The holder is the token's issuer and subject, the identity Mint put in the token, and the revision
+moved to 2.
+`actions` now offers the two declared outcomes beside `release` and `delegate`, each carrying the
+new `ifMatch`: claiming an item is what opens deciding it.
+
+{/* Evidence: crates/registry-casework/src/http.rs, claim() and if_match();
+    crates/registry-casework/src/hosted.rs;
+    crates/registry-caseworkctl/tests/dev_lifecycle.rs. */}
+
+## Decide the item
+
+Renew the Staff token again before the two decision attempts:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
+
+Try to confirm the renewal with the `ifMatch` value the inbox offered before the claim:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --header 'Registry-Casework-Profile: staff' \
+  --header "If-Match: $claim_match" \
+  --header 'Idempotency-Key: tutorial-decide-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"outcome":"confirmed"}' \
+  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items/$item_id/hosted-decisions"
+python3 -c 'import json; print(json.load(open("tutorial-work/problem.json"))["code"])'
+```
+
+```text
+HTTP 412
+precondition.failed
+```
+
+The refusal body lands in `tutorial-work/problem.json`, an RFC 7807 problem whose `code` is the
+stable name a client matches on, and whose detail reads
+`The item or directory changed since you loaded it. Reload and try again.`
+The claim moved the item to revision 2, so a decision sent against revision 1 was made on a view of
+the item that no longer holds.
+This is the check that stops a second caseworker deciding against a screen loaded before your claim.
+
+Take the `ifMatch` value the claim offered for the `confirmed` outcome, and decide:
+
+```sh
+decide_match=$(python3 -c 'import json; actions = json.load(open("tutorial-work/claimed.json"))["item"]["actions"]; print(next(action["ifMatch"] for action in actions if action["operation"] == "confirmed"))')
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --header 'Registry-Casework-Profile: staff' \
+  --header "If-Match: $decide_match" \
+  --header 'Idempotency-Key: tutorial-decide-1' \
+  --header 'Content-Type: application/json' \
+  --data '{"outcome":"confirmed"}' \
+  --output tutorial-work/decided.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items/$item_id/hosted-decisions"
+```
+
+```text
+HTTP 200
+```
+
+Read what was recorded:
+
+```sh
+python3 -m json.tool tutorial-work/decided.json
+```
+
+```json
+{
+    "itemId": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b",
+    "eventId": "60169bbc-3c8a-4e07-83e8-53ba439394cb",
+    "requesterReference": "LIC-2026-0041",
+    "state": "completed",
+    "outcome": "confirmed",
+    "actorRef": "actor_c5875a22cd6845dc98c08e00ec80836c",
+    "kindPolicyDigest": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+    "terminalAt": "2026-09-11T16:17:02.277563Z"
+}
+```
+
+The item is `completed` and the work is finished: a terminal state ends the claim and closes the
+item to further decisions.
+`eventId` identifies this decision, `actorRef` is an opaque handle for whoever made it, and
+`terminalAt` starts the retention clock the `decision` kind declares.
+Sending `{"outcome":"rejected"}` instead would have been refused without a `reason`, because the
+template marks that outcome `reasonRequired`.
+
+{/* Evidence: crates/registry-casework/src/http.rs, decide_hosted_item();
+    crates/registry-casework-core/src/hosted.rs, HostedDecisionRequest;
+    crates/registry-casework-core/src/http.rs, PRECONDITION_FAILED_PROBLEM. */}
+
+## Read the outcome as the Requester
+
+The Requester never sees the inbox, the claim, or the caseworker.
+Renew the Requester token before reading its own
+[terminal feed](../../reference/glossary/#terminal-feed):
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/requester/client-id")" \
+  --key "$credentials/requester/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+```
+
+Read the feed:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/requester.header \
+  --header 'Registry-Casework-Profile: requester' \
+  --output tutorial-work/terminal.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/hosted-items/terminal"
+```
+
+```text
+HTTP 200
+```
+
+```sh
+python3 -m json.tool tutorial-work/terminal.json
+```
+
+```json
+{
+    "items": [
+        {
+            "itemId": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b",
+            "eventId": "60169bbc-3c8a-4e07-83e8-53ba439394cb",
+            "requesterReference": "LIC-2026-0041",
+            "state": "completed",
+            "outcome": "confirmed",
+            "actorRef": "actor_c5875a22cd6845dc98c08e00ec80836c",
+            "kindPolicyDigest": "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139",
+            "terminalAt": "2026-09-11T16:17:02.277563Z"
+        }
+    ],
+    "status": "complete"
+}
+```
+
+The feed carries the outcome and `requesterReference`, which is what an application matching results
+back to its own records needs, and the opaque `actorRef` in place of the caseworker's identity.
+`"status": "complete"` says this page is the end of the feed.
+
+{/* Evidence: crates/registry-casework/src/http.rs, hosted_terminal_items();
+    crates/registry-casework-core/src/http.rs, HostedTerminalQuery;
+    products/casework/generated/registry-casework.openapi.json. */}
+
+## See who decided, as the Supervisor
+
+A Supervisor resolves the opaque handle to a person, one decision at a time.
+Mint a Supervisor token:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/supervisor/client-id")" \
+  --key "$credentials/supervisor/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/supervisor.header
+```
+
+Read the [accountability record](../../reference/glossary/#accountability-record) for the decision
+event:
+
+```sh
+event_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/decided.json"))["eventId"])')
+curl --silent --show-error \
+  --header @tutorial-work/supervisor.header \
+  --header 'Registry-Casework-Profile: supervisor' \
+  --output tutorial-work/accountability.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/hosted-accountability/$event_id"
+```
+
+```text
+HTTP 200
+```
+
+```sh
+python3 -m json.tool tutorial-work/accountability.json
+```
+
+```json
+{
+    "itemId": "8567158b-6ea5-49c4-ba9f-74ab7f01d83b",
+    "eventId": "60169bbc-3c8a-4e07-83e8-53ba439394cb",
+    "actorRef": "actor_c5875a22cd6845dc98c08e00ec80836c",
+    "actor": {
+        "issuer": "http://127.0.0.1:8093",
+        "subject": "urn:casework:dev:staff"
+    },
+    "profileId": "staff",
+    "outcome": "confirmed",
+    "recordedAt": "2026-09-11T16:17:02.277563Z",
+    "retainedUntil": "2027-09-11T16:17:02.277563Z"
+}
+```
+
+This is the whole accountability surface: the same `actorRef` the Requester saw, resolved to the
+issuer and subject in the decider's token, the profile they acted under, the outcome, and how long
+the record is kept.
+`retainedUntil` is one year after the decision because the `decision` kind declares
+`accountabilityDays: 365`, and the Requester's terminal entry declares a shorter 90 days, so
+accountability outlives the feed.
+
+{/* Evidence: crates/registry-casework/src/http.rs, hosted_accountability();
+    crates/registry-casework-core/src/hosted.rs, HostedAccountabilityRecord;
+    crates/registry-caseworkctl/src/project.rs, init(). */}
+
+## Requests Casework refuses
+
+Three refusals show where the boundaries are.
+Renew the Requester token so the first refusal proves the profile boundary rather than token
+expiry:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/requester/client-id")" \
+  --key "$credentials/requester/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+```
+
+Ask for the Staff inbox with the Requester token:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/requester.header \
+  --header 'Registry-Casework-Profile: requester' \
+  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items?view=my_teams&queue=decisions"
+python3 -c 'import json; print(json.load(open("tutorial-work/problem.json"))["code"])'
+```
+
+```text
+HTTP 403
+operation.not-authorized
+```
+
+The Requester profile carries no authority over the queue, whatever it asks for.
+
+Renew the Staff token, then ask for the same inbox while selecting the `supervisor` profile:
+
+```sh
+mint token --url "$token_endpoint" \
+  --client-id "$(cat "$credentials/staff/client-id")" \
+  --key "$credentials/staff/assertion-key.jwk" \
+  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+```
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --header 'Registry-Casework-Profile: supervisor' \
+  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items?view=my_teams&queue=decisions"
+python3 -c 'import json; print(json.load(open("tutorial-work/problem.json"))["code"])'
+```
+
+```text
+HTTP 403
+profile.not-authorized
+```
+
+Naming a profile in a header grants nothing, because Casework checks the token's scopes against the
+scopes that profile requires in `casework.yaml`.
+A caseworker who is also a supervisor holds a token carrying both scope sets and selects one profile
+per request.
+
+Last, send the Staff request with no profile header at all:
+
+```sh
+curl --silent --show-error \
+  --header @tutorial-work/staff.header \
+  --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
+  "$casework_url/v1/work-items?view=my_teams&queue=decisions"
+python3 -c 'import json; print(json.load(open("tutorial-work/problem.json"))["code"])'
+```
+
+```text
+HTTP 400
+request.invalid
+```
+
+Casework has no default profile: a request that does not say which authority it acts under is
+incomplete, not permissive.
+
+{/* Evidence: crates/registry-casework-core/src/http.rs, OPERATION_NOT_AUTHORIZED_PROBLEM
+    and PROFILE_NOT_AUTHORIZED_PROBLEM and REQUEST_INVALID_PROBLEM;
+    crates/registry-casework/src/http.rs, authenticate() and profile_header(). */}
+
+## Stop Casework
+
+Stop the services:
+
+```sh
+caseworkctl dev stop tutorial-work/casework
+```
+
+The report's `status` reads `stopped`.
+The container and its volume stay, with the item, the decision, and the accountability record, and
+the start command from [Start Casework](#start-casework) brings the same runtime back.
+
+:::caution[--remove discards the records]
+Stopping with `--remove` deletes the container and its volume.
+The work item, its decision, its terminal entry, and its accountability record go with them, and
+nothing here restores them.
+:::
+
+```sh
+caseworkctl dev stop tutorial-work/casework --remove
+```
+
+Either way, keep `tutorial-work/`: the project inside it is what the configuration guide edits.
+After a plain stop, the next start refuses a project whose declarations changed while records
+exist, and names `caseworkctl dev stop --remove` as the way to discard them first.
+After `--remove`, the next start builds the project as it stands, edits included.
+
+{/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, stop() and start(). */}
+
+## What you built
+
+You generated a Casework project, ran it as a service, submitted one request as a Requester, claimed
+and decided it as Staff, read the outcome from the Requester's own feed, resolved the decider as a
+Supervisor, and saw profile authority and version checks refuse three requests.
+All of it came from the YAML in `tutorial-work/casework`.
+
+## Troubleshooting
+
+### Renew an expired token
+
+A local token lasts five minutes.
+Run the `mint token` command for that client again; it replaces the header file.
+If it fails, the runtime is stopped: start it again with the command from
+[Start Casework](#start-casework), then renew.
+
+### Other problems
+
+| Symptom | Next move |
+| --- | --- |
+| `caseworkctl`, `casework`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| `caseworkctl dev` refuses over a reported version | The `casework` or `mint` it resolved comes from another release than `caseworkctl`. The refusal names both versions. Install all three from the same release, or put the matching build first on `PATH`. |
+| `caseworkctl dev` refuses a port | Something else listens on 8092, 8093, or 55433. Set `CASEWORKCTL_DEV_CASEWORK_PORT`, `CASEWORKCTL_DEV_MINT_PORT`, or `CASEWORKCTL_DEV_DATABASE_PORT`, or pass `--casework-port`, `--mint-port`, or `--database-port`, on the first start; later starts keep the ports you chose, and the `casework_url` and `token_endpoint` assignments from [Start Casework](#start-casework) pick them up. |
+| `caseworkctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed. Otherwise check that Docker is running. Run `caseworkctl dev events tutorial-work/casework` for the retained runtime journal; do not share the credential files beside it. |
+| A request returns `401` with code `authentication.refused` | The token expired, or the header file is stale. Mint it again for that client, as [Renew an expired token](#renew-an-expired-token) describes. |
+| A request returns `400` with code `request.invalid` | A required header is missing. Every request carries `Registry-Casework-Profile`, and every write also carries `Idempotency-Key`. |
+| A claim or decision returns `412` | The item moved. Re-read it, take the `ifMatch` value from the `actions` entry for the operation you want, and send it again. |
+| A claim returns `409` | Another caller holds the item. Its `actions` array shows what remains open to you. |
+| You opened a fresh terminal | Run the `casework_url`, `token_endpoint`, and `credentials` assignments from [Start Casework](#start-casework) again. The header files and `tutorial-work` directory are still there. |
+
+## Next
+
+- [Author a Casework policy](../../configure/casework/) to change the queue, the hosted kind, and the profiles this tutorial used.
+- [How Casework works](../../explanation/how-casework-works/) for the model behind claims, attempts, and accountability.
+- [Deploy Registry Casework](../../operate/casework/) before you plan a deployment.
+- [Retain, erase, and settle](../../operate/casework-retention/) for what happens to the records after the clocks in this tutorial run out.
+- [Registry Casework API reference](../../reference/apis/registry-casework/) for every route and problem code.

@@ -11,7 +11,7 @@ export BREG_TEST_S3_BUCKET=breg-http-attachments
 container=$(docker run --rm -d -p 127.0.0.1::9000 \
   -e MINIO_ROOT_USER="$BREG_TEST_S3_ACCESS_KEY" \
   -e MINIO_ROOT_PASSWORD="$BREG_TEST_S3_SECRET_KEY" \
-  minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
+  quay.io/minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e \
   server /data)
 trap 'docker stop "$container" >/dev/null' EXIT
 port=$(docker port "$container" 9000/tcp)

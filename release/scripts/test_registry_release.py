@@ -1082,15 +1082,25 @@ class RegistryReleaseTest(TestCase):
         workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
             encoding="utf-8"
         )
+        assemble = workflow.split("\n  assemble:", 1)[1].split("\n  attest:", 1)[0]
         installer = ROOT / "crates/registry-casework/install.sh"
         installer_text = installer.read_text(encoding="utf-8")
         self.assertIn("release_minor >= 30", workflow)
         self.assertIn("-p registry-casework --bin casework", workflow)
         self.assertIn("-p registry-caseworkctl --bin caseworkctl", workflow)
-        self.assertIn("binaries=(casework caseworkctl)", installer_text)
+        self.assertIn("binaries=(casework caseworkctl mint)", installer_text)
         self.assertIn("CASEWORK_ASSET_DIR", workflow)
         self.assertIn("CASEWORK_INSTALL_DIR", workflow)
         self.assertIn("--template standalone-decision", workflow)
+        self.assertIn(
+            '"caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
+            '                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
+            "                > SHA256SUMS",
+            assemble,
+        )
+        self.assertIn(
+            "for casework_binary in casework caseworkctl mint; do", assemble
+        )
         self.assertIn('caseworkctl\" check', workflow)
         self.assertIn('caseworkctl\" test', workflow)
         self.assertIn('caseworkctl\" package', workflow)
@@ -1117,7 +1127,7 @@ class RegistryReleaseTest(TestCase):
                     f"installer has no release asset for {os_name}/{architecture}"
                 )
             checksums = []
-            for binary in ("casework", "caseworkctl"):
+            for binary in ("casework", "caseworkctl", "mint"):
                 name = f"{binary}-v0.30.0-{platform_name}"
                 body = f"{binary} fixture\n".encode()
                 (assets / name).write_bytes(body)
@@ -1139,7 +1149,7 @@ class RegistryReleaseTest(TestCase):
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            for binary in ("casework", "caseworkctl"):
+            for binary in ("casework", "caseworkctl", "mint"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)

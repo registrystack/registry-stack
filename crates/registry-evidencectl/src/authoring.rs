@@ -134,6 +134,11 @@ pub(crate) struct AuthoredDiagnostic {
     pub(crate) message: String,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct TargetBoundSource {
+    pub(crate) source_id: String,
+}
+
 impl std::fmt::Display for AuthoredDiagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(&self.message)
@@ -1649,8 +1654,25 @@ pub(crate) fn source_connection_users(
 /// structural import check; the real Evidence bundle check remains mandatory
 /// when an operator selects a target and builds the complete project.
 pub(crate) fn validate_source_artifact_graph(project_root: &Path) -> Result<()> {
+    validate_source_artifact_graph_with_target_bindings(project_root).map(drop)
+}
+
+/// Validate the authored source graph and return the connections whose values
+/// only an explicit deployment target can supply.
+///
+/// This does not resolve, synthesize, or validate deployment connection
+/// values. `resolve_source_connections` remains the strict compilation step
+/// after a target has been selected.
+pub(crate) fn target_bound_sources(project_root: &Path) -> Result<Vec<TargetBoundSource>> {
+    validate_source_artifact_graph_with_target_bindings(project_root)
+}
+
+fn validate_source_artifact_graph_with_target_bindings(
+    project_root: &Path,
+) -> Result<Vec<TargetBoundSource>> {
     let selectors = read_named_objects(project_root, SELECTORS_DIRECTORY, "selector profile")?;
     let sources = read_named_objects(project_root, SOURCES_DIRECTORY, "source")?;
+    let mut target_bound_sources = Vec::new();
     for (source_id, source) in &sources {
         if source.get("connection").is_none() {
             validate_referenced_source_authentication("imported source", source_id, source)?;
@@ -1668,6 +1690,9 @@ pub(crate) fn validate_source_artifact_graph(project_root: &Path) -> Result<()> 
             {
                 bail!("source `{source_id}` must leave connection-owned fields to `{name}`");
             }
+            target_bound_sources.push(TargetBoundSource {
+                source_id: source_id.clone(),
+            });
         }
         for input in source_selector_inputs(source)? {
             let alternatives = input
@@ -1773,7 +1798,7 @@ pub(crate) fn validate_source_artifact_graph(project_root: &Path) -> Result<()> 
             }
         }
     }
-    Ok(())
+    Ok(target_bound_sources)
 }
 
 fn compile_question_plan(
@@ -5919,6 +5944,42 @@ fn prepare(selectors, context) {
     }
 
     #[test]
+    fn target_bound_source_shape_validates_without_resolving_a_target() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        let source_path = fixture.project.join("sources/people.yaml");
+        let mut source: Value = serde_norway::from_slice(&fs::read(&source_path).unwrap()).unwrap();
+        for field in ["baseUrl", "authentication"] {
+            source.as_object_mut().unwrap().remove(field);
+        }
+        source["request"]
+            .as_object_mut()
+            .unwrap()
+            .remove("concurrencyLimit");
+        source["connection"] = json!("records");
+        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+
+        let target_bound = target_bound_sources(&fixture.project)
+            .expect("the authored connection reference and source shape validate");
+
+        assert_eq!(
+            target_bound,
+            [TargetBoundSource {
+                source_id: "people".to_owned(),
+            }]
+        );
+
+        source["baseUrl"] = json!("https://author-cannot-retarget.example");
+        fs::write(&source_path, serde_norway::to_string(&source).unwrap()).unwrap();
+        let error = target_bound_sources(&fixture.project)
+            .expect_err("a target-bound source cannot override connection-owned values");
+        assert_eq!(
+            error.to_string(),
+            "source `people` must leave connection-owned fields to `records`"
+        );
+    }
+
+    #[test]
     fn one_question_compiles_explicit_overlapping_and_composite_profiles() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         let question = write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
@@ -6042,6 +6103,11 @@ fn prepare(selectors, context) {
         ]);
         resolve_source_connections(&mut sources, &connections).unwrap();
         assert_eq!(sources["ordinary"], original);
+        assert_eq!(sources["connected"]["connection"], "records");
+        assert_eq!(
+            sources["connected"]["baseUrl"],
+            connections["records"]["baseUrl"]
+        );
         assert_eq!(sources["connected"]["request"]["concurrencyLimit"], 4);
         assert_eq!(
             sources["connected"]["authentication"],
@@ -6056,11 +6122,15 @@ fn prepare(selectors, context) {
             )
             .is_err());
         }
-        assert!(resolve_source_connections(
+        let error = resolve_source_connections(
             &mut BTreeMap::from([("connected".to_owned(), connected)]),
-            &json!({})
+            &json!({}),
         )
-        .is_err());
+        .expect_err("explicit target compilation requires the named connection");
+        assert_eq!(
+            error.to_string(),
+            "source connection `records` is not declared by the selected target"
+        );
     }
 
     #[test]

@@ -9,14 +9,11 @@ use registry_casework_core::{
     AttemptSettlement, AttemptSettlementReport, CaseworkProject, SourceRetentionReport,
     SourceRetentionSelector,
 };
+use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
-use std::fs::{self, OpenOptions};
-use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
-use std::net::{SocketAddr, TcpStream};
+use std::fs;
+use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
 
 const CASEWORK_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
@@ -125,7 +122,7 @@ expect:
 
 const EVENT_WIRING_GUIDANCE: &str = "The configured source reader cannot attest that BReg sends lifecycle events to this Casework receiver with the same key. Run bregctl doctor against the BReg runtime configuration, then cause and confirm one lifecycle delivery.";
 
-const STANDALONE_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
+pub(super) const STANDALONE_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
 casework:
   id: standalone-decision
@@ -188,12 +185,95 @@ expect:
   outcomes: [confirmed, rejected]
 "#;
 
+/// The local clients `caseworkctl init` writes beside the standalone project.
+pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `caseworkctl dev`. Registry Mint, the local token issuer
+# that `dev` starts beside Casework, registers each client below and issues it
+# short-lived tokens carrying these claims. One client binds each access
+# profile `casework.yaml` declares, so a first start serves every role in the
+# tutorial without another file. `registry_actor_kind: human` is the claim
+# Casework requires of a person; a Requester is a calling system, so it carries
+# no such claim.
+#
+# `dev` generates a fresh private key per client under
+# `.casework/dev/credentials/`; nothing here is a credential, and none of it
+# belongs in a deployment.
+version: 1
+clients:
+  - id: administrator
+    accessProfile: administrator
+    scopes: [casework:admin]
+    claims:
+      registry_actor_kind: human
+  - id: supervisor
+    accessProfile: supervisor
+    scopes: [casework:supervisor]
+    claims:
+      registry_actor_kind: human
+  - id: staff
+    accessProfile: staff
+    scopes: [casework:staff]
+    claims:
+      registry_actor_kind: human
+  - id: requester
+    accessProfile: requester
+    scopes: [casework:request]
+# The directory `dev` seeds as an Administrator on the first start, so
+# `caseworkctl doctor` reports ready and the inbox opens. Every queue
+# `casework.yaml` declares needs a team serving it.
+directory:
+  - team: decisions-team
+    queue: decisions
+    staff: [staff]
+    supervisors: [supervisor]
+"#;
+
+/// The local clients `caseworkctl init` writes beside the professional-review
+/// project. That project binds a BReg source, so its runtime needs a reader
+/// credential `dev` cannot generate; these clients serve a deployed runtime,
+/// and `mint` issues their tokens from the operator's own issuer.
+pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for this Casework project. Each client binds one access
+# profile `casework.yaml` declares and carries the claims that profile reads:
+# `registry_principal` is this project's `principalClaim`, and
+# `registry_actor_kind: human` is the claim Casework requires of a person.
+#
+# This project binds a BReg source, so `caseworkctl dev` does not serve it: a
+# source binding needs a running source system and its own reader credential.
+# Point these clients at the deployed runtime's own token issuer.
+version: 1
+clients:
+  - id: administrator
+    accessProfile: administrator
+    scopes: [casework:admin]
+    claims:
+      registry_actor_kind: human
+      registry_principal: professional-review-administrator
+  - id: supervisor
+    accessProfile: supervisor
+    scopes: [casework:supervisor]
+    claims:
+      registry_actor_kind: human
+      registry_principal: professional-review-supervisor
+  - id: staff
+    accessProfile: staff
+    scopes: [casework:staff]
+    claims:
+      registry_actor_kind: human
+      registry_principal: professional-review-staff
+# Every queue `casework.yaml` declares needs a team serving it before
+# `caseworkctl doctor` reports ready.
+directory:
+  - team: corrections-team
+    queue: corrections
+    staff: [staff]
+    supervisors: [supervisor]
+"#;
+
 pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
-    let (project_yaml, fixture_name, fixture, next) = match template {
-        "professional-review" => (CASEWORK_YAML, "professional-review.yaml", FIXTURE,
+    let (project_yaml, fixture_name, fixture, dev_clients, next) = match template {
+        "professional-review" => (CASEWORK_YAML, "professional-review.yaml", FIXTURE, PROFESSIONAL_REVIEW_DEV_CLIENTS,
             "Run caseworkctl source add with the authored BReg project and --source-id professional-register."),
-        "standalone-decision" => (STANDALONE_YAML, "standalone-decision.yaml", STANDALONE_FIXTURE,
-            "Run caseworkctl check and test, copy runtime.example.yaml to runtime.yaml and configure its database and identity settings, then create a team serving decisions as an Administrator."),
+        "standalone-decision" => (STANDALONE_YAML, "standalone-decision.yaml", STANDALONE_FIXTURE, STANDALONE_DEV_CLIENTS,
+            "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."),
         _ => bail!("unknown template {template:?}; available templates: professional-review, standalone-decision"),
     };
     match fs::symlink_metadata(project) {
@@ -211,7 +291,10 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .context("creating project staging directory")?;
     fs::create_dir(staging.path().join("fixtures"))?;
     fs::create_dir(staging.path().join("sources"))?;
-    fs::create_dir_all(staging.path().join(".casework/schemas"))?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(staging.path().join(".casework"))?;
+    fs::create_dir(staging.path().join(".casework/schemas"))?;
     fs::create_dir(staging.path().join(".vscode"))?;
     fs::write(staging.path().join("casework.yaml"), project_yaml)?;
     fs::write(
@@ -233,6 +316,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         editor_settings,
     )?;
     fs::write(staging.path().join("fixtures").join(fixture_name), fixture)?;
+    fs::write(staging.path().join("dev-clients.yaml"), dev_clients)?;
     let staging_path = staging.keep();
     fs::rename(&staging_path, project)
         .context("publishing Casework project without replacement")?;
@@ -241,7 +325,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "runtime.example.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
+        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
         "next": [next]
     }))
 }
@@ -394,7 +478,7 @@ fn load_yaml(path: &Path, label: &str) -> Result<Value> {
     }
     serde_norway::from_slice(&bytes).with_context(|| format!("parsing {label}"))
 }
-fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
+pub(super) fn load_and_check_policy(project: &Path) -> Result<CaseworkProject> {
     let policy = CaseworkProject::load(project.join("casework.yaml"))
         .context("loading and checking casework.yaml")?;
     if policy.sources.is_empty() {
@@ -583,6 +667,137 @@ fn validate_fixture(fixture: &Value, effective: &Value, policy: &CaseworkProject
     Ok(())
 }
 
+/// Every secret reference the operator configuration names, in the order an
+/// operator reads them, paired with the setting that names it.
+fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
+    let mut references = vec![
+        (
+            "database.runtimeUrlRef".to_owned(),
+            config.database.runtime_url_ref.as_str(),
+        ),
+        (
+            "database.migrationUrlRef".to_owned(),
+            config.database.migration_url_ref.as_str(),
+        ),
+    ];
+    if let Some(reference) = config.database.trusted_root_certificate_ref.as_deref() {
+        references.push(("database.trustedRootCertificateRef".to_owned(), reference));
+    }
+    if let registry_casework::OidcJwksSource::Static { document_ref } =
+        &config.authentication.oidc.jwks_source
+    {
+        references.push((
+            "authentication.oidc.jwksSource.documentRef".to_owned(),
+            document_ref.as_str(),
+        ));
+    }
+    references.push((
+        "audit.hashKeyRef".to_owned(),
+        config.audit.hash_key_ref.as_str(),
+    ));
+    for (id, binding) in &config.sources {
+        for (setting, reference) in [
+            ("clientIdRef", Some(binding.client_id_ref.as_str())),
+            (
+                "clientAssertionKeyRef",
+                Some(binding.client_assertion_key_ref.as_str()),
+            ),
+            (
+                "webhookSecretRef",
+                Some(binding.webhook_secret_ref.as_str()),
+            ),
+            (
+                "trustedRootCertificatesRef",
+                binding.trusted_root_certificates_ref.as_deref(),
+            ),
+        ] {
+            if let Some(reference) = reference {
+                references.push((format!("sources.{id}.{setting}"), reference));
+            }
+        }
+    }
+    references
+}
+
+/// Why one parsed file reference is unusable, or `None` when the runtime's
+/// shared descriptor-relative resolver accepts it. Nothing from the resolved
+/// bytes is retained or reported.
+fn secret_file_refusal(
+    resolver: &SecretResolver,
+    reference: &SecretReference,
+) -> Option<&'static str> {
+    match resolver.resolve_reference(reference) {
+        Ok(_) => None,
+        Err(SecretError::Unavailable) => {
+            Some("missing or unreadable under the configured file secret root")
+        }
+        Err(SecretError::UnsafeFile) => {
+            Some("not an owner-only ordinary single-link file with mode 0400 or 0600")
+        }
+        Err(SecretError::Read) => Some("unreadable"),
+        Err(SecretError::InvalidValue) => Some("not non-empty bounded text without NUL bytes"),
+        Err(SecretError::InvalidReference) => Some("not a valid secret reference"),
+        Err(SecretError::ProviderDisabled) => Some("served by a disabled file secret provider"),
+        Err(SecretError::InvalidProviderConfiguration) => {
+            Some("served by an invalid file secret provider configuration")
+        }
+    }
+}
+
+/// Parse every configured secret reference before the live checks, then inspect
+/// each `secret:file/...` value and report one bounded result per reference. A
+/// reference served by another provider is reported as outside this check
+/// rather than silently omitted.
+fn secret_file_checks(config: &RuntimeConfig, resolver: &SecretResolver) -> Result<Vec<Value>> {
+    let file_root = config
+        .secret_providers
+        .file
+        .as_ref()
+        .map(|provider| provider.root.as_path());
+    let mut checks = Vec::new();
+    let mut refused = Vec::new();
+    let references = secret_references(config)
+        .into_iter()
+        .map(|(setting, reference)| {
+            SecretReference::parse(reference)
+                .with_context(|| {
+                    format!(
+                        "{setting} must be an exact secret:env/NAME or secret:file/name reference"
+                    )
+                })
+                .map(|reference| (setting, reference))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (setting, reference) in references {
+        let check = match reference.provider() {
+            SecretProvider::File => match secret_file_refusal(resolver, &reference) {
+                None => json!({"setting": setting, "provider": "file", "status": "ready"}),
+                Some(refusal) => {
+                    refused.push(format!("{setting} is {refusal}"));
+                    json!({"setting": setting, "provider": "file", "status": "refused", "refusal": refusal})
+                }
+            },
+            SecretProvider::Environment => json!({
+                "setting": setting,
+                "provider": "environment",
+                "status": "not-checked",
+                "refusal": "served by the environment provider, which this check does not read"
+            }),
+        };
+        checks.push(check);
+    }
+    if !refused.is_empty() {
+        bail!(
+            "the operator configuration names secret files this runtime cannot read: {}. Correct them under {}",
+            refused.join("; "),
+            file_root
+                .map(|root| root.display().to_string())
+                .unwrap_or_else(|| "the disabled file secret provider".to_owned())
+        );
+    }
+    Ok(checks)
+}
+
 pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
     let config =
         RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
@@ -592,6 +807,7 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         .context("resolving the configured Casework package root")?;
     check_source_descriptions(&package_root)?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let secret_files = secret_file_checks(&config, &resolver)?;
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
@@ -643,12 +859,14 @@ pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
         "packageRoot": package_root,
         "checks": {
             "configuration": "ready",
+            "secretFiles": "ready",
             "sourceDescriptions": "ready",
             "sourceConnections": "ready",
             "database": "ready",
             "oidcIssuer": "ready",
             "directory": "ready"
         },
+        "secretFileChecks": secret_files,
         "sourceChecks": source_checks,
         "eventWiringGuidance": EVENT_WIRING_GUIDANCE
     }))
@@ -767,162 +985,6 @@ fn attempt_settlement_output(
     })
 }
 
-pub(super) fn dev_start(project: &Path, runtime_config: Option<&Path>) -> Result<Value> {
-    let workspace =
-        fs::canonicalize(project).context("resolving Casework development workspace")?;
-    let state = state_paths(&workspace);
-    let remembered = if runtime_config.is_none() {
-        read_session(&state.session)?.map(|session| session.runtime_config)
-    } else {
-        None
-    };
-    let selected = load_runtime(&workspace, runtime_config.or(remembered.as_deref()))?;
-    let config = &selected.config;
-    fs::create_dir_all(&state.directory).context("creating local Casework state")?;
-    if let Some(process) = read_process(&state.pid)? {
-        if process_matches(&process)? {
-            bail!("a local Casework runtime is already running for this project");
-        }
-        fs::remove_file(&state.pid).context("removing a stale Casework pid file")?;
-    }
-    rotate_journal(&state.journal)?;
-    let journal = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&state.journal)
-        .context("opening the local Casework journal")?;
-    let stderr = journal.try_clone()?;
-    let binary = std::env::var_os("CASEWORK_BIN")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("casework"));
-    check_casework_version(&binary)?;
-    let mut child = Command::new(&binary)
-        .args([
-            "--runtime-config",
-            selected
-                .runtime_config
-                .to_str()
-                .context("runtime config path is not UTF-8")?,
-            "serve",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(journal))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .context(
-            "starting casework; set CASEWORK_BIN to the same-version binary if it is not on PATH",
-        )?;
-    let process = ProcessRecord {
-        pid: child.id(),
-        binary: binary.clone(),
-        runtime_config: selected.runtime_config.clone(),
-        listen: config.listener.bind,
-    };
-    write_process(&state.pid, &process)?;
-    write_session(
-        &state.session,
-        &DevSession {
-            runtime_config: selected.runtime_config.clone(),
-            listen: config.listener.bind,
-        },
-    )?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if let Some(status) = child.try_wait().context("checking the Casework child")? {
-            let _ = fs::remove_file(&state.pid);
-            bail!("Casework exited before readiness with {status}; inspect caseworkctl dev events");
-        }
-        if probe_ready(config.listener.bind) {
-            break;
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = fs::remove_file(&state.pid);
-            bail!(
-                "Casework did not report ready within 10 seconds; inspect caseworkctl dev events"
-            );
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    Ok(json!({
-        "ok": true,
-        "command": "dev start",
-        "project": selected.workspace,
-        "runtimeConfig": selected.runtime_config,
-        "packageRoot": selected.package_root,
-        "pid": process.pid,
-        "listen": config.listener.bind,
-        "health": "ready",
-        "journal": state.journal
-    }))
-}
-
-pub(super) fn dev_stop(project: &Path) -> Result<Value> {
-    let project = fs::canonicalize(project).context("resolving Casework project")?;
-    let state = state_paths(&project);
-    let Some(process) = read_process(&state.pid)? else {
-        bail!("no local Casework runtime exists in this project; nothing was stopped");
-    };
-    if !process_matches(&process)? {
-        fs::remove_file(&state.pid).context("removing stale Casework pid state")?;
-        bail!("the retained Casework process is no longer running; stale state was removed");
-    }
-    signal(process.pid, "-TERM")?;
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while process_matches(&process)? {
-        if Instant::now() >= deadline {
-            signal(process.pid, "-KILL")?;
-            break;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    fs::remove_file(&state.pid).context("removing Casework pid state")?;
-    Ok(json!({
-        "ok":true,
-        "command":"dev stop",
-        "project":project,
-        "runtimeConfig": process.runtime_config,
-        "listen": process.listen,
-        "pid":process.pid,
-        "status":"stopped"
-    }))
-}
-
-pub(super) fn dev_events(project: &Path) -> Result<Value> {
-    let project = fs::canonicalize(project).context("resolving Casework project")?;
-    let journal = state_paths(&project).journal;
-    const MAX_BYTES: u64 = 256 * 1024;
-    let (bytes, byte_truncated) = match fs::File::open(&journal) {
-        Ok(mut file) => {
-            let length = file
-                .metadata()
-                .context("reading local Casework journal metadata")?
-                .len();
-            let start = length.saturating_sub(MAX_BYTES);
-            file.seek(SeekFrom::Start(start))
-                .context("seeking local Casework journal tail")?;
-            let mut bytes = Vec::with_capacity(
-                usize::try_from(length.min(MAX_BYTES)).context("sizing Casework journal tail")?,
-            );
-            file.take(MAX_BYTES)
-                .read_to_end(&mut bytes)
-                .context("reading local Casework journal tail")?;
-            (bytes, start > 0)
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (Vec::new(), false),
-        Err(error) => return Err(error).context("opening local Casework journal"),
-    };
-    let text = String::from_utf8_lossy(&bytes);
-    let lines = text.lines().collect::<Vec<_>>();
-    let line_truncated = lines.len() > 512;
-    let first_line = if line_truncated { lines.len() - 512 } else { 0 };
-    let events = lines.into_iter().skip(first_line).collect::<Vec<_>>();
-    Ok(
-        json!({"ok":true,"command":"dev events","project":project,"journal":journal,"events":events,"truncated":byte_truncated || line_truncated}),
-    )
-}
-
 fn runtime_config_path(project: &Path, requested: Option<&Path>) -> PathBuf {
     requested
         .map(Path::to_path_buf)
@@ -932,7 +994,6 @@ fn runtime_config_path(project: &Path, requested: Option<&Path>) -> PathBuf {
 struct RuntimeSelection {
     workspace: PathBuf,
     runtime_config: PathBuf,
-    package_root: PathBuf,
     config: RuntimeConfig,
 }
 
@@ -941,15 +1002,15 @@ fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelec
         fs::canonicalize(project).context("resolving Casework development workspace")?;
     let runtime_config = fs::canonicalize(runtime_config_path(&workspace, requested))
         .context("resolving Casework runtime configuration")?;
-    let config =
+    let mut config =
         RuntimeConfig::load(&runtime_config).context("loading Casework runtime configuration")?;
     let package_root = fs::canonicalize(&config.package.root)
         .context("resolving the configured Casework package root")?;
     load_and_check_policy(&package_root)?;
+    config.package.root = package_root;
     Ok(RuntimeSelection {
         workspace,
         runtime_config,
-        package_root,
         config,
     })
 }
@@ -971,141 +1032,6 @@ fn async_runtime() -> Result<tokio::runtime::Runtime> {
         .enable_all()
         .build()
         .context("starting the Casework operator runtime")
-}
-
-struct StatePaths {
-    directory: PathBuf,
-    pid: PathBuf,
-    session: PathBuf,
-    journal: PathBuf,
-}
-
-fn state_paths(project: &Path) -> StatePaths {
-    let directory = project.join(".casework");
-    StatePaths {
-        pid: directory.join("dev-process.json"),
-        session: directory.join("dev-session.json"),
-        journal: directory.join("events.log"),
-        directory,
-    }
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-struct ProcessRecord {
-    pid: u32,
-    binary: PathBuf,
-    runtime_config: PathBuf,
-    listen: SocketAddr,
-}
-
-#[derive(serde::Deserialize, serde::Serialize)]
-struct DevSession {
-    runtime_config: PathBuf,
-    listen: SocketAddr,
-}
-
-fn read_session(path: &Path) -> Result<Option<DevSession>> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .context("reading retained Casework development session"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).context("reading retained Casework development session"),
-    }
-}
-
-fn write_session(path: &Path, session: &DevSession) -> Result<()> {
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(path.parent().context("session path has no parent")?)?;
-    serde_json::to_writer(&mut temporary, session)?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
-}
-
-fn read_process(path: &Path) -> Result<Option<ProcessRecord>> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .context("reading retained Casework process state"),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).context("reading retained Casework process state"),
-    }
-}
-
-fn write_process(path: &Path, process: &ProcessRecord) -> Result<()> {
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(path.parent().context("pid path has no parent")?)?;
-    serde_json::to_writer(&mut temporary, process)?;
-    temporary.write_all(b"\n")?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path).map_err(|error| error.error)?;
-    Ok(())
-}
-
-fn process_matches(process: &ProcessRecord) -> Result<bool> {
-    let output = Command::new("ps")
-        .args(["-p", &process.pid.to_string(), "-o", "command="])
-        .output()
-        .context("checking retained Casework process")?;
-    if !output.status.success() {
-        return Ok(false);
-    }
-    let command = String::from_utf8_lossy(&output.stdout);
-    Ok(command.contains("casework")
-        && command.contains(process.runtime_config.to_string_lossy().as_ref()))
-}
-
-fn signal(pid: u32, signal: &str) -> Result<()> {
-    let status = Command::new("kill")
-        .args([signal, &pid.to_string()])
-        .status()
-        .context("signalling retained Casework process")?;
-    if !status.success() {
-        bail!("could not signal retained Casework process {pid}");
-    }
-    Ok(())
-}
-
-fn check_casework_version(binary: &Path) -> Result<()> {
-    let output = Command::new(binary)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .context("starting casework for its version")?;
-    let expected = format!("casework {}", registry_platform_buildinfo::DISPLAY_VERSION);
-    if !output.status.success() || String::from_utf8_lossy(&output.stdout).trim() != expected {
-        bail!("dev start requires {expected}");
-    }
-    Ok(())
-}
-
-fn probe_ready(address: SocketAddr) -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_millis(250)) else {
-        return false;
-    };
-    let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
-    if stream
-        .write_all(b"GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .is_err()
-    {
-        return false;
-    }
-    let mut response = [0_u8; 64];
-    let Ok(length) = stream.read(&mut response) else {
-        return false;
-    };
-    response[..length].starts_with(b"HTTP/1.1 200")
-        || response[..length].starts_with(b"HTTP/1.1 204")
-}
-
-fn rotate_journal(path: &Path) -> Result<()> {
-    if fs::metadata(path).is_ok_and(|metadata| metadata.len() > 1024 * 1024) {
-        let bytes = fs::read(path)?;
-        fs::write(path, &bytes[bytes.len().saturating_sub(256 * 1024)..])?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -1222,10 +1148,276 @@ mod tests {
     }
 
     #[test]
-    fn standalone_starter_checks_real_display_schema_without_a_source() {
+    fn init_writes_local_clients_for_both_templates() {
+        for (template, queue, profiles) in [
+            (
+                "standalone-decision",
+                "decisions",
+                vec!["administrator", "supervisor", "staff", "requester"],
+            ),
+            (
+                "professional-review",
+                "corrections",
+                vec!["administrator", "supervisor", "staff"],
+            ),
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join(template);
+            let report = init(&project, template).unwrap();
+            assert!(report["created"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("dev-clients.yaml")));
+            let clients = project.join("dev-clients.yaml");
+            let text = fs::read_to_string(&clients).unwrap();
+            let value: Value = serde_norway::from_str(&text).unwrap();
+            assert_eq!(value["version"], 1);
+            let declared: Vec<&str> = value["clients"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|client| client["accessProfile"].as_str().unwrap())
+                .collect();
+            assert_eq!(declared, profiles);
+            assert_eq!(value["directory"][0]["queue"], queue);
+            // The file explains itself; none of it is a credential.
+            assert!(text.starts_with('#'), "{template}");
+            // Every profile the project declares is bound exactly once.
+            let policy = load_and_check_policy(&project).unwrap();
+            let bound: Vec<&str> = policy
+                .access_profiles
+                .iter()
+                .map(|profile| profile.id.as_str())
+                .collect();
+            assert_eq!(
+                bound
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>(),
+                declared
+                    .iter()
+                    .copied()
+                    .collect::<std::collections::BTreeSet<_>>()
+            );
+        }
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
+        assert!(init(&project, "standalone-decision").is_err());
+    }
+
+    #[test]
+    fn the_secret_file_preflight_names_every_unusable_reference() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let secrets = root.path().to_path_buf();
+        let write = |name: &str, bytes: &[u8], mode: u32| {
+            let path = secrets.join(name);
+            fs::write(&path, bytes).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
+        };
+        write("ready", b"0123456789abcdef", 0o600);
+        write("readable", b"0123456789abcdef", 0o644);
+        write("empty", b"", 0o600);
+        write("with-nul", b"abc\0def", 0o600);
+        write(
+            "at-limit",
+            &vec![b'x'; registry_platform_config::MAX_SECRET_BYTES],
+            0o600,
+        );
+        write(
+            "over-limit",
+            &vec![b'x'; registry_platform_config::MAX_SECRET_BYTES + 1],
+            0o600,
+        );
+
+        let resolver = SecretResolver::new([SecretProvider::File], &secrets).unwrap();
+        let refusal = |name: &str| {
+            let reference = SecretReference::parse(format!("secret:file/{name}")).unwrap();
+            secret_file_refusal(&resolver, &reference)
+        };
+        assert_eq!(refusal("ready"), None);
+        assert_eq!(
+            refusal("absent"),
+            Some("missing or unreadable under the configured file secret root")
+        );
+        assert_eq!(
+            refusal("readable"),
+            Some("not an owner-only ordinary single-link file with mode 0400 or 0600")
+        );
+        assert_eq!(
+            refusal("empty"),
+            Some("not non-empty bounded text without NUL bytes")
+        );
+        assert_eq!(refusal("at-limit"), None);
+        assert_eq!(
+            refusal("over-limit"),
+            Some("not non-empty bounded text without NUL bytes")
+        );
+        assert_eq!(
+            refusal("with-nul"),
+            Some("not non-empty bounded text without NUL bytes")
+        );
+    }
+
+    #[test]
+    fn the_secret_file_preflight_reports_one_result_per_reference() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let secrets = project.join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        let audit = secrets.join("casework-audit-key");
+        fs::write(&audit, "0".repeat(64)).unwrap();
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o600)).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+
+        let checks = secret_file_checks(&config, &resolver).unwrap();
+        let settings: Vec<&str> = checks
+            .iter()
+            .map(|check| check["setting"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            settings,
+            [
+                "database.runtimeUrlRef",
+                "database.migrationUrlRef",
+                "audit.hashKeyRef"
+            ]
+        );
+        // The example binds its database through the environment provider.
+        assert_eq!(checks[0]["provider"], "environment");
+        assert_eq!(checks[0]["status"], "not-checked");
+        assert_eq!(checks[2]["provider"], "file");
+        assert_eq!(checks[2]["status"], "ready");
+        // No result may carry any part of a secret.
+        assert!(!serde_json::to_string(&checks).unwrap().contains("00000"));
+
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o644)).unwrap();
+        let refusal = format!("{:#}", secret_file_checks(&config, &resolver).unwrap_err());
+        assert!(refusal.contains("audit.hashKeyRef"), "{refusal}");
+        assert!(refusal.contains("0400 or 0600"), "{refusal}");
+    }
+
+    #[test]
+    fn doctor_refuses_a_symlinked_file_root_for_a_migration_only_file_reference() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let actual_secrets = root.path().join("actual-secrets");
+        fs::create_dir(&actual_secrets).unwrap();
+        let migration = actual_secrets.join("migration-database-url");
+        fs::write(&migration, "postgresql://migration.example.test/casework").unwrap();
+        fs::set_permissions(&migration, fs::Permissions::from_mode(0o600)).unwrap();
+        std::os::unix::fs::symlink(&actual_secrets, project.join("secrets")).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["audit"]["hashKeyRef"] = json!("secret:env/CASEWORK_AUDIT_KEY");
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
+        let resolver = secret_resolver(&config).unwrap();
+        let migration = SecretReference::parse(&config.database.migration_url_ref).unwrap();
+
+        assert_eq!(
+            resolver.resolve_reference(&migration).unwrap_err(),
+            SecretError::Unavailable
+        );
+        let refusal = format!("{:#}", doctor(&runtime_config).unwrap_err());
+        assert!(refusal.contains("database.migrationUrlRef"), "{refusal}");
+        assert!(
+            refusal.contains("missing or unreadable under the configured file secret root"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn doctor_refuses_malformed_secret_references_before_live_checks() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        let secrets = project.join("secrets");
+        fs::create_dir(&secrets).unwrap();
+        let audit = secrets.join("casework-audit-key");
+        fs::write(&audit, "0".repeat(64)).unwrap();
+        fs::set_permissions(&audit, fs::Permissions::from_mode(0o600)).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        let valid = serde_norway::to_string(&document).unwrap();
+
+        for (setting, authored, malformed) in [
+            (
+                "database.runtimeUrlRef",
+                "secret:env/CASEWORK_DATABASE_URL",
+                "CASEWORK_DATABASE_URL",
+            ),
+            (
+                "database.migrationUrlRef",
+                "secret:env/CASEWORK_MIGRATION_DATABASE_URL",
+                "secret:file/../token",
+            ),
+        ] {
+            fs::write(&runtime_config, valid.replace(authored, malformed)).unwrap();
+
+            let error = doctor(&runtime_config).unwrap_err();
+            let runtime_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
+            assert!(
+                matches!(
+                    runtime_error,
+                    Some(registry_casework::RuntimeConfigError::InvalidSecretReference { path })
+                        if path == setting
+                ),
+                "{error:#}"
+            );
+            let refusal = format!("{error:#}");
+            assert!(
+                refusal.contains(&format!("{setting} is not a valid secret reference")),
+                "{refusal}"
+            );
+            assert!(!refusal.contains(malformed), "{refusal}");
+        }
+    }
+
+    #[test]
+    fn standalone_starter_checks_real_display_schema_without_a_source() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("standalone");
+        init(&project, "standalone-decision").unwrap();
+        assert_eq!(
+            fs::metadata(project.join(".casework"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "dev state must be created under an owner-only parent"
+        );
         let checked = check(&project, false, false).unwrap();
         assert_eq!(
             load_and_check_policy(&project).unwrap().hosted_kinds,
@@ -1332,123 +1524,5 @@ mod tests {
         let config = RuntimeConfig::load(runtime).unwrap();
         assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
         assert!(config.sources.contains_key("professional-register"));
-    }
-
-    #[test]
-    fn runtime_package_root_exclusively_selects_policy_across_workspaces() {
-        let root = tempfile::tempdir().unwrap();
-        let workspace = root.path().join("development-workspace");
-        let selected_package = root.path().join("selected-package");
-        fs::create_dir(&workspace).unwrap();
-        init(&selected_package, "standalone-decision").unwrap();
-        let runtime = selected_package.join("runtime.example.yaml");
-
-        let selected = load_runtime(&workspace, Some(&runtime)).unwrap();
-        assert_eq!(selected.workspace, workspace.canonicalize().unwrap());
-        assert_eq!(
-            selected.package_root,
-            selected_package.canonicalize().unwrap()
-        );
-        assert_ne!(selected.workspace, selected.package_root);
-        assert_eq!(
-            selected.config.policy_path(),
-            selected_package.join("casework.yaml")
-        );
-    }
-
-    #[test]
-    fn development_session_retains_runtime_config_and_listener() {
-        let root = tempfile::tempdir().unwrap();
-        let state = state_paths(root.path());
-        fs::create_dir_all(&state.directory).unwrap();
-        let session = DevSession {
-            runtime_config: root.path().join("alternate-runtime.yaml"),
-            listen: "127.0.0.1:8123".parse().unwrap(),
-        };
-        write_session(&state.session, &session).unwrap();
-        let retained = read_session(&state.session).unwrap().unwrap();
-        assert_eq!(retained.runtime_config, session.runtime_config);
-        assert_eq!(retained.listen, session.listen);
-    }
-
-    #[test]
-    fn incomplete_source_import_is_visible_and_can_be_denied() {
-        let root = tempfile::tempdir().unwrap();
-        let project = root.path().join("authored");
-        init(&project, "professional-review").unwrap();
-
-        let report = check(&project, false, false).unwrap();
-        assert_eq!(report["ok"], true);
-        assert_eq!(report["status"], "incomplete");
-        assert_eq!(report["findings"][0]["severity"], "finding");
-        assert_eq!(
-            report["findings"][0]["code"],
-            "casework.source-description.missing"
-        );
-        assert_eq!(report["findings"][0]["artifact"], "casework_project");
-        assert_eq!(
-            report["findings"][0]["path"],
-            "casework.yaml:/sources/0/description"
-        );
-        assert!(report["findings"][0]["suggestedAction"]
-            .as_str()
-            .unwrap()
-            .contains("source add"));
-        let tested = test(&project).unwrap();
-        assert_eq!(tested["authoringStatus"], "incomplete");
-        assert_eq!(tested["findings"], report["findings"]);
-        assert_eq!(tested["proofBoundary"], "offline_synthetic");
-        assert_eq!(tested["productionClosure"], false);
-        assert!(check(&project, false, true)
-            .unwrap_err()
-            .downcast_ref::<DeniedFindings>()
-            .is_some());
-        assert!(check(&project, true, false)
-            .unwrap_err()
-            .downcast_ref::<DeniedFindings>()
-            .is_some());
-        assert!(package(&project, &root.path().join("package")).is_err());
-    }
-
-    #[test]
-    fn dev_events_returns_only_the_bounded_journal_tail() {
-        let project = tempfile::tempdir().unwrap();
-        let state = state_paths(project.path());
-        fs::create_dir_all(&state.directory).unwrap();
-        let mut journal = String::new();
-        for index in 0..700 {
-            journal.push_str(&format!("event-{index:04}-{}\n", "x".repeat(500)));
-        }
-        fs::write(&state.journal, journal).unwrap();
-
-        let result = dev_events(project.path()).unwrap();
-        let events = result["events"].as_array().unwrap();
-        let expected_last = format!("event-0699-{}", "x".repeat(500));
-        assert!(result["truncated"].as_bool().unwrap());
-        assert!(events.len() <= 512);
-        assert_eq!(
-            events.last().and_then(Value::as_str),
-            Some(expected_last.as_str())
-        );
-        assert!(
-            events
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::len)
-                .sum::<usize>()
-                <= 256 * 1024
-        );
-
-        let short_lines = (0..600)
-            .map(|index| format!("short-{index:04}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        fs::write(&state.journal, short_lines).unwrap();
-        let line_limited = dev_events(project.path()).unwrap();
-        let events = line_limited["events"].as_array().unwrap();
-        assert_eq!(events.len(), 512);
-        assert!(line_limited["truncated"].as_bool().unwrap());
-        assert_eq!(events.first().and_then(Value::as_str), Some("short-0088"));
-        assert_eq!(events.last().and_then(Value::as_str), Some("short-0599"));
     }
 }

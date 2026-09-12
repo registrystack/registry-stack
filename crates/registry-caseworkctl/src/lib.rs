@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+mod dev;
 mod policy;
 mod project;
 mod source_add;
 
 use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_casework::RuntimeConfigError;
+use registry_casework::{AttemptSettlementError, RuntimeConfigError, StoreError};
 use registry_casework_core::{
     AttemptSettlement, AttemptSettlementOutcome, ConfigError, ConfigLoadError,
 };
@@ -57,8 +58,14 @@ enum Command {
     Retention(RetentionArgs),
     /// Preview or record an operator settlement of one uncertain source attempt.
     Attempt(AttemptArgs),
-    /// Manage a retained local Casework process.
-    Dev(DevArgs),
+    /// Start, stop and inspect this project's retained local Casework runtime.
+    Dev(dev::DevArgs),
+    /// Supervise one project's owned local services. Not for direct use.
+    #[command(name = "__dev-supervisor", hide = true)]
+    DevSupervisor(dev::SupervisorArgs),
+    /// Own one native service until it exits or its supervisor is lost.
+    #[command(name = "__dev-service-guard", hide = true)]
+    DevServiceGuard(dev::ServiceGuardArgs),
 }
 
 #[derive(Debug, Args)]
@@ -255,22 +262,6 @@ impl From<SettleOutcome> for AttemptSettlementOutcome {
     }
 }
 
-#[derive(Debug, Args)]
-struct DevArgs {
-    #[command(subcommand)]
-    command: DevCommand,
-}
-
-#[derive(Debug, Subcommand)]
-enum DevCommand {
-    /// Start a retained local Casework runtime.
-    Start(OperatorArgs),
-    /// Stop this project's retained local Casework runtime.
-    Stop(ProjectArgs),
-    /// Print the bounded retained runtime journal.
-    Events(ProjectArgs),
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 enum OutputFormat {
@@ -331,6 +322,31 @@ where
             return ExitCode::from(2);
         }
     };
+    let cli = match cli.command {
+        Command::DevServiceGuard(args) => {
+            return match dev::run_service_guard(args) {
+                Ok(false) => ExitCode::SUCCESS,
+                Ok(true) => ExitCode::from(dev::SERVICE_GUARD_FORCED_EXIT),
+                Err(error) => {
+                    let _ = writeln!(stderr, "{error:#}");
+                    ExitCode::from(DOMAIN_REFUSAL_EXIT)
+                }
+            };
+        }
+        Command::DevSupervisor(args) => {
+            return match dev::run_supervisor(args) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    let _ = writeln!(stderr, "{error:#}");
+                    ExitCode::from(DOMAIN_REFUSAL_EXIT)
+                }
+            };
+        }
+        command => Cli {
+            format: cli.format,
+            command,
+        },
+    };
     let format = cli.format;
     let command_kind = command_kind(&cli.command);
     match run(cli) {
@@ -361,16 +377,20 @@ where
 enum CommandKind {
     Authoring,
     Operational,
+    Retention,
+    AttemptSettlement,
 }
 
 fn command_kind(command: &Command) -> CommandKind {
+    if matches!(command, Command::Retention(_)) {
+        return CommandKind::Retention;
+    }
+    if matches!(command, Command::Attempt(_)) {
+        return CommandKind::AttemptSettlement;
+    }
     if matches!(
         command,
-        Command::Doctor(_)
-            | Command::Db(_)
-            | Command::Retention(_)
-            | Command::Attempt(_)
-            | Command::Dev(_)
+        Command::Doctor(_) | Command::Db(_) | Command::Dev(_)
     ) {
         CommandKind::Operational
     } else {
@@ -379,6 +399,9 @@ fn command_kind(command: &Command) -> CommandKind {
 }
 
 fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
+    if let Some(diagnostic) = operator_refusal(kind, error) {
+        return (DOMAIN_REFUSAL_EXIT, diagnostic);
+    }
     let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
     let runtime_error = error
         .chain()
@@ -469,6 +492,58 @@ fn classify_failure(kind: CommandKind, error: &anyhow::Error) -> (u8, Value) {
             "message":message, "suggestedAction":action
         }),
     )
+}
+
+fn operator_refusal(kind: CommandKind, error: &anyhow::Error) -> Option<Value> {
+    let (code, path, message, action) = match kind {
+        CommandKind::Retention => {
+            let store = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<StoreError>())?;
+            if !matches!(
+                store,
+                StoreError::NotFound | StoreError::AttemptPending | StoreError::Invalid
+            ) {
+                return None;
+            }
+            (
+                "casework.retention.refused",
+                "retention",
+                store.to_string(),
+                "Correct the exact source selection or recover the pending attempt, then preview again.",
+            )
+        }
+        CommandKind::AttemptSettlement => {
+            let settlement = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<AttemptSettlementError>())?;
+            if !matches!(
+                settlement,
+                AttemptSettlementError::NotFound
+                    | AttemptSettlementError::NotUncertain(_)
+                    | AttemptSettlementError::LeaseLive
+                    | AttemptSettlementError::ItemNotSynchronizing(_)
+                    | AttemptSettlementError::Invalid { .. }
+            ) {
+                return None;
+            }
+            (
+                "casework.attempt-settlement.refused",
+                "attempt",
+                settlement.to_string(),
+                "Confirm the attempt and source outcome, then preview the settlement again.",
+            )
+        }
+        CommandKind::Authoring | CommandKind::Operational => return None,
+    };
+    Some(json!({
+        "severity": "error",
+        "code": code,
+        "artifact": "operator_action",
+        "path": path,
+        "message": message,
+        "suggestedAction": action,
+    }))
 }
 
 fn runtime_diagnostic_location(error: &RuntimeConfigError) -> (&'static str, String, &'static str) {
@@ -715,13 +790,9 @@ fn run(cli: Cli) -> Result<Value> {
                 args.apply,
             ),
         },
-        Command::Dev(args) => match args.command {
-            DevCommand::Start(args) => {
-                project::dev_start(&args.project, args.runtime_config.as_deref())
-            }
-            DevCommand::Stop(args) => project::dev_stop(&args.project),
-            DevCommand::Events(args) => project::dev_events(&args.project),
-        },
+        Command::Dev(args) => dev::run(args),
+        Command::DevSupervisor(_) => unreachable!("the supervisor is dispatched before run"),
+        Command::DevServiceGuard(_) => unreachable!("the service guard is dispatched before run"),
     }
     .context("casework command refused")
 }
@@ -729,6 +800,30 @@ fn run(cli: Cli) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn internal_service_guard_preserves_hyphenated_service_arguments() {
+        let cli = Cli::try_parse_from([
+            "caseworkctl",
+            "__dev-service-guard",
+            "--",
+            "/bin/echo",
+            "--config",
+            "/tmp/service.yaml",
+        ])
+        .unwrap();
+        let Command::DevServiceGuard(args) = cli.command else {
+            panic!("internal guard command not parsed");
+        };
+        assert_eq!(args.binary, PathBuf::from("/bin/echo"));
+        assert_eq!(
+            args.arguments,
+            [
+                std::ffi::OsString::from("--config"),
+                std::ffi::OsString::from("/tmp/service.yaml"),
+            ]
+        );
+    }
 
     #[test]
     fn retention_erase_previews_unless_apply_is_explicit() {
@@ -1032,6 +1127,39 @@ mod tests {
         assert_eq!(
             diagnostic["suggestedAction"],
             "Restore access to the configured OIDC issuer or mounted JWKS, then retry."
+        );
+    }
+
+    #[test]
+    fn operator_refusals_keep_safe_recovery_reasons_without_exposing_store_failures() {
+        let pending = anyhow::Error::new(StoreError::AttemptPending)
+            .context("processing Casework source retention");
+        let (exit, diagnostic) = classify_failure(CommandKind::Retention, &pending);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.retention.refused");
+        assert_eq!(
+            diagnostic["message"],
+            "a source attempt is still pending recovery"
+        );
+
+        let lease = anyhow::Error::new(AttemptSettlementError::LeaseLive)
+            .context("settling the Casework source attempt");
+        let (exit, diagnostic) = classify_failure(CommandKind::AttemptSettlement, &lease);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(diagnostic["code"], "casework.attempt-settlement.refused");
+        assert_eq!(
+            diagnostic["message"],
+            "the source attempt still holds a live execution lease; wait for it to expire"
+        );
+
+        let corrupt =
+            anyhow::Error::new(StoreError::Corrupt).context("processing Casework source retention");
+        let (exit, diagnostic) = classify_failure(CommandKind::Retention, &corrupt);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "caseworkctl.operational-failure");
+        assert_eq!(
+            diagnostic["message"],
+            "A Casework runtime dependency check failed."
         );
     }
 

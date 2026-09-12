@@ -1210,7 +1210,7 @@ mod tests {
         let dev = find_command(&catalog.binaries, "evidencectl dev");
         assert_eq!(
             dev.usage,
-            "evidencectl dev [OPTIONS] --detach\n       evidencectl dev <COMMAND>"
+            "evidencectl dev [OPTIONS]\n       evidencectl dev <COMMAND>"
         );
         assert!(dev
             .options

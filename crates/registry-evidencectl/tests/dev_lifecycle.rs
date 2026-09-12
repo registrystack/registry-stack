@@ -444,6 +444,81 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
 }
 
 #[test]
+#[ignore = "exact gate: starts real local Mint and Evidence services"]
+fn retained_special_file_refuses_restart_before_any_child_starts() {
+    const CANARY: &str = "retained-cleanup-canary";
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let (evidence_port, mint_port) = unused_port_pair();
+
+    assert_success(
+        &fixture.dev_start_on_ports(&evidence, &mint, evidence_port, mint_port),
+        "initial local start",
+    );
+    assert_success(&fixture.dev_stop(), "initial local stop");
+    wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
+    wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+
+    let dev = fixture.root.join(".evidence/dev");
+    fs::set_permissions(&dev, fs::Permissions::from_mode(0o700)).expect("writable stopped root");
+    let planted = dev.join(CANARY);
+    assert!(
+        Command::new("mkfifo")
+            .arg(&planted)
+            .status()
+            .expect("run mkfifo")
+            .success(),
+        "mkfifo left no special file"
+    );
+    let pid_directory = fixture.root.join("restart-service-pids");
+    fs::create_dir(&pid_directory).expect("PID directory");
+    fs::set_permissions(&pid_directory, fs::Permissions::from_mode(0o700))
+        .expect("PID directory mode");
+
+    let refused = fixture
+        .dev_start_command(&evidence, &mint)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--mint-port", &mint_port.to_string()])
+        .env("EVIDENCECTL_TEST_SERVICE_PID_DIRECTORY", &pid_directory)
+        .output()
+        .expect("restart with retained special file");
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty(), "no ready state may be published");
+    let diagnostic = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        diagnostic.contains("error[evidence.dev.failed]"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains(CANARY), "{diagnostic}");
+    assert!(
+        !diagnostic.contains(&planted.to_string_lossy().into_owned()),
+        "{diagnostic}"
+    );
+    assert!(sorted_names(&pid_directory).is_empty());
+    assert!(TcpListener::bind(("127.0.0.1", evidence_port)).is_ok());
+    assert!(TcpListener::bind(("127.0.0.1", mint_port)).is_ok());
+    assert!(!fixture
+        .root
+        .join(".evidence/dev-stopped-before-restart")
+        .exists());
+    let state: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).expect("stopped state"))
+            .expect("stopped state JSON");
+    assert_eq!(state["status"], "stopped");
+
+    fs::remove_file(&planted).expect("remove planted FIFO");
+    let restarted = fixture.dev_start_on_ports(&evidence, &mint, evidence_port, mint_port);
+    assert_success(&restarted, "ordinary retained-state restart");
+    assert_success(
+        &fixture.dev_stop(),
+        "ordinary stop after retained-state restart",
+    );
+}
+
+#[test]
 #[ignore = "exact gate: starts real Mint and Evidence services"]
 fn explicit_access_clients_reload_mint_without_restarting_services() {
     let evidence = required_binary("EVIDENCE_BIN");

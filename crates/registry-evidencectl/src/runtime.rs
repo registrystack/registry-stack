@@ -7,8 +7,10 @@
 
 use std::{
     io::Write as _,
+    path::Path,
     path::PathBuf,
     process::{Command, ExitCode, ExitStatus, Stdio},
+    time::Duration,
 };
 
 use anyhow::{bail, Context as _, Result};
@@ -18,6 +20,19 @@ use serde::Serialize;
 use crate::{evidence_binary, OutputFormat};
 
 const MAX_DIAGNOSTIC_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug)]
+pub(crate) struct DoctorOperationalDiagnostic {
+    pub(crate) artifact: String,
+}
+
+impl std::fmt::Display for DoctorOperationalDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the delegated Evidence runtime check did not complete safely")
+    }
+}
+
+impl std::error::Error for DoctorOperationalDiagnostic {}
 
 #[derive(Debug, Args)]
 #[command(group(ArgGroup::new("selection").multiple(false).args(["runtime_config", "project"])))]
@@ -38,7 +53,7 @@ pub(crate) struct DoctorArgs {
     #[arg(long, conflicts_with = "runtime_config")]
     project: Option<PathBuf>,
     /// Compatibility Mint configuration for the former artifact inspection.
-    #[arg(long, conflicts_with = "runtime_config")]
+    #[arg(long, value_name = "PATH", conflicts_with = "runtime_config")]
     mint_config: Option<PathBuf>,
     /// Compatibility spelling for JSON artifact-inspection output.
     #[arg(long, conflicts_with_all = ["runtime_config", "output_format"])]
@@ -87,7 +102,21 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         bail!("--require-audit-under must be an absolute path");
     }
 
-    let evidence = evidence_binary::resolve_matching(args.evidence_bin.as_deref())?;
+    let evidence = evidence_binary::resolve_matching_within(
+        args.evidence_bin.as_deref(),
+        version_handshake_deadline(),
+    )
+    .map_err(|error| {
+        if error.chain().any(|cause| {
+            cause
+                .downcast_ref::<evidence_binary::DelegatedRunBoundError>()
+                .is_some()
+        }) {
+            operational_diagnostic(&runtime_config)
+        } else {
+            error
+        }
+    })?;
     let base = invoke_check(&evidence, &runtime_config, false, None)?;
     if !base.status.success() {
         let dependency_failure = runtime_diagnostic_is_dependency_failure(&base.stderr);
@@ -200,29 +229,59 @@ fn invoke_check(
     let status = evidence_binary::wait_bounded(
         &mut child,
         "Evidence runtime dependency preflight",
-        evidence_binary::DELEGATED_RUN_DEADLINE,
+        delegated_run_deadline(),
         &|| Ok(()),
         &|| {
             evidence_binary::capture_over_limit(&stdout, MAX_DIAGNOSTIC_BYTES)
                 || evidence_binary::capture_over_limit(&stderr, MAX_DIAGNOSTIC_BYTES)
         },
-    )?;
+    )
+    .map_err(|_| operational_diagnostic(runtime_config))?;
     let runtime_output = evidence_binary::drain_capture(
         &mut stdout,
         MAX_DIAGNOSTIC_BYTES,
         "Evidence runtime dependency preflight output",
-    )?;
+    )
+    .map_err(|_| operational_diagnostic(runtime_config))?;
     let runtime_diagnostic = evidence_binary::drain_capture(
         &mut stderr,
         MAX_DIAGNOSTIC_BYTES,
         "Evidence runtime dependency preflight diagnostics",
-    )?;
+    )
+    .map_err(|_| operational_diagnostic(runtime_config))?;
 
     Ok(CheckOutcome {
         status,
         stdout: runtime_output,
         stderr: runtime_diagnostic,
     })
+}
+
+fn operational_diagnostic(runtime_config: &Path) -> anyhow::Error {
+    DoctorOperationalDiagnostic {
+        artifact: runtime_config.display().to_string(),
+    }
+    .into()
+}
+
+fn delegated_run_deadline() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(milliseconds) = std::env::var_os("EVIDENCECTL_TEST_DOCTOR_DEADLINE_MS")
+        .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
+    {
+        return Duration::from_millis(milliseconds.max(1));
+    }
+    evidence_binary::DELEGATED_RUN_DEADLINE
+}
+
+fn version_handshake_deadline() -> Duration {
+    #[cfg(debug_assertions)]
+    if let Some(milliseconds) = std::env::var_os("EVIDENCECTL_TEST_DOCTOR_VERSION_DEADLINE_MS")
+        .and_then(|value| value.to_str().and_then(|value| value.parse::<u64>().ok()))
+    {
+        return Duration::from_millis(milliseconds.max(1));
+    }
+    evidence_binary::VERSION_HANDSHAKE_DEADLINE
 }
 
 fn render_refusal(

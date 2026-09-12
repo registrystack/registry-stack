@@ -1882,11 +1882,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "f65f055644b92ba5b3863ec685e8eedf57caecf918ecd70dbb41a1fdc723148f"
+        "sha256": "0f45eaa62a216138216b5d230361cd324bd6384140f60e590bd2ce10b272a803"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "3cefa3de059d2c807bf2b682f15fd4a25547913a5abb7a43077d224ffb4691dd",
+        "sha256": "0da29f83c8142dd426c8007a0a85cedea8363f4ad7be86fbded663ef1517a825",
         "mediaType": "application/schema+json"
       }
     },

@@ -238,6 +238,12 @@ pub fn main_entry() -> ExitCode {
         }
     };
     let format = cli.output_format;
+    if format == OutputFormat::Json {
+        if let Some(command) = unsupported_json_command(&cli.command) {
+            println!("{}", unsupported_json_format_failure(command));
+            return ExitCode::from(2);
+        }
+    }
     let result = match cli.command {
         Command::Init(args) => {
             let artifact = args.directory.display().to_string();
@@ -291,7 +297,7 @@ pub fn main_entry() -> ExitCode {
         Command::Package(args) => {
             let artifact = args.project.display().to_string();
             safe_command(
-                build::run_with_format(
+                build::run_package_with_format(
                     build::BuildArgs {
                         project: args.project,
                         target: args.target,
@@ -316,6 +322,10 @@ pub fn main_entry() -> ExitCode {
             fixtures::run(fixtures::FixturesCommand::Run(args))
         }
         Command::Source(command) => source_cli::run(command, format),
+        Command::Target(target::TargetCommand::Explain(mut args)) => {
+            args.json |= format == OutputFormat::Json;
+            target::run(target::TargetCommand::Explain(args))
+        }
         Command::Target(command) => target::run(command),
         Command::Doctor(args) => safe_command(
             runtime::run(args, format),
@@ -393,6 +403,61 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
     }
 }
 
+/// Name a command whose legacy renderer cannot fulfil the global JSON output
+/// contract. Refuse these commands before their handlers can write files,
+/// bind listeners, or emit human prose.
+fn unsupported_json_command(command: &Command) -> Option<&'static str> {
+    match command {
+        Command::Client(_) => Some("client"),
+        Command::Access(_) => Some("access"),
+        Command::Keygen(_) => Some("keygen"),
+        Command::Jwks(_) => Some("jwks"),
+        Command::Source(
+            source_cli::SourceCommand::Suggest(_)
+            | source_cli::SourceCommand::Mock(_)
+            | source_cli::SourceCommand::Detach(_),
+        ) => Some("source"),
+        Command::Target(target::TargetCommand::New(_)) => Some("target new"),
+        Command::Request(_) => Some("request"),
+        Command::Verify(_) => Some("verify"),
+        Command::Audit(_) => Some("audit"),
+        Command::Tooling(_) => Some("tooling"),
+        Command::DevSupervisor(_) => Some("__dev-supervisor"),
+        Command::Init(_)
+        | Command::Check(_)
+        | Command::Explain(_)
+        | Command::Test(_)
+        | Command::Package(_)
+        | Command::New(_)
+        | Command::Build(_)
+        | Command::Fixtures(_)
+        | Command::Source(
+            source_cli::SourceCommand::Add(_)
+            | source_cli::SourceCommand::Diff(_)
+            | source_cli::SourceCommand::Import(_)
+            | source_cli::SourceCommand::Update(_),
+        )
+        | Command::Target(target::TargetCommand::Explain(_))
+        | Command::Doctor(_)
+        | Command::Artifact(_)
+        | Command::Dev(_) => None,
+    }
+}
+
+fn unsupported_json_format_failure(command: &str) -> serde_json::Value {
+    serde_json::json!({
+        "status": "usage-error",
+        "diagnostics": [{
+            "severity": "error",
+            "code": "evidencectl.format.unsupported",
+            "artifact": command,
+            "path": "$.format",
+            "message": "The selected Evidence command does not provide a JSON report.",
+            "suggestedAction": "Rerun this command with --format human and do not parse its prose output."
+        }]
+    })
+}
+
 fn usage_failure_json() -> serde_json::Value {
     serde_json::json!({
         "status": "usage-error",
@@ -467,6 +532,37 @@ fn safe_command(
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
                 suggested_action: suggested_action.to_owned(),
+            }
+            .into();
+        }
+        if let Some(diagnostic) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<doctor::DoctorDiagnostic>())
+        {
+            return SafeCliFailure {
+                operational: false,
+                code: diagnostic.code,
+                artifact: diagnostic.artifact.clone(),
+                path: diagnostic.path.clone(),
+                message: diagnostic.message.clone(),
+                suggested_action: diagnostic.suggested_action.clone(),
+            }
+            .into();
+        }
+        if let Some(diagnostic) = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<runtime::DoctorOperationalDiagnostic>())
+        {
+            return SafeCliFailure {
+                operational: true,
+                code: "evidence.doctor.runtime-check-unavailable",
+                artifact: diagnostic.artifact.clone(),
+                path: "$".to_owned(),
+                message: "The delegated Evidence runtime check did not complete within its execution bounds."
+                    .to_owned(),
+                suggested_action:
+                    "Confirm the matching Evidence runtime can finish its check without exceeding the time or output limit, then rerun doctor."
+                        .to_owned(),
             }
             .into();
         }
