@@ -303,16 +303,10 @@ exec /bin/mv "${arguments[@]}"
     fn preinstall_pointer_toolset_without_ctl(&self) {
         let toolset = self.install_dir.join(".breg-toolset.earlier");
         fs::create_dir_all(&toolset).unwrap();
-        for binary in ["breg"] {
-            let path = toolset.join(binary);
-            fs::write(&path, format!("{binary} previous binary\n")).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            std::os::unix::fs::symlink(
-                format!(".breg-current/{binary}"),
-                self.install_dir.join(binary),
-            )
-            .unwrap();
-        }
+        let path = toolset.join("breg");
+        fs::write(&path, "breg previous binary\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(".breg-current/breg", self.install_dir.join("breg")).unwrap();
         std::os::unix::fs::symlink(
             ".breg-toolset.earlier",
             self.install_dir.join(".breg-current"),
