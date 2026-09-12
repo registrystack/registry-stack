@@ -6,7 +6,9 @@
 //! Docker ID match its private journal. There is intentionally no reset.
 
 mod config;
+mod integrations;
 mod private;
+mod public_jwks;
 #[cfg(test)]
 mod tests;
 
@@ -111,10 +113,19 @@ enum DevAction {
     Stop(StopArgs),
     /// Print the bounded retained runtime journal.
     Events(EventsArgs),
-    /// Write a fresh bearer header for a registered local teaching client.
+    /// Write a fresh bearer header for a registered local teaching or service client.
     Token(TokenArgs),
     /// Exchange an existing Casework approval using an explicit configured issuer connection.
     Grant(GrantArgs),
+    /// Show a stable native subject before authoring local directory or task templates.
+    Identity(IdentityArgs),
+}
+
+#[derive(Debug, Args)]
+struct IdentityArgs {
+    /// Bounded local client ID to bind in the governed project.
+    #[arg(value_name = "CLIENT")]
+    client: String,
 }
 
 #[derive(Debug, Args)]
@@ -134,7 +145,7 @@ struct GrantArgs {
 
 #[derive(Debug, Args)]
 struct TokenArgs {
-    /// Registered local teaching client identifier from the retained dev state.
+    /// Registered local teaching or service client identifier from the retained dev state.
     #[arg(value_name = "CLIENT")]
     client: String,
     /// Existing authored Casework project directory.
@@ -216,6 +227,8 @@ struct State {
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
+    #[serde(default)]
+    resource: Option<String>,
     /// Every local client with the access profile it binds and that profile's
     /// role, recorded so the report needs no second reading of the project.
     clients: Vec<ReportedClient>,
@@ -297,7 +310,9 @@ impl State {
         format!("http://127.0.0.1:{}", self.issuer_port)
     }
     fn audience(&self) -> String {
-        format!("urn:casework:dev:{}", self.owner)
+        self.resource
+            .clone()
+            .unwrap_or_else(|| format!("urn:casework:dev:{}", self.owner))
     }
     fn administrator(&self) -> Result<&ReportedClient> {
         self.clients
@@ -331,6 +346,15 @@ pub(crate) fn run(args: DevArgs) -> Result<Value> {
         Some(DevAction::Events(args)) => events(&args.project),
         Some(DevAction::Token(args)) => fresh_token(&args.project, &args.client),
         Some(DevAction::Grant(args)) => approved_grant(args),
+        Some(DevAction::Identity(args)) => {
+            if !config::identifier(&args.client) || args.client == "issuer" {
+                bail!("a bounded local client ID is required");
+            }
+            Ok(
+                json!({"ok":true,"command":"dev identity","clientId":args.client,
+                "subject":config::principal(&args.client)}),
+            )
+        }
         Some(DevAction::Start(args)) => start(args),
         None => start(args.start),
     }
@@ -433,6 +457,10 @@ fn read_state(root: &Path) -> Result<State> {
     if state.version != 2
         || state.root() != root
         || uuid::Uuid::parse_str(&state.owner).is_err()
+        || state
+            .resource
+            .as_ref()
+            .is_some_and(|resource| !registry_platform_httputil::valid_resource_uri(resource))
         || state.directory_revision < 0
         || state
             .container_id
@@ -517,10 +545,12 @@ impl Drop for StartInterruption {
 
 fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
     let policy = crate::project::load_and_check_policy(project)?;
-    if !policy.sources.is_empty() {
-        bail!("caseworkctl dev serves a project with no declared sources, because every source binding needs a running source system and its own reader credential. Run this project against a deployed Casework runtime, or start with the standalone-decision template");
-    }
     let clients = config::clients(client_bytes)?;
+    if let Some(integrations) = &clients.integrations {
+        integrations.validate(&clients, &policy)?;
+    } else if !policy.sources.is_empty() || !policy.task_templates.is_empty() {
+        bail!("source-backed development requires explicit integrations with source bindings and any task authority in the local clients file");
+    }
     let bound = config::bind(&clients, &policy)?;
     let reported = bound
         .iter()
@@ -535,6 +565,13 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
     let mut hasher = Sha256::new();
     hasher.update(b"casework-dev-source/v1\0");
     for bytes in [project_bytes.as_slice(), client_bytes] {
+        hasher.update((bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+    }
+    for source in &policy.sources {
+        let bytes = bounded(&project.join(&source.description), "source description")?;
+        hasher.update((source.description.len() as u64).to_be_bytes());
+        hasher.update(source.description.as_bytes());
         hasher.update((bytes.len() as u64).to_be_bytes());
         hasher.update(bytes);
     }
@@ -619,6 +656,10 @@ fn start(args: StartArgs) -> Result<Value> {
                 .unwrap_or(55433),
             clients_file,
             source_digest: digest,
+            resource: clients
+                .integrations
+                .as_ref()
+                .map(|value| value.resource.clone()),
             clients: reported,
             container_id: None,
             tls_files_copied: false,
@@ -634,9 +675,19 @@ fn start(args: StartArgs) -> Result<Value> {
         for port in [state.casework_port, state.issuer_port, state.database_port] {
             probe(port)?;
         }
+        if let Some(integrations) = &clients.integrations {
+            integrations
+                .validate_session(&state, &crate::project::load_and_check_policy(&project)?)?;
+            if let Some(authority) = &integrations.task_authority {
+                public_jwks::probe(authority.jwks_port)?;
+            }
+        }
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
+    if clients.integrations.is_some() {
+        integrations::validate_bindings(&root, &project)?;
+    }
     let casework = executable("casework", args.casework_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
@@ -757,6 +808,9 @@ fn initialize(root: &Path, original: &State, clients: &Clients) -> Result<()> {
         let mut staged = original.clone();
         staged.project = original.project.clone();
         config::prepare(&stage, original, clients)?;
+        if clients.integrations.is_some() {
+            integrations::validate_bindings(&stage, &original.project)?;
+        }
         private::create(
             &stage.join("state.json"),
             &serde_json::to_vec_pretty(&staged)?,
@@ -1132,8 +1186,19 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
     let clients: Clients =
         serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
     let mut children = Children::default();
+    let mut public_jwks = None;
     let result = (|| {
         ensure_active(&terminate)?;
+        if let Some(authority) = clients
+            .integrations
+            .as_ref()
+            .and_then(|value| value.task_authority.as_ref())
+        {
+            public_jwks = Some(public_jwks::Server::start(
+                authority.jwks_port,
+                &root.join("task-authority/jwks.json"),
+            )?);
+        }
         database(&args.docker_bin, &mut state, &terminate)?;
         ensure_active(&terminate)?;
         issuer(&args.docker_bin, &state, &terminate)?;
@@ -1194,7 +1259,11 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
             if terminate.load(Ordering::Relaxed) {
                 break;
             }
-            if children.exited()? {
+            if children.exited()?
+                || public_jwks
+                    .as_ref()
+                    .is_some_and(public_jwks::Server::is_finished)
+            {
                 bail!("a supervised local service exited; inspect private logs");
             }
             match listener.accept() {
@@ -1220,6 +1289,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         state.save()?;
         Ok(stop_stream)
     })();
+    drop(public_jwks);
     let child_cleanup = children.stop();
     let issuer_cleanup = stop_issuer(&args.docker_bin, &state);
     let database_cleanup = stop_database(&args.docker_bin, &state);
@@ -3051,10 +3121,17 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
     let root = state.root();
     let clients: Clients =
         serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
-    let client = clients
+    let (resource, scopes) = clients
         .clients
         .iter()
         .find(|client| client.id == id)
+        .map(|client| (state.audience(), client.scopes.clone()))
+        .or_else(|| {
+            clients
+                .integrations
+                .as_ref()
+                .and_then(|value| value.token_parameters(state, id))
+        })
         .context("the local client is not registered")?;
     let bytes = private::read(
         &root.join("credentials").join(id).join("assertion-key.jwk"),
@@ -3072,8 +3149,8 @@ fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
             key,
         )
         .with_audience(state.issuer_origin())
-        .with_resource(state.audience())
-        .with_scopes(client.scopes.clone()),
+        .with_resource(resource)
+        .with_scopes(scopes),
     )?;
     let value = tokio::runtime::Builder::new_current_thread()
         .enable_all()

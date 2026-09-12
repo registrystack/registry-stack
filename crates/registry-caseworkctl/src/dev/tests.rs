@@ -16,6 +16,7 @@ fn session(project: &Path) -> State {
         database_port: 55433,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: String::new(),
+        resource: None,
         clients: Vec::new(),
         container_id: None,
         tls_files_copied: false,
@@ -3290,6 +3291,7 @@ fn seeding_administrator_token_is_issued_after_every_other_client() {
             })
             .collect(),
         directory: Vec::new(),
+        integrations: None,
     };
     state.clients = clients
         .clients
@@ -3349,6 +3351,7 @@ fn token_issuance_stops_between_clients_when_interrupted() {
             },
         ],
         directory: Vec::new(),
+        integrations: None,
     };
     state.clients = vec![
         ReportedClient {
@@ -3457,4 +3460,149 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
     let mut arbitrary = args.to_vec();
     arbitrary.extend(["--purpose", "invented"]);
     assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
+}
+
+#[test]
+fn explicit_local_integrations_render_only_governed_authority_and_bind_the_source() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
+    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":"urn:casework:source-group",
+        "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
+            "tokenEndpoint":"http://127.0.0.1:8093/oauth2/token","clientAssertionAudience":"http://127.0.0.1:8093",
+            "resource":"urn:casework:source-group","scopes":["records:get"],
+            "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key",
+            "webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:source:instance:local"}},
+        "serviceClients":[
+            {"id":"reader","scopes":["records:get"]},
+            {"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},
+            {"id":"status","scopes":["casework:grants:status"]}],
+        "taskAuthority":{"id":"casework","issuer":"https://casework.local.example","jwksPort":8801,"statusClients":{"status":"urn:casework:source-group"}}
+    })).unwrap();
+    clients.integrations = Some(integrations.clone());
+    integrations.validate(&clients, &policy).unwrap();
+    let mut state = session(&project);
+    state.resource = Some(integrations.resource.clone());
+    integrations.validate_session(&state, &policy).unwrap();
+    let root = project.join("private");
+    private::directory(&root).unwrap();
+    for name in ["issuer", "secrets", "credentials"] {
+        private::directory(&root.join(name)).unwrap();
+    }
+    let key = config::keypair(&root.join("human")).unwrap();
+    let mut description = registry_thunderid_tooling::local::local_description(
+        registry_thunderid_tooling::description::SessionIdentity {
+            label: "source-unit".into(),
+            id: "casework-local".into(),
+        },
+        state.issuer_port,
+        root.join("issuer"),
+        state.audience(),
+        vec![registry_thunderid_tooling::local::LocalClient {
+            client_id: "staff".into(),
+            public_jwks: json!({"keys":[key]}).to_string(),
+            claims: BTreeMap::new(),
+            scopes: vec!["casework:staff".into()],
+            allow_human_fixture: true,
+        }],
+    )
+    .unwrap();
+    integrations
+        .prepare(&root, &state, &mut description, &policy)
+        .unwrap();
+    let agent = description
+        .machine_clients
+        .iter()
+        .find(|client| client.client_id == "task-agent")
+        .unwrap();
+    assert_eq!(agent.agent_id, config::principal("task-agent"));
+    assert!(agent.token_exchange.is_some());
+    assert_eq!(agent.attributes["registry_actor_kind"], "agent");
+    assert!(!agent
+        .attributes
+        .keys()
+        .any(|name| name.starts_with("registry_grant_")));
+    let mut operator = config::operator(&state);
+    integrations
+        .operator(&state, &clients, &mut operator)
+        .unwrap();
+    assert_eq!(
+        operator["taskAuthority"]["issuer"],
+        "https://casework.local.example"
+    );
+    assert_eq!(operator["sources"]["source"]["resource"], state.audience());
+    assert_eq!(description.exchange_issuers.len(), 1);
+    let mut wrong = integrations.clone();
+    wrong.sources.get_mut("source").unwrap().resource = Some("urn:other".into());
+    assert!(wrong.validate_session(&state, &policy).is_err());
+    let mut wrong = integrations.clone();
+    wrong
+        .sources
+        .get_mut("source")
+        .unwrap()
+        .client_assertion_audience = Some("https://other.example".into());
+    assert!(wrong.validate_session(&state, &policy).is_err());
+    let mut wrong = integrations.clone();
+    wrong.service_clients[1].scopes.push("records:get".into());
+    assert!(wrong.validate(&clients, &policy).is_err());
+    let mut wrong = integrations.clone();
+    wrong.service_clients[0]
+        .claims
+        .insert("registry_actor_kind".into(), json!("human"));
+    assert!(wrong.validate(&clients, &policy).is_err());
+    let mut wrong = integrations.clone();
+    wrong
+        .sources
+        .get_mut("source")
+        .unwrap()
+        .client_assertion_key_ref = "secret:file/service-status-key".into();
+    assert!(wrong.validate_session(&state, &policy).is_err());
+    let mut wrong = integrations.clone();
+    wrong.service_clients[0].scopes.push("records:patch".into());
+    assert!(wrong.validate_session(&state, &policy).is_err());
+    // Invalid binding input never installs a partially initialized session.
+    fs::write(
+        project.join("casework.yaml"),
+        serde_norway::to_string(&policy).unwrap(),
+    )
+    .unwrap();
+    fs::write(project.join("source.json"), serde_json::to_vec(&json!({
+        "apiVersion":"registry.registrystack.org/casework-source-description/v1alpha1",
+        "kind":"BRegCaseworkSourceDescription","origin":"bregctl explain change-requests","authority":"none",
+        "sourceId":"source","sourceRevision":"sha256:source",
+        "request":{"requestEntity":"correction","requestRoute":"corrections","reviewMode":"staged",
+            "stages":[{"id":"review","approvals":1,"excludeSubmitter":true,"excludePreviousReviewers":false}],
+            "fields":[],"contractFingerprint":"sha256:contract","application":{"mode":"manual"}}
+    })).unwrap()).unwrap();
+    let webhook = root.join("webhook-input");
+    private::create(&webhook, b"synthetic-webhook-secret-at-least-32-bytes").unwrap();
+    let mut staged_integrations = integrations.clone();
+    staged_integrations
+        .secret_files
+        .insert("source-webhook".into(), webhook);
+    staged_integrations
+        .sources
+        .get_mut("source")
+        .unwrap()
+        .event_source = "urn:invalid:event".into();
+    clients.integrations = Some(staged_integrations);
+    parent_directory(&project).unwrap();
+    assert!(initialize(&state.root(), &state, &clients).is_err());
+    assert!(!state.root().exists());
+    clients
+        .integrations
+        .as_mut()
+        .unwrap()
+        .sources
+        .get_mut("source")
+        .unwrap()
+        .event_source = "urn:registrystack:registry:source:instance:local".into();
+    initialize(&state.root(), &state, &clients).unwrap();
+    assert!(state.root().join("operator.yaml").exists());
+    let mut wrong = integrations;
+    wrong.sources.clear();
+    assert!(wrong.validate(&clients, &policy).is_err());
 }

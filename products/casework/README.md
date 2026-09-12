@@ -327,9 +327,9 @@ Casework. Activating a new package does not rewrite running clock occurrences;
 each keeps its pinned clock policy and calculation. Holiday changes use the
 Administrator preview-and-apply flow described above.
 
-The source-backed starter cannot run under `caseworkctl dev`: every declared
-source needs a running source system and a reader credential that the local
-supervisor cannot create. Follow
+The source-backed starter can use the explicit local configuration in
+[Source-backed development](DEV-SOURCES.md). Every declared source still needs
+a running source system with its own access profiles. For a deployment, follow
 [Deploy Registry Casework](../../docs/site/src/content/docs/operate/casework.mdx)
 to install the package, runtime configuration, and credentials. The deployment
 runtime applies migrations and serves the package through the `casework`

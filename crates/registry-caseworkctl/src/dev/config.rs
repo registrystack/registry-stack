@@ -41,6 +41,8 @@ pub(super) struct Clients {
     pub clients: Vec<Client>,
     #[serde(default)]
     pub directory: Vec<DirectoryTeam>,
+    #[serde(default)]
+    pub integrations: Option<super::integrations::Integrations>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -388,7 +390,7 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     }
     // Stable teaching subjects are qualified by the exact local issuer URL.
     // The container label separately binds the randomly owned dev session.
-    let description = registry_thunderid_tooling::local::local_description(
+    let mut description = registry_thunderid_tooling::local::local_description(
         registry_thunderid_tooling::description::SessionIdentity {
             label: format!("casework-dev-{}", state.owner),
             id: "casework-local".into(),
@@ -398,6 +400,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         state.audience(),
         local_clients,
     )?;
+    if let Some(integrations) = &clients.integrations {
+        let policy = crate::project::load_and_check_policy(&state.project)?;
+        integrations.prepare(root, state, &mut description, &policy)?;
+    }
     registry_thunderid_tooling::render::render(&description)?;
     private::create(
         &root.join("secrets/casework-audit-key"),
@@ -463,7 +469,11 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    write_yaml(&root.join("operator.yaml"), &operator(state))?;
+    let mut operator = operator(state);
+    if let Some(integrations) = &clients.integrations {
+        integrations.operator(state, clients, &mut operator)?;
+    }
+    write_yaml(&root.join("operator.yaml"), &operator)?;
     Ok(())
 }
 

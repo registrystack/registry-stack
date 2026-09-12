@@ -57,6 +57,111 @@ fn derived_uuid(seed: &str) -> String {
     result
 }
 
+fn add_scope(
+    resources: &mut BTreeMap<Vec<String>, Resource>,
+    scope: &str,
+) -> Result<(), ToolingError> {
+    let refuse = |reason| ToolingError::InvalidDescription { reason };
+    let segments: Vec<_> = scope.split(':').collect();
+    if segments.len() < 2
+        || segments.iter().any(|segment| {
+            segment.is_empty()
+                || !segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        })
+    {
+        return Err(refuse(
+            "local scopes must be exact colon-delimited upstream handles",
+        ));
+    }
+    let chain: Vec<String> = segments[..segments.len() - 1]
+        .iter()
+        .map(|part| (*part).into())
+        .collect();
+    let action = segments[segments.len() - 1];
+    for depth in 1..=chain.len() {
+        let prefix = chain[..depth].to_vec();
+        resources.entry(prefix.clone()).or_insert_with(|| Resource {
+            name: chain[depth - 1].clone(),
+            handle: chain[depth - 1].clone(),
+            parent: (depth > 1).then(|| chain[depth - 2].clone()),
+            description: format!("local resource {}", prefix.join(":")),
+            actions: vec![],
+        });
+    }
+    let leaf = resources.get_mut(&chain).expect("inserted resource chain");
+    if !leaf
+        .actions
+        .iter()
+        .any(|existing| existing.handle == action)
+    {
+        leaf.actions.push(Action {
+            name: action.into(),
+            handle: action.into(),
+            description: format!("local permission {scope}"),
+        });
+    }
+    Ok(())
+}
+
+/// Declare exact scope handles for another audience in the same native issuer.
+/// This creates no role assignment and gives no client any additional permission.
+pub fn declare_resource(
+    description: &mut IssuerDescription,
+    audience: &str,
+    scopes: &[String],
+) -> Result<String, ToolingError> {
+    let mut resources = BTreeMap::new();
+    for scope in scopes {
+        add_scope(&mut resources, scope)?;
+    }
+    let server = if let Some(index) = description
+        .resource_servers
+        .iter()
+        .position(|server| server.identifier == audience)
+    {
+        &mut description.resource_servers[index]
+    } else {
+        description.resource_servers.push(ResourceServer {
+            id: derived_uuid(&format!("{}:resource:{audience}", description.session.id)),
+            name: "Configured local resource".into(),
+            identifier: audience.into(),
+            description: "Explicit local resource scope handles".into(),
+            resources: vec![],
+        });
+        description
+            .resource_servers
+            .last_mut()
+            .expect("inserted resource server")
+    };
+    for resource in resources.into_values() {
+        if let Some(existing) = server
+            .resources
+            .iter_mut()
+            .find(|entry| entry.handle == resource.handle)
+        {
+            if existing.parent != resource.parent {
+                return Err(ToolingError::InvalidDescription {
+                    reason: "local resource handles must have one unambiguous parent",
+                });
+            }
+            for action in resource.actions {
+                if !existing
+                    .actions
+                    .iter()
+                    .any(|entry| entry.handle == action.handle)
+                {
+                    existing.actions.push(action);
+                }
+            }
+        } else {
+            server.resources.push(resource);
+        }
+    }
+    Ok(server.id.clone())
+}
+
 /// Render one audience and the exact declared scope trees. Colon-delimited
 /// handles must be directly representable by the pinned upstream grammar;
 /// no permission is renamed or approximated. Institutional grants use the
@@ -116,46 +221,7 @@ pub fn typed_local_description(
             ));
         }
         for scope in &client.scopes {
-            let segments: Vec<_> = scope.split(':').collect();
-            if segments.len() < 2
-                || segments.iter().any(|segment| {
-                    segment.is_empty()
-                        || !segment
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-                })
-            {
-                return Err(refuse(
-                    "local scopes must be exact colon-delimited upstream handles",
-                ));
-            }
-            let chain: Vec<String> = segments[..segments.len() - 1]
-                .iter()
-                .map(|part| (*part).into())
-                .collect();
-            let action = segments[segments.len() - 1];
-            for depth in 1..=chain.len() {
-                let prefix = chain[..depth].to_vec();
-                resources.entry(prefix.clone()).or_insert_with(|| Resource {
-                    name: chain[depth - 1].clone(),
-                    handle: chain[depth - 1].clone(),
-                    parent: (depth > 1).then(|| chain[depth - 2].clone()),
-                    description: format!("local resource {}", prefix.join(":")),
-                    actions: vec![],
-                });
-            }
-            let leaf = resources.get_mut(&chain).expect("inserted resource chain");
-            if !leaf
-                .actions
-                .iter()
-                .any(|existing| existing.handle == action)
-            {
-                leaf.actions.push(Action {
-                    name: action.into(),
-                    handle: action.into(),
-                    description: format!("local permission {scope}"),
-                });
-            }
+            add_scope(&mut resources, scope)?;
         }
         let native_id = agent_id(&session.id, &client.client_id);
         let role_id = derived_uuid(&format!("{}:role:{}", session.id, client.client_id));
@@ -328,5 +394,57 @@ mod tests {
             serde_json::json!(["policy-a", "policy-b"])
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn declaring_an_exchange_target_adds_no_client_permission() {
+        let mut description = build(client()).unwrap();
+        let permissions = description
+            .roles
+            .iter()
+            .map(|role| role.permissions.clone())
+            .collect::<Vec<_>>();
+        let id = declare_resource(
+            &mut description,
+            "urn:synthetic:destination",
+            &["records:get".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            declare_resource(
+                &mut description,
+                "urn:synthetic:destination",
+                &["records:patch".into()]
+            )
+            .unwrap(),
+            id
+        );
+        description.validate().unwrap();
+        assert_eq!(
+            description
+                .roles
+                .iter()
+                .map(|role| role.permissions.clone())
+                .collect::<Vec<_>>(),
+            permissions
+        );
+        assert_eq!(
+            description
+                .resource_servers
+                .iter()
+                .filter(|server| server.identifier == "urn:synthetic:destination")
+                .count(),
+            1
+        );
+        assert_eq!(
+            description
+                .resource_servers
+                .iter()
+                .find(|server| server.id == id)
+                .unwrap()
+                .resources[0]
+                .actions
+                .len(),
+            2
+        );
     }
 }
