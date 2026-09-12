@@ -271,8 +271,8 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
     environment = dict(os.environ)
     environment.pop("REGISTRY_EVIDENCE_RUNTIME", None)
     environment["PATH"] = os.pathsep.join(
-        [str(binaries["breg"].parent), str(binaries["mint"].parent),
-         str(binaries["evidence"].parent), environment.get("PATH", "")]
+        [str(binaries["breg"].parent), str(binaries["evidence"].parent),
+         environment.get("PATH", "")]
     )
     registry, project = workspace / "registry", workspace / "evidence"
     candidate, target = workspace / "candidate", project / "targets/configured"
@@ -291,7 +291,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
         if result.returncode:
             # Native diagnostics are already secret-free. Never include token stdout.
             details = result.stderr
-            if name != "mint" and not details:
+            if not details:
                 try:
                     details = json.dumps(json.loads(result.stdout).get("diagnostics", []))
                 except (ValueError, AttributeError):
@@ -315,10 +315,12 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             return response.status, json.loads(response.read()), response.headers
 
     def token(session: dict[str, object], client_name: str) -> str:
-        client = next(item for item in session["clients"] if item["id"] == client_name)
-        return command("mint", "token", "--url", session["tokenEndpoint"],
-                       "--client-id", Path(client["clientIdFile"]).read_text().strip(),
-                       "--key", client["assertionKeyFile"]).strip()
+        report = json.loads(command("bregctl", "--format", "json", "dev", "token",
+                                    client_name, registry))
+        header = Path(report["headerFile"]).read_text().strip()
+        prefix = "Authorization: Bearer "
+        assert header.startswith(prefix), "BREG dev token header is malformed"
+        return header[len(prefix):]
 
     fact, answer = ("name", "named") if late else ("status", "active")
     value = "Synthetic Works" if late else "active"
@@ -353,7 +355,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
     try:
         breg_started = True  # Also clean up a partially started owned session.
         session = json.loads(command("bregctl", "dev", registry, "--breg-port", ports[0],
-                                     "--mint-port", ports[1], "--database-port", ports[2],
+                                     "--issuer-port", ports[1], "--database-port", ports[2],
                                      "--format", "json"))
         assert not project.exists(), "record must precede Evidence creation"
         operator = token(session, "operator")
@@ -382,7 +384,8 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
         prior_keys = {str(path.relative_to(state_root)): path.read_bytes()
                       for path in (state_root / "credentials").rglob("*") if path.is_file()}
         prior_registrations = {str(path.relative_to(state_root)): path.read_bytes()
-                               for path in (state_root / "mint/clients").glob("*.yaml")}
+                               for path in (state_root / "issuer/registry-schema/agents").glob("*")
+                               if path.is_file()}
         prior_clients = json.loads((state_root / "clients.json").read_text())
 
         def history() -> bytes:
@@ -575,7 +578,7 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             denied[name] = {"status": status, "code": problem["code"]}
         evidence_started = True
         command("evidencectl", "dev", "--target", target, "--detach", "--evidence-port", ports[3],
-                "--mint-port", ports[4], cwd=project)
+                "--issuer-port", ports[4], cwd=project)
         command("evidencectl", "request", "prepare", question, "--purpose", "record-verification",
                 "--subject", f"subject@{selector_profile}:code={code}",
                 "--name", "by-code", cwd=project)
@@ -622,12 +625,12 @@ def main() -> None:
     for name in ["bregctl", "evidencectl", "evidence"]:
         parser.add_argument(f"--{name}", type=Path, default=shutil.which(name))
     parser.add_argument("--work-dir", type=Path, help="new private directory to retain test outputs")
-    parser.add_argument("--live", action="store_true", help="also run retained-record proof with Docker, breg and mint")
-    for name in ["breg", "mint"]:
+    parser.add_argument("--live", action="store_true", help="also run retained-record proof with Docker, breg and the stock issuer")
+    for name in ["breg"]:
         parser.add_argument(f"--{name}", type=Path, default=shutil.which(name))
     args = parser.parse_args()
     binaries = {}
-    for name in ["bregctl", "evidencectl", "evidence"] + (["breg", "mint"] if args.live else []):
+    for name in ["bregctl", "evidencectl", "evidence"] + (["breg"] if args.live else []):
         path = getattr(args, name)
         if path is None or not path.is_file():
             parser.error(f"provide --{name} with a matching native executable")
