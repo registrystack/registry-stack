@@ -11,8 +11,8 @@ The examples deliberately repeat complete environment documents. They use no
 overlays, environment branches, symlinks, or runtime substitutions. Replace the
 reserved `example.org` identities with controlled endpoints and replace the
 example public keys with the exact public projections of independently created
-environment keys. Evidence signing, Evidence audit, subject binding, and issuer
-client keys must all remain distinct.
+environment keys. Evidence signing, Evidence audit, and subject-binding keys
+must all remain distinct.
 
 Run `./check-public-key-separation.sh` after replacing keys. It uses Python 3
 and PyYAML to parse client registrations structurally, fingerprints the complete
