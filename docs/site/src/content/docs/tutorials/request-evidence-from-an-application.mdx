@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-19"
+last_reviewed: "2026-09-13"
 doc_type: tutorial
 persona:
   - consumer or verifier
@@ -214,11 +214,14 @@ client = EvidenceClient(
     revoked_key_ids=[],
     token={
         "private_key_jwt": {
-            "token_endpoint": "http://127.0.0.1:8081/token",
+            "token_endpoint": "http://127.0.0.1:8081/oauth2/token",
             "client_id": "age-check-app",
             "client_key": json.loads(
                 Path(".evidence/clients/age-check-app/private.jwk").read_text()
             ),
+            "audience": "http://127.0.0.1:8081",
+            "resource": "urn:registrystack:evidence:local:gateway",
+            "scopes": ["evidence:invoke"],
         },
     },
 )
@@ -486,11 +489,14 @@ def build_client():
         revoked_key_ids=[],
         token={
             "private_key_jwt": {
-                "token_endpoint": "http://127.0.0.1:8081/token",
+                "token_endpoint": "http://127.0.0.1:8081/oauth2/token",
                 "client_id": "age-check-app",
                 "client_key": json.loads(
                     Path(".evidence/clients/age-check-app/private.jwk").read_text()
                 ),
+                "audience": "http://127.0.0.1:8081",
+                "resource": "urn:registrystack:evidence:local:gateway",
+                "scopes": ["evidence:invoke"],
             },
         },
     )
