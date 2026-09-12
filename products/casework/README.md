@@ -79,9 +79,10 @@ the item, so a later configuration change does not rewrite existing work.
 read. It requires a `Registry-Source-Profile` header and answers from the
 source, so hosted work has no usable answer there and a call without that
 header returns `source-profile.required` with HTTP 400. `hosted-history` is the
-staff-readable route for hosted work and refuses a source-profile header for the
-same reason. A profile with no source, such as every profile in the
-`standalone-decision` starter, therefore reads `hosted-history`.
+staff-readable route for hosted work and returns `source-profile.not-applicable`
+with HTTP 400 when that header is present. A profile with no source, such as
+every profile in the `standalone-decision` starter, therefore reads
+`hosted-history`.
 
 Requester terminal results are ordered by terminal time and stable event id.
 Each result is either a completed outcome with an opaque `actorRef`, or a

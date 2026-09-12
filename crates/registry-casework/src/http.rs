@@ -1168,7 +1168,7 @@ fn source_profile_optional(headers: &HeaderMap) -> Result<Option<&str>, HttpErro
 
 fn reject_source_profile(headers: &HeaderMap) -> Result<(), HttpError> {
     if headers.contains_key(SOURCE_PROFILE_HEADER) {
-        return Err(HttpError::Invalid);
+        return Err(HttpError::SourceProfileNotApplicable);
     }
     Ok(())
 }
@@ -1260,6 +1260,7 @@ pub enum HttpError {
     Invalid,
     ServiceUnavailable,
     SourceNotFound,
+    SourceProfileNotApplicable,
     SourceProfileRequired,
     SourceBadGateway,
     ReasonUnsupported,
@@ -1368,6 +1369,7 @@ impl HttpError {
             Self::Invalid => ProblemCode::RequestInvalid,
             Self::ServiceUnavailable => ProblemCode::ServiceUnavailable,
             Self::SourceNotFound => ProblemCode::SourceNotFound,
+            Self::SourceProfileNotApplicable => ProblemCode::SourceProfileNotApplicable,
             Self::SourceProfileRequired => ProblemCode::SourceProfileRequired,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
             Self::ReasonUnsupported => ProblemCode::RequestReasonUnsupported,
@@ -1567,7 +1569,7 @@ mod tests {
             (
                 "hosted-history",
                 Some("reader"),
-                Some(ProblemCode::RequestInvalid),
+                Some(ProblemCode::SourceProfileNotApplicable),
             ),
         ];
 

@@ -331,6 +331,7 @@ export type KnownCaseworkProblemCode =
   | 'request.unsupported-media-type'
   | 'runtime.failure'
   | 'service.unavailable'
+  | 'source-profile.not-applicable'
   | 'source-profile.required'
   | 'source.bad-gateway'
   | 'source.not-found'

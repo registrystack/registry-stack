@@ -127,7 +127,7 @@ authentication:
   oidc:
     issuer: https://identity.example.org/realms/registry
     audience: urn:example:casework
-    scopeClaim: registry_scopes
+    scopeClaim: scope
     humanIdentity:
       claim: registry_actor_kind
       value: human
@@ -169,8 +169,9 @@ mode that serves an authored project with no manifest beside it. Apply HSTS on t
 responses; the runtime adds its remaining security headers and `Cache-Control: no-store` to every
 response it returns.
 
-`scopeClaim` defaults to `registry_scopes` and carries every required scope for the selected
-profile. `humanIdentity` defaults to the claim `registry_actor_kind` with the value `human`, must
+`scopeClaim` defaults to `scope`, matching Registry Mint and Registry Stack local development, and
+carries every required scope for the selected profile. `humanIdentity` defaults to the claim
+`registry_actor_kind` with the value `human`, must
 differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
 Each access profile names its own `principalClaim`; there is no runtime-wide principal claim.
 The runtime accepts RS256 and ES256 signatures and the token types `at+jwt` and `JWT`.
@@ -196,6 +197,8 @@ Each source binding also accepts `eventType`, which defaults to `casework-lifecy
 accept at most 300000, and are refused when the connect timeout is the larger of the two, and
 `reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
 source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
+The interval changes scheduling only. Changing it does not invalidate displayed source bindings or
+durable attempts because it does not change source authority or saved source state.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
@@ -207,8 +210,8 @@ before they become the anchor for verification.
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig, TlsTermination,
     ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
     and parse_static_jwks();
-    crates/registry-casework-breg/src/config.rs, BregBinding, DEFAULT_EVENT_TYPE,
-    DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
+    crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
+    DEFAULT_EVENT_TYPE, DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
     crates/registry-casework/src/http.rs; products/casework/README.md. */}
 
 ### Create the secret files

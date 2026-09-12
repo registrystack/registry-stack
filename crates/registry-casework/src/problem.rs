@@ -13,11 +13,12 @@ use registry_casework_core::{
     REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
     REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
     REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
-    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
+    SOURCE_PROFILE_REQUIRED_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
+    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
+    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
+    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
+    WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 
 /// Resolve a Casework problem code under its registered product prefix.
@@ -55,6 +56,7 @@ pub enum ProblemCode {
     ServiceUnavailable,
     SourceBadGateway,
     SourceNotFound,
+    SourceProfileNotApplicable,
     SourceProfileRequired,
     SourceSignatureInvalid,
     WorkItemAlreadyClaimed,
@@ -94,6 +96,7 @@ impl ProblemCode {
         Self::RequestUnsupportedMediaType,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::SourceProfileNotApplicable,
         Self::SourceProfileRequired,
         Self::SourceBadGateway,
         Self::SourceNotFound,
@@ -137,6 +140,7 @@ impl ProblemCode {
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
+            Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
             Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
             Self::WorkItemAlreadyClaimed => WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
@@ -165,9 +169,10 @@ impl ProblemCode {
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 StatusCode::FORBIDDEN
             }
-            Self::RequestInvalid | Self::SourceProfileRequired | Self::SourceSignatureInvalid => {
-                StatusCode::BAD_REQUEST
-            }
+            Self::RequestInvalid
+            | Self::SourceProfileNotApplicable
+            | Self::SourceProfileRequired
+            | Self::SourceSignatureInvalid => StatusCode::BAD_REQUEST,
             Self::RequestNotFound | Self::SourceNotFound | Self::WorkItemNotVisible => {
                 StatusCode::NOT_FOUND
             }
@@ -223,6 +228,7 @@ impl ProblemCode {
             Self::ServiceUnavailable => "Casework service unavailable",
             Self::SourceBadGateway => "Invalid source response",
             Self::SourceNotFound => "Source not found",
+            Self::SourceProfileNotApplicable => "Source profile not applicable",
             Self::SourceProfileRequired => "Source profile required",
             Self::SourceSignatureInvalid => "Source signature invalid",
             Self::WorkItemAlreadyClaimed => "Work item already claimed",
@@ -289,6 +295,9 @@ impl ProblemCode {
                 "The source returned a response that does not match its registered contract."
             }
             Self::SourceNotFound => "The requested source is not registered.",
+            Self::SourceProfileNotApplicable => {
+                "Omit the Registry-Source-Profile header for this request."
+            }
             Self::SourceProfileRequired => {
                 "Send the Registry-Source-Profile header to select the source profile for this request."
             }
@@ -355,6 +364,7 @@ const HOSTED_READ: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::RuntimeFailure,
 ];
@@ -367,6 +377,7 @@ const HOSTED_PAGE: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const HOSTED_ITEM_PAGE: &[ProblemCode] = &[
@@ -378,6 +389,7 @@ const HOSTED_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::RuntimeFailure,
 ];
@@ -392,6 +404,7 @@ const HOSTED_CREATE: &[ProblemCode] = &[
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const HOSTED_MUTATION: &[ProblemCode] = &[
@@ -407,6 +420,7 @@ const HOSTED_MUTATION: &[ProblemCode] = &[
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemAlreadyClaimed,
     ProblemCode::WorkItemNotHolder,
     ProblemCode::WorkItemNotOffered,
@@ -555,6 +569,7 @@ const DIRECTORY_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const ABSENCE_CREATE: &[ProblemCode] = &[

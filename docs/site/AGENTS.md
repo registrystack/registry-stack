@@ -9,6 +9,9 @@ This repo is an Astro and Starlight documentation site.
 - CLI pages under `src/content/docs/reference/cli/` and data under
   `src/data/generated/` are ignored build artifacts. Commit authored inputs and
   generators. `npm test` and `npm run check` regenerate them before validation.
+- `scripts/check-draft-links.mjs` is not a standalone check. Run
+  `npm run generate` first so its draft-page links can resolve synced product
+  pages and generated example assets.
 - `src/data/cli-reference.yaml` is the publication record for the generated CLI
   reference. Its v3 content digest covers the public command catalog except the
   top-level workspace version. Version-only bumps preserve the original human

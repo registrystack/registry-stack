@@ -462,7 +462,7 @@ pub enum OidcJwksSource {
 }
 
 fn default_scope_claim() -> String {
-    "registry_scopes".to_owned()
+    "scope".to_owned()
 }
 fn default_human_identity_claim() -> String {
     "registry_actor_kind".to_owned()
@@ -1003,6 +1003,7 @@ sources:
                 value: "human".to_owned(),
             }
         );
+        assert_eq!(oidc.scope_claim, "scope");
     }
 
     #[test]

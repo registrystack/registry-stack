@@ -1981,13 +1981,16 @@ on:
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
-    def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
+    def test_docs_job_prepares_generator_inputs_before_script_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         docs_job = workflow.split("\n  docs:\n", 1)[1].split("\n  docs-required:\n", 1)[0]
+        rust = "run: rustup toolchain install 1.95.0 --profile minimal"
         fetch = "run: node scripts/fetch-openapi.mjs"
         test_scripts = "run: npm test"
 
+        self.assertIn(rust, docs_job)
         self.assertIn(fetch, docs_job)
+        self.assertLess(docs_job.index(rust), docs_job.index(test_scripts))
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
     def test_every_referenced_changes_output_is_declared_and_emitted(self) -> None:

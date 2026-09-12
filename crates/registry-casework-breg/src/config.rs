@@ -784,4 +784,29 @@ mod tests {
         .unwrap();
         assert_ne!(first, changed_reference);
     }
+
+    #[test]
+    fn generation_ignores_reconciliation_cadence() {
+        let source = source();
+        let binding = binding();
+        let first = binding_generation(
+            &binding,
+            &source,
+            "casework-client",
+            &description("correction"),
+        )
+        .unwrap();
+        let changed_cadence = binding_generation(
+            &BregBinding {
+                reconciliation_interval_milliseconds: 120_000,
+                ..binding
+            },
+            &source,
+            "casework-client",
+            &description("correction"),
+        )
+        .unwrap();
+
+        assert_eq!(first, changed_cadence);
+    }
 }

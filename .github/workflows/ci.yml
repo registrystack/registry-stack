@@ -1462,6 +1462,9 @@ jobs:
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
 
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+
       - name: Install docs shell dependency
         run: |
           sudo apt-get update

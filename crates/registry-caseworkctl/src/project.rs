@@ -67,7 +67,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test/realms/registry",
             "audience": "urn:example:casework",
-            "scopeClaim": "registry_scopes",
+            "scopeClaim": "scope",
             "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
         }},
         "audit": {"path": package_root.join("state/audit.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
@@ -1176,6 +1176,11 @@ mod tests {
             let text = fs::read_to_string(&clients).unwrap();
             let value: Value = serde_norway::from_str(&text).unwrap();
             assert_eq!(value["version"], 1);
+            let runtime: Value = serde_norway::from_str(
+                &fs::read_to_string(project.join("runtime.example.yaml")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(runtime["authentication"]["oidc"]["scopeClaim"], "scope");
             let declared: Vec<&str> = value["clients"]
                 .as_array()
                 .unwrap()

@@ -9,11 +9,12 @@ use registry_casework_core::{
     REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
     REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
     REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
-    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
-    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
-    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
-    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
-    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
+    SOURCE_PROFILE_REQUIRED_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
+    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
+    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
+    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
+    WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
@@ -57,6 +58,7 @@ pub enum CaseworkProblemCode {
     RequestUnsupportedMediaType,
     RuntimeFailure,
     ServiceUnavailable,
+    SourceProfileNotApplicable,
     SourceProfileRequired,
     SourceBadGateway,
     SourceNotFound,
@@ -78,7 +80,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -103,6 +105,7 @@ impl CaseworkProblemCode {
         Self::RequestUnsupportedMediaType,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::SourceProfileNotApplicable,
         Self::SourceProfileRequired,
         Self::SourceBadGateway,
         Self::SourceNotFound,
@@ -144,6 +147,7 @@ impl CaseworkProblemCode {
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
+            Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
             Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
@@ -186,6 +190,7 @@ impl CaseworkProblemCode {
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
+            SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM => Self::SourceProfileNotApplicable,
             SOURCE_PROFILE_REQUIRED_PROBLEM => Self::SourceProfileRequired,
             SOURCE_BAD_GATEWAY_PROBLEM => Self::SourceBadGateway,
             SOURCE_NOT_FOUND_PROBLEM => Self::SourceNotFound,
@@ -218,9 +223,10 @@ impl CaseworkProblemCode {
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 403
             }
-            Self::RequestInvalid | Self::SourceProfileRequired | Self::SourceSignatureInvalid => {
-                400
-            }
+            Self::RequestInvalid
+            | Self::SourceProfileNotApplicable
+            | Self::SourceProfileRequired
+            | Self::SourceSignatureInvalid => 400,
             Self::RequestNotFound | Self::SourceNotFound | Self::WorkItemNotVisible => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
@@ -330,6 +336,10 @@ impl CaseworkProblemCode {
             Self::ServiceUnavailable => (
                 "Casework service unavailable",
                 "Casework storage is unavailable. Try again after the service recovers.",
+            ),
+            Self::SourceProfileNotApplicable => (
+                "Source profile not applicable",
+                "Omit the Registry-Source-Profile header for this request.",
             ),
             Self::SourceProfileRequired => (
                 "Source profile required",
@@ -495,5 +505,28 @@ mod tests {
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             ))
         );
+    }
+
+    #[test]
+    fn source_profile_header_problems_have_exact_recovery_contracts() {
+        for (value, expected, title, detail) in [
+            (
+                "source-profile.not-applicable",
+                CaseworkProblemCode::SourceProfileNotApplicable,
+                "Source profile not applicable",
+                "Omit the Registry-Source-Profile header for this request.",
+            ),
+            (
+                "source-profile.required",
+                CaseworkProblemCode::SourceProfileRequired,
+                "Source profile required",
+                "Send the Registry-Source-Profile header to select the source profile for this request.",
+            ),
+        ] {
+            let code = CaseworkProblemCode::parse(value);
+            assert_eq!(code, expected);
+            assert_eq!(code.expected_status(), Some(400));
+            assert_eq!(code.expected_text(), Some((title, detail)));
+        }
     }
 }

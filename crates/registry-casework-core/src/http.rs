@@ -40,6 +40,7 @@ pub const RUNTIME_FAILURE_PROBLEM: &str = "runtime.failure";
 pub const SERVICE_UNAVAILABLE_PROBLEM: &str = "service.unavailable";
 pub const SOURCE_BAD_GATEWAY_PROBLEM: &str = "source.bad-gateway";
 pub const SOURCE_NOT_FOUND_PROBLEM: &str = "source.not-found";
+pub const SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM: &str = "source-profile.not-applicable";
 pub const SOURCE_PROFILE_REQUIRED_PROBLEM: &str = "source-profile.required";
 pub const SOURCE_SIGNATURE_INVALID_PROBLEM: &str = "source.signature-invalid";
 pub const WORK_ITEM_ALREADY_CLAIMED_PROBLEM: &str = "work-item.already-claimed";

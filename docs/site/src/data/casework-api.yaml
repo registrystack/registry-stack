@@ -26,6 +26,7 @@
     - ['`request.unsupported-media-type`', '415', 'A body without `Content-Type: application/json`.']
     - ['`runtime.failure`', '500', 'Casework could not complete the request.']
     - ['`service.unavailable`', '503', 'Casework storage is unavailable. Retry after the service recovers.']
+    - ['`source-profile.not-applicable`', '400', 'The route does not use source authority. Omit the `Registry-Source-Profile` header.']
     - ['`source-profile.required`', '400', 'The route needs an explicit `Registry-Source-Profile` header to select source authority.']
     - ['`source.bad-gateway`', '502', 'The source returned a response that does not match its registered contract.']
     - ['`source.not-found`', '404', 'The named source is not registered.']

@@ -102,10 +102,11 @@ in a family grants nothing on its own.
 Two history reads sit under the same work item and answer different questions.
 `GET /v1/work-items/{itemId}/hosted-history` is the staff read of hosted lifecycle history, open to a
 human Staff or Supervisor profile under current deciding-profile and served-queue authority, and it
-refuses a request that carries `Registry-Source-Profile`.
+returns `source-profile.not-applicable` when a request carries `Registry-Source-Profile`.
 `GET /v1/work-items/{itemId}/history` is the source-scoped variant and requires
-`Registry-Source-Profile`, returning entries under the caller's current source visibility. Both order entries by `occurredAt` and `eventId` and page with an opaque
-cursor.
+`Registry-Source-Profile`, returning `source-profile.required` when it is absent and entries under
+the caller's current source visibility when it is present. Both order entries by `occurredAt` and
+`eventId` and page with an opaque cursor.
 
 {/* Evidence: crates/registry-casework/src/http.rs, hosted_staff_history() and reject_source_profile();
     products/casework/generated/registry-casework.openapi.json. */}

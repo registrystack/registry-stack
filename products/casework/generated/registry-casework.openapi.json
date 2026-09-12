@@ -2386,6 +2386,7 @@
               "request.unsupported-media-type",
               "runtime.failure",
               "service.unavailable",
+              "source-profile.not-applicable",
               "source-profile.required",
               "source.bad-gateway",
               "source.not-found",
@@ -3124,6 +3125,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/source/not-found"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemSourceProfileNotApplicable": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source-profile.not-applicable"
+              },
+              "detail": {
+                "const": "Omit the Registry-Source-Profile header for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Source profile not applicable"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source-profile/not-applicable"
               }
             },
             "type": "object"
@@ -5015,12 +5043,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8052,12 +8083,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -8800,11 +8834,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9017,11 +9058,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
@@ -9309,12 +9357,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9514,11 +9565,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -9751,11 +9809,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
@@ -10111,12 +10176,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10362,11 +10430,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
@@ -15101,11 +15176,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.not-applicable",
             "headers": {
               "Registry-Casework-Validation-Path": {
                 "description": "Bounded JSON path for a typed hosted validation failure. Present together with Registry-Casework-Validation-Reason; rejected values are never echoed.",
@@ -15461,12 +15543,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileNotApplicable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.not-applicable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
