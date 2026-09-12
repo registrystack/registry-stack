@@ -104,7 +104,7 @@ fn authenticator(
             registry,
             verifier,
             keys,
-            AuthorityClaimConfig::new("registry_principal", Some("purpose".to_owned())),
+            AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
         )
         .expect("explicit issuer configuration"),
     )

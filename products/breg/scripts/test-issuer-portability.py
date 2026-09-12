@@ -128,7 +128,7 @@ def realm(client_secret: str, password: str, callback: str, audience: str) -> di
         mapper("tenant assignment", "oidc-hardcoded-claim-mapper", {
             "claim.name": "tenant_claim", "claim.value": "tenant-a", "jsonType.label": "String"}),
         mapper("purpose", "oidc-hardcoded-claim-mapper", {
-            "claim.name": "purpose", "claim.value": PURPOSE, "jsonType.label": "String"}),
+            "claim.name": "registry_purpose", "claim.value": PURPOSE, "jsonType.label": "String"}),
         mapper("BREG resource", "oidc-audience-mapper", {"included.custom.audience": audience}),
     ]
     client = {"protocol": "openid-connect", "enabled": True,
@@ -245,7 +245,7 @@ clients:
     scopes: [registry:read]
     claims:
       registry_principal: urn:institution:service-clerk
-      purpose: registry-administration
+      registry_purpose: registry-administration
       districts: district-a
       tenant_claim: tenant-a
 """)

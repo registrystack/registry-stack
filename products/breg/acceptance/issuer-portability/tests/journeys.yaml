@@ -7,6 +7,9 @@ journeys:
         accessProfile: clerk
         claims:
           principal: urn:institution:service-clerk
+          scopes: [registry:read]
+          purpose: registry-administration
+          directClaims: {districts: district-a}
         request:
           operation: list
         expect:
