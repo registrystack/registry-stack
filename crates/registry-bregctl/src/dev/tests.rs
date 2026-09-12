@@ -183,15 +183,26 @@ seed: []
         .find(|client| client.id == "guest")
         .expect("the unbound client is retained");
     assert!(guest.access_profiles.is_empty());
+    assert!(!guest.allow_breg_access);
 }
 
 #[test]
-fn an_unbound_client_registers_with_mint_but_cannot_authenticate_to_breg() {
+fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
     let (_temp, state, mut clients, files) = fixture();
     clients.clients.push(config::Client {
         id: "guest".into(),
         access_profiles: vec![],
+        allow_breg_access: false,
         scopes: vec!["registry:generic:introspect".into()],
+        claims: BTreeMap::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    });
+    clients.clients.push(config::Client {
+        id: "casework-reviewer".into(),
+        access_profiles: vec![],
+        allow_breg_access: true,
+        scopes: vec!["registry:generic:review".into()],
         claims: BTreeMap::new(),
         client_id_file: None,
         assertion_key_file: None,
@@ -200,6 +211,8 @@ fn an_unbound_client_registers_with_mint_but_cannot_authenticate_to_breg() {
     let root = state.root();
     private::read(&root.join("mint/clients/guest.yaml"), MAX_BYTES)
         .expect("the unbound client still registers with the local Mint");
+    private::read(&root.join("mint/clients/casework-reviewer.yaml"), MAX_BYTES)
+        .expect("the integration client registers with the local Mint");
     let runtime: Value = serde_norway::from_slice(
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
@@ -210,6 +223,10 @@ fn an_unbound_client_registers_with_mint_but_cannot_authenticate_to_breg() {
     assert!(
         !allowed.iter().any(|id| id == "guest"),
         "the unbound client must be absent from allowedClients: {allowed:?}"
+    );
+    assert!(
+        allowed.iter().any(|id| id == "casework-reviewer"),
+        "the explicitly admitted integration client must be allowed: {allowed:?}"
     );
     assert!(
         clients
@@ -232,6 +249,7 @@ fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client(
     clients.clients.push(config::Client {
         id: "guest".into(),
         access_profiles: vec![],
+        allow_breg_access: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
         client_id_file: None,

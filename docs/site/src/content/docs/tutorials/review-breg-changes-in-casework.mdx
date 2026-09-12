@@ -132,7 +132,9 @@ In `registry.yaml`, a lifecycle event on `scope-correction` tells Casework when 
 and a `casework-reader` access profile lets Casework read requests and nothing else.
 In `dev-clients.yaml`, a `casework-reader` client is the credential the local Casework session
 reads the registry with, and `administrator`, `supervisor`, and `staff` are the Casework project's
-own people, registered with the registry's Mint so one token serves both products.
+own people, registered with the registry's Mint so one token serves both products. Staff and
+Supervisor are explicitly admitted to BReg because they review and apply its requests;
+Administrator remains a Casework-only caller.
 
 Read the preview, then write it:
 

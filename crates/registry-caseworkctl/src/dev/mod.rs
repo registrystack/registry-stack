@@ -10,8 +10,6 @@ mod private;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use config::principal as local_principal;
-
 use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use config::Clients;

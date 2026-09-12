@@ -28,6 +28,12 @@ const READER_PURPOSE: &str = "casework-sync";
 /// The Mint claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
 
+/// A source-backed Casework session borrows BReg's local Mint, so a synthesized
+/// subject must match the principal BReg registers for that client.
+fn borrowed_breg_principal(client_id: &str) -> String {
+    format!("urn:breg:dev:{client_id}")
+}
+
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
     let registry = canonical_dir(&args.registry, "BReg project")?;
@@ -104,6 +110,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
             bail!("BReg dev-clients.yaml changed after preview; no files were written, retry source add against its current revision");
         }
     }
+    ensure_runtime_binding_parent(&project, &binding_path)?;
     fs::create_dir_all(description_path.parent().expect("source file has parent"))
         .context("creating Casework source directory")?;
     write_atomic(&registry_yaml, proposed.as_bytes())?;
@@ -115,6 +122,35 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let final_check = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check after apply", &final_check)?;
     Ok(report)
+}
+
+/// Prepare the fixed launcher-binding directory without following an authored
+/// symlink outside the canonical Casework project. This runs before any output
+/// file is published so a missing directory cannot leave a partial apply.
+fn ensure_runtime_binding_parent(project: &Path, binding_path: &Path) -> Result<()> {
+    let parent = binding_path
+        .parent()
+        .context("BReg runtime binding has no parent")?;
+    if parent != project.join("sources") {
+        bail!("BReg runtime binding must stay in the Casework sources directory");
+    }
+    match fs::symlink_metadata(parent) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!("Casework sources directory must not be a symlink")
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            bail!("Casework sources path must be a directory")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir(parent).context("creating Casework runtime-binding directory")?;
+        }
+        Err(error) => return Err(error).context("checking Casework sources directory"),
+    }
+    if fs::canonicalize(parent).context("resolving Casework sources directory")? != parent {
+        bail!("Casework sources directory must resolve inside the project");
+    }
+    Ok(())
 }
 
 fn validate_id(id: &str) -> Result<()> {
@@ -722,7 +758,8 @@ fn has_nonempty_row_boundaries(value: &Value) -> bool {
 /// and claims, no access profile of its own. A staff or supervisor client
 /// additionally carries the selected request's reviewer scopes, maps its
 /// Casework principal into the BReg reviewer claim, and carries any required
-/// purpose claim.
+/// purpose claim. Only those reviewer roles explicitly opt in to BReg's
+/// `allowedClients` list.
 fn human_dev_client(
     client: &Value,
     role: &str,
@@ -745,12 +782,13 @@ fn human_dev_client(
         .flatten()
         .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
         .collect();
-    if matches!(role, "staff" | "supervisor") {
+    let allow_breg_access = matches!(role, "staff" | "supervisor");
+    if allow_breg_access {
         let authority = authority.context(
             "a Casework staff or supervisor dev client has no reviewer authority to bind",
         )?;
         let principal = if casework_principal_claim == "sub" {
-            crate::dev::local_principal(id)
+            borrowed_breg_principal(id)
         } else {
             claims
                 .get(casework_principal_claim)
@@ -786,12 +824,16 @@ fn human_dev_client(
             "Casework dev client {id} exceeds BReg local client scope or claim bounds after reviewer authority is added"
         );
     }
-    Ok(json!({
+    let mut result = json!({
         "id": id,
         "accessProfiles": Vec::<String>::new(),
         "scopes": scopes.into_iter().collect::<Vec<_>>(),
         "claims": claims,
-    }))
+    });
+    if allow_breg_access {
+        result["allowBregAccess"] = json!(true);
+    }
+    Ok(result)
 }
 
 /// Plans the BReg `dev-clients.yaml` side of `source add`: the reader client
@@ -1012,6 +1054,12 @@ fn render_dev_client_yaml_block(client: &Value) -> Result<String> {
         flow_sequence(&access_profiles),
         flow_sequence(&scopes),
     );
+    if let Some(allow_breg_access) = client.get("allowBregAccess") {
+        let allow_breg_access = allow_breg_access
+            .as_bool()
+            .context("planned BReg dev client allowBregAccess must be a boolean")?;
+        block.push_str(&format!("    allowBregAccess: {allow_breg_access}\n"));
+    }
     if claims.is_empty() {
         block.push_str("    claims: {}\n");
     } else {
@@ -1233,6 +1281,37 @@ mod tests {
     }
 
     #[test]
+    fn source_apply_prepares_a_missing_runtime_binding_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(root.path()).unwrap();
+        let binding = project.join("sources/professional.breg-runtime.yaml");
+
+        ensure_runtime_binding_parent(&project, &binding).unwrap();
+
+        assert!(project.join("sources").is_dir());
+        write_atomic(&binding, b"eventDestinations: {}\n").unwrap();
+        assert_eq!(fs::read(binding).unwrap(), b"eventDestinations: {}\n");
+    }
+
+    #[test]
+    fn source_apply_refuses_a_symlinked_runtime_binding_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(root.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), project.join("sources")).unwrap();
+        let binding = project.join("sources/professional.breg-runtime.yaml");
+
+        let error = ensure_runtime_binding_parent(&project, &binding)
+            .expect_err("a runtime binding must not traverse a symlink");
+
+        assert!(format!("{error:#}").contains("must not be a symlink"));
+        assert!(!outside
+            .path()
+            .join("professional.breg-runtime.yaml")
+            .exists());
+    }
+
+    #[test]
     fn source_import_preserves_multistage_approval_and_independence_requirements() {
         let project = tempfile::tempdir().unwrap();
         fs::write(project.path().join("casework.yaml"), serde_json::to_vec(&json!({
@@ -1406,6 +1485,7 @@ mod tests {
 
         for role in ["supervisor", "staff"] {
             let client = clients.iter().find(|c| c["id"] == role).unwrap();
+            assert_eq!(client["allowBregAccess"], true);
             assert_eq!(
                 client["scopes"],
                 json!([format!("casework:{role}"), "starter:reviewer"])
@@ -1554,6 +1634,7 @@ mod tests {
             .find(|client| client["id"] == "requester")
             .unwrap();
         assert_eq!(requester["accessProfiles"], json!([]));
+        assert!(requester.get("allowBregAccess").is_none());
         assert_eq!(requester["scopes"], json!(["casework:request"]));
         assert_eq!(requester["claims"], json!({}));
     }
@@ -1823,9 +1904,23 @@ mod tests {
         let merged = human_dev_client(&client, "staff", "sub", Some(&authority)).unwrap();
         assert_eq!(
             merged["claims"][READER_PRINCIPAL_CLAIM],
-            crate::dev::local_principal("staff")
+            borrowed_breg_principal("staff")
         );
         assert!(merged["claims"].get("sub").is_none());
+
+        let already_aligned = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{
+                "registry_actor_kind":"human",
+                "registry_principal":borrowed_breg_principal("staff")
+            }
+        });
+        let merged = human_dev_client(&already_aligned, "staff", "sub", Some(&authority)).unwrap();
+        assert_eq!(
+            merged["claims"][READER_PRINCIPAL_CLAIM],
+            borrowed_breg_principal("staff")
+        );
     }
 
     #[test]
@@ -1899,6 +1994,7 @@ mod tests {
         let client = json!({
             "id": "client",
             "accessProfiles": [],
+            "allowBregAccess": true,
             "scopes": ["read,write", "value: scoped", "true"],
             "claims": {"purpose": "review: licensing", "enabled": "false"}
         });

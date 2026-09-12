@@ -334,6 +334,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let client = config::Client {
         id: args.client.clone(),
         access_profiles: vec![args.access_profile.clone()],
+        allow_breg_access: false,
         scopes: vec![scope],
         claims,
         client_id_file: None,

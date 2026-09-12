@@ -134,6 +134,12 @@ claims for another product, such as Casework. The empty list gives that client
 no BReg access-profile binding. It is registered with the local Mint but omitted
 from the BReg runtime's `allowedClients`, so it cannot call BReg.
 
+An integration client that must call BReg without becoming a journey or seed
+binding must opt in with `allowBregAccess: true`. Use that flag only when its
+scopes and authority claims are intentionally sufficient for the BReg profiles
+it will select. `caseworkctl source add` sets it only for exported Staff and
+Supervisor reviewers; other profile-free Casework clients remain excluded.
+
 ```yaml
 version: 1
 clients:
