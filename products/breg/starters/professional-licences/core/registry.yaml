@@ -533,6 +533,11 @@
             }
           ]
         }
+      ],
+      "actorKind": "human",
+      "requesterClients": [
+        "staff",
+        "supervisor"
       ]
     },
     {

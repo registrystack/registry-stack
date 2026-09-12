@@ -121,7 +121,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "get",
@@ -142,7 +144,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "approve_request",
@@ -201,7 +205,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "get",
@@ -222,7 +228,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "apply_request",
@@ -354,7 +362,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "get",
@@ -375,7 +385,9 @@
             "scopes": [
               "starter:reviewer"
             ],
-            "purpose": "starter-learning"
+            "purpose": "starter-learning",
+            "actorKind": "human",
+            "requesterClient": "supervisor"
           },
           "request": {
             "operation": "reject_request",
