@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Synthetic governed-request fixture for the complete native task journey.
-#![allow(dead_code, unused_imports)]
 #[path = "../../../registry-breg/tests/support/postgres_harness.rs"]
+#[allow(dead_code)]
 mod postgres_harness;
 use axum::{
     body::{to_bytes, Body},
@@ -19,28 +19,17 @@ use registry_breg::postgres::{
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
     RegistryStateTestIdentity,
 };
-use registry_breg::task_grant::{TaskGrantBinding, TaskGrantError, TaskGrantStatusChecker};
-use registry_breg::{compile_project, parse_project_json, CompileProfile, CompiledRegistry};
+use registry_breg::task_grant::TaskGrantStatusChecker;
+use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
-use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
-use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use serde_json::{json, Value};
-use std::{
-    collections::BTreeMap,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 use tower::ServiceExt;
-use uuid::Uuid;
 use zeroize::Zeroizing;
 const PACKAGE: &str = "task-authority-http";
 const AUDIENCE: &str = "urn:breg:task-test";
 const REVISION: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const SOURCE: &str = "https://casework.example";
 pub(super) const PROJECT: &str = r#"{
   "apiVersion":"registry.registrystack.org/v1alpha1",
   "kind":"RegistryProject",
@@ -167,7 +156,10 @@ impl ReadinessProbe for Ready {
         Box::pin(async { true })
     }
 }
-pub(super) async fn install(db: &TestDatabase, registry: &CompiledRegistry) -> ExpectedRegistryIdentity {
+pub(super) async fn install(
+    db: &TestDatabase,
+    registry: &CompiledRegistry,
+) -> ExpectedRegistryIdentity {
     let (migration, task) = db.connect_migration().await;
     install_compiled_schema(&migration, registry, &db.runtime_role)
         .await
@@ -225,8 +217,18 @@ pub(super) fn app(
         )
         .with_task_status(status),
     );
-    let keys = Arc::new(JwksFetcher::new_static(serde_json::from_value(jwks).unwrap(), JwksFetcherConfig::defaults()));
-    let verifier = registry_platform_oidc::TokenVerifierConfig::access_token_profile(issuer, vec![AUDIENCE.into()], vec![jsonwebtoken::Algorithm::RS256], vec!["JWT".into(), "at+jwt".into()]).with_scope_claim("scope").with_allowed_clients(vec!["task-agent".into(),"seed-client".into()]);
+    let keys = Arc::new(JwksFetcher::new_static(
+        serde_json::from_value(jwks).unwrap(),
+        JwksFetcherConfig::defaults(),
+    ));
+    let verifier = registry_platform_oidc::TokenVerifierConfig::access_token_profile(
+        issuer,
+        vec![AUDIENCE.into()],
+        vec![jsonwebtoken::Algorithm::RS256],
+        vec!["at+jwt".into()],
+    )
+    .with_scope_claim("scope")
+    .with_allowed_clients(vec!["task-agent".into(), "seed-client".into()]);
     let auth = RegistryAuthenticator::new(
         &registry,
         verifier,
@@ -301,7 +303,13 @@ pub(super) async fn send(
         .unwrap();
     Response { status, etag, body }
 }
-pub(super) async fn create(app: &Router, route: &str, token: &str, key: &str, data: Value) -> Response {
+pub(super) async fn create(
+    app: &Router,
+    route: &str,
+    token: &str,
+    key: &str,
+    data: Value,
+) -> Response {
     let r = send(
         app,
         Method::POST,
@@ -334,35 +342,6 @@ pub(super) async fn get(app: &Router, id: &str, profile: &str, token: &str) -> R
     .await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     r
-}
-fn action(r: &Response, operation: &str) -> Value {
-    r.body["data"]["request"]["actions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|a| a["operation"] == operation)
-        .unwrap()
-        .clone()
-}
-async fn perform(app: &Router, action: &Value, token: &str, key: &str) -> Response {
-    let mut body = if action.get("proposalVersion").is_some() {
-        json!({"proposalVersion":action["proposalVersion"],"effectDigest":action["effectDigest"]})
-    } else {
-        json!({})
-    };
-    if action["operation"] == "reject_request" {
-        body["reason"] = json!("The task was revoked.");
-    }
-    send(
-        app,
-        Method::POST,
-        action["href"].as_str().unwrap(),
-        token,
-        Some(key),
-        action["ifMatch"].as_str(),
-        body,
-    )
-    .await
 }
 pub(super) async fn counts(db: &TestDatabase) -> Vec<i64> {
     let mut counts = Vec::new();
