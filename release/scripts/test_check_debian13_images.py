@@ -56,7 +56,6 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
-                Path("release/docker/Dockerfile.mint"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.casework"),
                 Path("release/docker/Dockerfile.relay"),
@@ -67,7 +66,6 @@ class ReleaseImagePolicyTests(unittest.TestCase):
             {
                 Path("release/docker/Dockerfile.discovery"),
                 Path("release/docker/Dockerfile.evidence"),
-                Path("release/docker/Dockerfile.mint"),
                 Path("release/docker/Dockerfile.breg"),
                 Path("release/docker/Dockerfile.casework"),
             },

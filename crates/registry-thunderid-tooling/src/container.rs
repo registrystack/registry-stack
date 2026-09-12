@@ -275,6 +275,13 @@ impl Session<'_> {
             "--publish".into(),
             format!("127.0.0.1:{}:8090", self.port),
         ];
+        // Docker Desktop provides this host name itself. Linux Engine needs an
+        // explicit host gateway so approved local assertion JWKS are reachable.
+        #[cfg(target_os = "linux")]
+        args.extend([
+            "--add-host".into(),
+            "host.docker.internal:host-gateway".into(),
+        ]);
         for (host, container) in self.serving_mounts() {
             args.push("--mount".into());
             args.push(format!(
@@ -504,6 +511,13 @@ mod tests {
         assert!(runner.commands[0].contains(&format!("name=^/{}$", session.container_name())));
         assert_eq!(runner.commands[1], ["rm", "-f", &id]);
         assert_eq!(runner.commands[2][0], "run");
+        assert!(runner.commands[2].contains(&"127.0.0.1:18091:8090".into()));
+        assert_eq!(
+            runner.commands[2]
+                .windows(2)
+                .any(|pair| pair == ["--add-host", "host.docker.internal:host-gateway"]),
+            cfg!(target_os = "linux"),
+        );
 
         runner.commands.clear();
         runner.owned_id = None;

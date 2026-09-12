@@ -10,7 +10,6 @@ artifacts:
   relayctl: 0.30.0
   evidence: 0.30.0
   evidencectl: 0.30.0
-  mint: 0.30.0
   evidence-oid4vci: 0.30.0
   evidencectl-installer: 0.30.0
   relay-installer: 0.30.0
@@ -31,3 +30,8 @@ identifier_catalog:
   entry_count: 112
 
 external: {}
+
+warnings:
+  - code: registry-mint-retired
+    classification: breaking-product-replacement
+    detail: Registry Mint binaries and images are no longer shipped. Configure a standards-based OAuth issuer; maintained local tooling uses pinned stock ThunderID 1.0.1. Existing Mint configuration and signing custody or durable pre-response issuance audit are not migrated.

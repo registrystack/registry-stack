@@ -920,7 +920,6 @@ class RegistryReleaseTest(TestCase):
         release_dockerfiles = [
             "release/docker/Dockerfile.discovery",
             "release/docker/Dockerfile.evidence",
-            "release/docker/Dockerfile.mint",
             "release/docker/Dockerfile.breg",
             "release/docker/Dockerfile.casework",
             "release/docker/Dockerfile.relay",
@@ -976,7 +975,7 @@ class RegistryReleaseTest(TestCase):
 
         self.assertIn("-p registry-evidence-oid4vci", platform_job)
         self.assertIn(
-            "for evidence_binary in evidence evidencectl mint evidence-oid4vci",
+            "for evidence_binary in evidence evidencectl evidence-oid4vci",
             platform_job,
         )
         self.assertIn("-p registry-evidence-oid4vci", linux_recipe)
@@ -985,13 +984,13 @@ class RegistryReleaseTest(TestCase):
             linux_recipe,
         )
         self.assertIn(
-            "binaries=(evidence evidencectl mint evidence-oid4vci)", installer
+            "binaries=(evidence evidencectl evidence-oid4vci)", installer
         )
         self.assertIn(
             'EVIDENCECTL_INSTALL_DIR="${evidence_install_dir}"', workflow
         )
         self.assertIn(
-            "for binary in evidence evidencectl mint evidence-oid4vci",
+            "for binary in evidence evidencectl evidence-oid4vci",
             workflow,
         )
 
@@ -1023,13 +1022,13 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('init "${breg_project}"', assemble)
         self.assertIn('check "${breg_project}"', assemble)
         self.assertIn(
-            "binaries=(breg bregctl mint)", installer_text
+            "binaries=(breg bregctl)", installer_text
         )
         self.assertIn(
-            '"mint-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n                > SHA256SUMS',
+            '"bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n                > SHA256SUMS',
             assemble,
         )
-        self.assertIn("for breg_binary in breg bregctl mint; do", assemble)
+        self.assertIn("for breg_binary in breg bregctl; do", assemble)
 
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -1051,7 +1050,7 @@ class RegistryReleaseTest(TestCase):
             else:
                 raise SkipTest(f"installer has no release asset for {os_name}/{architecture}")
             checksums = []
-            for binary in ("breg", "bregctl", "mint"):
+            for binary in ("breg", "bregctl"):
                 name = f"{binary}-v0.26.0-{platform_name}"
                 body = f"{binary} fixture\n".encode()
                 (assets / name).write_bytes(body)
@@ -1073,7 +1072,7 @@ class RegistryReleaseTest(TestCase):
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            for binary in ("breg", "bregctl", "mint"):
+            for binary in ("breg", "bregctl"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
@@ -1088,18 +1087,17 @@ class RegistryReleaseTest(TestCase):
         self.assertIn("release_minor >= 30", workflow)
         self.assertIn("-p registry-casework --bin casework", workflow)
         self.assertIn("-p registry-caseworkctl --bin caseworkctl", workflow)
-        self.assertIn("binaries=(casework caseworkctl mint)", installer_text)
+        self.assertIn("binaries=(casework caseworkctl)", installer_text)
         self.assertIn("CASEWORK_ASSET_DIR", workflow)
         self.assertIn("CASEWORK_INSTALL_DIR", workflow)
         self.assertIn("--template standalone-decision", workflow)
         self.assertIn(
             '"caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
-            '                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \\\n'
             "                > SHA256SUMS",
             assemble,
         )
         self.assertIn(
-            "for casework_binary in casework caseworkctl mint; do", assemble
+            "for casework_binary in casework caseworkctl; do", assemble
         )
         self.assertIn('caseworkctl\" check', workflow)
         self.assertIn('caseworkctl\" test', workflow)
@@ -1127,7 +1125,7 @@ class RegistryReleaseTest(TestCase):
                     f"installer has no release asset for {os_name}/{architecture}"
                 )
             checksums = []
-            for binary in ("casework", "caseworkctl", "mint"):
+            for binary in ("casework", "caseworkctl"):
                 name = f"{binary}-v0.30.0-{platform_name}"
                 body = f"{binary} fixture\n".encode()
                 (assets / name).write_bytes(body)
@@ -1149,7 +1147,7 @@ class RegistryReleaseTest(TestCase):
                 check=False,
             )
             self.assertEqual(0, result.returncode, result.stderr)
-            for binary in ("casework", "caseworkctl", "mint"):
+            for binary in ("casework", "caseworkctl"):
                 installed = destination / binary
                 self.assertEqual(f"{binary} fixture\n", installed.read_text())
                 self.assertTrue(installed.stat().st_mode & stat.S_IXUSR)
@@ -1382,12 +1380,11 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence mint discovery breg casework)",
+            "image_names=(relay evidence discovery breg casework)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
-            '"mint-image"',
             '"breg-image"',
             '"casework-image"',
             '"relay-image"',
@@ -1460,7 +1457,6 @@ class RegistryReleaseTest(TestCase):
             for name in (
                 "discovery",
                 "evidence",
-                "mint",
                 "breg",
                 "casework",
                 "relay",
@@ -1485,7 +1481,6 @@ class RegistryReleaseTest(TestCase):
         for name in (
             "discovery",
             "evidence",
-            "mint",
             "breg",
             "casework",
             "relay",
@@ -1499,7 +1494,7 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        self.assertIn("discovery|evidence|mint|breg|casework|relay)", image_recipe)
+        self.assertIn("discovery|evidence|breg|casework|relay)", image_recipe)
         self.assertNotIn("registry-relay)", image_recipe)
 
     def test_breg_release_image_keeps_deployment_inputs_external(self) -> None:
@@ -1709,7 +1704,7 @@ class RegistryReleaseTest(TestCase):
             for name in published_names
         }
         self.assertEqual([], module.artifact_inventory_errors("0.29.0", published))
-        future = {name: "0.30.0" for name in published}
+        future = {name: "0.30.0" for name in published if name != "mint"}
         future.update(
             {
                 "casework": "0.30.0",
@@ -1776,7 +1771,6 @@ class RegistryReleaseTest(TestCase):
     ) -> None:
         contracts = {
             "evidence": "/workspace/runtime-root/var/lib/registry-evidence/audit",
-            "mint": "/workspace/runtime-root/var/lib/registry-mint/audit",
             "relay": "/workspace/runtime-root/var/lib/relay/audit",
         }
         for name, audit_path in contracts.items():
@@ -3050,6 +3044,7 @@ def write_manifest(
         artifacts["registry-client-node"] = version
         artifacts["registry-client-python"] = version
     if version_tuple >= (0, 30, 0):
+        artifacts.pop("mint")
         artifacts["casework"] = version
         artifacts["caseworkctl"] = version
         artifacts["casework-installer"] = version

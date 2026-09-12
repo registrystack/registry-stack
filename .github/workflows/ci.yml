@@ -1334,7 +1334,7 @@ jobs:
           # so its binaries are part of the toolset the replay serves.
           CARGO_TARGET_DIR="target/casework-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-casework -p registry-caseworkctl -p registry-mint \
+            -p registry-casework -p registry-caseworkctl \
             -p registry-breg --features registry-breg/runtime \
             -p registry-bregctl --bins
 
@@ -1353,7 +1353,6 @@ jobs:
         env:
           CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/casework
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/caseworkctl
-          MINT_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/mint
           BREG_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/breg
           BREGCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/bregctl
         run: |

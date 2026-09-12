@@ -41,7 +41,6 @@ class NightlyCoverageTests(unittest.TestCase):
             "casework": "casework",
             "stack-client": "stack-client",
             "evidence": "evidence",
-            "mint": "mint",
             "developer-tools": "developer-tools",
         }
         self.assertEqual({entry["name"]: entry["flag"] for entry in entries}, expected_flags)

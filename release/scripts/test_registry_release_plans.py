@@ -138,6 +138,7 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             "breg-installer",
         )
     if version_tuple >= CASEWORK_RELEASE_MINIMUM_VERSION:
+        inventory = tuple(name for name in inventory if name != "mint")
         inventory += (
             "casework",
             "caseworkctl",

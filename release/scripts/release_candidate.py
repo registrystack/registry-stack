@@ -55,7 +55,8 @@ RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
     "breg"
 }
-CASEWORK_RUNTIME_IMAGE_NAMES = BREG_RUNTIME_IMAGE_NAMES | {"casework"}
+MINT_RETIREMENT_VERSION = (0, 30, 0)
+CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casework"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
     "repository",
@@ -293,6 +294,9 @@ def _relay_v2_payload_inventory(version: str) -> dict[str, str]:
             "evidence-oid4vci",
         ):
             inventory[f"{name}-{tag}-{platform}"] = "binary"
+    if version_tuple >= MINT_RETIREMENT_VERSION:
+        for platform in ("linux-amd64", "linux-arm64", "macos-arm64"):
+            inventory.pop(f"mint-{tag}-{platform}")
     unified_client = version_tuple >= UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION
     if not unified_client:
         for platform in ("linux-amd64-glibc", "linux-arm64-glibc", "macos-arm64"):

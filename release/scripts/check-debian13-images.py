@@ -47,7 +47,6 @@ DISTROLESS_REPOSITORY = DISTROLESS_RUNTIME.split("@", 1)[0]
 DOCKERFILES = (
     Path("release/docker/Dockerfile.discovery"),
     Path("release/docker/Dockerfile.evidence"),
-    Path("release/docker/Dockerfile.mint"),
     Path("release/docker/Dockerfile.breg"),
     Path("release/docker/Dockerfile.casework"),
     Path("release/docker/Dockerfile.relay"),
@@ -123,12 +122,6 @@ HTTP_PROBE_DOCKERFILES = {
         "binary": "evidence",
         "environment": "ENV REGISTRY_EVIDENCE_RUNTIME=/etc/registry-evidence/runtime.yaml",
         "entrypoint": 'ENTRYPOINT ["/usr/local/bin/evidence"]',
-        "command": 'CMD ["serve"]',
-    },
-    Path("release/docker/Dockerfile.mint"): {
-        "binary": "mint",
-        "environment": "ENV MINT_CONFIG=/etc/registry-mint/config.yaml",
-        "entrypoint": 'ENTRYPOINT ["/usr/local/bin/mint"]',
         "command": 'CMD ["serve"]',
     },
     Path("release/docker/Dockerfile.breg"): {
