@@ -4213,6 +4213,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "scopes": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21\\x23-\\x29\\x2b-\\x5b\\x5d-\\x7e]+$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "templateId": {
             "maxLength": 512,
             "minLength": 1,
@@ -4231,6 +4243,7 @@
           "agent",
           "client",
           "resource",
+          "scopes",
           "purpose",
           "bounds",
           "expiresAt",
@@ -4337,6 +4350,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "scopes": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21\\x23-\\x29\\x2b-\\x5b\\x5d-\\x7e]+$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "source": {
             "maxLength": 512,
             "minLength": 1,
@@ -4365,6 +4390,7 @@
           "agent",
           "client",
           "resource",
+          "scopes",
           "purpose",
           "bounds",
           "subjects",
@@ -4416,6 +4442,18 @@
             "minLength": 1,
             "type": "string"
           },
+          "scopes": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[\\x21\\x23-\\x29\\x2b-\\x5b\\x5d-\\x7e]+$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
           "subjects": {
             "additionalProperties": {
               "type": [
@@ -4440,6 +4478,7 @@
           "agent",
           "client",
           "resource",
+          "scopes",
           "purpose",
           "bounds",
           "subjects",
@@ -11426,18 +11465,6 @@
             }
           },
           {
-            "description": "Explicit Casework access profile. It never selects BReg authority.",
-            "in": "header",
-            "name": "Registry-Casework-Profile",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_.:-]+$",
-              "type": "string"
-            }
-          },
-          {
             "description": "Immutable task grant identifier.",
             "in": "path",
             "name": "grant_id",
@@ -11704,18 +11731,6 @@
             "name": "traceparent",
             "required": false,
             "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "Explicit Casework access profile. It never selects BReg authority.",
-            "in": "header",
-            "name": "Registry-Casework-Profile",
-            "required": true,
-            "schema": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Za-z0-9_.:-]+$",
               "type": "string"
             }
           },
