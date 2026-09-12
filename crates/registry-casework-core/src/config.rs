@@ -29,7 +29,9 @@ fn default_deadline_ms() -> u64 {
     2_000
 }
 
-fn valid_profile_identifier(value: &str) -> bool {
+/// Whether an identifier can select a Casework access profile over HTTP.
+#[must_use]
+pub fn valid_profile_identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= crate::MAXIMUM_CASEWORK_PROFILE_BYTES
         && value

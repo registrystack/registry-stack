@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-binaries=(casework caseworkctl)
+binaries=(casework caseworkctl mint)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -30,14 +30,18 @@ asset_dir="${CASEWORK_ASSET_DIR:-}"
 
 usage() {
 	cat <<EOF
-Install the Registry Casework runtime and its caseworkctl adopter tooling.
+Install the Registry Casework runtime, the caseworkctl adopter tooling, and
+the mint token issuer that a local registry uses when no identity provider is
+at hand. The mint binary is the one the Base Registry Engine and Evidence
+toolset installers also ship; every installer installs the same release
+asset.
 
 After selecting a release whose manifest lists Casework:
   curl -fsSL https://github.com/${repo}/releases/download/<version>/casework-<version>-install.sh | bash
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-two binaries together or not at all. It does not verify release authenticity. For
+three binaries together or not at all. It does not verify release authenticity. For
 a higher-assurance installation, follow the release verification guide for the
 pinned tag, then rerun with CASEWORK_ASSET_DIR set to the verified
 directory:
@@ -274,12 +278,19 @@ stage_dir="$(mktemp -d "$install_dir/.casework-toolset.XXXXXX")"
 link_stage_dir="$(mktemp -d "$install_dir/.casework-links.XXXXXX")"
 chmod 0755 "$stage_dir"
 install_complete=0
+transaction_active=0
+link_stage_cleanup=1
 cleanup_install() {
 	set +e
+	if [ "$transaction_active" -eq 1 ]; then
+		rollback_adoptions
+	fi
 	if [ "$install_complete" -eq 0 ]; then
 		rm -rf "$stage_dir"
 	fi
-	rm -rf "$link_stage_dir"
+	if [ "$link_stage_cleanup" -eq 1 ]; then
+		rm -rf "$link_stage_dir"
+	fi
 }
 trap 'cleanup_install; cleanup' EXIT
 trap 'exit 130' INT
@@ -327,33 +338,94 @@ if [ ! -L "$current_link" ]; then
 	fi
 fi
 
+had_current_link=0
+if [ -L "$current_link" ]; then
+	had_current_link=1
+	ln -s "$(readlink "$current_link")" "$link_stage_dir/previous-current"
+fi
+
 for binary in "${binaries[@]}"; do
 	if [ -d "$install_dir/$binary" ] && [ ! -L "$install_dir/$binary" ]; then
 		echo "Refusing to replace a directory at $install_dir/$binary." >&2
 		exit 1
 	fi
-	ln -s ".casework-current/$binary" "$link_stage_dir/$binary"
-	if [ -e "$current_link/$binary" ]; then
-		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+	command_target=".casework-current/$binary"
+	ln -s "$command_target" "$link_stage_dir/$binary"
+	if [ -L "$install_dir/$binary" ] &&
+		[ "$(readlink "$install_dir/$binary")" = "$command_target" ]; then
+		# This command already belongs to Casework and changes version through
+		# the pointer below. Leave it untouched if that pointer switch fails.
+		rm "$link_stage_dir/$binary"
+	elif [ -L "$install_dir/$binary" ]; then
+		# Preserve the target text, including a dangling or relative link, so a
+		# failed adoption restores the other installer's exact command path.
+		ln -s "$(readlink "$install_dir/$binary")" "$link_stage_dir/previous-$binary"
+	elif [ -e "$install_dir/$binary" ]; then
+		# A regular command may be a local wrapper. Preserve its bytes and mode.
+		cp -p "$install_dir/$binary" "$link_stage_dir/previous-$binary"
 	fi
 done
+
+adopted_binaries=()
+rollback_adoptions() {
+	local rollback_failed=0 binary backup
+	# Clear first so EXIT cleanup never replays a partial rollback whose backup
+	# entries may already have been moved back into place.
+	transaction_active=0
+	for binary in "${adopted_binaries[@]}"; do
+		backup="$link_stage_dir/previous-$binary"
+		if [ -L "$backup" ] || [ -e "$backup" ]; then
+			if ! replace_path "$backup" "$install_dir/$binary"; then
+				rollback_failed=1
+			fi
+		elif ! rm -f "$install_dir/$binary"; then
+			rollback_failed=1
+		fi
+	done
+	if [ "$had_current_link" -eq 1 ]; then
+		if ! replace_path "$link_stage_dir/previous-current" "$current_link"; then
+			rollback_failed=1
+		fi
+	elif ! rm -f "$current_link"; then
+		rollback_failed=1
+	fi
+	if [ "$rollback_failed" -eq 0 ]; then
+		# The new toolset is unreachable again and may be removed by cleanup.
+		install_complete=0
+	else
+		link_stage_cleanup=0
+		echo "The failed install could not restore every previous command path; inspect $install_dir and the retained backups under $link_stage_dir." >&2
+	fi
+	return "$rollback_failed"
+}
 
 # Every stable command link the pointer already resolves changes version through
 # this one atomic rename.
 ln -s "${stage_dir##*/}" "$link_stage_dir/current"
 install_complete=1
+transaction_active=1
 replace_path "$link_stage_dir/current" "$current_link"
 
-# A command the pointer does not resolve yet, such as one another product's
-# installer wrote directly, is linked only now that the switch has made its
-# target real. Installing that link earlier would replace a working command with
-# a link to a file that a failed switch never creates. Its staged link is still
-# in place because the loop above left it there.
+# A command not already linked through Casework's pointer, such as a shared
+# command owned by another product, is linked only now that the switch has made
+# its target real. Installing that link earlier would mutate a working command
+# even when the final pointer switch fails. Its staged link is still in place
+# because the loop above left it there.
 for binary in "${binaries[@]}"; do
 	if [ -L "$link_stage_dir/$binary" ]; then
-		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+		# Record the attempt before moving: a failing mv may already have changed
+		# its destination, so rollback must restore this path as well.
+		adopted_binaries+=("$binary")
+		if replace_path "$link_stage_dir/$binary" "$install_dir/$binary"; then
+			:
+		else
+			adoption_status=$?
+			rollback_adoptions || true
+			exit "$adoption_status"
+		fi
 	fi
 done
+transaction_active=0
 
 for binary in "${binaries[@]}"; do
 	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"
@@ -364,6 +436,7 @@ Try it:
   caseworkctl init --help
   caseworkctl check --help
   casework --help
+  mint --help
 
 EOF
 

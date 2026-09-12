@@ -163,6 +163,17 @@ class ProductContractTests(unittest.TestCase):
             with self.subTest(variable=variable):
                 self.assertIn(variable, readme)
 
+    def test_source_backed_checkpoint_uses_the_deployment_runtime(self):
+        readme = README.read_text(encoding="utf-8")
+
+        self.assertIn(
+            "casework --config /etc/registry-casework/operator.yaml migrate", readme
+        )
+        self.assertIn(
+            "casework --config /etc/registry-casework/operator.yaml serve", readme
+        )
+        self.assertNotIn("caseworkctl dev start ./casework", readme)
+
     def test_every_mapped_test_is_selected_by_its_own_runner(self):
         mapped = references(MATRIX.read_text(encoding="utf-8")) | references(
             TRACE.read_text(encoding="utf-8")

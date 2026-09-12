@@ -185,6 +185,16 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("--breg binary-shards/breg", merge)
         self.assertIn("breg-v${REHEARSAL_VERSION}-linux-amd64", merge)
         self.assertIn("bregctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("--casework binary-shards/casework", merge)
+        self.assertIn("casework-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn("caseworkctl-v${REHEARSAL_VERSION}-linux-amd64", merge)
+        self.assertIn(
+            "IFS=. read -r release_major release_minor _release_patch", merge
+        )
+        self.assertIn('<<<"${REHEARSAL_VERSION}"', merge)
+        self.assertIn(
+            "if (( release_major > 0 || release_minor >= 30 )); then", merge
+        )
         self.assertNotIn("${{ inputs.", merge)
         for forbidden in (
             "npm publish",

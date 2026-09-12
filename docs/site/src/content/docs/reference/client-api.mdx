@@ -1,11 +1,11 @@
 ---
 title: Registry Stack client API reference
-description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, and Base Registry Engine namespaces of the unified Registry Stack client.
+description: Construction, operations, outcomes, and errors for the Registry Discovery, Evidence Gateway, Registry Relay, Base Registry Engine, and Registry Casework namespaces of the unified Registry Stack client.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-09"
+last_reviewed: "2026-09-11"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -14,11 +14,11 @@ standards_referenced:
 ---
 
 One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. It holds four namespaces, one per product: `discovery` for Registry
-Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, and `breg` for Base Registry
-Engine (BReg). Each namespace keeps its own routes, authentication, errors, and verification rules,
-because those contracts differ. Relay and BReg share only the neutral `registry-record` types they
-decode Registry Record responses into.
+`registry-stack-client` on PyPI. It holds five namespaces, one per product: `discovery` for Registry
+Discovery, `evidence` for Evidence Gateway, `relay` for Registry Relay, `breg` for Base Registry
+Engine (BReg), and `casework` for Registry Casework. Each namespace keeps its own routes,
+authentication, errors, and verification rules, because those contracts differ. Relay and BReg share
+only the neutral `registry-record` types they decode Registry Record responses into.
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
 convert native values, construct the Rust client, run one method, and map the validated result or
@@ -32,8 +32,9 @@ deployment it calls unless a release note states a wider compatibility range.
 
 The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
-package per product instead. Python requires version 3.10 or later and the wheels use the Python
-3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
+package per product instead. The `casework` namespace is present in those same unified packages
+beginning with Registry Stack v0.30.0. Python requires version 3.10 or later and the wheels use the
+Python 3.10 stable ABI (`abi3-py310`), so a later Python imports the same file. Node requires version 22.12
 or later. Both packages select a native build for Linux amd64 with glibc, Linux arm64 with glibc, or
 macOS arm64, and require glibc 2.17 or newer on Linux. The version-specific GitHub Release retains
 the exact wheel and npm tarballs for an offline install.
@@ -77,8 +78,9 @@ npm install --save-dev "@types/node"
 The package does not declare that dependency itself, because a JavaScript consumer does not need it.
 
 A Rust application takes the source crate from the matching release tag. `registry-stack-client` is
-the facade that re-exports the four product clients under `breg`, `discovery`, `evidence`, and
-`relay` modules; a single-product application can depend on that product's crate directly instead.
+the facade that re-exports the five product clients under `breg`, `casework`, `discovery`,
+`evidence`, and `relay` modules; a single-product application can depend on that product's crate
+directly instead.
 
 ```toml
 [dependencies]
@@ -89,18 +91,18 @@ registry-stack-client = { git = "https://github.com/registrystack/registry-stack
     crates/registry-stack-client-py/README.md, crates/registry-stack-client/Cargo.toml,
     release/scripts/assemble-registry-client-wheel.py */}
 
-## One import, four namespaces
+## One import, five namespaces
 
 ```python
-from registry_client import breg, discovery, evidence, relay
+from registry_client import breg, casework, discovery, evidence, relay
 ```
 
 ```js
-const { breg, discovery, evidence, relay } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
 ```
 
 ```rust
-use registry_stack_client::{breg, discovery, evidence, relay};
+use registry_stack_client::{breg, casework, discovery, evidence, relay};
 ```
 
 Import only the namespaces an application uses. Nothing crosses a namespace: a Relay error is never
@@ -1001,6 +1003,176 @@ attributes are `kind`, `code`, `plan_refusal`, `refusal_code`, `status`, `trace_
     decode_exact_json, crates/registry-breg-client/src/strict_json.rs, validate_number_tokens,
     crates/registry-breg-client/src/attachment.rs */}
 
+## Registry Casework
+
+The Casework client owns Casework routes, its work item, hosted item, and directory types, its closed
+problem catalogue, and its attempt recovery contract. It carries no Base Registry Engine routes or
+protocol types, even where the deployment it calls reads source-backed work from a registry.
+
+### Construct a Casework client
+
+```rust
+use registry_casework_client::{CaseworkClient, CaseworkClientConfig};
+use url::Url;
+
+let client = CaseworkClient::new(CaseworkClientConfig::new(
+    Url::parse("https://casework.example.invalid/")?,
+))?;
+```
+
+```python
+from registry_client import casework
+
+client = casework.CaseworkClient("https://casework.example.invalid/")
+page = client.list_hosted_work_items(token, "staff", {"view": "mine", "limit": 25})
+```
+
+```js
+const { casework } = require('@registrystack/client');
+
+const client = new casework.CaseworkClient({
+  baseUrl: 'https://casework.example.invalid/',
+});
+const page = await client.listWorkItems(token, 'staff', 'reviewer', { view: 'my_teams', limit: 25 });
+```
+
+`CaseworkClientConfig` provides `with_request_timeout`, `with_connect_timeout`,
+`with_max_response_bytes`, `with_user_agent`, and `with_trusted_root_certificates`. The Python
+constructor takes the same settings as keyword arguments and the Node constructor as config members.
+A response is bounded to 4 MiB by default and to 16 MiB at most. The configuration holds no
+credential, and its debug output redacts the base URL, the user agent, and any trusted root
+certificates.
+
+{/* Evidence: crates/registry-casework-client/src/config.rs, CaseworkClientConfig,
+    DEFAULT_MAXIMUM_RESPONSE_BYTES, and MAXIMUM_RESPONSE_BYTES,
+    crates/registry-casework-client/tests/http_boundary.rs,
+    crates/registry-casework-client-py/README.md, crates/registry-stack-client-node/README.md */}
+
+### Casework authentication and profiles
+
+In Python and Node, every method takes the request's bearer token and the selected Casework profile
+as its first two arguments, and a source-scoped method takes the selected source profile as its
+third. `assignWorkItem`, `delegateWorkItem`, `previewCaseloadMove`, and `applyCaseloadMove` take the
+source profile as a trailing optional argument, so omitting it addresses hosted work. In Rust the
+same three values travel together as `CaseworkAuth`, built with `CaseworkAuth::new(token, profile)`
+and extended with `with_source_profile`.
+
+The client sends those values as `Authorization`, `Registry-Casework-Profile`, and
+`Registry-Source-Profile` on that one call, and retains none of them. The module is for a trusted
+server host: the host holds the session, chooses the profile for the request, and passes both in. A
+browser sends the host's session cookie and never a Casework token.
+
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkAuth,
+    crates/registry-casework-client-node/client.d.ts, listWorkItems and assignWorkItem,
+    crates/registry-casework-client-node/README.md, crates/registry-stack-client-node/README.md,
+    crates/registry-casework-client-py/README.md */}
+
+### Casework operations by role
+
+Method names are given in the Rust and Python form. Node uses the camel case form of the same name.
+
+- __Service description.__ `description` returns the queues, sources, calendars, clocks, and hosted
+  kinds the selected profile may see.
+- __Requester.__ `create_hosted_item`, `get_hosted_item`, `add_hosted_note`,
+  `requester_hosted_notes`, `cancel_hosted_item`, and `hosted_terminal_items` cover the hosted items
+  one Requester owns.
+- __Staff on hosted work.__ `list_hosted_work_items`, `get_hosted_work_item`,
+  `hosted_work_item_history`, `claim_hosted_work_item`, `release_hosted_work_item`, and
+  `decide_hosted_work_item` work the hosted inbox without a source profile.
+- __Staff on source-backed work.__ `list_work_items`, `next_work_item`, `get_work_item`,
+  `claim_work_item`, `release_work_item`, `get_draft`, `save_draft`, `delete_draft`,
+  `decide_work_item`, `work_item_history`, and `work_item_clocks`, each under the selected source
+  profile, with `recover_decision` and `recover_decision_by_key` for a lost decision response.
+- __Supervisor.__ `holdings`, `assign_work_item`, `delegate_work_item`, `preview_caseload_move`,
+  `apply_caseload_move`, and `hosted_accountability_record` for a retained accountability record.
+- __Administrator.__ `directory`, `directory_targets`, `bootstrap_directory`,
+  `update_directory_team`, `create_absence`, `update_absence`, `delete_absence`, `holiday_revision`,
+  `create_holiday_revision`, `preview_clock_recompute`, and `apply_clock_recompute`.
+
+Absence reads are scoped rather than reserved to one role: Staff read their own absences,
+Supervisors read absences for staff they currently supervise, and Administrators read all of them. In
+Rust, `absences` reads with the default query and `absences_page` takes one; the Python and Node
+`absences` takes the query as an optional argument.
+
+{/* Evidence: crates/registry-casework-client/src/client.rs, CaseworkClient and absences_page(),
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
+    crates/registry-casework-client-py/tests/python/test_capabilities.py,
+    test_all_canonical_operations_are_exported,
+    products/casework/generated/registry-casework.openapi.json */}
+
+### Revisions, actions, and recovery
+
+A claim, release, or decision takes the caller-filtered `CaseworkAction` the item carried, which
+holds the exact route and the `if_match` revision to send, so the caller never assembles that route.
+Every other revisioned mutation takes the revision the caller displayed and a caller-chosen
+idempotency key, both as explicit arguments. No client retries a mutation, and none replaces a key.
+
+After a lost response, `recover_decision_by_key` replays the original idempotency key, so recovery
+does not depend on the attempt identifier reaching the caller. `recover_decision` names the attempt
+identifier instead, for a caller that did receive one, including through the
+`Registry-Casework-Attempt` header on a refusal.
+
+{/* Evidence: crates/registry-casework-client/src/client.rs, claim_work_item(),
+    decide_work_item(), recover_decision(), recover_decision_by_key(), and ORIGINAL_ATTEMPT_HEADER,
+    crates/registry-casework-client/tests/http_boundary.rs,
+    crates/registry-stack-client-node/README.md */}
+
+### Casework outcomes
+
+A successful call returns `CaseworkComplete<T>` in Rust, a dict carrying `kind` (`complete`),
+`value`, and `trace_id` in Python, and an object carrying `kind`, `value`, and `traceId` in Node. The
+value is the camel case wire DTO the service returned.
+
+A paged read returns `items`, a `status` of `complete`, `budget_exhausted`, or `source_unavailable`,
+and `nextCursor` when another page exists. An empty page and an exhausted budget are both successful
+answers; pass the cursor back through the same method to continue.
+
+{/* Evidence: crates/registry-casework-client/src/model.rs, CaseworkComplete,
+    crates/registry-casework-client-node/client.d.ts, CaseworkOutcome and PageStatus,
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
+    crates/registry-casework-client-py/README.md */}
+
+### Casework error contract
+
+`CaseworkClientError` is distinct from every other namespace's error type. Rust answers with
+`Configuration`, `InvalidRequest`, `Transport`, `Problem`, or `Protocol`. A `Problem` carries the
+status, a `CaseworkProblemCode`, the fixed detail, the validated trace identifier, the original
+attempt identifier when the refusal named one, and the hosted validation detail when the service
+refused a submitted field. A `Protocol` carries a `CaseworkProtocolFailure` of `HeaderBounds`,
+`TraceContext`, `MediaType`, `Body`, `Problem`, or `Status`.
+
+`CaseworkProblemCode` registers the closed catalogue the service publishes and answers
+`expected_status` for each code. A code outside the catalogue arrives as `Unknown` rather than a
+parse failure, so an older client keeps the status and trace context of a refusal it does not
+recognize.
+
+Python raises `casework.CaseworkClientError`, an `Exception` whose attributes are `kind`, `code`,
+`detail`, `status`, `trace_id`, `original_attempt_id`, `validation`, `transport_kind`, and
+`protocol_failure`; an absent member is `None`. Node rejects with `casework.CaseworkClientError`, an
+`Error` with `kind` and the optional `code`, `detail`, `status`, `traceId`, `originalAttemptId`,
+`validation`, `transportKind`, and `protocolFailure`; an absent member is undefined.
+
+`kind` is one of:
+
+| Kind | Meaning | Members set |
+| --- | --- | --- |
+| `configuration` | The construction inputs were refused | none |
+| `invalid_request` | An input was refused before any exchange | none |
+| `transport` | The exchange failed below HTTP | `transport_kind` |
+| `problem` | Casework answered with an accepted problem | `status`, `code`, `detail`, `trace_id`, plus `original_attempt_id` on a recoverable attempt and `validation` on a refused hosted submission |
+| `protocol` | The response violated the contract | `status`, `protocol_failure`, and `trace_id` when one was validated |
+
+A validation member carries the bounded `path` of the refused field and one `reason` from a closed
+set: `kind_not_allowed`, `reference_invalid`, `object_required`, `maximum_bytes_exceeded`,
+`maximum_depth_exceeded`, `schema_mismatch`, `outcome_not_declared`, `reason_required`, and
+`text_invalid`. Neither member repeats a submitted value.
+
+{/* Evidence: crates/registry-casework-client/src/error.rs, CaseworkClientError,
+    CaseworkProblemCode, CaseworkProtocolFailure, and expected_status(),
+    crates/registry-casework-client-py/python/registry_casework_client/__init__.pyi,
+    CaseworkErrorKind and ValidationDetail, crates/registry-casework-client-py/src/lib.rs,
+    crates/registry-casework-client-node/client.d.ts, CaseworkClientError */}
+
 ## Shared implementation boundary
 
 The canonical Rust clients own product-neutral outbound policy, bearer acquisition, prefix-safe route
@@ -1016,6 +1188,8 @@ Deployment-defined data stays dynamic at the SDK boundary.
 - [Request evidence from an application](../../tutorials/request-evidence-from-an-application/) for a
   worked Evidence run.
 - [Base Registry Engine API reference](../breg-api/) for the BReg HTTP and Problem contracts.
+- [Registry Casework API](../apis/registry-casework/) for the Casework HTTP, header, and problem
+  contracts.
 - [Instance API references](../apis/) for the deployment-generated Relay OpenAPI boundary.
 - [Relayctl command reference](../relayctl/) for Relay project authoring and package commands.
 - [Errors and status codes](../errors/) for the wider Registry Stack error vocabulary.

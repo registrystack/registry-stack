@@ -17,14 +17,24 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
+base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
+getrandom.workspace = true
+p256.workspace = true
+rcgen.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
 registry-casework-core.workspace = true
 registry-casework.workspace = true
+reqwest.workspace = true
+rustix.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_norway.workspace = true
+sha2.workspace = true
+signal-hook.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt"] }
-uuid.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+zeroize.workspace = true

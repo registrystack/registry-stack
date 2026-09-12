@@ -1,196 +1,455 @@
 ---
-title: Run Registry Casework from source
-description: Build the unreleased candidate, migrate its PostgreSQL database, start it behind TLS, and complete authenticated directory setup.
+title: Deploy Registry Casework
+description: Install the Registry Casework runtime, write its operator file, verify the reviewed policy package, migrate PostgreSQL, serve behind your TLS proxy, and establish directory authority.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-10"
+last_reviewed: "2026-09-11"
 doc_type: how-to
 locale: en
 standards_referenced: []
 ---
 
-If you operate the unreleased Registry Casework candidate, build the runtime and
-tooling from one reviewed source revision, then run one policy package against
-PostgreSQL and one OIDC issuer. No published Registry Stack release currently
-contains a Casework runtime, installer, or image.
+An author has handed you a reviewed Registry Casework policy package and you want it serving. At
+the end of this page a `casework` process serves that package against PostgreSQL behind your own
+TLS proxy, answers `GET /ready`, and has a directory whose teams serve every queue the package
+declares.
 
-## Build the candidate
+Authoring, packaging, and the policy inside the package stay with the author;
+[authoring a Casework policy](../../configure/casework/) covers that side. This page starts from
+the package directory and ends at a serving deployment.
 
-From the reviewed Registry Stack checkout, build both binaries with the locked
-dependency graph:
+## What you provide
+
+- **One PostgreSQL database and two login credentials.** The migration credential owns the Casework
+  schema and applies migrations. The runtime credential serves requests and the background workers.
+  Casework creates no extension and no role, and its migrations carry no version-gated SQL; the
+  product's own database suites run against PostgreSQL 17. The runtime requires TLS on both
+  connections and refuses a plaintext one.
+- **One OpenID Connect issuer.** Casework verifies bearer access tokens and issues none. Configure
+  the issuer to add the exact human-identity assertion, `registry_actor_kind: human` by default,
+  only to interactive human sessions, and to issue the Requester scope to the services that call
+  on a person's behalf. A Staff, Supervisor, or Administrator token without that assertion is
+  refused even when it carries valid scopes and names a directory member.
+- **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP on a private
+  or container-private address and reads no forwarded header, so TLS termination, HSTS, and client
+  addresses stay with your proxy.
+- **Secrets the process can read.** Every credential in the operator file is a reference:
+  `secret:file/<name>` names an owner-only file under one file provider root, and
+  `secret:env/<NAME>` names an environment variable.
+- **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file
+  and holds a process-lifetime lock on a sentinel file beside it, so exactly one process writes
+  one chain.
+- **A host for one process, or a place to run the container image.**
+
+{/* Evidence: crates/registry-casework/src/{config,runtime,store,auth}.rs;
+    crates/registry-casework/migrations;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES and JsonlFileSink;
+    .github/workflows/ci.yml; products/casework/README.md. */}
+
+### What it does not need
+
+A hosted deployment that declares no source needs no Base Registry Engine (BReg): the work items
+its callers create live in Casework's own database, and the source bindings in the operator file
+exist only for the sources a package declares. Work, claims, drafts, attempts, accountability
+records, and the idempotency ledger all live in PostgreSQL, so no message broker and no cache take
+part in a request. Browser traffic reaches your own application host, which calls Casework server
+to server, so the API enables no CORS.
+
+{/* Evidence: crates/registry-casework/src/{config,http}.rs;
+    crates/registry-casework/migrations; products/casework/README.md. */}
+
+## Install the runtime
+
+Install the binaries on the host that will serve, and on the operator host that holds the migration
+credential:
 
 ```sh
-cargo build --release --locked \
-  -p registry-casework -p registry-caseworkctl
-export PATH="$PWD/target/release:$PATH"
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 casework --version
 caseworkctl --version
 ```
 
-Both version commands must identify the same source version. If the build needs
-to update `Cargo.lock`, stop and restore the reviewed lockfile or review the
-dependency change before continuing.
+The installer verifies every downloaded binary against the release `SHA256SUMS` before anything
+reaches the install directory, and installs `casework`, `caseworkctl`, and `mint` together or not
+at all. Registry Mint comes along because a deployment with no identity provider uses it to issue
+access tokens; a deployment with its own OpenID Connect issuer can ignore it. The installer does
+not verify release authenticity. Replace `| bash` with `| less` to read it before running it on a
+host you operate. `CASEWORK_INSTALL_DIR` selects the install directory, and the default is
+`~/.local/bin`; `CASEWORK_VERSION` pins one release; `CASEWORK_ASSET_DIR` installs from a directory
+you verified yourself. Binaries are published for `linux-amd64`, `linux-arm64`, and `macos-arm64`,
+and the release also publishes `casework-install.sh` as a movable alias of the pinned installer.
 
-{/* Evidence: Cargo.toml; crates/registry-casework/src/runtime.rs, command();
-    crates/registry-caseworkctl/src/lib.rs, Cli. */}
+The container image is `ghcr.io/registrystack/casework:v0.30.0`, built on a distroless nonroot base
+for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
+`--config /etc/registry-casework/operator.yaml serve`, and it exposes port 8091. It carries the
+runtime binary and its license and nothing else: no shell, no healthcheck command, and no
+`caseworkctl`, so migration and `doctor` run from a separate operator host. One directory is
+writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
+audit chain; mount the operator file, the policy package, and the secret root read-only. The
+release manifest published beside the binaries records the promoted digest of the image; pin that
+digest rather than the movable tag.
 
-### Use the source container adapter
+{/* Evidence: crates/registry-casework/install.sh; release/docker/Dockerfile.casework;
+    release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES and
+    CASEWORK_RELEASE_MINIMUM_VERSION; release/scripts/build-release-image.sh. */}
 
-The checkout also provides a local image target and Compose adapter. These
-build the same unreleased source; they do not pull or represent a published
-Casework image.
+## Write the operator file
 
-First [package the reviewed policy](../../configure/casework/#package-reviewed-policy).
-Set the operator file's `project` to
-`/etc/registry-casework/package/casework.yaml`, its secret root to
-`/run/secrets/registry-casework`, its audit path below
-`/var/lib/registry-casework/audit`, and its listener to a container-private
-address. Then provide absolute host paths to the three read-only inputs:
+The operator file binds one policy package to one database, one issuer, one listener, and one
+binding per source the package declares. It is a deployment artifact: keep it outside the authoring
+project, and put no credential in it.
 
-```sh
-export CASEWORK_OPERATOR_FILE="$PWD/operator.yaml"
-export CASEWORK_PACKAGE_DIR="$PWD/casework-policy-package"
-export CASEWORK_SECRET_ROOT="$PWD/secrets"
-
-docker compose -f docker/compose/docker-compose.casework.yaml build
-docker compose -f docker/compose/docker-compose.casework.yaml run --rm \
-  casework --config /etc/registry-casework/operator.yaml migrate
-docker compose -f docker/compose/docker-compose.casework.yaml up -d
+```yaml
+# The casework.yaml inside the installed policy package, not the authoring project.
+project: /etc/registry-casework/package/casework.yaml
+# A private or loopback address. The proxy in front of it terminates TLS.
+listen: 10.42.0.7:8091
+# operator-controlled-upstream for production; development-loopback only for a loopback listener.
+tlsTermination: operator-controlled-upstream
+# private-address accepts loopback and private addresses; container-private also accepts a wildcard bind.
+networkExposure: private-address
+secretProviders:
+  file:
+    # Owner-only files, one per reference. An absolute path avoids resolution against this file.
+    root: /etc/registry-casework/secrets
+database:
+  runtimeUrlRef: secret:file/casework-runtime-database-url
+  migrationUrlRef: secret:file/casework-migration-database-url
+  # Optional: a private certificate authority for the PostgreSQL connection.
+  trustedRootCertificateRef: secret:file/casework-database-root.pem
+authentication:
+  oidc:
+    issuer: https://identity.example.org/realms/registry
+    audience: urn:example:casework
+    # Non-empty; each access profile in the package names the claim its own callers carry.
+    principalClaim: sub
+    scopeClaim: registry_scopes
+    humanIdentity:
+      claim: registry_actor_kind
+      value: human
+    jwksSource:
+      kind: discovery
+audit:
+  path: /var/lib/registry-casework/audit/casework.ndjson
+  secretRef: secret:file/casework-audit-key
+sources:
+  # One entry per source the package declares, keyed by its exact source id.
+  professional-register:
+    baseUrl: https://registry.example.org
+    readerProfile: casework-reader
+    tokenEndpoint: https://identity.example.org/realms/registry/token
+    clientIdRef: secret:file/breg-reader-client-id
+    clientAssertionKeyRef: secret:file/breg-reader-key
+    webhookSecretRef: secret:file/breg-casework-webhook
+    eventSource: urn:registrystack:registry:professional-licences:instance:professional-licences-1
 ```
 
-The adapter publishes no host port. Attach an operator-controlled TLS proxy to
-its network, or enable only the loopback port mapping shown in the Compose file
-for local evaluation. PostgreSQL and the OIDC issuer remain external
-operator-owned dependencies.
+| Section | What it binds |
+| --- | --- |
+| `project` | The `casework.yaml` the runtime serves, with its manifest and exact source descriptions beside it. |
+| `listen`, `tlsTermination`, `networkExposure` | The listener address and the transport boundary the deployment declares for it. |
+| `secretProviders` | The root directory of the file secret provider. The environment provider is always available for `secret:env/<NAME>`. |
+| `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
+| `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
+| `audit` | The path of the external JSONL chain and the reference to the key that chains it. |
+| `sources` | One BReg binding per source the package declares: base URL, reader profile, token endpoint, and references to the client identifier, client assertion key, and webhook secret. The set of keys must equal the set of declared source ids exactly, and a package with no source needs no block. |
 
-{/* Evidence: docker/Dockerfile; docker/compose/docker-compose.casework.yaml;
-    docker/README.md. */}
+Relative `project`, secret root, and audit paths resolve against the directory holding the operator
+file, so pass an absolute path to `--config` or keep every path in the file absolute. A relative
+`--config` leaves the secret root relative, and the resolver, which requires an absolute root,
+refuses the configuration before anything else runs.
 
-## Prepare durable dependencies
+The listener boundary is checked, not advisory. With `operator-controlled-upstream` and
+`private-address`, the address must be loopback or private (IPv4 private range or IPv6 unique
+local); `container-private` also accepts a wildcard bind for a container on a private network.
+`development-loopback` accepts only a loopback address with `private-address`, and it is the one
+mode that serves an authored project with no manifest beside it. Apply HSTS on the proxy's TLS
+responses; the runtime adds its remaining security headers and `Cache-Control: no-store` to every
+response it returns.
 
-Provide one PostgreSQL database and two credentials. The migration credential
-owns and changes the Casework schema. The runtime credential serves requests and
-workers. Store both URLs behind the operator file's secret references rather
-than writing credentials into YAML.
+`scopeClaim` defaults to `registry_scopes` and carries every required scope for the selected
+profile. `humanIdentity` defaults to the claim `registry_actor_kind` with the value `human`, must
+differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
+The runtime accepts RS256 and ES256 signatures and the token types `at+jwt` and `JWT`.
 
-Provide the OIDC issuer named by the operator file. Its discovery document and
-keys must be reachable at startup unless the configuration selects a static JWKS
-document. Keep the audit file on durable storage and provide an audit secret of
-at least 32 bytes through the configured file secret provider.
+With the discovery source, the runtime reads the issuer's discovery document at startup and
+fetches its keys from the `jwks_uri` that document names; an optional `jwksUri` in this file
+overrides that one value and leaves the rest of discovery in place. Prefer the static alternative
+when the Casework host cannot reach discovery, or when you pin the issuer's keys deliberately:
 
-Place a TLS proxy or ingress in front of the Casework listener. The production
-runtime serves HTTP only on the private or container-private boundary declared
-by the operator file.
-
-{/* Evidence: crates/registry-casework/src/{config,runtime,store}.rs;
-    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES. */}
-
-## Migrate and start
-
-Apply embedded migrations using the operator configuration bound to the reviewed
-package:
-
-```sh
-casework --config ./operator.yaml migrate
-casework --config ./operator.yaml serve
+```yaml
+jwksSource:
+  kind: static
+  documentRef: secret:file/casework-issuer-jwks
 ```
 
-Run `serve` under the host's service manager. Startup refuses an unverified
-production package, an invalid listener boundary, mismatched source bindings,
-unavailable database state, invalid OIDC configuration, or an unusable audit
-secret. Fix the reported dependency or binding and restart; do not bypass the
-package or transport check.
+The document must be a JWKS with at least one RSA or elliptic-curve key, each carrying a distinct
+non-empty `kid`. It is read once, at startup, so a key rotation at the issuer is a replacement of
+that secret and a restart of every serving process.
 
-Probe `GET /health` for process liveness and `GET /ready` before routing traffic.
-Readiness checks PostgreSQL and audit publication. A failed audit publication
-pass makes readiness fail, logs only the failed stage, and retries; a successful
-pass restores readiness. Source outages remain visible on affected work-item
-operations instead of turning the inbox into an apparently complete empty page.
+Each source binding also accepts `eventType`, which defaults to `casework-lifecycle-v1`,
+`trustedRootCertificatesRef` for a private certificate authority in front of the source, and
+`requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which default to 30000 and 10000,
+accept at most 300000, and are refused when the connect timeout is the larger of the two.
 
-{/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path() and serve_from_path();
+:::caution[A static key set ages out of date on its own]
+A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
+rotation that nobody mirrors into the secret refuses fresh logins. Replace the secret and restart
+the process as part of the rotation, and confirm the replacement keys with the issuer's operator
+before they become the anchor for verification.
+:::
+
+{/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig, TlsTermination,
+    ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
+    and parse_static_jwks();
+    crates/registry-casework-breg/src/config.rs, BregBinding, DEFAULT_EVENT_TYPE,
+    DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
+    crates/registry-casework/src/http.rs; products/casework/README.md. */}
+
+### Create the secret files
+
+Create each file as the user that runs `casework`, because the resolver refuses a file owned by
+anyone else:
+
+```sh
+install -d -m 0700 /etc/registry-casework/secrets
+(umask 077; openssl rand -hex 32 | tr -d '\n' \
+  > /etc/registry-casework/secrets/casework-audit-key)
+(umask 077; printf '%s' 'postgresql://casework_runtime:<runtime-password>@db.example.org:5432/casework' \
+  > /etc/registry-casework/secrets/casework-runtime-database-url)
+(umask 077; printf '%s' 'postgresql://casework_migration:<migration-password>@db.example.org:5432/casework' \
+  > /etc/registry-casework/secrets/casework-migration-database-url)
+```
+
+Each file must be a regular file owned by the effective user, with mode `0400` or `0600`, exactly
+one link and no symbolic link to it, at most 64 KiB, non-empty, and free of NUL bytes, so generate
+key material as text rather than raw bytes. The name starts with a lowercase letter and carries
+lowercase letters, digits, `.`, `_`, and `-`. The bytes are used exactly as written, neither
+trimmed nor decoded, so write them without a trailing newline. The audit key needs at least 32
+bytes, which 64 hexadecimal characters satisfy. Percent-encode a password that carries reserved
+characters, and give the database user in each URL the role that owns the matching credential. A
+reference that cannot resolve is refused by name, together with the rule it broke, and the
+resolved bytes never appear in a message or a log.
+
+:::danger[The audit key is the only way back into the chain]
+The external audit file is a keyed hash chain, and the runtime authenticates the retained chain
+before it appends to it. A lost or replaced key leaves every retained record unverifiable and stops
+the process from continuing that file, and no command reconstructs it. Back the key up separately
+from the audit storage, and keep both for as long as the records must stay provable.
+:::
+
+{/* Evidence: crates/registry-platform-config/src/secrets.rs, validate_file_metadata(),
+    validate_secret(), valid_file_name(), and MAX_SECRET_BYTES;
+    crates/registry-platform-audit/src/lib.rs, MIN_AUDIT_SECRET_BYTES and bootstrap_or_start_empty();
+    crates/registry-casework/tests/secret_diagnostics.rs;
+    crates/registry-casework/src/store.rs, connect_reference(). */}
+
+## Verify the package before it opens the listener
+
+The runtime verifies the package every time it loads the operator file, before it opens the
+database, contacts the issuer, or binds the listener. It reads `casework.package.json` beside
+`casework.yaml`, recomputes the policy digest over the sorted file list, checks every file's
+SHA-256 digest and byte count, and refuses a package directory holding any file the manifest does
+not declare or any symbolic link. A start that verifies the package records the policy digest in
+the runtime log before anything else happens.
+
+With `tlsTermination: operator-controlled-upstream`, an absent manifest is a refusal rather than a
+fallback to the authored project. Each of these refusals is one run's entire output on standard
+error, written before the listener binds, and each exits non-zero:
+
+```text
+casework: operator-controlled production requires a verified Casework policy package
+casework: the Casework policy package is invalid
+casework: the Casework runtime configuration is not valid YAML
+casework: the Casework runtime configuration is invalid
+casework: the Casework secret-provider configuration is invalid; secretProviders.file.root must be an absolute path
+```
+
+The first line reports a production configuration with no manifest. The second reports a manifest
+whose digests, byte counts, or file set do not match the directory. The third and fourth report the
+operator file itself: unparseable YAML, and a configuration the checks refuse, which covers an
+invalid listener boundary, an empty issuer or claim name, a human-identity claim equal to the scope
+claim, an access profile using the human-identity claim as its principal claim, and a `sources` map
+that does not match the declared source ids exactly. The fifth reports a secret provider root the
+resolver cannot use, most often a relative root left by a relative `--config`.
+
+{/* Evidence: crates/registry-casework/src/config.rs, verify_policy_package(),
+    PolicyPackageManifest, RuntimeConfig::check(), and RuntimeConfigError;
+    crates/registry-casework/src/runtime.rs, serve_from_path() and RuntimeError;
+    crates/registry-casework/src/main.rs. */}
+
+## Migrate and serve
+
+Apply the migrations with the migration credential, from the operator host:
+
+```sh
+casework --config /etc/registry-casework/operator.yaml migrate
+```
+
+`migrate` loads the same operator file, resolves `migrationUrlRef`, takes a PostgreSQL advisory
+lock, and applies every unapplied migration in order under its ledger, so a second `migrate` on the
+same database waits rather than racing it. Run it before the first `serve` and before rolling out a
+release that adds migrations.
+
+:::caution[Keep the migration credential off the serving host]
+The migration credential owns the schema, and the serving process never needs it. Supply it only
+for the duration of a migration, and keep the runtime credential as the one the service manager
+holds.
+:::
+
+Then run the service:
+
+```sh
+casework --config /etc/registry-casework/operator.yaml serve
+```
+
+Run `serve` under your service manager and let it restart the process. `serve` refuses to start on
+an unverified production package, a listener the declared boundary does not allow, source bindings
+that do not match the declared sources, a database reference or connection it cannot use, an OIDC
+issuer it cannot initialize, and an audit secret or audit file it cannot open. Once it is serving,
+the listener stops when any supervised background worker stops, and the process exits reporting the
+stopped worker, because a deployment whose maintenance, reconciliation, or audit publication loop
+is gone keeps neither its deadlines nor its accountability records.
+
+Probe `GET /health` for liveness: it answers `200` as long as the process runs. Probe `GET /ready`
+before routing traffic: it answers `503` while audit publication is unhealthy or PostgreSQL is
+unreachable, and `200` otherwise. Readiness checks the audit publisher first, then the store.
+
+The audit publication worker runs once a second: it reads pending records, appends them to the
+keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that
+failed (`pending-read`, `record-identity`, `sink-append`, or `published-mark`) rather than the
+record, and retries; a passing run restores readiness. A maintenance pass runs every two seconds
+and a source reconciliation pass every 60 seconds per bound source. A source outage stays visible
+on the affected work-item operations rather than turning an inbox into an apparently complete empty
+page.
+
+{/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
+    serve_until_worker_stops(), supervise(), and AuditPublicationFailure;
+    crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
-    crates/registry-casework/src/service.rs. */}
+    crates/registry-casework/src/service.rs, ready(). */}
 
 ## Establish directory authority
 
-After authentication is working, use an Administrator token to bootstrap the
-first directory, then create or replace teams under the current directory
-revision. Each served queue belongs to at most one team. Removing a queue from
-one team before assigning it to another keeps the authority transition explicit.
+A serving process has no directory until an Administrator creates one, and a queue with no serving
+team holds work nobody can reach. Bootstrap the first team with an Administrator access token that
+carries the human-identity assertion. `If-Match` carries the directory revision the caller expects,
+which is `"0"` for the first call, and `Idempotency-Key` binds the request to one exact mutation:
 
-Administrator authority grants directory and holiday maintenance only. It does
-not grant item payload access. Supervisors assign and move caseload for teams
-they currently lead; Staff can delegate work they currently hold.
+```http
+POST /v1/directory/bootstrap HTTP/1.1
+Authorization: Bearer <administrator-access-token>
+Registry-Casework-Profile: administrator
+If-Match: "0"
+Idempotency-Key: <caller-selected-key>
+Content-Type: application/json
 
-Use the [generated API operations](../../reference/apis/casework/) for the exact
-headers, request schemas, success responses, and recovery problems.
+{
+  "teamId": "licence-review",
+  "staff": [
+    {
+      "issuer": "https://identity.example.org/realms/registry",
+      "subject": "<staff-subject>"
+    }
+  ],
+  "supervisors": [
+    {
+      "issuer": "https://identity.example.org/realms/registry",
+      "subject": "<supervisor-subject>"
+    }
+  ],
+  "queueId": "corrections"
+}
+```
+
+Afterwards, replace one team at a time with `PUT /v1/directory/teams/{team_id}`, carrying the same
+three headers with `If-Match` set to the revision the last directory response reported, and a body
+of `staff`, `supervisors`, and `servedQueues`. The replacement is whole: the members and queues it
+names become the team. A served queue belongs to one team, so a queue another team already serves
+is refused with `precondition.failed`; remove it from that team first, then assign it. A team holds
+at most 100 staff, 100 supervisors, and 100 served queues, and the whole directory document fits
+2 MiB. Authority changes take effect immediately, newly ineligible held items are released through
+maintenance, and items with an unresolved source attempt stay held for a later retry. Administrator
+authority covers the directory and holiday maintenance only; it grants no item payload access and
+no source review or application authority.
 
 {/* Evidence: crates/registry-casework/src/{assignment,http}.rs;
+    crates/registry-casework/src/assignment.rs, bootstrap_directory(), update_directory_team(),
+    and MAXIMUM_DIRECTORY_SERVED_QUEUES;
     products/casework/generated/registry-casework.openapi.json. */}
 
-## Erase source-backed payload copies
+### Check readiness with doctor
 
-When the source owner authorizes erasure for one exact request, preview the
-local effect under the migration database credential:
-
-```sh
-caseworkctl retention erase ./casework --operator ./operator.yaml \
-  --source-id "<source-id>" --request-kind "<request-kind>" --request-id "<request-id>"
-```
-
-The JSON report contains counts and the selector, with no item identifiers or
-erased values. Review that report against the source owner's retention decision,
-then repeat the exact command with `--apply`. Apply marks the local subject and
-items erased, removes drafts and correction context, strips retained attempt,
-receipt, history, event, idempotency, and audit-outbox payload fields, and
-cancels local clock work. A pending or uncertain source attempt blocks erasure;
-recover or settle that attempt before retrying so Casework does not fabricate an
-outcome.
-
-This command makes no Base Registry Engine (BReg) call and does not erase the
-external audit JSONL file. Retention and disposal for that file remain the
-deployment operator's separate policy.
-
-{/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, retention_erase();
-    crates/registry-casework/src/source_retention.rs;
-    crates/registry-casework-core/src/source_retention.rs. */}
-
-## Settle an uncertain source attempt
-
-When a source attempt stays uncertain and recovery cannot observe its outcome,
-confirm the outcome with the source owner. Then preview the settlement under the
-migration database credential:
+`caseworkctl doctor` opens every live dependency the runtime opens, without binding a listener:
 
 ```sh
-caseworkctl attempt settle ./casework --operator ./operator.yaml \
-  --attempt-id "<attempt-id>" --outcome not-applied \
-  --reason "<why the source owner confirmed this outcome>" \
-  --decided-by "<who decided>"
+caseworkctl doctor /etc/registry-casework/package \
+  --operator /etc/registry-casework/operator.yaml
 ```
 
-Use `--outcome applied` when the source applied the attempt. Only an uncertain
-attempt whose execution lease has expired can be settled; a live lease, a
-terminal attempt, or an unknown identifier is refused. The JSON report names the
-attempt, work item, operation, binding reference, and outcome, with the attempt
-and work item states the settlement produces. Review it, then repeat the exact
-command with `--apply`.
+It checks the configuration, the exact imported source descriptions, each source connection and its
+reader grants, the database, the OIDC issuer, and directory readiness, and it stops at the first
+one that refuses and names it. Its secret preflight resolves the audit reference before it opens
+anything, and a reference that cannot resolve is reported by name with the rule it broke. Directory
+readiness requires a team serving every queue the package declares, and a gap is reported as an
+instruction to complete the queue assignments as an Administrator. A run that reaches the end
+prints a JSON report naming each check and each source it contacted. The project argument is the
+directory holding the `casework.yaml` the operator file points at, and `doctor` refuses an operator
+file bound to a different project.
 
-`not-applied` refuses the attempt and returns the work item to its holder, who
-can act on it again. `applied` completes the attempt without a source receipt;
-the work item stays synchronizing until Casework observes the source's next
-revision. Apply records an `attempt_settled` history event with the outcome,
-reason, and decider, and no actor, in the same transaction as the state change.
-The reason is limited to 2,000 bytes and the decider to 256 bytes.
+{/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
+    and check_source_descriptions();
+    crates/registry-casework/tests/secret_diagnostics.rs. */}
 
-This command makes no BReg call.
+## Change the active package
 
-{/* Evidence: crates/registry-caseworkctl/src/{lib,project}.rs, attempt_settle();
-    crates/registry-casework/src/store.rs, settle_attempt();
-    crates/registry-casework-core/src/attempt_settlement.rs. */}
+The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
+new directory beside the current one, point `project` at the new directory's `casework.yaml`, and
+restart or roll out the process. Keep the previous package directory until the new one serves, so a
+rollback is a configuration change rather than a rebuild.
+
+:::caution[Editing a package in place changes nothing the process is serving]
+A running process keeps the policy it verified at startup, so files replaced under it leave the
+deployment serving a package that no longer matches its own manifest, and the next restart refuses
+the directory. Install the successor beside the current package and restart.
+:::
+
+Activating a package does not rewrite running clock occurrences: each keeps the clock policy and
+calculation pinned when it started. Holiday changes are a separate, deliberate operation. An
+Administrator publishes an immutable holiday-set revision, then previews and applies the change in
+batches of at most 100 active occurrences, repeating both until every occurrence is pinned to the
+selected revision. A preview records the expected calculation generation for each occurrence and is
+bound to the actor and selected profile for 15 minutes; an expired preview returns
+`clock.recompute-preview-expired`, and an already-applied preview or a changed generation returns
+`precondition.failed`. Create and review a new preview after either response.
+
+{/* Evidence: products/casework/README.md;
+    products/casework/generated/registry-casework.openapi.json;
+    crates/registry-casework/src/config.rs, verify_policy_package(). */}
+
+## Troubleshooting
+
+| Symptom | Next move |
+| --- | --- |
+| `operator-controlled production requires a verified Casework policy package`, or `the Casework policy package is invalid` | The first names a production configuration with no manifest, the second a package directory whose files disagree with the manifest. Point `project` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
+| `the Casework runtime configuration is invalid` | Check the listener against `tlsTermination` and `networkExposure`, the non-empty issuer and claim names, the human-identity claim against `scopeClaim` and the package's profiles, and `sources` against the declared source ids. |
+| `the Casework secret-provider configuration is invalid` | The file provider root is relative or unusable. Pass an absolute path to `--config`, or write an absolute `root`. |
+| A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
+| Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
+| Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
+| `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication or PostgreSQL is failing. Read the runtime log for the failed audit stage, and check the audit file, its lock, and the database. |
+| `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
+| Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, then check that binding's base URL, token endpoint, and reader grants. |
 
 ## Next
 
-- [Configure policy and authority](../../configure/casework/)
-- [Read the Casework API](../../reference/apis/registry-casework/)
+- [Author a Casework policy](../../configure/casework/) for the package this deployment
+  serves, and the checks that produce it.
+- [Erase and settle retained source work](../casework-retention/) for the operator commands that
+  erase source-backed payload copies and settle an uncertain source attempt.
+- [How Casework works](../../explanation/how-casework-works/) for the model behind queues, claims,
+  attempts, and the directory.
+- [Read the Casework API](../../reference/apis/registry-casework/) for the exact headers, request
+  schemas, and recovery problems every operation returns.
