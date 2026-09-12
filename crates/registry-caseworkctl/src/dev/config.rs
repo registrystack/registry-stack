@@ -376,6 +376,18 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     }
     private::directory(&root.join("mint/clients"))?;
     private::directory(&root.join("mint/audit"))?;
+    // A source-backed session borrows the registry session's Mint: its
+    // issuer keys, every client pair, and the operator configuration naming
+    // them arrive when the sources are bound, after this staging completes.
+    let borrowed = !state.sources.is_empty();
+    for client in &clients.clients {
+        if borrowed {
+            private::directory(&root.join("credentials").join(&client.id))?;
+        }
+    }
+    if borrowed {
+        return prepare_database(root, state);
+    }
     let mint_public = keypair(&root.join("credentials/issuer"))?;
     let mint_public_filename = format!(
         "{}.jwk.json",
@@ -401,15 +413,46 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             }),
         )?;
     }
-    for filename in ["casework-audit-key", "mint-audit-key"] {
-        private::create(
-            &root.join("secrets").join(filename),
-            hex_secret()?.as_bytes(),
-        )?;
-    }
+    private::create(
+        &root.join("secrets/mint-audit-key"),
+        hex_secret()?.as_bytes(),
+    )?;
     private::create(
         &root.join("secrets/mint-jwks"),
         &serde_json::to_vec(&json!({"keys":[mint_public]}))?,
+    )?;
+    prepare_database(root, state)?;
+    let final_root = state.root();
+    let mint_origin = state.mint_origin();
+    write_yaml(
+        &root.join("mint/mint.yaml"),
+        &json!({
+            "version":1,"validationMode":"supervised-local-development","issuer":mint_origin,
+            "listener":{"address":"127.0.0.1","port":state.mint_port},
+            "signing":{"algorithm":"ES256","activePublicJwkFile":final_root.join("credentials/issuer").join(mint_public_filename),"publishedPublicJwkFiles":[],"revokedKeyIds":[]},
+            "signer":{"kind":"local-jwk","privateKeyRef":"secret:file/assertion-key.jwk"},
+            "secretProviders":{"file":{"root":final_root.join("credentials/issuer")}},
+            "audit":{"path":"audit/mint.jsonl","maximumFileBytes":10485760,"hashKeyRef":"secret:file/mint-audit-key","hashKeyVersion":1},
+            "accessTokens":{"audiences":[state.audience()],"lifetimeSeconds":300},
+            "clientAssertion":{"audience":format!("{mint_origin}/token"),"maximumLifetimeSeconds":120,"algorithms":["ES256"]},
+            "clients":{"directory":"clients"}
+        }),
+    )?;
+    // One secret root serves Mint signing and audit; no cross-directory secret references.
+    private::create(
+        &root.join("credentials/issuer/mint-audit-key"),
+        &private::read(&root.join("secrets/mint-audit-key"), 128)?,
+    )?;
+    write_yaml(&root.join("operator.yaml"), &operator(state)?)?;
+    Ok(())
+}
+
+/// Stage the audit key, the database bootstrap material, and the TLS
+/// material every session needs, borrowed issuer or not.
+fn prepare_database(root: &Path, state: &State) -> Result<()> {
+    private::create(
+        &root.join("secrets/casework-audit-key"),
+        hex_secret()?.as_bytes(),
     )?;
     let password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
     private::create(
@@ -471,28 +514,6 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    let final_root = state.root();
-    let mint_origin = state.mint_origin();
-    write_yaml(
-        &root.join("mint/mint.yaml"),
-        &json!({
-            "version":1,"validationMode":"supervised-local-development","issuer":mint_origin,
-            "listener":{"address":"127.0.0.1","port":state.mint_port},
-            "signing":{"algorithm":"ES256","activePublicJwkFile":final_root.join("credentials/issuer").join(mint_public_filename),"publishedPublicJwkFiles":[],"revokedKeyIds":[]},
-            "signer":{"kind":"local-jwk","privateKeyRef":"secret:file/assertion-key.jwk"},
-            "secretProviders":{"file":{"root":final_root.join("credentials/issuer")}},
-            "audit":{"path":"audit/mint.jsonl","maximumFileBytes":10485760,"hashKeyRef":"secret:file/mint-audit-key","hashKeyVersion":1},
-            "accessTokens":{"audiences":[state.audience()],"lifetimeSeconds":300},
-            "clientAssertion":{"audience":format!("{mint_origin}/token"),"maximumLifetimeSeconds":120,"algorithms":["ES256"]},
-            "clients":{"directory":"clients"}
-        }),
-    )?;
-    // One secret root serves Mint signing and audit; no cross-directory secret references.
-    private::create(
-        &root.join("credentials/issuer/mint-audit-key"),
-        &private::read(&root.join("secrets/mint-audit-key"), 128)?,
-    )?;
-    write_yaml(&root.join("operator.yaml"), &operator(state))?;
     Ok(())
 }
 
@@ -501,9 +522,34 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
 /// It binds the authored `casework.yaml` the reader edits, not a copy, so
 /// `caseworkctl doctor --runtime-config <this file>` reports on the same
 /// policy the reader's `caseworkctl check` reads.
-pub(super) fn operator(state: &State) -> Value {
+///
+/// A source-backed session names the borrowed registry issuer and binds each
+/// source to the reader pair its registry session exported.
+pub(super) fn operator(state: &State) -> Result<Value> {
     let root = state.root();
-    json!({
+    let mut sources = serde_json::Map::new();
+    for (id, source) in &state.sources {
+        let binding = source
+            .binding
+            .as_ref()
+            .with_context(|| format!("source {id} is not bound to a registry session yet"))?;
+        sources.insert(
+            id.clone(),
+            json!({
+                "baseUrl": binding.breg_url,
+                "readerProfile": "casework-reader",
+                "tokenEndpoint": binding.token_endpoint,
+                "clientIdRef": format!("secret:file/{id}-reader-client-id"),
+                "clientAssertionKeyRef": format!("secret:file/{id}-reader-assertion-key.jwk"),
+                "webhookSecretRef": format!("secret:file/{id}-webhook-key"),
+                "eventSource": binding.event_source,
+                // The registry session delivers no events here, so a local
+                // reader sees accepted requests through reconciliation alone.
+                "reconciliationIntervalMilliseconds": 5000
+            }),
+        );
+    }
+    Ok(json!({
         "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
         "kind": registry_casework::RUNTIME_CONFIG_KIND,
         "package": {"root": state.project},
@@ -519,7 +565,7 @@ pub(super) fn operator(state: &State) -> Value {
             "trustedRootCertificateRef": "secret:file/database-root.pem"
         },
         "authentication": {"oidc": {
-            "issuer": state.mint_origin(),
+            "issuer": state.issuer(),
             "audience": state.audience(),
             // Mint emits one space-delimited `scope` claim.
             "scopeClaim": "scope",
@@ -532,8 +578,8 @@ pub(super) fn operator(state: &State) -> Value {
             "path": root.join("audit/casework.ndjson"),
             "hashKeyRef": "secret:file/casework-audit-key"
         },
-        "sources": {}
-    })
+        "sources": sources
+    }))
 }
 
 pub(super) fn write_yaml(path: &Path, value: &Value) -> Result<()> {
