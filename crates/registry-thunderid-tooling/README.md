@@ -108,7 +108,6 @@ flag. Neither operation removes retained files.
 
 ### Citizen delegation
 
-Citizen authorization-code delegation uses the reviewed native patch and rebuilt Gate in [the native extension](../../products/identity/thunderid/extension/README.md). `citizen::render` appends the closed provider, human type, consent flow and agent registration before `local::start`; use the build metadata's immutable candidate image ID. Copy the exact destination resource from its client export. This path always requires fresh purpose/field consent and admits no institutional grant namespace.
 
 ## Acquire an approved task
 

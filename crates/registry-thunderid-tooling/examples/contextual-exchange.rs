@@ -255,20 +255,11 @@ impl Running {
             image: &self.pin.image,
         }
     }
-    fn start(description: IssuerDescription, image: Option<&str>) -> Result<Self> {
+    fn start(description: IssuerDescription) -> Result<Self> {
         description
             .validate()
             .map_err(|_| "Gate0 description validation failed")?;
-        let mut pin = ThunderIdPin::load().map_err(|_| "upstream pin invalid")?;
-        if let Some(image) = image {
-            check(
-                image.strip_prefix("sha256:").is_some_and(|digest| {
-                    digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
-                }),
-                "candidate image must be an immutable local image ID",
-            )?;
-            pin.image = image.to_owned();
-        }
+        let pin = ThunderIdPin::load().map_err(|_| "upstream pin invalid")?;
         let this = Self { description, pin };
         let root = &this.description.state_root;
         std::fs::create_dir_all(root.join("secrets"))
@@ -280,48 +271,6 @@ impl Running {
                 .map_err(|_| "secret permissions failed")?;
         }
         render::render(&this.description).map_err(|_| "native resource rendering failed")?;
-        if image.is_some() {
-            let provider = format!(
-                "http://host.docker.internal:{}",
-                this.description.exchange_issuers[0]
-                    .issuer
-                    .rsplit(':')
-                    .next()
-                    .and_then(|s| s.split('/').next())
-                    .unwrap_or("1")
-            );
-            let (_, public_jwks) = key("citizen-client");
-            registry_thunderid_tooling::citizen::render(
-                &this.description,
-                &registry_thunderid_tooling::citizen::Federation {
-                    id: "0197aaaa-0000-7000-8000-0000000000d9".into(),
-                    name: "Synthetic citizen federation".into(),
-                    issuer: provider.clone(),
-                    authorization_endpoint: format!("{provider}/authorize"),
-                    token_endpoint: format!("{provider}/token"),
-                    userinfo_endpoint: format!("{provider}/userinfo"),
-                    jwks_endpoint: format!("{provider}/a/jwks"),
-                    client_id: "citizen-upstream".into(),
-                    redirect_uri: format!("http://127.0.0.1:{}/gate/signin", this.description.port),
-                    id_token_alg: "PS256".into(),
-                    userinfo_alg: "PS256".into(),
-                },
-                &registry_thunderid_tooling::citizen::Client {
-                    client_id: "citizen-agent".into(),
-                    name: "Citizen self-service agent".into(),
-                    public_jwks,
-                    redirect_uri: "http://127.0.0.1:8901/callback".into(),
-                    resource: TARGET.into(),
-                    purpose: "Citizen status lookup".into(),
-                    scope_fields: BTreeMap::from([(
-                        TARGET_SCOPE.into(),
-                        vec!["person-reference".into(), "status".into()],
-                    )]),
-                    require_active_identity: true,
-                },
-            )
-            .map_err(|_| "native citizen resource rendering failed")?;
-        }
         local::start(&this.session(), std::path::Path::new("docker"), &mut || {
             false
         })
@@ -510,7 +459,7 @@ fn exchanged(
     let claims = verified(&compact, jwks)?;
     Ok((compact, claims))
 }
-fn run(root: &Path, image: Option<&str>) -> Result<()> {
+fn run(root: &Path) -> Result<()> {
     std::fs::create_dir(root)
         .map_err(|_| "state must be a fresh directory; existing state is never removed")?;
     std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700))
@@ -527,10 +476,13 @@ fn run(root: &Path, image: Option<&str>) -> Result<()> {
         .port();
     drop(socket);
     let started = Instant::now();
-    let live = Running::start(
-        description(root, port, &random(), &keys, [client_jwks, second_jwks]),
-        image,
-    )?;
+    let live = Running::start(description(
+        root,
+        port,
+        &random(),
+        &keys,
+        [client_jwks, second_jwks],
+    ))?;
     let issuer = live.issuer();
     let discovery = loop {
         if let Ok((200, body)) = http(&format!("{issuer}/.well-known/openid-configuration"), None) {
@@ -914,23 +866,19 @@ fn main() {
     let root = match (args.next().as_deref(), args.next()) {
         (Some("--state"), Some(root)) => PathBuf::from(root),
         _ => {
-            eprintln!("usage: contextual-exchange --state FRESH_ABSOLUTE_DIRECTORY [--image sha256:LOCAL_IMAGE_ID]");
+            eprintln!("usage: contextual-exchange --state FRESH_ABSOLUTE_DIRECTORY");
             std::process::exit(2);
         }
     };
-    let image = match (args.next().as_deref(), args.next(), args.next()) {
-        (None, None, None) => None,
-        (Some("--image"), Some(image), None) => Some(image),
-        _ => {
-            eprintln!("invalid candidate image arguments");
-            std::process::exit(2);
-        }
-    };
+    if args.next().is_some() {
+        eprintln!("unexpected arguments");
+        std::process::exit(2);
+    }
     if !root.is_absolute() {
         eprintln!("state must be absolute");
         std::process::exit(2);
     }
-    if let Err(reason) = run(&root, image.as_deref()) {
+    if let Err(reason) = run(&root) {
         eprintln!("FAIL Gate0: {reason}");
         std::process::exit(1);
     }

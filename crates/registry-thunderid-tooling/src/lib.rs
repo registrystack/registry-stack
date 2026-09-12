@@ -1,4 +1,4 @@
-//! Tooling-only support for pinned ThunderID and its reviewed native extensions.
+//! Tooling-only support for the pinned upstream ThunderID release.
 //!
 //! This crate exists so adopter CLIs and integration tests can stand up one
 //! development session's ThunderID container, render the pinned release's
@@ -26,7 +26,6 @@
 //! tooling, examples, and CI all read that one pin.
 
 pub mod bootstrap;
-pub mod citizen;
 pub mod container;
 pub mod description;
 pub mod grant;

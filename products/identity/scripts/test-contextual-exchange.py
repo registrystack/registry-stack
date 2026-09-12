@@ -19,7 +19,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--driver", type=Path, help="already-built contextual-exchange example")
     parser.add_argument("--state", type=Path, help="fresh absolute state directory")
-    parser.add_argument("--image", help="immutable local candidate sha256 image ID")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[3]
     state = args.state or Path(tempfile.gettempdir()) / f"registry-contextual-gate0-{uuid.uuid4().hex}"
@@ -37,8 +36,6 @@ def main() -> int:
         driver = target / "debug/examples/contextual-exchange"
     print(f"Gate0 retained state: {state}", flush=True)
     command = [str(driver.resolve()), "--state", str(state)]
-    if args.image:
-        command.extend(["--image", args.image])
     return subprocess.run(command, cwd=root, check=False).returncode
 
 
