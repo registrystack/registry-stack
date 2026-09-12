@@ -251,6 +251,10 @@ def cleanup(
                 isinstance(tag, str) for tag in tags
             ):
                 raise CleanupError(f"{package}/{version_id} has malformed tag metadata")
+            # Keep the provisioned private package identity until the operator
+            # removes its bootstrap marker after the first real candidate.
+            if "bootstrap" in tags:
+                continue
             action = {
                 "package": package,
                 "version_id": version_id,

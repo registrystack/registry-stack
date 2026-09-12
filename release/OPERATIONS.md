@@ -87,8 +87,12 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
    baseline. The workflow has no publication permission, cannot seal or attest
    a candidate, and does not supply publication bytes. Do not copy another
    product's baseline or add a provisional bypass.
-6. Use that exact private image and the existing procedure in "Renew an image
-   advisory fingerprint" to author and review
+6. Wait for the canonical Linux evidence job to succeed and upload its artifact.
+   The bootstrap workflow as a whole is expected to fail at the normal
+   rehearsal's strict baseline check. Download the evidence artifact from that
+   run using the advisory-evidence procedure below; no private image is
+   published by the rehearsal. Use the artifact's exact image evidence and the
+   procedure in "Renew an image advisory fingerprint" to author and review
    `release/security/<name>-advisory-baseline.json`. Relay alone uses
    `products/relay-v2/security/advisory-baseline.json`. Merge the reviewed
    baseline change.
@@ -136,7 +140,8 @@ Each result must name the requested package and report `container` and
 classic-PAT bootstrap before dispatch. If it reports `public`, change it to
 private in the organization package settings. The package REST API does not
 provide a visibility change. Remove the candidate bootstrap version only after
-the first real candidate tag exists.
+the first real candidate tag exists. Scheduled cleanup preserves versions tagged
+`bootstrap`; the operator removes that marker version after onboarding.
 
 Selecting `v0.30.0` or later includes Casework in both checks. The commands do
 not establish that `casework` or `casework-candidate` has already been
@@ -436,10 +441,13 @@ an advisory nor supplies publication bytes, and the release candidate still
 rebuilds and checks its exact protected-main images under the normal release
 policy.
 
+Wait for the canonical Linux job to finish successfully and upload the artifact.
+For a missing-baseline bootstrap, the normal rehearsal job fails as expected;
+use the artifact from that run even though the overall run did not succeed.
 Download that exact rehearsal artifact and prepare one image's evidence with:
 
 ```sh
-rehearsal_run=<successful-rehearsal-run-id>
+rehearsal_run=<run-id-with-successful-canonical-linux-evidence-job>
 version=<version>
 request_id=<rehearsal-request-id>
 name=relay # or evidence, mint, discovery, breg, or casework
