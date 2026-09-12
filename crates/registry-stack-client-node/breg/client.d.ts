@@ -78,6 +78,15 @@ export interface PrivateKeyJwtConfig {
   trustedRootCertificates?: string | null
 }
 
+/** OAuth credentials are returned to the caller. Keep them out of logs and persistence. */
+export class PrivateKeyJwt {
+  constructor(config: PrivateKeyJwtConfig)
+  /** Fresh RFC 8693 exchange. Requires resource and scopes; never shares the service cache. */
+  exchange(subjectToken: string): Promise<string>
+  /** Client credentials with the shared provider's bounded service-token cache. */
+  bearerToken(): Promise<string>
+}
+
 export type BaseRegistryAuthorization =
   | { static: string }
   | { privateKeyJwt: PrivateKeyJwtConfig }
