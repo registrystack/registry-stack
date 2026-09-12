@@ -179,6 +179,12 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     let provider = EvidenceProvider::start().await;
     let database = TestDatabase::create(8).await;
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    // This guard has no mutation effect or ordinary UPDATE privilege. It must
+    // still be lockable during apply without becoming writable.
+    source["accessProfiles"][4]["grants"][0]["applyTargets"]
+        .as_array_mut().unwrap().push(json!({
+            "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+        }));
     source["evidenceProviders"] = json!([{
         "id":"farmer-registry",
         "contracts":"evidence/farmer-contracts.json",
@@ -187,7 +193,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     source["entities"][2]["changeRequest"]["application"] = json!({
         "mode":"manual",
         "preconditions":{"targets":[{
-            "id":"placement-guard", "entity":"asset-placement", "fromField":"placement",
+            "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
             "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
         }],"evidence":[{
             "id":"farmer-status",
@@ -198,7 +204,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
                 "selectors":{"farmer-number":{
                     "source":"request_field", "field":"tenant"
                 },"placement-site":{
-                    "source":"target_field", "target":"placement-guard", "field":"site"
+                    "source":"target_field", "target":"site-guard", "field":"name"
                 }}
             }},
             "requires":[{"output":"active", "equals":true}],
@@ -287,16 +293,14 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         |_| json!({"proposalVersion":1,"effectDigest":digest}),
     )
     .await;
-    let request_uuid = Uuid::parse_str(&request.id).unwrap();
+    let target = &registry.entities()["asset-site"];
+    let table = quote_sql_identifier(&target.physical_table);
+    let name_column = quote_sql_identifier(&target.fields["name"].physical_name);
     let guard_row = database
         .admin
         .query_one(
-            "SELECT target_record_id, expected_revision
-               FROM registry_internal.registry_request_targets
-              WHERE request_entity_id = 'correction-request'
-                AND request_id = $1 AND proposal_version = 1
-                AND target_entity_id = 'asset-placement'",
-            &[&request_uuid],
+            &format!("SELECT record_id, record_revision FROM registry_data.{table} WHERE {name_column} = $1"),
+            &[&"two-new"],
         )
         .await
         .unwrap();
@@ -313,9 +317,9 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         "contractFingerprint":guard_plan.contract_fingerprint,
         "effectDigest":digest,"activePackageRevision":PACKAGE_REVISION,
         "selectedAccessProfile":"applier","principal":APPLIER,"purpose":"apply",
-        "effectId":"placement-guard","targetEntityId":"asset-placement",
+        "effectId":"site-guard","targetEntityId":"asset-site",
         "targetRecordId":guard_id.to_string(),"operation":"patch",
-        "fields":["site","tenant"],"expectedRevision":guard_revision,
+        "fields":["name","tenant"],"expectedRevision":guard_revision,
         "targetRowBoundaries":[{"field":"tenant","operator":"equals","values":[TENANT]}]
     });
     let applier_context = ClaimContext::for_compiled(
@@ -341,8 +345,6 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     )
     .await
     .unwrap();
-    let target = &registry.entities()["asset-placement"];
-    let table = quote_sql_identifier(&target.physical_table);
     let mut wrong_digest_context = guard_context.clone();
     wrong_digest_context["effectDigest"] =
         json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");

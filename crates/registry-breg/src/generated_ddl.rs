@@ -918,6 +918,19 @@ fn runtime_privileges(
         .values()
         .filter_map(|entity| entity.change_request.as_ref())
     {
+        if request
+            .application
+            .preconditions
+            .targets
+            .iter()
+            .any(|guard| guard.entity_id == entity.id)
+        {
+            // PostgreSQL requires UPDATE privilege for SELECT FOR UPDATE,
+            // including immutable targets with no write effect. Guard RLS
+            // permits only the exact request-bound lock, with CHECK false.
+            privileges.insert(TablePrivilege::Select);
+            privileges.insert(TablePrivilege::Update);
+        }
         for effect in &request.effects {
             if effect.target.entity_id != entity.id {
                 continue;
