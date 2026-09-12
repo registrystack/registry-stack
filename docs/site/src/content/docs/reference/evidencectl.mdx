@@ -110,12 +110,17 @@ evidencectl init <directory> --transport sqlite-extract --profile local
 OpenAPI mode creates an authoring workspace whose source, question, and fixture directories remain
 empty. SQLite mode creates a synthetic source, question, query, adapters, schemas, derivation, and
 fixture. Both create disposable, unbound Evidence Gateway key material in the ignored owner-only
-`secrets/` directory. Neither creates a production target, Mint configuration, or deployable bundle.
+`secrets/` directory. Neither creates a production target, issuer configuration, or deployable bundle.
 
-`evidencectl dev start [<project>]` creates session-scoped P-256 pairs for Registry Mint and an SD-JWT VC
-holder. It creates an implicit caller pair only when the project has no explicit access
+`evidencectl dev start [<project>]` starts Evidence Gateway and the pinned local issuer on loopback.
+It creates a session-scoped P-256 pair for an SD-JWT VC holder and an implicit caller pair only when the project has no explicit access
 policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
 `.evidence/dev` or `.evidence/clients` enters a production target.
+
+`evidencectl dev token <client> [<project>]` obtains a fresh service token and writes an owner-only
+`Authorization` header file under `.evidence/dev/generated/keys/`. It reports the path and never
+prints the token. Task grants come from the configured Casework authority and are not static local
+client attributes.
 
 `evidencectl access` manages caller access for one local project:
 
@@ -125,16 +130,15 @@ policy; explicit local clients use their keys under `.evidence/clients/`. Nothin
 | `evidencectl access policy list` | Reads `access/policies/` | Lists the governed local policies and their questions |
 | `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
 | `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
-| `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for new token requests and removes its live generated registration; retains `.evidence/clients/<client>/private.jwk` |
+| `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for the next issuer generation and retains `.evidence/clients/<client>/private.jwk` |
 
 Public, reviewable local access configuration lives under `access/`. Owner-only private client keys
-live only under `.evidence/clients/`. Generated Registry Mint registrations under
-`.evidence/dev/generated/clients/` are disposable and contain public keys only.
+live only under `.evidence/clients/`. Generated issuer resources under `.evidence/dev/generated/issuer/`
+are disposable.
 
-Client add and revoke request a Registry Mint reload only when `evidencectl dev start` has a ready local
-session. They do not restart or reload Evidence Gateway. Registry Mint does not acknowledge completion of
-the reload, so the next token exchange provides the functional check. A policy change requires a
-new Evidence Gateway generation.
+Stop the local development session before adding or revoking a client. The next start validates the
+complete client and policy registry, then provisions it as one issuer generation. A policy change also
+requires a new Evidence Gateway generation.
 
 The local access commands do not define production authority or production clients. Production
 authority profiles remain in the deployment target's governed `governance.yaml`. Production client

@@ -28,7 +28,7 @@ JSON with synthetic records, not a captured server response; it doubles as a sam
 YAML field IDs such as `valid-from` become JSON names such as `validFrom`.
 Requests omit the deployment's host and bearer token. The
 [example reader profile](#access-for-the-example-queries) supplies the required read permissions;
-selecting its name does not authenticate a caller. Creation and correction need separate write grants.
+selecting its name does not authenticate a caller. Creation and correction need separate write permissions.
 
 {/* Evidence: crates/registry-breg/src/artifacts.rs, single_response_schema() and list_response_schema();
     crates/registry-breg/src/api/mod.rs, read_dispatch();
@@ -686,7 +686,7 @@ permissions, and meaning independently of changes that only add optional metadat
 
 ## Access for the example queries
 
-This profile grants the five example queries and no writes. It can list every row in these entities;
+This profile permissions the five example queries and no writes. It can list every row in these entities;
 the example filters do not restrict authorization. Add it only if one reader should see all these
 rows and fields. Real deployments may need separate profiles and row restrictions. It requires
 a verified `registry_principal` claim, the scope `registry:examples:read`, and the purpose
@@ -699,7 +699,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:examples:read]
     requiredPurposes: [registry-operations]
-    grants:
+    permissions:
       - entity: business-identifier
         rowBoundaries: []
         operations: [list]
