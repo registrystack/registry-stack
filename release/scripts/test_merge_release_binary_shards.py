@@ -16,7 +16,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.30.0"
+VERSION = "0.30.1"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -155,9 +155,17 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         rosters_030, images_030 = MODULE.rosters("0.30.0")
         self.assertEqual(2, len(rosters_030["casework"]))
         self.assertEqual(
-            ["discovery", "breg", "casework", "evidence", "relay"],
+            ["discovery", "breg", "casework", "evidence", "mint", "relay"],
             [name for name, _ in images_030],
         )
+
+    def test_mint_is_retired_only_after_published_v0_30_0(self) -> None:
+        old, old_images = MODULE.rosters("0.30.0")
+        current, current_images = MODULE.rosters("0.30.1")
+        self.assertIn("mint-v0.30.0-linux-amd64", old["core"])
+        self.assertNotIn("mint-v0.30.1-linux-amd64", current["core"])
+        self.assertIn("mint", dict(old_images))
+        self.assertNotIn("mint", dict(current_images))
 
     def test_rejects_incomplete_or_ambiguous_shards_before_staging_output(self) -> None:
         mutations = {

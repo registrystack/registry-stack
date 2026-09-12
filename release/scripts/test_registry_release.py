@@ -1704,7 +1704,7 @@ class RegistryReleaseTest(TestCase):
             for name in published_names
         }
         self.assertEqual([], module.artifact_inventory_errors("0.29.0", published))
-        future = {name: "0.30.0" for name in published if name != "mint"}
+        future = {name: "0.30.0" for name in published}
         future.update(
             {
                 "casework": "0.30.0",
@@ -1713,6 +1713,9 @@ class RegistryReleaseTest(TestCase):
             }
         )
         self.assertEqual([], module.artifact_inventory_errors("0.30.0", future))
+        retired = {name: "0.30.1" for name in future if name != "mint"}
+        self.assertEqual([], module.artifact_inventory_errors("0.30.1", retired))
+        self.assertNotEqual([], module.artifact_inventory_errors("0.30.0", retired))
         del future["caseworkctl"]
         self.assertNotEqual([], module.artifact_inventory_errors("0.30.0", future))
 

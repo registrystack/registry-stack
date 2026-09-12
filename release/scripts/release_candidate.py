@@ -55,7 +55,8 @@ RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
     "breg"
 }
-MINT_RETIREMENT_VERSION = (0, 30, 0)
+MINT_RETIREMENT_VERSION = (0, 30, 1)
+# v0.30.0 is already released. Every later version omits Mint.
 CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casework"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -123,6 +124,8 @@ def _candidate_image_names(version: str) -> set[str]:
         return DISCOVERY_RUNTIME_IMAGE_NAMES
     if parsed < CASEWORK_RELEASE_MINIMUM_VERSION:
         return BREG_RUNTIME_IMAGE_NAMES
+    if parsed < MINT_RETIREMENT_VERSION:
+        return CASEWORK_RUNTIME_IMAGE_NAMES | {"mint"}
     return CASEWORK_RUNTIME_IMAGE_NAMES
 
 

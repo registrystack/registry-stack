@@ -53,11 +53,11 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         f"relay-{tag}-linux-amd64",
         f"relayctl-{tag}-linux-amd64",
     ]
-    if parsed >= (0, 30, 0):
+    if parsed > (0, 30, 0):
         common.remove(f"mint-{tag}-linux-amd64")
     core.extend(common)
     for image_name in ("evidence", "mint", "relay"):
-        if image_name != "mint" or parsed < (0, 30, 0):
+        if image_name != "mint" or parsed <= (0, 30, 0):
             image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
     return {"core": core, "breg": breg, "casework": casework}, image_bins
 
