@@ -1,0 +1,2322 @@
+diff --git a/backend/cmd/server/servicemanager.go b/backend/cmd/server/servicemanager.go
+--- a/backend/cmd/server/servicemanager.go
++++ b/backend/cmd/server/servicemanager.go
+@@ -478,7 +478,7 @@
+ 	tokenValidator, err := oauth.Initialize(mux, actorProvider, authnProvider, jwtService, jweService,
+ 		flowExecService, observabilitySvc, runtimeCryptoSvc, ouService, attributeCacheService, authZService,
+ 		resourceServerProvider, i18nService, idpService, dpopVerifier,
+-		runtimeStoreProvider, transactioner, revocationEnforcer, revocationSvc, oauthCfg)
++		runtimeStoreProvider, transactioner, revocationEnforcer, revocationSvc, oauthCfg, consentEnforcer)
+ 	fatalOnError(ctx, logger, err, "Failed to initialize OAuth services")
+ 
+ 	// Initialized after the OAuth services because credential issuance validates the presented
+diff --git a/backend/internal/authn/common/model.go b/backend/internal/authn/common/model.go
+--- a/backend/internal/authn/common/model.go
++++ b/backend/internal/authn/common/model.go
+@@ -63,7 +63,8 @@
+ // AuthorizationData holds authorization flow parameters exchanged during federated authentication.
+ type AuthorizationData struct {
+ 	// Code is the authorization code received from the identity provider
+-	Code string
++	CodeVerifier string
++	Code         string
+ 	// Nonce is the nonce parameter received from the identity provider (if applicable)
+ 	Nonce string
+ }
+diff --git a/backend/internal/authn/consent/delegation.go b/backend/internal/authn/consent/delegation.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/authn/consent/delegation.go
+@@ -0,0 +1,98 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package consent
++
++import (
++	"context"
++	"github.com/thunder-id/thunderid/internal/consent"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++	"time"
++)
++
++// ValidateConsentAuthorization reads current native consent at every code
++// redemption. A replacement authorization row can never revive an older code.
++func (s *consentEnforcerService) ValidateConsentAuthorization(ctx context.Context, b providers.DelegationConsentBinding) *tidcommon.ServiceError {
++	if s.consentService == nil || b.ConsentID == "" || b.AuthorizationID == "" || b.UserID == "" || b.AppID == "" || b.Deadline <= time.Now().Unix() {
++		return &ErrorConsentSessionInvalid
++	}
++	records, err := s.consentService.SearchConsents(ctx, consent.ConsentFilter{GroupID: b.AppID, UserID: b.UserID, ConsentStatus: consent.ConsentStatusActive})
++	if err != nil {
++		return &ErrorConsentSearchFailed
++	}
++	for _, record := range records {
++		if record == nil || record.ID != b.ConsentID || record.GroupID != b.AppID || record.Status != consent.ConsentStatusActive || record.ValidityTime < b.Deadline {
++			continue
++		}
++		authorized := false
++		for _, a := range record.Authorizations {
++			if a.ID == b.AuthorizationID && a.UserID == b.UserID && a.Status == consent.AuthorizationStatusApproved {
++				authorized = true
++			}
++		}
++		if !authorized {
++			continue
++		}
++		approved := map[string]map[string]bool{}
++		for _, purpose := range record.Purposes {
++			elements := map[string]bool{}
++			for _, element := range purpose.Elements {
++				elements[element.Name] = element.IsUserApproved
++			}
++			approved[purpose.Name] = elements
++		}
++		valid := true
++		for _, scope := range b.Scopes {
++			if !approved[consent.PermissionPurposeName(b.AppID)][scope] {
++				valid = false
++			}
++		}
++		for _, attr := range b.Attributes {
++			if !approved[consent.AttributePurposeName(b.AppID)][attr] {
++				valid = false
++			}
++		}
++		if valid {
++			return nil
++		}
++	}
++	return &ErrorConsentSessionInvalid
++}
++
++// WithdrawAuthenticatedConsent is called only after the interactive flow has
++// verified a human. The caller supplies server-resolved user and application IDs.
++func (s *consentEnforcerService) WithdrawAuthenticatedConsent(ctx context.Context, appID, userID string) *tidcommon.ServiceError {
++	if s.consentService == nil || appID == "" || userID == "" {
++		return &ErrorConsentSessionInvalid
++	}
++	records, err := s.consentService.SearchConsents(ctx, consent.ConsentFilter{GroupID: appID, UserID: userID, ConsentStatus: consent.ConsentStatusActive})
++	if err != nil {
++		return &ErrorConsentSearchFailed
++	}
++	for _, record := range records {
++		if record == nil || record.GroupID != appID {
++			return &ErrorConsentSessionInvalid
++		}
++		for _, authorization := range record.Authorizations {
++			if authorization.UserID != userID {
++				return &ErrorConsentSessionInvalid
++			}
++		}
++		purposes := make([]consent.ConsentPurposeItem, 0, len(record.Purposes))
++		for _, purpose := range record.Purposes {
++			denied := consent.ConsentPurposeItem{Name: purpose.Name}
++			for _, element := range purpose.Elements {
++				element.IsUserApproved = false
++				denied.Elements = append(denied.Elements, element)
++			}
++			purposes = append(purposes, denied)
++		}
++		_, err := s.consentService.UpdateConsent(ctx, record.ID, &consent.ConsentRequest{GroupID: appID, ValidityTime: time.Now().Unix(), Purposes: purposes,
++			Authorizations: []consent.ConsentAuthorizationRequest{{UserID: userID, Type: consent.AuthorizationTypeAuthorization, Status: consent.AuthorizationStatusRejected}}})
++		if err != nil {
++			return &ErrorConsentSessionInvalid
++		}
++	}
++	return nil
++}
+diff --git a/backend/internal/authn/consent/delegation_test.go b/backend/internal/authn/consent/delegation_test.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/authn/consent/delegation_test.go
+@@ -0,0 +1,87 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++package consent
++
++import (
++	"context"
++	"github.com/stretchr/testify/mock"
++	"github.com/stretchr/testify/require"
++	"github.com/thunder-id/thunderid/internal/consent"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++	"github.com/thunder-id/thunderid/tests/mocks/consentmock"
++	"testing"
++	"time"
++)
++
++func TestCitizenCodeWithdrawalCannotBeUndoneByReapproval(t *testing.T) {
++	binding := providers.DelegationConsentBinding{ConsentID: "consent", AuthorizationID: "approval-one", AppID: "agent", UserID: "citizen", Deadline: time.Now().Unix() + 120, Scopes: []string{"records:read"}, Attributes: []string{"person_reference"}}
++	record := &consent.Consent{ID: "consent", GroupID: "agent", Status: consent.ConsentStatusActive, ValidityTime: binding.Deadline,
++		Authorizations: []consent.ConsentAuthorization{{ID: "approval-one", UserID: "citizen", Status: consent.AuthorizationStatusApproved}},
++		Purposes:       []consent.ConsentPurposeItem{{Name: "permissions:agent", Elements: []consent.ConsentElementApproval{{Name: "records:read", IsUserApproved: true}}}, {Name: "attributes:agent", Elements: []consent.ConsentElementApproval{{Name: "person_reference", IsUserApproved: true}}}}}
++	store := consentmock.NewConsentServiceInterfaceMock(t)
++	unavailable := false
++	store.On("SearchConsents", mock.Anything, consent.ConsentFilter{GroupID: "agent", UserID: "citizen", ConsentStatus: consent.ConsentStatusActive}).Return(
++		func(context.Context, consent.ConsentFilter) []*consent.Consent { return []*consent.Consent{record} },
++		func(context.Context, consent.ConsentFilter) *tidcommon.ServiceError {
++			if unavailable {
++				return &tidcommon.InternalServerError
++			}
++			return nil
++		})
++	svc := &consentEnforcerService{consentService: store}
++	require.Nil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	record.Authorizations[0].Status = consent.AuthorizationStatusRejected
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	record.Authorizations[0].Status = consent.AuthorizationStatusApproved
++	record.Authorizations[0].ID = "approval-two"
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding), "reapproval revived an old code")
++	binding.AuthorizationID = "approval-two"
++	require.Nil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	record.Purposes[0].Elements[0].IsUserApproved = false
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	record.Purposes[0].Elements[0].IsUserApproved = true
++	record.Purposes[1].Elements[0].IsUserApproved = false
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	record.Purposes[1].Elements[0].IsUserApproved = true
++	unavailable = true
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++	unavailable = false
++	binding.Deadline = time.Now().Unix() - 1
++	require.NotNil(t, svc.ValidateConsentAuthorization(context.Background(), binding))
++}
++
++func TestAuthenticatedWithdrawalRejectsOnlyCurrentCitizenConsent(t *testing.T) {
++	for _, scenario := range []string{"ok", "other-user", "other-app", "lookup-failed", "write-failed"} {
++		t.Run(scenario, func(t *testing.T) {
++			record := &consent.Consent{ID: "current", GroupID: "agent", Authorizations: []consent.ConsentAuthorization{{ID: "old", UserID: "citizen", Status: consent.AuthorizationStatusApproved}}, Purposes: []consent.ConsentPurposeItem{{Name: "permissions:agent", Elements: []consent.ConsentElementApproval{{Name: "records:read", IsUserApproved: true}}}}}
++			if scenario == "other-user" {
++				record.Authorizations[0].UserID = "other"
++			}
++			if scenario == "other-app" {
++				record.GroupID = "other"
++			}
++			store := consentmock.NewConsentServiceInterfaceMock(t)
++			var lookupErr *tidcommon.ServiceError
++			if scenario == "lookup-failed" {
++				lookupErr = &tidcommon.InternalServerError
++			}
++			store.On("SearchConsents", mock.Anything, consent.ConsentFilter{GroupID: "agent", UserID: "citizen", ConsentStatus: consent.ConsentStatusActive}).Return([]*consent.Consent{record}, lookupErr)
++			if scenario == "ok" || scenario == "write-failed" {
++				var writeErr *tidcommon.ServiceError
++				if scenario == "write-failed" {
++					writeErr = &tidcommon.InternalServerError
++				}
++				store.On("UpdateConsent", mock.Anything, "current", mock.MatchedBy(func(req *consent.ConsentRequest) bool {
++					return req.GroupID == "agent" && req.ValidityTime <= time.Now().Unix() && len(req.Authorizations) == 1 && req.Authorizations[0].UserID == "citizen" && req.Authorizations[0].Status == consent.AuthorizationStatusRejected && !req.Purposes[0].Elements[0].IsUserApproved
++				})).Return(record, writeErr).Once()
++			}
++			err := (&consentEnforcerService{consentService: store}).WithdrawAuthenticatedConsent(context.Background(), "agent", "citizen")
++			if scenario == "ok" {
++				require.Nil(t, err)
++			} else {
++				require.NotNil(t, err)
++			}
++		})
++	}
++}
+diff --git a/backend/internal/authn/oauth/federation.go b/backend/internal/authn/oauth/federation.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/authn/oauth/federation.go
+@@ -0,0 +1,69 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package oauth
++
++import (
++	"context"
++	"errors"
++	"net/http"
++	"net/url"
++	"slices"
++	"strings"
++	"time"
++)
++
++type federationExchangeKey struct{}
++type federationExchange struct{ Verifier, Assertion string }
++
++// WithFederationExchange carries server-held transaction material to the token
++// request builder. It is never an authorization request or browser parameter.
++func WithFederationExchange(ctx context.Context, verifier, assertion string) context.Context {
++	return context.WithValue(ctx, federationExchangeKey{}, federationExchange{verifier, assertion})
++}
++
++// FederationHTTPClient sends only to governed endpoints. It refuses redirects,
++// including same-origin redirects that could change the assertion audience.
++func FederationHTTPClient() *http.Client {
++	return &http.Client{Timeout: 15 * time.Second,
++		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
++}
++
++// ValidateFederation keeps private_key_jwt connections complete and explicit.
++// Loopback HTTP is only for locally authored protocol fixtures.
++func (c *OAuthClientConfig) ValidateFederation() error {
++	if c.TokenEndpointAuthMethod == "" {
++		return nil
++	}
++	invalid := errors.New("private_key_jwt federation requires exact issuer endpoints, signed responses, and required claims")
++	if c.TokenEndpointAuthMethod != "private_key_jwt" || c.ClientSecret != "" || c.ClientID == "" ||
++		c.RedirectURI == "" || !slices.Contains(c.Scopes, "openid") || len(c.RequiredClaims) == 0 || len(c.RequiredClaims) > 32 {
++		return invalid
++	}
++	for _, alg := range []string{c.IDTokenSigningAlg, c.UserInfoSigningAlg} {
++		if !slices.Contains([]string{"RS256", "PS256", "ES256"}, alg) {
++			return invalid
++		}
++	}
++	issuer, err := url.Parse(c.Issuer)
++	if err != nil || issuer.Host == "" || issuer.User != nil || issuer.RawQuery != "" || issuer.Fragment != "" {
++		return invalid
++	}
++	if issuer.Scheme != "https" && !(issuer.Scheme == "http" && slices.Contains([]string{"localhost", "127.0.0.1", "::1", "host.docker.internal"}, issuer.Hostname())) {
++		return invalid
++	}
++	for _, endpoint := range []string{c.OAuthEndpoints.AuthorizationEndpoint, c.OAuthEndpoints.TokenEndpoint, c.OAuthEndpoints.UserInfoEndpoint, c.OAuthEndpoints.JwksEndpoint} {
++		parsed, err := url.Parse(endpoint)
++		if err != nil || parsed.Scheme != issuer.Scheme || parsed.Host != issuer.Host || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
++			return invalid
++		}
++	}
++	seen := map[string]bool{}
++	for _, claim := range c.RequiredClaims {
++		if claim == "" || len(claim) > 128 || strings.ContainsAny(claim, " \t\r\n") || seen[claim] {
++			return invalid
++		}
++		seen[claim] = true
++	}
++	return nil
++}
+diff --git a/backend/internal/authn/oauth/model.go b/backend/internal/authn/oauth/model.go
+--- a/backend/internal/authn/oauth/model.go
++++ b/backend/internal/authn/oauth/model.go
+@@ -14,12 +14,17 @@
+ 
+ // OAuthClientConfig holds the OAuth client configuration details.
+ type OAuthClientConfig struct {
+-	ClientID         string
+-	ClientSecret     string
+-	RedirectURI      string
+-	Scopes           []string
+-	OAuthEndpoints   OAuthEndpoints
+-	AdditionalParams map[string]string
++	Issuer                  string
++	TokenEndpointAuthMethod string
++	IDTokenSigningAlg       string
++	UserInfoSigningAlg      string
++	RequiredClaims          []string
++	ClientID                string
++	ClientSecret            string
++	RedirectURI             string
++	Scopes                  []string
++	OAuthEndpoints          OAuthEndpoints
++	AdditionalParams        map[string]string
+ }
+ 
+ // TokenResponse represents the token endpoint response body.
+diff --git a/backend/internal/authn/oauth/service.go b/backend/internal/authn/oauth/service.go
+--- a/backend/internal/authn/oauth/service.go
++++ b/backend/internal/authn/oauth/service.go
+@@ -174,7 +174,11 @@
+ 		return nil, svcErr
+ 	}
+ 
+-	tokenResp, svcErr := sendTokenRequest(httpReq, s.httpClient, logger)
++	client := s.httpClient
++	if oAuthClientConfig.TokenEndpointAuthMethod == "private_key_jwt" {
++		client = FederationHTTPClient()
++	}
++	tokenResp, svcErr := sendTokenRequest(httpReq, client, logger)
+ 	if svcErr != nil {
+ 		return nil, svcErr
+ 	}
+diff --git a/backend/internal/authn/oauth/utils.go b/backend/internal/authn/oauth/utils.go
+--- a/backend/internal/authn/oauth/utils.go
++++ b/backend/internal/authn/oauth/utils.go
+@@ -57,7 +57,17 @@
+ 			oAuthClientConfig.OAuthEndpoints.UserEmailEndpoint = value
+ 		case idpPkg.PropJwksEndpoint:
+ 			oAuthClientConfig.OAuthEndpoints.JwksEndpoint = value
+-		case idpPkg.PropIssuer, idpPkg.PropTokenExchangeEnabled:
++		case idpPkg.PropIssuer:
++			oAuthClientConfig.Issuer = value
++		case idpPkg.PropTokenEndpointAuthMethod:
++			oAuthClientConfig.TokenEndpointAuthMethod = value
++		case idpPkg.PropIDTokenSigningAlg:
++			oAuthClientConfig.IDTokenSigningAlg = value
++		case idpPkg.PropUserInfoSigningAlg:
++			oAuthClientConfig.UserInfoSigningAlg = value
++		case idpPkg.PropRequiredClaims:
++			oAuthClientConfig.RequiredClaims = sysutils.ParseStringArray(value, ",")
++		case idpPkg.PropTokenExchangeEnabled:
+ 			// Server-side configuration consumed elsewhere (token exchange).
+ 			// These must not be forwarded as query parameters on the external authorize request.
+ 		default:
+@@ -75,6 +85,9 @@
+ 		}
+ 	}
+ 
++	if err := oAuthClientConfig.ValidateFederation(); err != nil {
++		return nil, err
++	}
+ 	return &oAuthClientConfig, nil
+ }
+ 
+@@ -83,12 +96,22 @@
+ 	*http.Request, *tidcommon.ServiceError) {
+ 	form := url.Values{}
+ 	form.Set(oauth2const.RequestParamClientID, oAuthClientConfig.ClientID)
+-	form.Set(oauth2const.RequestParamClientSecret, oAuthClientConfig.ClientSecret)
++	if oAuthClientConfig.TokenEndpointAuthMethod == "private_key_jwt" {
++		binding, ok := ctx.Value(federationExchangeKey{}).(federationExchange)
++		if !ok || len(binding.Verifier) < 43 || binding.Assertion == "" {
++			return nil, &ErrorInvalidTokenResponse
++		}
++		form.Set("code_verifier", binding.Verifier)
++		form.Set("client_assertion", binding.Assertion)
++		form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
++	} else {
++		form.Set(oauth2const.RequestParamClientSecret, oAuthClientConfig.ClientSecret)
++	}
+ 	form.Set(oauth2const.RequestParamRedirectURI, oAuthClientConfig.RedirectURI)
+ 	form.Set(oauth2const.RequestParamGrantType, string(providers.GrantTypeAuthorizationCode))
+ 	form.Set(oauth2const.RequestParamCode, code)
+ 
+-	httpReq, err := http.NewRequest(http.MethodPost, oAuthClientConfig.OAuthEndpoints.TokenEndpoint,
++	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, oAuthClientConfig.OAuthEndpoints.TokenEndpoint,
+ 		strings.NewReader(form.Encode()))
+ 	if err != nil {
+ 		logger.Error(ctx, "Failed to create token request", log.Error(err))
+@@ -117,14 +140,13 @@
+ 	}()
+ 
+ 	if resp.StatusCode != http.StatusOK {
+-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+ 		logger.Error(ctx, "Token endpoint returned an error response",
+-			log.Int("statusCode", resp.StatusCode), log.String("response", string(body)))
++			log.Int("statusCode", resp.StatusCode))
+ 		return nil, &tidcommon.InternalServerError
+ 	}
+ 
+ 	var tokenResp TokenResponse
+-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
++	if err := json.NewDecoder(io.LimitReader(resp.Body, 256*1024)).Decode(&tokenResp); err != nil {
+ 		logger.Error(ctx, "Failed to parse token response", log.Error(err))
+ 		return nil, &tidcommon.InternalServerError
+ 	}
+@@ -135,7 +157,7 @@
+ // buildUserInfoRequest constructs the HTTP request to fetch user information from the identity provider.
+ func buildUserInfoRequest(ctx context.Context, userInfoEndpoint string, accessToken string, logger *log.Logger) (
+ 	*http.Request, *tidcommon.ServiceError) {
+-	req, err := http.NewRequest(http.MethodGet, userInfoEndpoint, nil)
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoEndpoint, nil)
+ 	if err != nil {
+ 		logger.Error(ctx, "Failed to create userinfo request", log.Error(err))
+ 		return nil, &tidcommon.InternalServerError
+@@ -163,9 +185,8 @@
+ 	}()
+ 
+ 	if resp.StatusCode != http.StatusOK {
+-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+ 		logger.Error(ctx, "Userinfo endpoint returned an error response",
+-			log.Int("statusCode", resp.StatusCode), log.String("response", string(body)))
++			log.Int("statusCode", resp.StatusCode))
+ 		return nil, &ErrorUserProfileRetrievalFailed
+ 	}
+ 
+diff --git a/backend/internal/authn/oidc/federation.go b/backend/internal/authn/oidc/federation.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/authn/oidc/federation.go
+@@ -0,0 +1,158 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package oidc
++
++import (
++	"context"
++	"crypto/rand"
++	"crypto/sha256"
++	"encoding/base64"
++	"encoding/json"
++	"errors"
++	"io"
++	"net/http"
++	"net/url"
++	"strings"
++	"time"
++
++	authnoauth "github.com/thunder-id/thunderid/internal/authn/oauth"
++	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++)
++
++const maxFederationResponse = 256 * 1024
++
++type federationVerifierKey struct{}
++
++func bindPKCE(authorize string, metadata map[string]string, c *authnoauth.OAuthClientConfig) (string, error) {
++	bytes := make([]byte, 32)
++	if _, err := rand.Read(bytes); err != nil {
++		return "", err
++	}
++	verifier := base64.RawURLEncoding.EncodeToString(bytes)
++	challenge := sha256.Sum256([]byte(verifier))
++	u, err := url.Parse(authorize)
++	if err != nil {
++		return "", err
++	}
++	q := u.Query()
++	q.Set("code_challenge", base64.RawURLEncoding.EncodeToString(challenge[:]))
++	q.Set("code_challenge_method", "S256")
++	requested := map[string]interface{}{}
++	for _, claim := range c.RequiredClaims {
++		requested[claim] = map[string]bool{"essential": true}
++	}
++	claims, err := json.Marshal(map[string]interface{}{"userinfo": requested})
++	if err != nil {
++		return "", err
++	}
++	q.Set("claims", string(claims))
++	u.RawQuery = q.Encode()
++	metadata["code_verifier"] = verifier
++	return u.String(), nil
++}
++
++func readFederationResponse(ctx context.Context, endpoint, bearer, accept string) ([]byte, error) {
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
++	if err != nil {
++		return nil, err
++	}
++	if bearer != "" {
++		req.Header.Set("Authorization", "Bearer "+bearer)
++	}
++	req.Header.Set("Accept", accept)
++	resp, err := authnoauth.FederationHTTPClient().Do(req)
++	if err != nil {
++		return nil, errors.New("federation endpoint unavailable")
++	}
++	defer resp.Body.Close()
++	if resp.StatusCode != http.StatusOK {
++		return nil, errors.New("federation endpoint refused request")
++	}
++	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFederationResponse+1))
++	if err != nil || len(body) > maxFederationResponse {
++		return nil, errors.New("federation response exceeds bound")
++	}
++	return body, nil
++}
++
++// verifyFederationJWT fetches only the configured JWKS, never token header URLs.
++// The selected algorithm and key must agree before injected crypto verifies it.
++func (s *oidcAuthnService) verifyFederationJWT(ctx context.Context, token, alg string, c *authnoauth.OAuthClientConfig) (map[string]interface{}, *tidcommon.ServiceError) {
++	if len(token) > maxFederationResponse {
++		return nil, &ErrorInvalidIDToken
++	}
++	header, err := jwt.DecodeJWTHeader(token)
++	if err != nil || header["alg"] != alg || header["crit"] != nil || header["jku"] != nil || header["x5u"] != nil || header["b64"] != nil {
++		return nil, &ErrorInvalidIDToken
++	}
++	kid, ok := header["kid"].(string)
++	if !ok || kid == "" || len(kid) > 256 {
++		return nil, &ErrorInvalidIDToken
++	}
++	body, err := readFederationResponse(ctx, c.OAuthEndpoints.JwksEndpoint, "", "application/json")
++	if err != nil {
++		return nil, &ErrorInvalidIDToken
++	}
++	var set struct {
++		Keys []map[string]interface{} `json:"keys"`
++	}
++	if json.Unmarshal(body, &set) != nil || len(set.Keys) == 0 || len(set.Keys) > 32 {
++		return nil, &ErrorInvalidIDToken
++	}
++	var selected map[string]interface{}
++	for _, key := range set.Keys {
++		if key["kid"] != kid {
++			continue
++		}
++		if selected != nil || key["d"] != nil || (key["alg"] != nil && key["alg"] != alg) || (key["use"] != nil && key["use"] != "sig") {
++			return nil, &ErrorInvalidIDToken
++		}
++		if (strings.HasPrefix(alg, "RS") || strings.HasPrefix(alg, "PS")) && key["kty"] != "RSA" {
++			return nil, &ErrorInvalidIDToken
++		}
++		if alg == "ES256" && (key["kty"] != "EC" || key["crv"] != "P-256") {
++			return nil, &ErrorInvalidIDToken
++		}
++		selected = key
++	}
++	if selected == nil {
++		return nil, &ErrorInvalidIDToken
++	}
++	if err := s.jwtService.VerifyJWTWithPublicKey(ctx, token, providers.KeyRef{PublicKeyJWK: selected}, c.ClientID, c.Issuer); err != nil {
++		return nil, &ErrorInvalidIDTokenSignature
++	}
++	claims, err := jwt.DecodeJWTPayload(token)
++	if err != nil {
++		return nil, &ErrorInvalidIDToken
++	}
++	sub, ok := claims["sub"].(string)
++	if !ok || sub == "" || len(sub) > 1024 {
++		return nil, &ErrorInvalidIDToken
++	}
++	// Exact single audience removes multi-audience/azp ambiguity at this boundary.
++	audOK := claims["aud"] == c.ClientID
++	if aud, ok := claims["aud"].([]interface{}); ok {
++		audOK = len(aud) == 1 && aud[0] == c.ClientID
++	}
++	if !audOK || claims["iss"] != c.Issuer {
++		return nil, &ErrorInvalidIDToken
++	}
++	if azp, exists := claims["azp"]; exists && azp != c.ClientID {
++		return nil, &ErrorInvalidIDToken
++	}
++	now := float64(time.Now().Unix())
++	exp, ok := claims["exp"].(float64)
++	if !ok || exp <= now {
++		return nil, &ErrorInvalidIDToken
++	}
++	if iat, exists := claims["iat"]; exists {
++		value, ok := iat.(float64)
++		if !ok || value > now+30 || value >= exp {
++			return nil, &ErrorInvalidIDToken
++		}
++	}
++	return claims, nil
++}
+diff --git a/backend/internal/authn/oidc/federation_test.go b/backend/internal/authn/oidc/federation_test.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/authn/oidc/federation_test.go
+@@ -0,0 +1,293 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package oidc
++
++import (
++	"context"
++	"crypto"
++	"crypto/rand"
++	"crypto/rsa"
++	"crypto/sha256"
++	"crypto/x509"
++	"encoding/base64"
++	"encoding/json"
++	"fmt"
++	"math/big"
++	"net/http"
++	"net/http/httptest"
++	"net/url"
++	"strings"
++	"testing"
++	"time"
++
++	"github.com/stretchr/testify/mock"
++	"github.com/stretchr/testify/require"
++	authncm "github.com/thunder-id/thunderid/internal/authn/common"
++	"github.com/thunder-id/thunderid/internal/authn/oauth"
++	"github.com/thunder-id/thunderid/internal/idp"
++	"github.com/thunder-id/thunderid/internal/system/cmodels"
++	"github.com/thunder-id/thunderid/internal/system/config"
++	joseconfig "github.com/thunder-id/thunderid/internal/system/jose/config"
++	"github.com/thunder-id/thunderid/internal/system/jose/jwt"
++	"github.com/thunder-id/thunderid/internal/system/kmprovider/defaultkm"
++	"github.com/thunder-id/thunderid/internal/system/kmprovider/defaultkm/pki"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++	"github.com/thunder-id/thunderid/tests/mocks/idp/idpmock"
++)
++
++type protocolPKI struct {
++	pki.PKIServiceInterface
++	key *rsa.PrivateKey
++}
++
++func (p protocolPKI) GetPrivateKey(context.Context, string) (crypto.PrivateKey, *tidcommon.ServiceError) {
++	return p.key, nil
++}
++func (p protocolPKI) GetCertificateChain(string) [][]byte { return nil }
++func (p protocolPKI) GetCertThumbprint(string) string     { return "issuer-key" }
++func (p protocolPKI) GetAllX509Certificates(context.Context) (map[string]*x509.Certificate, *tidcommon.ServiceError) {
++	return map[string]*x509.Certificate{"issuer-key": {PublicKey: &p.key.PublicKey}}, nil
++}
++func (p protocolPKI) GetX509Certificate(context.Context, string) (*x509.Certificate, *tidcommon.ServiceError) {
++	return &x509.Certificate{PublicKey: &p.key.PublicKey}, nil
++}
++func (p protocolPKI) GetSupportedSigningAlgorithms() []string { return []string{"RS256", "PS256"} }
++
++func protocolJWK(key *rsa.PrivateKey) map[string]interface{} {
++	return map[string]interface{}{"kty": "RSA", "kid": "provider-key", "alg": "PS256", "use": "sig",
++		"n": base64.RawURLEncoding.EncodeToString(key.N.Bytes()), "e": base64.RawURLEncoding.EncodeToString(big.NewInt(int64(key.E)).Bytes())}
++}
++func protocolSign(t *testing.T, key *rsa.PrivateKey, claims map[string]interface{}, alg, kid string) string {
++	t.Helper()
++	h, _ := json.Marshal(map[string]string{"alg": alg, "kid": kid})
++	p, _ := json.Marshal(claims)
++	input := base64.RawURLEncoding.EncodeToString(h) + "." + base64.RawURLEncoding.EncodeToString(p)
++	digest := sha256.Sum256([]byte(input))
++	sig, err := rsa.SignPSS(rand.Reader, key, crypto.SHA256, digest[:], &rsa.PSSOptions{SaltLength: rsa.PSSSaltLengthEqualsHash})
++	require.NoError(t, err)
++	return input + "." + base64.RawURLEncoding.EncodeToString(sig)
++}
++
++// TestFederationProtocol uses real local authorization, token, JWKS and UserInfo
++// endpoints and the production OAuth/JWT/default-key-manager implementations.
++// All keys and subjects are generated synthetic fixture state, never logged.
++func TestFederationProtocol(t *testing.T) {
++	config.ResetServerRuntime()
++	require.NoError(t, config.InitializeServerRuntime("", &config.Config{}))
++	issuerKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	require.NoError(t, err)
++	providerKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	require.NoError(t, err)
++	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
++	require.NoError(t, err)
++	cryptoSvc := defaultkm.NewRuntimeCryptoService(protocolPKI{key: issuerKey}, nil)
++	jwtSvc, err := jwt.Initialize(cryptoSvc, joseconfig.Config{Issuer: "urn:fixture:issuer", ValidityPeriod: 300, PreferredKeyID: "issuer-key"})
++	require.NoError(t, err)
++	mode := ""
++	nonce := ""
++	challenge := ""
++	code := ""
++	used := false
++	counter := 0
++	issuer := ""
++	seenJTIs := map[string]bool{}
++	tokenCalls := 0
++	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		now := time.Now().Unix()
++		claims := map[string]interface{}{"iss": issuer, "aud": "outbound-client", "sub": "pairwise-citizen", "iat": now, "exp": now + 300, "nonce": nonce}
++		switch r.URL.Path {
++		case "/authorize":
++			q := r.URL.Query()
++			nonce = q.Get("nonce")
++			challenge = q.Get("code_challenge")
++			if q.Get("client_id") != "outbound-client" || q.Get("response_type") != "code" || q.Get("state") == "" || nonce == "" || q.Get("code_challenge_method") != "S256" || len(challenge) != 43 || q.Get("code_verifier") != "" {
++				t.Error("authorization request omitted or disclosed transaction binding")
++				w.WriteHeader(400)
++				return
++			}
++			var requested map[string]map[string]map[string]bool
++			if json.Unmarshal([]byte(q.Get("claims")), &requested) != nil || !requested["userinfo"]["person_reference"]["essential"] {
++				t.Error("essential provider-neutral claim not requested")
++				w.WriteHeader(400)
++				return
++			}
++			counter++
++			code = fmt.Sprintf("code-%d", counter)
++			used = false
++			_ = json.NewEncoder(w).Encode(map[string]string{"code": code})
++		case "/token":
++			tokenCalls++
++			if mode == "token-redirect" {
++				http.Redirect(w, r, issuer+"/never", 302)
++				return
++			}
++			if r.ParseForm() != nil {
++				w.WriteHeader(400)
++				return
++			}
++			form := r.PostForm
++			d := sha256.Sum256([]byte(form.Get("code_verifier")))
++			if used || form.Get("code") != code || base64.RawURLEncoding.EncodeToString(d[:]) != challenge {
++				w.WriteHeader(400)
++				return
++			}
++			assertion := form.Get("client_assertion")
++			parts := strings.Split(assertion, ".")
++			if len(parts) != 3 {
++				t.Error("client assertion missing")
++				w.WriteHeader(400)
++				return
++			}
++			signature, e := base64.RawURLEncoding.DecodeString(parts[2])
++			digest := sha256.Sum256([]byte(parts[0] + "." + parts[1]))
++			if e != nil || rsa.VerifyPKCS1v15(&issuerKey.PublicKey, crypto.SHA256, digest[:], signature) != nil {
++				t.Error("client assertion signature rejected")
++				w.WriteHeader(400)
++				return
++			}
++			payload, e := jwt.DecodeJWTPayload(assertion)
++			header, he := jwt.DecodeJWTHeader(assertion)
++			jti, _ := payload["jti"].(string)
++			if e != nil || he != nil || header["alg"] != "RS256" || header["kid"] != "issuer-key" || payload["iss"] != "outbound-client" || payload["sub"] != "outbound-client" || payload["aud"] != issuer+"/token" || jti == "" || seenJTIs[jti] || payload["exp"].(float64)-payload["iat"].(float64) != 60 || form.Get("client_secret") != "" || form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" {
++				t.Error("client assertion contract rejected")
++				w.WriteHeader(400)
++				return
++			}
++			seenJTIs[jti] = true
++			used = true
++			key := providerKey
++			alg := "PS256"
++			kid := "provider-key"
++			switch mode {
++			case "id-wrong-issuer":
++				claims["iss"] = "urn:other"
++			case "id-wrong-audience":
++				claims["aud"] = "other-client"
++			case "id-multi-audience":
++				claims["aud"] = []string{"outbound-client", "other-client"}
++			case "id-wrong-azp":
++				claims["azp"] = "other-client"
++			case "id-no-sub":
++				delete(claims, "sub")
++			case "id-expired":
++				claims["exp"] = now - 1
++			case "id-future":
++				claims["iat"] = now + 120
++			case "id-wrong-nonce":
++				claims["nonce"] = "other-transaction"
++			case "id-wrong-key":
++				key = wrongKey
++			case "id-wrong-alg":
++				alg = "RS256"
++			case "id-unknown-kid":
++				kid = "unknown"
++			}
++			_ = json.NewEncoder(w).Encode(map[string]interface{}{"access_token": "fixture-access", "token_type": "Bearer", "id_token": protocolSign(t, key, claims, alg, kid), "expires_in": 300})
++		case "/jwks":
++			if mode == "jwks-redirect" {
++				http.Redirect(w, r, issuer+"/never", 302)
++				return
++			}
++			keys := []map[string]interface{}{protocolJWK(providerKey)}
++			if mode == "duplicate-kid" {
++				keys = append(keys, protocolJWK(wrongKey))
++			}
++			if mode == "jwks-wrong-alg" {
++				keys[0]["alg"] = "RS256"
++			}
++			_ = json.NewEncoder(w).Encode(map[string]interface{}{"keys": keys})
++		case "/userinfo":
++			if r.Header.Get("Authorization") != "Bearer fixture-access" {
++				t.Error("userinfo access bearer missing")
++				w.WriteHeader(401)
++				return
++			}
++			if mode == "userinfo-redirect" {
++				http.Redirect(w, r, issuer+"/never", 302)
++				return
++			}
++			if mode == "userinfo-unavailable" {
++				w.WriteHeader(503)
++				return
++			}
++			claims["person_reference"] = "synthetic-domain-reference"
++			key := providerKey
++			switch mode {
++			case "userinfo-wrong-issuer":
++				claims["iss"] = "urn:other"
++			case "userinfo-wrong-audience":
++				claims["aud"] = "other-client"
++			case "userinfo-wrong-sub":
++				claims["sub"] = "other-citizen"
++			case "userinfo-missing-sub":
++				delete(claims, "sub")
++			case "userinfo-missing-essential":
++				delete(claims, "person_reference")
++			case "userinfo-wrong-key":
++				key = wrongKey
++			case "userinfo-unsigned":
++				_ = json.NewEncoder(w).Encode(claims)
++				return
++			}
++			_, _ = w.Write([]byte(protocolSign(t, key, claims, "PS256", "provider-key")))
++		default:
++			t.Error("unexpected endpoint or followed redirect")
++			w.WriteHeader(400)
++		}
++	}))
++	defer server.Close()
++	issuer = server.URL
++	properties := map[string]string{idp.PropClientID: "outbound-client", idp.PropTokenEndpointAuthMethod: "private_key_jwt", idp.PropIDTokenSigningAlg: "PS256", idp.PropUserInfoSigningAlg: "PS256", idp.PropRequiredClaims: "person_reference", idp.PropIssuer: issuer, idp.PropRedirectURI: "http://127.0.0.1:9999/callback", idp.PropScopes: "openid", idp.PropAuthorizationEndpoint: issuer + "/authorize", idp.PropTokenEndpoint: issuer + "/token", idp.PropUserInfoEndpoint: issuer + "/userinfo", idp.PropJwksEndpoint: issuer + "/jwks"}
++	dto := &providers.IDPDTO{ID: "fixture-connection", Type: providers.IDPTypeOIDC}
++	for name, value := range properties {
++		prop, e := cmodels.NewProperty(name, value, false)
++		require.NoError(t, e)
++		dto.Properties = append(dto.Properties, *prop)
++	}
++	idpSvc := idpmock.NewIDPServiceInterfaceMock(t)
++	idpSvc.On("GetIdentityProvider", mock.Anything, "fixture-connection").Return(dto, nil)
++	svc := newOIDCAuthnService(oauth.Initialize(idpSvc, nil), jwtSvc)
++	for _, scenario := range []string{"ok", "id-wrong-issuer", "id-wrong-audience", "id-multi-audience", "id-wrong-azp", "id-no-sub", "id-expired", "id-future", "id-wrong-nonce", "id-wrong-key", "id-wrong-alg", "id-unknown-kid", "duplicate-kid", "jwks-wrong-alg", "jwks-redirect", "token-redirect", "userinfo-wrong-issuer", "userinfo-wrong-audience", "userinfo-wrong-sub", "userinfo-missing-sub", "userinfo-missing-essential", "userinfo-wrong-key", "userinfo-unsigned", "userinfo-unavailable", "userinfo-redirect", "bad-verifier", "missing-verifier", "ok-after-refusals"} {
++		t.Run(scenario, func(t *testing.T) {
++			mode = scenario
++			authorize, metadata, svcErr := svc.BuildAuthorizeURL(context.Background(), "fixture-connection")
++			require.Nil(t, svcErr)
++			resp, e := http.Get(authorize)
++			require.NoError(t, e)
++			require.Equal(t, 200, resp.StatusCode)
++			resp.Body.Close()
++			verifier := metadata["code_verifier"]
++			if mode == "bad-verifier" {
++				verifier = strings.Repeat("a", 43)
++			}
++			if mode == "missing-verifier" {
++				verifier = ""
++			}
++			authz := authncm.AuthorizationData{Code: code, Nonce: metadata["nonce"], CodeVerifier: verifier}
++			result, svcErr := svc.Authenticate(context.Background(), "fixture-connection", authz)
++			if strings.HasPrefix(mode, "ok") {
++				require.Nil(t, svcErr)
++				require.NotNil(t, result)
++				require.Equal(t, map[string]interface{}{"sub": "pairwise-citizen", "registry_federation_issuer": issuer}, result.Token)
++				require.Equal(t, issuer, result.AuthenticatedClaims["registry_federation_issuer"])
++				require.Equal(t, "synthetic-domain-reference", result.AuthenticatedClaims["person_reference"])
++				replay, err := svc.Authenticate(context.Background(), "fixture-connection", authz)
++				require.Nil(t, replay)
++				require.NotNil(t, err)
++			} else {
++				require.Nil(t, result)
++				require.NotNil(t, svcErr)
++			}
++		})
++	}
++	require.Greater(t, tokenCalls, 20)
++	require.Greater(t, len(seenJTIs), 20)
++	c, e := svc.GetOAuthClientConfig(context.Background(), "fixture-connection")
++	require.Nil(t, e)
++	c.OAuthEndpoints.JwksEndpoint = "https://other.example/jwks"
++	require.Error(t, c.ValidateFederation())
++	_, err = url.Parse(issuer)
++	require.NoError(t, err)
++}
+diff --git a/backend/internal/authn/oidc/service.go b/backend/internal/authn/oidc/service.go
+--- a/backend/internal/authn/oidc/service.go
++++ b/backend/internal/authn/oidc/service.go
+@@ -76,6 +76,17 @@
+ 	}
+ 	metadata[oauth2const.RequestParamNonce] = nonce
+ 
++	config, configErr := s.GetOAuthClientConfig(ctx, idpID)
++	if configErr != nil {
++		return "", nil, configErr
++	}
++	if config.TokenEndpointAuthMethod == "private_key_jwt" {
++		var err error
++		authorizeURL, err = bindPKCE(authorizeURL, metadata, config)
++		if err != nil {
++			return "", nil, &tidcommon.InternalServerError
++		}
++	}
+ 	return authorizeURL, metadata, nil
+ }
+ 
+@@ -83,6 +94,22 @@
+ // and validates the token response if validateResponse is true.
+ func (s *oidcAuthnService) ExchangeCodeForToken(ctx context.Context, idpID, code string, validateResponse bool) (
+ 	*authnoauth.TokenResponse, *tidcommon.ServiceError) {
++	config, configErr := s.GetOAuthClientConfig(ctx, idpID)
++	if configErr != nil {
++		return nil, configErr
++	}
++	if config.TokenEndpointAuthMethod == "private_key_jwt" {
++		verifier, _ := ctx.Value(federationVerifierKey{}).(string)
++		if len(verifier) != 43 {
++			return nil, &ErrorInvalidIDToken
++		}
++		assertion, _, err := s.jwtService.GenerateJWT(ctx, config.ClientID, config.ClientID, 60,
++			map[string]interface{}{"aud": config.OAuthEndpoints.TokenEndpoint}, "JWT", "RS256")
++		if err != nil {
++			return nil, err
++		}
++		ctx = authnoauth.WithFederationExchange(ctx, verifier, assertion)
++	}
+ 	tokenResp, svcErr := s.internal.ExchangeCodeForToken(ctx, idpID, code, false)
+ 	if svcErr != nil {
+ 		return nil, svcErr
+@@ -147,6 +174,10 @@
+ 		return svcErr
+ 	}
+ 
++	if oAuthClientConfig.TokenEndpointAuthMethod == "private_key_jwt" {
++		_, err := s.verifyFederationJWT(ctx, idToken, oAuthClientConfig.IDTokenSigningAlg, oAuthClientConfig)
++		return err
++	}
+ 	// Validate ID token signature using JWKS endpoint if available
+ 	if oAuthClientConfig.OAuthEndpoints.JwksEndpoint != "" {
+ 		err := s.jwtService.VerifyJWTWithJWKS(ctx, idToken, oAuthClientConfig.OAuthEndpoints.JwksEndpoint, "", "")
+@@ -189,6 +220,17 @@
+ // FetchUserInfo retrieves user information from the external identity provider.
+ func (s *oidcAuthnService) FetchUserInfo(ctx context.Context, idpID, accessToken string) (
+ 	map[string]interface{}, *tidcommon.ServiceError) {
++	config, err := s.GetOAuthClientConfig(ctx, idpID)
++	if err != nil {
++		return nil, err
++	}
++	if config.TokenEndpointAuthMethod == "private_key_jwt" {
++		body, err := readFederationResponse(ctx, config.OAuthEndpoints.UserInfoEndpoint, accessToken, "application/jwt")
++		if err != nil {
++			return nil, &ErrorInvalidIDToken
++		}
++		return s.verifyFederationJWT(ctx, string(body), config.UserInfoSigningAlg, config)
++	}
+ 	return s.internal.FetchUserInfo(ctx, idpID, accessToken)
+ }
+ 
+@@ -200,6 +242,7 @@
+ 	logger := s.logger.With(log.String("idpId", idpID))
+ 	logger.Debug(ctx, "Performing federated OIDC authentication")
+ 
++	ctx = context.WithValue(ctx, federationVerifierKey{}, authzData.CodeVerifier)
+ 	tokenResp, svcErr := s.ExchangeCodeForToken(ctx, idpID, authzData.Code, true)
+ 	if svcErr != nil {
+ 		return nil, svcErr
+@@ -231,7 +274,30 @@
+ 	// Fetch user info if a UserInfo endpoint and additional scopes are configured, so callers get the
+ 	// full attribute set. The identity itself comes from the ID token, so a failed fetch is not fatal.
+ 	oauthConfig, svcErr := s.GetOAuthClientConfig(ctx, idpID)
+-	if svcErr == nil && oauthConfig.OAuthEndpoints.UserInfoEndpoint != "" && len(oauthConfig.Scopes) > 1 {
++	if svcErr != nil {
++		return nil, svcErr
++	}
++	if oauthConfig.TokenEndpointAuthMethod == "private_key_jwt" {
++		userInfo, err := s.FetchUserInfo(ctx, idpID, tokenResp.AccessToken)
++		if err != nil {
++			return nil, err
++		}
++		if userInfo["sub"] != sub {
++			return nil, &ErrorInvalidIDToken
++		}
++		for _, claim := range oauthConfig.RequiredClaims {
++			value, ok := userInfo[claim].(string)
++			if !ok || strings.TrimSpace(value) == "" || len(value) > 4096 {
++				return nil, &ErrorInvalidIDToken
++			}
++			claims[claim] = value
++		}
++		for k, v := range userInfo {
++			if _, exists := claims[k]; !exists {
++				claims[k] = v
++			}
++		}
++	} else if oauthConfig.OAuthEndpoints.UserInfoEndpoint != "" && len(oauthConfig.Scopes) > 1 {
+ 		userInfo, infoErr := s.FetchUserInfo(ctx, idpID, tokenResp.AccessToken)
+ 		if infoErr == nil {
+ 			if userInfoSub, ok := userInfo["sub"].(string); !ok || userInfoSub == sub {
+@@ -246,7 +312,21 @@
+ 		}
+ 	}
+ 
+-	return s.internal.BuildFederatedAuthResult(ctx, idpID, sub, claims)
++	result, resultErr := s.internal.BuildFederatedAuthResult(ctx, idpID, sub, claims)
++	if resultErr != nil {
++		return nil, resultErr
++	}
++	if oauthConfig.TokenEndpointAuthMethod == "private_key_jwt" {
++		// A pairwise subject is scoped to its verified issuer. Disable account
++		// linking by mutable claims on this governed citizen federation path.
++		result.Token = map[string]interface{}{"sub": sub, "registry_federation_issuer": oauthConfig.Issuer}
++		if result.AuthenticatedClaims == nil {
++			result.AuthenticatedClaims = make(map[string]interface{})
++		}
++		result.AuthenticatedClaims["sub"] = sub
++		result.AuthenticatedClaims["registry_federation_issuer"] = oauthConfig.Issuer
++	}
++	return result, nil
+ }
+ 
+ // BuildFederatedAuthResult delegates to the underlying OAuth service, which applies attribute mapping
+diff --git a/backend/internal/authn/oidc/service_test.go b/backend/internal/authn/oidc/service_test.go
+--- a/backend/internal/authn/oidc/service_test.go
++++ b/backend/internal/authn/oidc/service_test.go
+@@ -92,6 +92,8 @@
+ }
+ 
+ func (suite *OIDCAuthnServiceTestSuite) TestBuildAuthorizeURLSuccess() {
++	suite.mockOAuthService.On("GetOAuthClientConfig", mock.Anything, testOIDCIDPID).Return(&oauth.OAuthClientConfig{}, nil)
++
+ 	expectedURL := "https://example.com/authorize?client_id=test"
+ 	suite.mockOAuthService.On("BuildAuthorizeURL", mock.Anything, testOIDCIDPID).
+ 		Return(expectedURL, map[string]string{oauth2const.RequestParamState: "test-state"}, nil)
+@@ -104,6 +106,7 @@
+ }
+ 
+ func (suite *OIDCAuthnServiceTestSuite) TestBuildAuthorizeURLError() {
++
+ 	svcErr := &tidcommon.ServiceError{
+ 		Code: "ERROR",
+ 		ErrorDescription: tidcommon.I18nMessage{
+@@ -151,6 +154,7 @@
+ 			name:             "WithoutValidation",
+ 			validateResponse: false,
+ 			setupMocks: func() {
++				suite.mockOAuthService.On("GetOAuthClientConfig", mock.Anything, testOIDCIDPID).Return(&oauth.OAuthClientConfig{}, nil)
+ 				code := "auth_code"
+ 				tokenResp := &oauth.TokenResponse{
+ 					AccessToken: "access_token",
+@@ -336,6 +340,8 @@
+ }
+ 
+ func (suite *OIDCAuthnServiceTestSuite) TestFetchUserInfoSuccess() {
++	suite.mockOAuthService.On("GetOAuthClientConfig", mock.Anything, testOIDCIDPID).Return(&oauth.OAuthClientConfig{}, nil)
++
+ 	accessToken := "access_token"
+ 	userInfo := map[string]interface{}{
+ 		"sub":   "user123",
+@@ -350,6 +356,8 @@
+ }
+ 
+ func (suite *OIDCAuthnServiceTestSuite) TestExchangeCodeForTokenInternalError() {
++	suite.mockOAuthService.On("GetOAuthClientConfig", mock.Anything, testOIDCIDPID).Return(&oauth.OAuthClientConfig{}, nil)
++
+ 	suite.mockOAuthService.On("ExchangeCodeForToken", mock.Anything, testOIDCIDPID, "auth_code", false).
+ 		Return(nil, &tidcommon.ServiceError{Code: "INT-ERR"})
+ 
+@@ -599,6 +607,7 @@
+ }
+ 
+ func (suite *OIDCAuthnServiceTestSuite) TestAuthenticateExchangeCodeError() {
++
+ 	suite.mockOAuthService = oauthmock.NewOAuthAuthnServiceInterfaceMock(suite.T())
+ 	suite.mockJWTService = jwtmock.NewJWTServiceInterfaceMock(suite.T())
+ 
+@@ -607,6 +616,7 @@
+ 	suite.True(ok)
+ 	suite.service = *cast
+ 
++	suite.mockOAuthService.On("GetOAuthClientConfig", mock.Anything, testOIDCIDPID).Return(&oauth.OAuthClientConfig{}, nil)
+ 	suite.mockOAuthService.On("ExchangeCodeForToken", mock.Anything, testOIDCIDPID, "bad_code", false).
+ 		Return(nil, &tidcommon.ServiceError{Code: "TOKEN-ERR"})
+ 
+diff --git a/backend/internal/connection/connection_declarative_model.go b/backend/internal/connection/connection_declarative_model.go
+--- a/backend/internal/connection/connection_declarative_model.go
++++ b/backend/internal/connection/connection_declarative_model.go
+@@ -19,18 +19,22 @@
+ 	Description string `yaml:"description,omitempty" json:"description,omitempty"`
+ 
+ 	// IdP-backed vendor fields (google, github, oidc, oauth).
+-	ClientID              string   `yaml:"clientId,omitempty"              json:"clientId,omitempty"`
+-	ClientSecret          string   `yaml:"clientSecret,omitempty"          json:"clientSecret,omitempty"`
+-	RedirectURI           string   `yaml:"redirectUri,omitempty"           json:"redirectUri,omitempty"`
+-	Scopes                []string `yaml:"scopes,omitempty"                json:"scopes,omitempty"`
+-	Prompt                string   `yaml:"prompt,omitempty"                json:"prompt,omitempty"`
+-	AuthorizationEndpoint string   `yaml:"authorizationEndpoint,omitempty" json:"authorizationEndpoint,omitempty"`
+-	TokenEndpoint         string   `yaml:"tokenEndpoint,omitempty"         json:"tokenEndpoint,omitempty"`
+-	UserInfoEndpoint      string   `yaml:"userInfoEndpoint,omitempty"      json:"userInfoEndpoint,omitempty"`
+-	JwksEndpoint          string   `yaml:"jwksEndpoint,omitempty"          json:"jwksEndpoint,omitempty"`
+-	Issuer                string   `yaml:"issuer,omitempty"                json:"issuer,omitempty"`
+-	TokenExchangeEnabled  *bool    `yaml:"tokenExchangeEnabled,omitempty"  json:"tokenExchangeEnabled,omitempty"`
+-	TrustedTokenAudience  string   `yaml:"trustedTokenAudience,omitempty"  json:"trustedTokenAudience,omitempty"`
++	TokenEndpointAuthMethod string   `yaml:"tokenEndpointAuthMethod,omitempty" json:"tokenEndpointAuthMethod,omitempty"`
++	IDTokenSigningAlg       string   `yaml:"idTokenSigningAlg,omitempty" json:"idTokenSigningAlg,omitempty"`
++	UserInfoSigningAlg      string   `yaml:"userInfoSigningAlg,omitempty" json:"userInfoSigningAlg,omitempty"`
++	RequiredClaims          []string `yaml:"requiredClaims,omitempty" json:"requiredClaims,omitempty"`
++	ClientID                string   `yaml:"clientId,omitempty"              json:"clientId,omitempty"`
++	ClientSecret            string   `yaml:"clientSecret,omitempty"          json:"clientSecret,omitempty"`
++	RedirectURI             string   `yaml:"redirectUri,omitempty"           json:"redirectUri,omitempty"`
++	Scopes                  []string `yaml:"scopes,omitempty"                json:"scopes,omitempty"`
++	Prompt                  string   `yaml:"prompt,omitempty"                json:"prompt,omitempty"`
++	AuthorizationEndpoint   string   `yaml:"authorizationEndpoint,omitempty" json:"authorizationEndpoint,omitempty"`
++	TokenEndpoint           string   `yaml:"tokenEndpoint,omitempty"         json:"tokenEndpoint,omitempty"`
++	UserInfoEndpoint        string   `yaml:"userInfoEndpoint,omitempty"      json:"userInfoEndpoint,omitempty"`
++	JwksEndpoint            string   `yaml:"jwksEndpoint,omitempty"          json:"jwksEndpoint,omitempty"`
++	Issuer                  string   `yaml:"issuer,omitempty"                json:"issuer,omitempty"`
++	TokenExchangeEnabled    *bool    `yaml:"tokenExchangeEnabled,omitempty"  json:"tokenExchangeEnabled,omitempty"`
++	TrustedTokenAudience    string   `yaml:"trustedTokenAudience,omitempty"  json:"trustedTokenAudience,omitempty"`
+ 
+ 	//nolint:lll // long struct tag: both yaml and json keys needed for declarative load/export and import
+ 	AttributeConfiguration *providers.AttributeConfiguration `yaml:"attributeConfiguration,omitempty" json:"attributeConfiguration,omitempty"`
+diff --git a/backend/internal/connection/declarative_resource.go b/backend/internal/connection/declarative_resource.go
+--- a/backend/internal/connection/declarative_resource.go
++++ b/backend/internal/connection/declarative_resource.go
+@@ -218,11 +218,16 @@
+ 	}
+ 
+ 	model := connectionExportModel{
+-		ID:                     dto.ID,
+-		Type:                   vendor,
+-		Name:                   dto.Name,
+-		Description:            dto.Description,
+-		ClientID:               values[idp.PropClientID],
++		ID:                      dto.ID,
++		Type:                    vendor,
++		Name:                    dto.Name,
++		Description:             dto.Description,
++		ClientID:                values[idp.PropClientID],
++		TokenEndpointAuthMethod: values[idp.PropTokenEndpointAuthMethod],
++		IDTokenSigningAlg:       values[idp.PropIDTokenSigningAlg],
++		UserInfoSigningAlg:      values[idp.PropUserInfoSigningAlg],
++		RequiredClaims:          splitScopes(values[idp.PropRequiredClaims]),
++
+ 		ClientSecret:           values[idp.PropClientSecret],
+ 		RedirectURI:            values[idp.PropRedirectURI],
+ 		Scopes:                 splitScopes(values[idp.PropScopes]),
+@@ -309,6 +314,11 @@
+ 		return dto, nil, nil
+ 	case "oidc":
+ 		dto, err := oidcToIDPDTO(oidcConnectionRequest{
++			TokenEndpointAuthMethod: model.TokenEndpointAuthMethod,
++			IDTokenSigningAlg:       model.IDTokenSigningAlg,
++			UserInfoSigningAlg:      model.UserInfoSigningAlg,
++			RequiredClaims:          model.RequiredClaims,
++
+ 			Name: model.Name, Description: model.Description, ClientID: model.ClientID,
+ 			ClientSecret: model.ClientSecret, RedirectURI: model.RedirectURI,
+ 			AuthorizationEndpoint: model.AuthorizationEndpoint, TokenEndpoint: model.TokenEndpoint,
+diff --git a/backend/internal/connection/oidc.go b/backend/internal/connection/oidc.go
+--- a/backend/internal/connection/oidc.go
++++ b/backend/internal/connection/oidc.go
+@@ -13,44 +13,52 @@
+ 
+ // oidcConnectionRequest is the create/update payload for a generic OpenID Connect connection.
+ type oidcConnectionRequest struct {
+-	Name                  string   `json:"name"`
+-	Description           string   `json:"description,omitempty"`
+-	ClientID              string   `json:"clientId"`
+-	ClientSecret          string   `json:"clientSecret"`
+-	RedirectURI           string   `json:"redirectUri"`
+-	AuthorizationEndpoint string   `json:"authorizationEndpoint"`
+-	TokenEndpoint         string   `json:"tokenEndpoint"`
+-	UserInfoEndpoint      string   `json:"userInfoEndpoint,omitempty"`
+-	JwksEndpoint          string   `json:"jwksEndpoint,omitempty"`
+-	Issuer                string   `json:"issuer,omitempty"`
+-	Scopes                []string `json:"scopes,omitempty"`
+-	Prompt                string   `json:"prompt,omitempty"`
+-	TokenExchangeEnabled  *bool    `json:"tokenExchangeEnabled,omitempty"`
+-	TrustedTokenAudience  string   `json:"trustedTokenAudience,omitempty"`
+-	IDJagEnabled          *bool    `json:"idJagEnabled,omitempty"`
++	Name                    string   `json:"name"`
++	Description             string   `json:"description,omitempty"`
++	TokenEndpointAuthMethod string   `json:"tokenEndpointAuthMethod,omitempty"`
++	IDTokenSigningAlg       string   `json:"idTokenSigningAlg,omitempty"`
++	UserInfoSigningAlg      string   `json:"userInfoSigningAlg,omitempty"`
++	RequiredClaims          []string `json:"requiredClaims,omitempty"`
++	ClientID                string   `json:"clientId"`
++	ClientSecret            string   `json:"clientSecret"`
++	RedirectURI             string   `json:"redirectUri"`
++	AuthorizationEndpoint   string   `json:"authorizationEndpoint"`
++	TokenEndpoint           string   `json:"tokenEndpoint"`
++	UserInfoEndpoint        string   `json:"userInfoEndpoint,omitempty"`
++	JwksEndpoint            string   `json:"jwksEndpoint,omitempty"`
++	Issuer                  string   `json:"issuer,omitempty"`
++	Scopes                  []string `json:"scopes,omitempty"`
++	Prompt                  string   `json:"prompt,omitempty"`
++	TokenExchangeEnabled    *bool    `json:"tokenExchangeEnabled,omitempty"`
++	TrustedTokenAudience    string   `json:"trustedTokenAudience,omitempty"`
++	IDJagEnabled            *bool    `json:"idJagEnabled,omitempty"`
+ 
+ 	AttributeConfiguration *providers.AttributeConfiguration `json:"attributeConfiguration,omitempty"`
+ }
+ 
+ // oidcConnectionResponse is the detail payload for an OIDC connection (secret masked).
+ type oidcConnectionResponse struct {
+-	ID                    string   `json:"id"`
+-	Name                  string   `json:"name"`
+-	Description           string   `json:"description,omitempty"`
+-	Type                  string   `json:"type"`
+-	ClientID              string   `json:"clientId,omitempty"`
+-	ClientSecret          string   `json:"clientSecret,omitempty"`
+-	RedirectURI           string   `json:"redirectUri,omitempty"`
+-	AuthorizationEndpoint string   `json:"authorizationEndpoint,omitempty"`
+-	TokenEndpoint         string   `json:"tokenEndpoint,omitempty"`
+-	UserInfoEndpoint      string   `json:"userInfoEndpoint,omitempty"`
+-	JwksEndpoint          string   `json:"jwksEndpoint,omitempty"`
+-	Issuer                string   `json:"issuer,omitempty"`
+-	Scopes                []string `json:"scopes,omitempty"`
+-	Prompt                string   `json:"prompt,omitempty"`
+-	TokenExchangeEnabled  *bool    `json:"tokenExchangeEnabled,omitempty"`
+-	TrustedTokenAudience  string   `json:"trustedTokenAudience,omitempty"`
+-	IDJagEnabled          *bool    `json:"idJagEnabled,omitempty"`
++	ID                      string   `json:"id"`
++	Name                    string   `json:"name"`
++	Description             string   `json:"description,omitempty"`
++	Type                    string   `json:"type"`
++	TokenEndpointAuthMethod string   `json:"tokenEndpointAuthMethod,omitempty"`
++	IDTokenSigningAlg       string   `json:"idTokenSigningAlg,omitempty"`
++	UserInfoSigningAlg      string   `json:"userInfoSigningAlg,omitempty"`
++	RequiredClaims          []string `json:"requiredClaims,omitempty"`
++	ClientID                string   `json:"clientId,omitempty"`
++	ClientSecret            string   `json:"clientSecret,omitempty"`
++	RedirectURI             string   `json:"redirectUri,omitempty"`
++	AuthorizationEndpoint   string   `json:"authorizationEndpoint,omitempty"`
++	TokenEndpoint           string   `json:"tokenEndpoint,omitempty"`
++	UserInfoEndpoint        string   `json:"userInfoEndpoint,omitempty"`
++	JwksEndpoint            string   `json:"jwksEndpoint,omitempty"`
++	Issuer                  string   `json:"issuer,omitempty"`
++	Scopes                  []string `json:"scopes,omitempty"`
++	Prompt                  string   `json:"prompt,omitempty"`
++	TokenExchangeEnabled    *bool    `json:"tokenExchangeEnabled,omitempty"`
++	TrustedTokenAudience    string   `json:"trustedTokenAudience,omitempty"`
++	IDJagEnabled            *bool    `json:"idJagEnabled,omitempty"`
+ 
+ 	AttributeConfiguration *providers.AttributeConfiguration `json:"attributeConfiguration,omitempty"`
+ }
+@@ -64,6 +72,11 @@
+ 		isSecret bool
+ 	}{
+ 		{idp.PropClientID, req.ClientID, false},
++		{idp.PropTokenEndpointAuthMethod, req.TokenEndpointAuthMethod, false},
++		{idp.PropIDTokenSigningAlg, req.IDTokenSigningAlg, false},
++		{idp.PropUserInfoSigningAlg, req.UserInfoSigningAlg, false},
++		{idp.PropRequiredClaims, joinScopes(req.RequiredClaims), false},
++
+ 		{idp.PropClientSecret, req.ClientSecret, true},
+ 		{idp.PropRedirectURI, req.RedirectURI, false},
+ 		{idp.PropAuthorizationEndpoint, req.AuthorizationEndpoint, false},
+@@ -115,11 +128,16 @@
+ 		return oidcConnectionResponse{}, err
+ 	}
+ 	resp := oidcConnectionResponse{
+-		ID:                    dto.ID,
+-		Name:                  dto.Name,
+-		Description:           dto.Description,
+-		Type:                  connectionTypeName(dto.Type),
+-		ClientID:              values[idp.PropClientID],
++		ID:                      dto.ID,
++		Name:                    dto.Name,
++		Description:             dto.Description,
++		Type:                    connectionTypeName(dto.Type),
++		ClientID:                values[idp.PropClientID],
++		TokenEndpointAuthMethod: values[idp.PropTokenEndpointAuthMethod],
++		IDTokenSigningAlg:       values[idp.PropIDTokenSigningAlg],
++		UserInfoSigningAlg:      values[idp.PropUserInfoSigningAlg],
++		RequiredClaims:          splitScopes(values[idp.PropRequiredClaims]),
++
+ 		ClientSecret:          values[idp.PropClientSecret],
+ 		RedirectURI:           values[idp.PropRedirectURI],
+ 		AuthorizationEndpoint: values[idp.PropAuthorizationEndpoint],
+diff --git a/backend/internal/flow/executor/auth_assert_executor.go b/backend/internal/flow/executor/auth_assert_executor.go
+--- a/backend/internal/flow/executor/auth_assert_executor.go
++++ b/backend/internal/flow/executor/auth_assert_executor.go
+@@ -5,6 +5,7 @@
+ 
+ import (
+ 	"context"
++	"encoding/json"
+ 	"errors"
+ 	"slices"
+ 	"sort"
+@@ -275,6 +276,18 @@
+ 		return "", attrErr
+ 	}
+ 
++	// User attributes can never supply the server-only consent binding.
++	delete(resolvedAttributes, providers.DelegationConsentCacheKey)
++	delete(resolvedAttributes, providers.DelegationConsentPolicyKey)
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		var binding providers.DelegationConsentBinding
++		if json.Unmarshal([]byte(ctx.RuntimeData[providers.DelegationConsentCacheKey]), &binding) != nil || binding.AuthorizationID == "" || binding.UserID != entityRef.EntityID || binding.AppID != ctx.Application.ID {
++			return "", errors.New("fresh citizen consent binding is missing")
++		}
++		binding.Subject = tokenSub
++		encoded, _ := json.Marshal(binding)
++		resolvedAttributes[providers.DelegationConsentCacheKey] = string(encoded)
++	}
+ 	if ttlSecondsStr, exists := ctx.RuntimeData[common.RuntimeKeyUserAttributesCacheTTLSeconds]; exists {
+ 		// We are not in an App Native flow, so we need to cache the user attributes
+ 		if len(resolvedAttributes) > 0 {
+diff --git a/backend/internal/flow/executor/consent_executor.go b/backend/internal/flow/executor/consent_executor.go
+--- a/backend/internal/flow/executor/consent_executor.go
++++ b/backend/internal/flow/executor/consent_executor.go
+@@ -4,9 +4,12 @@
+ package executor
+ 
+ import (
++	"context"
+ 	"encoding/json"
+ 	"errors"
++	"fmt"
+ 	"html"
++	"reflect"
+ 	"slices"
+ 	"strconv"
+ 	"strings"
+@@ -106,6 +109,11 @@
+ 		return execResp, errors.New("Failed to get entity reference from AuthUser")
+ 	}
+ 
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil && (entityRef == nil || entityRef.EntityCategory != string(providers.EntityCategoryUser)) {
++		execResp.Status = providers.ExecFailure
++		execResp.Error = &ErrUserNotAuthenticated
++		return execResp, nil
++	}
+ 	availableAttrs, svcErr := e.authnProvider.GetUserAvailableAttributes(ctx.Context, execResp.AuthUser)
+ 	execResp.AuthUser = authUser
+ 	if svcErr != nil {
+@@ -141,6 +149,28 @@
+ 	availableAttributes := e.buildAugmentedAvailableAttributes(availableAttrResp, entityRef)
+ 	appName := ctx.Application.Name
+ 	forceReprompt := ctx.RuntimeData[common.RuntimeKeyForceConsentReprompt] == "true"
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		if consent.Delegation.Validate() != nil || consent.ValidityPeriod <= 0 || consent.ValidityPeriod > 300 || ctx.RuntimeData[common.RuntimeKeyResourceServerIdentifier] != consent.Delegation.Resource {
++			return nil, errors.New("citizen delegation policy is invalid")
++		}
++		requested := strings.Fields(ctx.RuntimeData[common.RuntimeKeyRequestedPermissions])
++		if len(requested) == 0 {
++			return nil, errors.New("citizen delegation requires requested permissions")
++		}
++		for _, scope := range requested {
++			if _, ok := consent.Delegation.ScopeFields[scope]; !ok {
++				return nil, errors.New("permission has no consent field description")
++			}
++		}
++		if existing, ok := ctx.RuntimeData["authorized_permissions"]; ok {
++			requested = strings.Fields(intersectPermissionSpaceList(strings.Join(requested, " "), existing))
++		}
++		authorizedPermissions = requested
++		forceReprompt = true
++		execResp.AdditionalData["citizenConsentWithdrawal"] = "true"
++		policy, _ := json.Marshal(consent.Delegation)
++		execResp.RuntimeData[providers.DelegationConsentPolicyKey] = string(policy)
++	}
+ 
+ 	// Resolve consent to determine if any required consents are missing and need to be prompted
+ 	promptData, svcErr := e.consentEnforcer.ResolveConsent(
+@@ -166,6 +196,20 @@
+ 		return execResp, nil
+ 	}
+ 
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		for i := range promptData.Purposes {
++			prompt := &promptData.Purposes[i]
++			fields := []string{}
++			for _, scope := range authorizedPermissions {
++				for _, field := range consent.Delegation.ScopeFields[scope] {
++					if !slices.Contains(fields, field) {
++						fields = append(fields, field)
++					}
++				}
++			}
++			prompt.Description = fmt.Sprintf("%s may use %s for %s. Fields: %s. Access lasts at most %d seconds. A later request requires your consent again.", appName, consent.Delegation.Resource, consent.Delegation.Purpose, strings.Join(fields, ", "), consent.ValidityPeriod)
++		}
++	}
+ 	// Consent is needed — forward prompt data to the prompt node via ForwardedData
+ 	promptJSON, err := json.Marshal(promptData.Purposes)
+ 	if err != nil {
+@@ -227,6 +271,29 @@
+ 	}
+ 
+ 	failOnDeny, _ := ctx.NodeProperties[propertyKeyConsentFailOnDeny].(bool)
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		failOnDeny = true
++		var shown providers.DelegationConsentConfig
++		if json.Unmarshal([]byte(ctx.RuntimeData[providers.DelegationConsentPolicyKey]), &shown) != nil || !reflect.DeepEqual(shown, *consent.Delegation) {
++			return nil, errors.New("citizen consent policy changed during prompt")
++		}
++	}
++
++	if decisions.Reason == providers.ConsentDecisionReason("withdrawal") {
++		consent := ctx.Application.LoginConsent
++		withdrawer, ok := e.consentEnforcer.(interface {
++			WithdrawAuthenticatedConsent(context.Context, string, string) *tidcommon.ServiceError
++		})
++		if consent == nil || consent.Delegation == nil || !ok {
++			return nil, errors.New("citizen withdrawal is not configured")
++		}
++		if err := withdrawer.WithdrawAuthenticatedConsent(ctx.Context, appID, userID); err != nil {
++			return nil, errors.New("citizen withdrawal could not be recorded")
++		}
++		execResp.Status = providers.ExecFailure
++		execResp.Error = &tidcommon.ServiceError{Type: tidcommon.ClientErrorType, Code: "CITIZEN-CONSENT-WITHDRAWN", Error: tidcommon.I18nMessage{DefaultValue: "Access withdrawn"}, ErrorDescription: tidcommon.I18nMessage{DefaultValue: "This agent's consent has been withdrawn. No new access was issued."}}
++		return execResp, nil
++	}
+ 
+ 	// A timed out prompt is not a user decision, so nothing is recorded and nothing is consented.
+ 	// The expiry check below is skipped because such a submission is expected to arrive late.
+@@ -255,6 +322,14 @@
+ 				return execResp, nil
+ 			}
+ 		}
++	}
++
++	// Declining this request does not withdraw an earlier approval. Withdrawal
++	// is an explicit, separately authenticated action above.
++	if c := ctx.Application.LoginConsent; c != nil && c.Delegation != nil && !decisions.Approved {
++		execResp.Status = providers.ExecFailure
++		execResp.Error = &ErrConsentDenied
++		return execResp, nil
+ 	}
+ 
+ 	// Determine validity period from the application config
+@@ -309,10 +384,30 @@
+ 	// understand the full consent data structure. Both keys are always set (even if empty) so
+ 	// auth assert knows that the consent step ran and can apply the appropriate precedence chain.
+ 	consentedAttrs := collectApprovedElementsByPurposeName(consentRecord, buildAttributePurposeName(appID))
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		essential, optional := e.getRequiredAttributes(ctx)
++		consentedAttrs = strings.Fields(intersectPermissionSpaceList(strings.Join(consentedAttrs, " "), strings.Join(append(essential, optional...), " ")))
++	}
+ 	execResp.RuntimeData[common.RuntimeKeyConsentedAttributes] = strings.Join(consentedAttrs, " ")
+ 	consentedPerms := collectApprovedElementsByPurposeName(consentRecord, buildPermissionsPurposeName(appID))
+ 	execResp.RuntimeData[common.RuntimeKeyConsentedPermissions] = strings.Join(consentedPerms, " ")
+ 
++	if consent := ctx.Application.LoginConsent; consent != nil && consent.Delegation != nil {
++		binding := providers.DelegationConsentBinding{ConsentID: consentRecord.ID, AppID: appID, UserID: userID, ValidityPeriod: consent.ValidityPeriod, Deadline: consentRecord.ValidityTime, Policy: *consent.Delegation, Scopes: consentedPerms, Attributes: consentedAttrs}
++		for _, authorization := range consentRecord.Authorizations {
++			if authorization.UserID == userID && authorization.Status == providers.AuthorizationStatusApproved {
++				binding.AuthorizationID = authorization.ID
++			}
++		}
++		if binding.AuthorizationID == "" || binding.Deadline <= time.Now().Unix() || binding.Deadline > time.Now().Unix()+300 {
++			return nil, errors.New("consent authorization binding is missing or expired")
++		}
++		// Merged native records may include earlier scopes. Retain only this attempt's prompt.
++		binding.Scopes = strings.Fields(intersectPermissionSpaceList(strings.Join(binding.Scopes, " "), ctx.RuntimeData[common.RuntimeKeyRequestedPermissions]))
++		execResp.RuntimeData[common.RuntimeKeyConsentedPermissions] = strings.Join(binding.Scopes, " ")
++		encoded, _ := json.Marshal(binding)
++		execResp.RuntimeData[providers.DelegationConsentCacheKey] = string(encoded)
++	}
+ 	logger.Debug(ctx.Context, "Consent recorded successfully", log.String("consentID", consentRecord.ID))
+ 	execResp.Status = providers.ExecComplete
+ 	return execResp, nil
+diff --git a/backend/internal/flow/executor/consent_executor_test.go b/backend/internal/flow/executor/consent_executor_test.go
+--- a/backend/internal/flow/executor/consent_executor_test.go
++++ b/backend/internal/flow/executor/consent_executor_test.go
+@@ -1926,3 +1926,53 @@
+ 
+ 	assert.Nil(suite.T(), result)
+ }
++
++type withdrawalConsent struct {
++	providers.ConsentProvider
++	appID, userID string
++	calls         int
++}
++
++func (c *withdrawalConsent) WithdrawAuthenticatedConsent(_ context.Context, appID, userID string) *tidcommon.ServiceError {
++	c.appID = appID
++	c.userID = userID
++	c.calls++
++	return nil
++}
++func (suite *ConsentExecutorTestSuite) TestCitizenWithdrawalAndDeclineAreDistinct() {
++	ctx := buildConsentNodeContext()
++	policy := &providers.DelegationConsentConfig{Purpose: "Read status", Resource: "urn:records", ScopeFields: map[string][]string{"read": {"status"}}}
++	ctx.Application.LoginConsent = &providers.LoginConsentConfig{ValidityPeriod: 300, Delegation: policy}
++	raw, _ := json.Marshal(policy)
++	ctx.RuntimeData[providers.DelegationConsentPolicyKey] = string(raw)
++	withdrawer := &withdrawalConsent{ConsentProvider: suite.mockConsentEnforcer}
++	suite.executor.consentEnforcer = withdrawer
++	ctx.UserInputs[userInputConsentDecisions] = `{"approved":false}`
++	response, err := suite.executor.handleConsentDecisions(ctx, &providers.ExecutorResponse{}, "ou", "server-agent", "verified-citizen")
++	suite.NoError(err)
++	suite.Equal(providers.ExecFailure, response.Status)
++	suite.Zero(withdrawer.calls)
++	ctx.UserInputs[userInputConsentDecisions] = `{"approved":false,"reason":"withdrawal"}`
++	response, err = suite.executor.handleConsentDecisions(ctx, &providers.ExecutorResponse{}, "ou", "server-agent", "verified-citizen")
++	suite.NoError(err)
++	suite.Equal(providers.ExecFailure, response.Status)
++	suite.Equal("CITIZEN-CONSENT-WITHDRAWN", response.Error.Code)
++	suite.Equal(1, withdrawer.calls)
++	suite.Equal("server-agent", withdrawer.appID)
++	suite.Equal("verified-citizen", withdrawer.userID)
++	suite.mockConsentEnforcer.AssertNotCalled(suite.T(), "RecordConsent", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything)
++}
++
++func (suite *ConsentExecutorTestSuite) TestCitizenWithdrawalRequiresVerifiedHuman() {
++	ctx := buildConsentNodeContext()
++	ctx.Application.LoginConsent = &providers.LoginConsentConfig{ValidityPeriod: 300, Delegation: &providers.DelegationConsentConfig{Purpose: "Read status", Resource: "urn:records", ScopeFields: map[string][]string{"read": {"status"}}}}
++	ctx.UserInputs[userInputConsentDecisions] = `{"approved":false,"reason":"withdrawal"}`
++	suite.executor.Executor.(*coremock.ExecutorInterfaceMock).On("ValidatePrerequisites", ctx, mock.Anything, mock.Anything).Return(true)
++	ref := buildConsentEntityRef()
++	ref.EntityCategory = string(providers.EntityCategoryAgent)
++	suite.mockAuthnProvider.On("GetEntityReference", mock.Anything, mock.Anything).Return(buildConsentAuthUser(), ref, (*tidcommon.ServiceError)(nil))
++	response, err := suite.executor.Execute(ctx)
++	suite.NoError(err)
++	suite.Equal(providers.ExecFailure, response.Status)
++	suite.Equal(ErrUserNotAuthenticated.Code, response.Error.Code)
++}
+diff --git a/backend/internal/flow/executor/oidc_auth_executor.go b/backend/internal/flow/executor/oidc_auth_executor.go
+--- a/backend/internal/flow/executor/oidc_auth_executor.go
++++ b/backend/internal/flow/executor/oidc_auth_executor.go
+@@ -131,6 +131,9 @@
+ 		return nil, errors.New("OIDC nonce is missing in the authorization flow")
+ 	}
+ 	execResp.RuntimeData[common.RuntimeKeyOIDCNonce] = nonce
++	if verifier, ok := metadata["code_verifier"]; ok {
++		execResp.RuntimeData["oidc_code_verifier"] = verifier
++	}
+ 
+ 	return metadata, nil
+ }
+@@ -150,6 +153,11 @@
+ 	// Validate the OAuth state parameter to prevent CSRF attacks.
+ 	// State is validated only when the client sends it back. Clients that handle CSRF
+ 	// protection client-side (e.g., via sessionStorage) may omit it.
++	if ctx.RuntimeData["oidc_code_verifier"] != "" && (ctx.RuntimeData[common.RuntimeKeyOAuthState] == "" || ctx.UserInputs[userInputState] != ctx.RuntimeData[common.RuntimeKeyOAuthState]) {
++		execResp.Status = providers.ExecFailure
++		execResp.Error = &ErrInvalidOAuthState
++		return nil
++	}
+ 	if returnedState, ok := ctx.UserInputs[userInputState]; ok && returnedState != "" {
+ 		expectedState := ctx.RuntimeData[common.RuntimeKeyOAuthState]
+ 		if returnedState != expectedState {
+@@ -186,8 +194,9 @@
+ 			IDPID:   idpID,
+ 			IDPType: o.idpType,
+ 			AuthorizationData: authncm.AuthorizationData{
+-				Code:  code,
+-				Nonce: ctx.RuntimeData[common.RuntimeKeyOIDCNonce],
++				Code:         code,
++				Nonce:        ctx.RuntimeData[common.RuntimeKeyOIDCNonce],
++				CodeVerifier: ctx.RuntimeData["oidc_code_verifier"],
+ 			},
+ 		},
+ 	}
+diff --git a/backend/internal/flow/executor/oidc_auth_executor_test.go b/backend/internal/flow/executor/oidc_auth_executor_test.go
+--- a/backend/internal/flow/executor/oidc_auth_executor_test.go
++++ b/backend/internal/flow/executor/oidc_auth_executor_test.go
+@@ -1146,3 +1146,14 @@
+ 	assert.Contains(suite.T(), err.Error(), "OIDC authentication failed")
+ 	suite.mockAuthnProvider.AssertExpectations(suite.T())
+ }
++
++func (suite *OIDCAuthExecutorTestSuite) TestPrivateFederationRequiresReturnedState() {
++	for _, returned := range []string{"", "different-state"} {
++		ctx := &providers.NodeContext{ExecutionID: "fixture", UserInputs: map[string]string{"code": "synthetic-code", "state": returned}, RuntimeData: map[string]string{"oidc_code_verifier": "server-held", common.RuntimeKeyOAuthState: "expected-state"}}
++		resp := &providers.ExecutorResponse{}
++		err := suite.executor.ProcessAuthFlowResponse(ctx, resp)
++		suite.NoError(err)
++		suite.Equal(providers.ExecFailure, resp.Status)
++		suite.Equal(ErrInvalidOAuthState.Code, resp.Error.Code)
++	}
++}
+diff --git a/backend/internal/idp/constants.go b/backend/internal/idp/constants.go
+--- a/backend/internal/idp/constants.go
++++ b/backend/internal/idp/constants.go
+@@ -7,7 +7,12 @@
+ 
+ // IDP property names.
+ const (
+-	PropClientID              = "client_id"
++	PropClientID                = "client_id"
++	PropTokenEndpointAuthMethod = "token_endpoint_auth_method"
++	PropIDTokenSigningAlg       = "id_token_signing_alg"
++	PropUserInfoSigningAlg      = "userinfo_signing_alg"
++	PropRequiredClaims          = "required_claims"
++
+ 	PropClientSecret          = "client_secret"
+ 	PropRedirectURI           = "redirect_uri"
+ 	PropScopes                = "scopes"
+@@ -102,6 +107,10 @@
+ 			PropTokenExchangeEnabled,
+ 			PropTrustedTokenAudience,
+ 			PropIDJagEnabled,
++			PropTokenEndpointAuthMethod,
++			PropIDTokenSigningAlg,
++			PropUserInfoSigningAlg,
++			PropRequiredClaims,
+ 		},
+ 		Defaults: map[string]string{},
+ 	},
+diff --git a/backend/internal/idp/utils.go b/backend/internal/idp/utils.go
+--- a/backend/internal/idp/utils.go
++++ b/backend/internal/idp/utils.go
+@@ -345,6 +345,20 @@
+ 			requiredProps = teProps
+ 		}
+ 	}
++	if idpType == providers.IDPTypeOIDC {
++		if method, ok := filteredPropsMap[PropTokenEndpointAuthMethod]; ok {
++			value, err := method.GetValue()
++			if err != nil || value != "private_key_jwt" {
++				return nil, &ErrorInvalidIDPProperty
++			}
++			if _, exists := filteredPropsMap[PropClientSecret]; exists {
++				return nil, &ErrorInvalidIDPProperty
++			}
++			requiredProps = []string{PropClientID, PropRedirectURI, PropAuthorizationEndpoint,
++				PropTokenEndpoint, PropUserInfoEndpoint, PropJwksEndpoint, PropIssuer,
++				PropIDTokenSigningAlg, PropUserInfoSigningAlg, PropRequiredClaims}
++		}
++	}
+ 	for _, requiredProp := range requiredProps {
+ 		if !slices.Contains(filteredPropKeys, requiredProp) {
+ 			return nil, tidcommon.CustomServiceError(ErrorInvalidIDPProperty, tidcommon.I18nMessage{
+diff --git a/backend/internal/oauth/init.go b/backend/internal/oauth/init.go
+--- a/backend/internal/oauth/init.go
++++ b/backend/internal/oauth/init.go
+@@ -56,6 +56,7 @@
+ 	enforcementService revocation.EnforcementServiceInterface,
+ 	revocationSvc revocation.RevocationServiceInterface,
+ 	cfg oauthconfig.Config,
++	consentProvider providers.ConsentProvider,
+ ) (tokenservice.TokenValidatorInterface, error) {
+ 	jwks.Initialize(mux, runtimeCrypto)
+ 	httpClient := syshttp.NewHTTPClientWithCheckRedirect(func(req *http.Request, _ []*http.Request) error {
+@@ -96,7 +97,7 @@
+ 	grantHandlerProvider := granthandlers.Initialize(
+ 		jwtService, oauth2AuthzService, tokenBuilder, tokenValidator,
+ 		attributeCacheSvc, ouService, authzService, actorProvider, resourceService,
+-		cibaService, revocationSvc, revocationSvc, cfg)
++		cibaService, revocationSvc, revocationSvc, cfg, consentProvider)
+ 
+ 	token.Initialize(mux, jwtService, actorProvider, authnProvider, grantHandlerProvider,
+ 		scopeValidator, observabilitySvc, discoveryService, dpopVerifier, jtiStore, cfg)
+diff --git a/backend/internal/oauth/oauth2/authz/service.go b/backend/internal/oauth/oauth2/authz/service.go
+--- a/backend/internal/oauth/oauth2/authz/service.go
++++ b/backend/internal/oauth/oauth2/authz/service.go
+@@ -408,6 +408,20 @@
+ 		}
+ 	}
+ 
++	if app.EntityCategory == providers.EntityCategoryAgent {
++		inbound, err := as.inboundClient.GetInboundClientByID(ctx, app.ID)
++		if providers.ValidateCitizenCodeClient(app) != nil || err != nil || inbound == nil || inbound.LoginConsent == nil ||
++			inbound.LoginConsent.Delegation.Validate() != nil || inbound.LoginConsent.ValidityPeriod <= 0 || inbound.LoginConsent.ValidityPeriod > 300 ||
++			len(oauthParams.Resources) != 1 || oauthParams.Resources[0] != inbound.LoginConsent.Delegation.Resource || len(oauthParams.PermissionScopes) == 0 {
++			return nil, &AuthorizationError{Code: oauth2const.ErrorInvalidRequest, Message: "Citizen agent authorization configuration or resource is invalid"}
++		}
++		for _, scope := range oauthParams.PermissionScopes {
++			if _, ok := inbound.LoginConsent.Delegation.ScopeFields[scope]; !ok {
++				return nil, &AuthorizationError{Code: oauth2const.ErrorInvalidScope, Message: "Scope has no governed consent field description"}
++			}
++		}
++	}
++
+ 	// Initiate flow with OAuth context.
+ 	runtimeData := map[string]string{
+ 		flowcm.RuntimeKeyClientID:                      oauthParams.ClientID,
+@@ -422,7 +436,7 @@
+ 	if effectiveAcrValues != "" {
+ 		runtimeData[flowcm.RuntimeKeyRequestedAuthClasses] = effectiveAcrValues
+ 	}
+-	if slices.Contains(strings.Fields(oauthParams.Prompt), oauth2const.PromptConsent) {
++	if app.EntityCategory == providers.EntityCategoryAgent || slices.Contains(strings.Fields(oauthParams.Prompt), oauth2const.PromptConsent) {
+ 		runtimeData[flowcm.RuntimeKeyForceConsentReprompt] = "true"
+ 	}
+ 	if oauthParams.MaxAge != "" {
+diff --git a/backend/internal/oauth/oauth2/granthandlers/authorization_code.go b/backend/internal/oauth/oauth2/granthandlers/authorization_code.go
+--- a/backend/internal/oauth/oauth2/granthandlers/authorization_code.go
++++ b/backend/internal/oauth/oauth2/granthandlers/authorization_code.go
+@@ -24,10 +24,12 @@
+ 
+ // authorizationCodeGrantHandler handles the authorization code grant type.
+ type authorizationCodeGrantHandler struct {
+-	authzService    authz.AuthorizeServiceInterface
+-	tokenBuilder    tokenservice.TokenBuilderInterface
+-	attributeCache  attributecache.AttributeCacheServiceInterface
+-	resourceService providers.ResourceServerProvider
++	actorProvider    providers.ActorProvider
++	consentValidator consentAuthorizationValidator
++	authzService     authz.AuthorizeServiceInterface
++	tokenBuilder     tokenservice.TokenBuilderInterface
++	attributeCache   attributecache.AttributeCacheServiceInterface
++	resourceService  providers.ResourceServerProvider
+ }
+ 
+ // newAuthorizationCodeGrantHandler creates a new instance of AuthorizationCodeGrantHandler.
+@@ -150,6 +152,18 @@
+ 		accessTokenScopes = append(accessTokenScopes, downscopedNonOidc...)
+ 	}
+ 
++	var consentBinding *providers.DelegationConsentBinding
++	if oauthApp.EntityCategory == providers.EntityCategoryAgent {
++		binding, err := h.validateCitizenConsent(ctx, oauthApp, authCode, attrs, accessTokenAudiences, accessTokenScopes)
++		if err != nil {
++			return nil, err
++		}
++		consentBinding = binding
++		stripCitizenAuthority(attrs)
++	}
++	delete(attrs, "registry_actor_kind")
++	delete(attrs, providers.DelegationConsentCacheKey)
++	delete(attrs, providers.DelegationConsentPolicyKey)
+ 	// Generate access token using tokenBuilder (attributes will be filtered in BuildAccessToken)
+ 	userSubConfig := oauthApp.UserAccessTokenConfig()
+ 	accessTokenCtx := &tokenservice.AccessTokenBuildContext{
+@@ -166,6 +180,26 @@
+ 		ValidityPeriod:    userSubConfig.ValidityPeriodOrZero(),
+ 		DPoPJkt:           dpop.GetJkt(ctx),
+ 		TokenFamilyID:     authCode.TokenFamilyID,
++	}
++	if consentBinding != nil {
++		if accessTokenCtx.SubjectAttributes == nil {
++			accessTokenCtx.SubjectAttributes = make(map[string]interface{})
++		}
++		accessTokenCtx.SubjectAttributes["registry_actor_kind"] = "agent"
++		accessTokenCtx.SubjectAttributes["registry_purpose"] = consentBinding.Policy.Purpose
++		if source := consentBinding.Policy.SubjectAttribute; source != "" {
++			accessTokenCtx.SubjectAttributes["registry_subject_person_reference"] = attrs[source]
++		}
++		if status := consentBinding.Policy.IdentityStatus; status != "" {
++			accessTokenCtx.SubjectAttributes["registry_identity_status"] = status
++		}
++		remaining := consentBinding.Deadline - time.Now().Unix()
++		if remaining <= 0 {
++			return nil, &model.ErrorResponse{Error: constants.ErrorInvalidGrant, ErrorDescription: "Citizen consent expired"}
++		}
++		if accessTokenCtx.ValidityPeriod > remaining {
++			accessTokenCtx.ValidityPeriod = remaining
++		}
+ 	}
+ 	if oauthApp.ShouldAppendActorClaim() {
+ 		accessTokenCtx.ActorClaims = &tokenservice.SubjectTokenClaims{Sub: oauthApp.ID}
+diff --git a/backend/internal/oauth/oauth2/granthandlers/authorization_code_test.go b/backend/internal/oauth/oauth2/granthandlers/authorization_code_test.go
+--- a/backend/internal/oauth/oauth2/granthandlers/authorization_code_test.go
++++ b/backend/internal/oauth/oauth2/granthandlers/authorization_code_test.go
+@@ -342,8 +342,7 @@
+ 		includeActClaim bool
+ 		expectActor     bool
+ 	}{
+-		{name: "AgentClientAlwaysAppendsActor", entityCategory: providers.EntityCategoryAgent,
+-			includeActClaim: false, expectActor: true},
++
+ 		{name: "AppClientWithoutFlagOmitsActor", entityCategory: providers.EntityCategoryApp,
+ 			includeActClaim: false, expectActor: false},
+ 		{name: "AppClientWithFlagAppendsActor", entityCategory: providers.EntityCategoryApp,
+diff --git a/backend/internal/oauth/oauth2/granthandlers/citizen_consent.go b/backend/internal/oauth/oauth2/granthandlers/citizen_consent.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/oauth/oauth2/granthandlers/citizen_consent.go
+@@ -0,0 +1,70 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package granthandlers
++
++import (
++	"context"
++	"encoding/json"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/authz"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/model"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++	"reflect"
++	"slices"
++	"strings"
++	"time"
++)
++
++type consentAuthorizationValidator interface {
++	ValidateConsentAuthorization(context.Context, providers.DelegationConsentBinding) *tidcommon.ServiceError
++}
++
++func (h *authorizationCodeGrantHandler) validateCitizenConsent(ctx context.Context, c *providers.OAuthClient, code *authz.AuthorizationCode, attrs map[string]interface{}, resources []string, scopes []string) (*providers.DelegationConsentBinding, *model.ErrorResponse) {
++	refusal := &model.ErrorResponse{Error: constants.ErrorInvalidGrant, ErrorDescription: "Fresh citizen consent is missing, withdrawn, expired, or changed"}
++	if providers.ValidateCitizenCodeClient(c) != nil || h.actorProvider == nil || h.consentValidator == nil {
++		return nil, refusal
++	}
++	inbound, err := h.actorProvider.GetInboundClientByID(ctx, c.ID)
++	if err != nil || inbound == nil || inbound.LoginConsent == nil || inbound.LoginConsent.Delegation.Validate() != nil {
++		return nil, refusal
++	}
++	raw, ok := attrs[providers.DelegationConsentCacheKey].(string)
++	if !ok || len(raw) > 64*1024 {
++		return nil, refusal
++	}
++	var binding providers.DelegationConsentBinding
++	if json.Unmarshal([]byte(raw), &binding) != nil || binding.Subject != code.AuthorizedUserID || binding.AppID != c.ID || binding.AuthorizationID == "" ||
++		binding.ValidityPeriod != inbound.LoginConsent.ValidityPeriod || binding.ValidityPeriod <= 0 || binding.ValidityPeriod > 300 || binding.Deadline <= time.Now().Unix() || !reflect.DeepEqual(binding.Policy, *inbound.LoginConsent.Delegation) || len(resources) != 1 || resources[0] != binding.Policy.Resource || len(binding.Scopes) == 0 {
++		return nil, refusal
++	}
++	for _, scope := range scopes {
++		if _, oidc := constants.StandardOIDCScopes[scope]; !oidc && !slices.Contains(binding.Scopes, scope) {
++			return nil, refusal
++		}
++	}
++	for key := range attrs {
++		if key != providers.DelegationConsentCacheKey && !slices.Contains(binding.Attributes, key) {
++			delete(attrs, key)
++		}
++	}
++	if name := binding.Policy.SubjectAttribute; name != "" {
++		value, ok := attrs[name].(string)
++		if !ok || strings.TrimSpace(value) == "" || len(value) > 1024 || !slices.Contains(binding.Attributes, name) {
++			return nil, refusal
++		}
++	}
++	if h.consentValidator.ValidateConsentAuthorization(ctx, binding) != nil {
++		return nil, refusal
++	}
++	return &binding, nil
++}
++
++func stripCitizenAuthority(attrs map[string]interface{}) {
++	for key := range attrs {
++		if strings.HasPrefix(key, "registry_grant_") || key == "registry_approver" || key == "identity" || key == "registry_subject_person_reference" || key == "registry_identity_status" || key == providers.DelegationConsentCacheKey || key == providers.DelegationConsentPolicyKey {
++			delete(attrs, key)
++		}
++	}
++}
+diff --git a/backend/internal/oauth/oauth2/granthandlers/citizen_consent_test.go b/backend/internal/oauth/oauth2/granthandlers/citizen_consent_test.go
+new file mode 100644
+--- /dev/null
++++ b/backend/internal/oauth/oauth2/granthandlers/citizen_consent_test.go
+@@ -0,0 +1,148 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++package granthandlers
++
++import (
++	"context"
++	"encoding/json"
++	"github.com/stretchr/testify/mock"
++	"github.com/stretchr/testify/require"
++	"github.com/thunder-id/thunderid/internal/attributecache"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/authz"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/constants"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/model"
++	"github.com/thunder-id/thunderid/internal/oauth/oauth2/tokenservice"
++	tidcommon "github.com/thunder-id/thunderid/pkg/thunderidengine/common"
++	"github.com/thunder-id/thunderid/pkg/thunderidengine/providers"
++	"testing"
++	"time"
++)
++
++type citizenActor struct {
++	providers.ActorProvider
++	inbound *providers.InboundClient
++}
++
++func (a citizenActor) GetInboundClientByID(context.Context, string) (*providers.InboundClient, *tidcommon.ServiceError) {
++	return a.inbound, nil
++}
++
++type citizenConsent struct{ failed bool }
++
++func (c citizenConsent) ValidateConsentAuthorization(context.Context, providers.DelegationConsentBinding) *tidcommon.ServiceError {
++	if c.failed {
++		return &tidcommon.InternalServerError
++	}
++	return nil
++}
++
++func citizenFixture() (*authorizationCodeGrantHandler, *providers.OAuthClient, *authz.AuthorizationCode, providers.DelegationConsentBinding) {
++	policy := providers.DelegationConsentConfig{SubjectAttribute: "person_reference", IdentityStatus: "active", Purpose: "Read eligibility", Resource: "urn:registry:citizen", ScopeFields: map[string][]string{"records:read": {"eligibility"}}}
++	client := &providers.OAuthClient{ID: "native-agent-entity", ClientID: "oauth-client", EntityCategory: providers.EntityCategoryAgent,
++		PKCERequired: true, GrantTypes: []providers.GrantType{providers.GrantTypeAuthorizationCode}, ResponseTypes: []providers.ResponseType{providers.ResponseTypeCode}, RedirectURIs: []string{"https://agent.example/callback"},
++		Token: &providers.OAuthTokenConfig{AccessToken: &providers.AccessTokenConfig{UserConfig: &providers.AccessTokenSubConfig{ValidityPeriod: 300, Attributes: []string{"person_reference"}}}}}
++	binding := providers.DelegationConsentBinding{ConsentID: "consent", AuthorizationID: "fresh-authorization", UserID: "native-citizen", Subject: "pairwise-citizen", AppID: client.ID, ValidityPeriod: 300, Deadline: time.Now().Unix() + 120, Policy: policy, Scopes: []string{"records:read"}, Attributes: []string{"person_reference"}}
++	h := &authorizationCodeGrantHandler{actorProvider: citizenActor{inbound: &providers.InboundClient{LoginConsent: &providers.LoginConsentConfig{Delegation: &policy, ValidityPeriod: 300}}}, consentValidator: citizenConsent{}}
++	return h, client, &authz.AuthorizationCode{AuthorizedUserID: "pairwise-citizen"}, binding
++}
++func TestCitizenCodeRequiresTrustedCurrentBinding(t *testing.T) {
++	for _, scenario := range []string{"ok", "missing-cache", "forged-json", "other-subject", "other-agent", "expired", "purpose-changed", "fields-changed", "resource-changed", "scope-increase", "lookup-failed", "mixed-grants", "refresh", "pkce-disabled", "long-token", "grant-attributes", "missing-person-reference", "status-policy-changed", "duration-policy-changed"} {
++		t.Run(scenario, func(t *testing.T) {
++			h, c, code, binding := citizenFixture()
++			resources := []string{binding.Policy.Resource}
++			scopes := []string{"openid", "records:read"}
++			switch scenario {
++			case "duration-policy-changed":
++				binding.ValidityPeriod = 30
++			case "status-policy-changed":
++				binding.Policy.IdentityStatus = "inactive"
++			case "other-subject":
++				code.AuthorizedUserID = "other-citizen"
++			case "other-agent":
++				c.ID = "other-agent"
++			case "expired":
++				binding.Deadline = time.Now().Unix() - 1
++			case "purpose-changed":
++				binding.Policy.Purpose = "unapproved purpose"
++			case "fields-changed":
++				binding.Policy.ScopeFields = map[string][]string{"records:read": {"name", "address"}}
++			case "resource-changed":
++				resources = []string{"urn:other"}
++			case "scope-increase":
++				scopes = append(scopes, "records:write")
++			case "lookup-failed":
++				h.consentValidator = citizenConsent{failed: true}
++			case "mixed-grants":
++				c.GrantTypes = append(c.GrantTypes, providers.GrantTypeClientCredentials)
++			case "refresh":
++				c.GrantTypes = append(c.GrantTypes, providers.GrantTypeRefreshToken)
++			case "pkce-disabled":
++				c.PKCERequired = false
++			case "long-token":
++				c.Token.AccessToken.UserConfig.ValidityPeriod = 301
++			case "grant-attributes":
++				c.Token.AccessToken.UserConfig.Attributes = append(c.Token.AccessToken.UserConfig.Attributes, "registry_grant_id")
++			}
++			raw, _ := json.Marshal(binding)
++			attrs := map[string]interface{}{providers.DelegationConsentCacheKey: string(raw), "person_reference": "synthetic-ref", "unconsented": "hidden"}
++			if scenario == "missing-person-reference" {
++				delete(attrs, "person_reference")
++			}
++			if scenario == "missing-cache" {
++				delete(attrs, providers.DelegationConsentCacheKey)
++			}
++			if scenario == "forged-json" {
++				attrs[providers.DelegationConsentCacheKey] = map[string]string{"AuthorizationID": "forged"}
++			}
++			result, err := h.validateCitizenConsent(context.Background(), c, code, attrs, resources, scopes)
++			if scenario == "ok" {
++				require.Nil(t, err)
++				require.NotNil(t, result)
++				require.NotContains(t, attrs, "unconsented")
++			} else {
++				require.NotNil(t, err)
++				require.Nil(t, result)
++			}
++		})
++	}
++}
++
++func (suite *AuthorizationCodeGrantHandlerTestSuite) TestCitizenAgentEmitsOnlyConsentedAuthority() {
++	base, c, _, binding := citizenFixture()
++	c.ClientID = testClientID
++	c.RedirectURIs = []string{testClientCallbackURL}
++	c.Token.AccessToken.UserConfig.Attributes = []string{"person_reference", "registry_actor_kind", "registry_purpose"}
++	suite.handler.actorProvider = base.actorProvider
++	suite.handler.consentValidator = base.consentValidator
++	suite.testAuthzCode.AuthorizedUserID = binding.Subject
++	suite.testAuthzCode.Resources = []string{binding.Policy.Resource}
++	suite.testAuthzCode.Scopes = "records:read"
++	suite.testAuthzCode.CodeChallenge = testCodeChallenge
++	suite.testAuthzCode.CodeChallengeMethod = "S256"
++	suite.testAuthzCode.AttributeCacheID = "citizen-cache"
++	suite.testTokenReq.Resources = []string{binding.Policy.Resource}
++	suite.testTokenReq.CodeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
++	raw, _ := json.Marshal(binding)
++	attrs := map[string]interface{}{providers.DelegationConsentCacheKey: string(raw), "person_reference": "synthetic-ref", "registry_actor_kind": "human", "registry_purpose": "forged", "registry_grant_id": "forged", "registry_subject_person_reference": "forged", "registry_identity_status": "forged", "identity": map[string]string{"other": "forged"}}
++	suite.mockAttrCacheService.On("GetAttributeCache", mock.Anything, "citizen-cache").Return(&attributecache.AttributeCache{Attributes: attrs}, nil)
++	suite.mockAuthzService.On("GetAuthorizationCodeDetails", mock.Anything, testClientID, "test-auth-code").Return(&suite.testAuthzCode, nil)
++	var captured *tokenservice.AccessTokenBuildContext
++	suite.mockTokenBuilder.On("BuildAccessToken", mock.Anything, mock.Anything).Run(func(args mock.Arguments) { captured = args.Get(1).(*tokenservice.AccessTokenBuildContext) }).Return(&model.TokenDTO{Token: "synthetic-access", TokenType: constants.TokenTypeBearer}, nil)
++	result, err := suite.handler.HandleGrant(context.Background(), suite.testTokenReq, c)
++	suite.Nil(err)
++	suite.NotNil(result)
++	suite.NotNil(captured)
++	suite.Equal(binding.Subject, captured.Subject)
++	suite.Equal(c.ID, captured.ActorClaims.Sub)
++	suite.Equal(testClientID, captured.ClientID)
++	suite.Equal("agent", captured.SubjectAttributes["registry_actor_kind"])
++	suite.Equal(binding.Policy.Purpose, captured.SubjectAttributes["registry_purpose"])
++	suite.Equal("synthetic-ref", captured.SubjectAttributes["person_reference"])
++	suite.Equal("synthetic-ref", captured.SubjectAttributes["registry_subject_person_reference"])
++	suite.Equal("active", captured.SubjectAttributes["registry_identity_status"])
++	suite.NotContains(captured.SubjectAttributes, "registry_grant_id")
++	suite.NotContains(captured.SubjectAttributes, "identity")
++	suite.NotContains(captured.SubjectAttributes, providers.DelegationConsentCacheKey)
++	suite.LessOrEqual(captured.ValidityPeriod, int64(120))
++	suite.Greater(captured.ValidityPeriod, int64(0))
++}
+diff --git a/backend/internal/oauth/oauth2/granthandlers/init.go b/backend/internal/oauth/oauth2/granthandlers/init.go
+--- a/backend/internal/oauth/oauth2/granthandlers/init.go
++++ b/backend/internal/oauth/oauth2/granthandlers/init.go
+@@ -31,8 +31,9 @@
+ 	refreshTokenRevoker revocation.RefreshTokenRevokerInterface,
+ 	criteriaRevoker revocation.CriteriaRevokerInterface,
+ 	cfg oauthconfig.Config,
++	consentProvider providers.ConsentProvider,
+ ) GrantHandlerProviderInterface {
+-	return newGrantHandlerProvider(
++	result := newGrantHandlerProvider(
+ 		jwtService,
+ 		oauth2AuthzService,
+ 		tokenBuilder,
+@@ -47,4 +48,11 @@
+ 		criteriaRevoker,
+ 		cfg,
+ 	)
++	if p, ok := result.(*GrantHandlerProvider); ok {
++		if h, ok := p.authorizationCodeGrantHandler.(*authorizationCodeGrantHandler); ok {
++			h.actorProvider = actorProvider
++			h.consentValidator, _ = consentProvider.(consentAuthorizationValidator)
++		}
++	}
++	return result
+ }
+diff --git a/backend/internal/oauth/oauth2/token/service.go b/backend/internal/oauth/oauth2/token/service.go
+--- a/backend/internal/oauth/oauth2/token/service.go
++++ b/backend/internal/oauth/oauth2/token/service.go
+@@ -116,6 +116,9 @@
+ 		}
+ 	}
+ 
++	if oauthApp.EntityCategory == providers.EntityCategoryAgent && oauthApp.IsAllowedGrantType(providers.GrantTypeAuthorizationCode) && providers.ValidateCitizenCodeClient(oauthApp) != nil {
++		return nil, &model.ErrorResponse{Error: constants.ErrorUnauthorizedClient, ErrorDescription: "Citizen agents require a closed authorization-code configuration"}
++	}
+ 	// Validate grant type against the application.
+ 	if !oauthApp.IsAllowedGrantType(grantType) {
+ 		publishTokenIssuanceFailedEvent(ts.observabilitySvc, ctx, clientID, grantTypeStr, scopeStr,
+diff --git a/backend/pkg/thunderidengine/engine.go b/backend/pkg/thunderidengine/engine.go
+--- a/backend/pkg/thunderidengine/engine.go
++++ b/backend/pkg/thunderidengine/engine.go
+@@ -221,7 +221,7 @@
+ 		engineCtx.jweService, engineCtx.flowExecService, engineCtx.observabilitySvc, engineCtx.runtimeCryptoSvc,
+ 		engineCtx.ouProvider, engineCtx.attributeCacheService, engineCtx.authzProvider, engineCtx.resourceProvider,
+ 		engineCtx.i18nProvider, engineCtx.idpProvider, engineCtx.dpopVerifier, engineCtx.runtimeStoreProvider,
+-		engineCtx.transactioner, revocationEnforcer, revocationService, oauthConfig)
++		engineCtx.transactioner, revocationEnforcer, revocationService, oauthConfig, engineCtx.consentProvider)
+ 	if err != nil {
+ 		logger.Fatal(ctx, "Failed to initialize OAuth services", log.Error(err))
+ 	}
+diff --git a/backend/pkg/thunderidengine/providers/delegation.go b/backend/pkg/thunderidengine/providers/delegation.go
+new file mode 100644
+--- /dev/null
++++ b/backend/pkg/thunderidengine/providers/delegation.go
+@@ -0,0 +1,92 @@
++// Copyright 2026 The ThunderID Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package providers
++
++import (
++	"errors"
++	"net/url"
++	"slices"
++	"strings"
++)
++
++// DelegationConsentConfig describes the governed downstream use shown to a
++// citizen. ScopeFields lists the exact fields each admitted permission exposes.
++type DelegationConsentConfig struct {
++	SubjectAttribute string              `json:"subjectAttribute,omitempty" yaml:"subjectAttribute,omitempty"`
++	IdentityStatus   string              `json:"identityStatus,omitempty" yaml:"identityStatus,omitempty"`
++	Purpose          string              `json:"purpose" yaml:"purpose"`
++	Resource         string              `json:"resource" yaml:"resource"`
++	ScopeFields      map[string][]string `json:"scopeFields" yaml:"scopeFields"`
++}
++
++// DelegationConsentBinding is server-only flow/cache state, never a user claim.
++// AuthorizationID changes on every native consent update, including reapproval.
++type DelegationConsentBinding struct {
++	ConsentID       string
++	AuthorizationID string
++	AppID           string
++	UserID          string
++	Subject         string
++	ValidityPeriod  int64
++	Deadline        int64
++	Policy          DelegationConsentConfig
++	Scopes          []string
++	Attributes      []string
++}
++
++const DelegationConsentCacheKey = "__registry_citizen_consent"
++const DelegationConsentPolicyKey = "__registry_citizen_policy"
++
++func (c *DelegationConsentConfig) Validate() error {
++	invalid := errors.New("citizen delegation requires a purpose, resource, and explicit scope field descriptions")
++	if c == nil || strings.TrimSpace(c.Purpose) == "" || len(c.Purpose) > 1024 || len(c.ScopeFields) == 0 || len(c.ScopeFields) > 64 {
++		return invalid
++	}
++	if len(c.SubjectAttribute) > 128 || strings.ContainsAny(c.SubjectAttribute, " \t\r\n") || strings.HasPrefix(c.SubjectAttribute, "registry_") || strings.HasPrefix(c.SubjectAttribute, "_") || c.IdentityStatus != "" && c.IdentityStatus != "active" {
++		return invalid
++	}
++	resource, err := url.Parse(c.Resource)
++	if err != nil || resource.Scheme == "" || resource.Fragment != "" || resource.User != nil {
++		return invalid
++	}
++	for scope, fields := range c.ScopeFields {
++		if scope == "" || len(scope) > 256 || strings.ContainsAny(scope, " \t\r\n") || len(fields) == 0 || len(fields) > 64 {
++			return invalid
++		}
++		seen := map[string]bool{}
++		for _, field := range fields {
++			if field == "" || len(field) > 256 || strings.ContainsAny(field, "\r\n") || seen[field] {
++				return invalid
++			}
++			seen[field] = true
++		}
++	}
++	return nil
++}
++
++// ValidateCitizenCodeClient also runs at authorization and redemption, so a
++// changed registration cannot unlock another issuance path for a citizen client.
++func ValidateCitizenCodeClient(c *OAuthClient) error {
++	invalid := errors.New("citizen agents require authorization_code only, PKCE, exact redirects, and at most 300 second access tokens")
++	if c == nil || c.EntityCategory != EntityCategoryAgent || c.ID == "" || len(c.GrantTypes) != 1 || c.GrantTypes[0] != GrantTypeAuthorizationCode ||
++		!c.PKCERequired || len(c.ResponseTypes) != 1 || c.ResponseTypes[0] != ResponseTypeCode || len(c.RedirectURIs) == 0 {
++		return invalid
++	}
++	cfg := c.UserAccessTokenConfig()
++	if cfg == nil || cfg.ValidityPeriod <= 0 || cfg.ValidityPeriod > 300 {
++		return invalid
++	}
++	for _, uri := range c.RedirectURIs {
++		u, err := url.Parse(uri)
++		if err != nil || u.Scheme == "" || u.Fragment != "" || u.User != nil || strings.Contains(uri, "*") {
++			return invalid
++		}
++	}
++	for _, attr := range cfg.Attributes {
++		if strings.HasPrefix(attr, "registry_grant_") || slices.Contains([]string{"registry_approver", DelegationConsentCacheKey, DelegationConsentPolicyKey}, attr) {
++			return invalid
++		}
++	}
++	return nil
++}
+diff --git a/backend/pkg/thunderidengine/providers/model.go b/backend/pkg/thunderidengine/providers/model.go
+--- a/backend/pkg/thunderidengine/providers/model.go
++++ b/backend/pkg/thunderidengine/providers/model.go
+@@ -722,7 +722,8 @@
+ 
+ // LoginConsentConfig is the login consent configuration.
+ type LoginConsentConfig struct {
+-	ValidityPeriod int64 `json:"validityPeriod" yaml:"validityPeriod" jsonschema:"Consent validity period in seconds. 0 means never expire."`
++	Delegation     *DelegationConsentConfig `json:"delegation,omitempty" yaml:"delegation,omitempty"`
++	ValidityPeriod int64                    `json:"validityPeriod" yaml:"validityPeriod" jsonschema:"Consent validity period in seconds. 0 means never expire."`
+ }
+ 
+ // Entity represents a unified identity principal returned by the entity provider.
+diff --git a/frontend/packages/design/src/components/flow/FlowComponentRenderer.tsx b/frontend/packages/design/src/components/flow/FlowComponentRenderer.tsx
+--- a/frontend/packages/design/src/components/flow/FlowComponentRenderer.tsx
++++ b/frontend/packages/design/src/components/flow/FlowComponentRenderer.tsx
+@@ -116,6 +116,16 @@
+     const isExpiredOnMount = hasTimer && expiresIn <= 0;
+ 
+     if (hasConsent) {
++      const findSubmit = (items: FlowComponent[]): FlowComponent | undefined => {
++        for (const item of items) {
++          if (item.eventType?.toUpperCase() === 'SUBMIT') return item;
++          const child = findSubmit((item.components ?? []) as FlowComponent[]);
++          if (child) return child;
++        }
++        return undefined;
++      };
++      const withdrawalAction = findSubmit([comp]);
++      const canWithdraw = additionalData?.['citizenConsentWithdrawal'] === 'true' && withdrawalAction != null;
+       return (
+         <>
+           <ConsentAdapter
+@@ -124,6 +134,10 @@
+             }
+             formValues={values}
+             onInputChange={onInputChange}
++            disabled={isLoading || isExpiredOnMount}
++            onWithdraw={
++              canWithdraw ? () => onSubmit(withdrawalAction!, {...values, __consent_reason__: 'withdrawal'}) : undefined
++            }
+           />
+           <BlockAdapter
+             component={component}
+diff --git a/frontend/packages/design/src/components/flow/__tests__/FlowComponentRenderer.test.tsx b/frontend/packages/design/src/components/flow/__tests__/FlowComponentRenderer.test.tsx
+--- a/frontend/packages/design/src/components/flow/__tests__/FlowComponentRenderer.test.tsx
++++ b/frontend/packages/design/src/components/flow/__tests__/FlowComponentRenderer.test.tsx
+@@ -547,3 +547,34 @@
+     expect((document.getElementById('action_resend') as HTMLButtonElement).disabled).toBe(true);
+   });
+ });
++
++describe('Citizen withdrawal routing', () => {
++  it('submits withdrawal through the native flow only when the server exposes it', () => {
++    const action = {type: 'ACTION', id: 'allow', eventType: 'SUBMIT', label: 'Allow'};
++    const component = {
++      type: 'BLOCK',
++      id: 'consent',
++      components: [{type: 'CONSENT_INPUT', id: 'input'}, action],
++    } as unknown as EmbeddedFlowComponent;
++    const onSubmit = vi.fn();
++    renderWithProviders(
++      <FlowComponentRenderer
++        component={component}
++        index={0}
++        values={{}}
++        isLoading={false}
++        resolve={identity}
++        onInputChange={noop}
++        onSubmit={onSubmit}
++        additionalData={{
++          consentPrompt: JSON.stringify([
++            {purposeName: 'permissions:agent', type: 'permissions', optional: [{name: 'records:read'}]},
++          ]),
++          citizenConsentWithdrawal: 'true',
++        }}
++      />,
++    );
++    fireEvent.click(screen.getByRole('button', {name: 'Withdraw this agent’s access'}));
++    expect(onSubmit).toHaveBeenCalledWith(action, {__consent_reason__: 'withdrawal'});
++  });
++});
+diff --git a/frontend/packages/design/src/components/flow/adapters/ConsentAdapter.tsx b/frontend/packages/design/src/components/flow/adapters/ConsentAdapter.tsx
+--- a/frontend/packages/design/src/components/flow/adapters/ConsentAdapter.tsx
++++ b/frontend/packages/design/src/components/flow/adapters/ConsentAdapter.tsx
+@@ -9,7 +9,7 @@
+   type ConsentRenderProps,
+ } from '@thunderid/react';
+ import {cn} from '@thunderid/utils';
+-import {Box, Divider, FormControlLabel, Switch, Typography} from '@wso2/oxygen-ui';
++import {Box, Button, Divider, FormControlLabel, Switch, Typography} from '@wso2/oxygen-ui';
+ import type {JSX} from 'react';
+ 
+ function isPermissionPurpose(purpose: ConsentPurpose): boolean {
+@@ -43,6 +43,8 @@
+ 
+ interface ConsentAdapterProps {
+   consentData?: string | ConsentPurpose[] | {purposes: ConsentPurpose[]};
++  onWithdraw?: () => void;
++  disabled?: boolean;
+   formValues: Record<string, string>;
+   onInputChange: (name: string, value: string) => void;
+ }
+@@ -140,6 +142,8 @@
+   consentData = undefined,
+   formValues,
+   onInputChange,
++  onWithdraw,
++  disabled = false,
+ }: ConsentAdapterProps): JSX.Element | null {
+   if (!consentData) return null;
+ 
+@@ -147,8 +151,24 @@
+     <Consent consentData={consentData} formValues={formValues} onInputChange={onInputChange}>
+       {({purposes}: ConsentRenderProps) => (
+         <Box className={cn('Flow--consent')} sx={{display: 'flex', flexDirection: 'column', gap: 2, mt: 1}}>
++          {onWithdraw && (
++            <Box>
++              <Typography variant="body2">
++                Withdrawing ends this agent's current consent. Declining the new request leaves earlier consent
++                unchanged. Already issued access may remain valid for up to five minutes.
++              </Typography>
++              <Button type="button" color="error" disabled={disabled} onClick={onWithdraw}>
++                Withdraw this agent’s access
++              </Button>
++            </Box>
++          )}
+           {purposes.map((purpose, idx) => (
+             <Box key={purpose.purposeId ?? idx}>
++              {purpose.description && (
++                <Typography variant="body2" sx={{mb: 1}}>
++                  {purpose.description}
++                </Typography>
++              )}
+               {isPermissionPurpose(purpose) && purpose.optional && purpose.optional.length > 0 && (
+                 <Box sx={{mt: 1}}>
+                   <Typography className={cn('Text--subtitle2')} variant="subtitle2" fontWeight="bold" sx={{mb: 0.5}}>
+diff --git a/frontend/packages/design/src/components/flow/adapters/__tests__/ConsentAdapter.test.tsx b/frontend/packages/design/src/components/flow/adapters/__tests__/ConsentAdapter.test.tsx
+--- a/frontend/packages/design/src/components/flow/adapters/__tests__/ConsentAdapter.test.tsx
++++ b/frontend/packages/design/src/components/flow/adapters/__tests__/ConsentAdapter.test.tsx
+@@ -109,3 +109,38 @@
+     expect(switchFor('users').checked).toBe(true);
+   });
+ });
++
++describe('ConsentAdapter purpose disclosure', () => {
++  it('shows the governed agent purpose, destination, fields and duration', () => {
++    const description =
++      'Eligibility agent may use the citizen registry for eligibility. Fields: eligibility. Access lasts at most 300 seconds.';
++    const consentData = JSON.stringify([
++      {
++        purposeName: 'permissions:agent',
++        purposeId: 'agent',
++        type: 'permissions',
++        description,
++        essential: [],
++        optional: [{name: 'records:read'}],
++      },
++    ]);
++    renderWithProviders(<ConsentAdapter consentData={consentData} formValues={{}} onInputChange={noop} />);
++    expect(screen.getByText(description)).toBeInTheDocument();
++  });
++});
++
++describe('Citizen withdrawal', () => {
++  it('offers explicit withdrawal separately from consent choices', () => {
++    const onWithdraw = vi.fn();
++    renderWithProviders(
++      <ConsentAdapter consentData={permissionsPurpose} formValues={{}} onInputChange={noop} onWithdraw={onWithdraw} />,
++    );
++    fireEvent.click(screen.getByRole('button', {name: 'Withdraw this agent’s access'}));
++    expect(onWithdraw).toHaveBeenCalledOnce();
++    expect(screen.getByText(/Already issued access may remain valid/)).toBeTruthy();
++  });
++  it('does not offer withdrawal without server authorization', () => {
++    renderWithProviders(<ConsentAdapter consentData={permissionsPurpose} formValues={{}} onInputChange={noop} />);
++    expect(screen.queryByRole('button', {name: 'Withdraw this agent’s access'})).toBeNull();
++  });
++});
