@@ -205,9 +205,6 @@ impl std::error::Error for SafeCliFailure {}
 struct ArtifactInspectArgs {
     /// Deployment project containing runtime.yaml beside bundle/.
     project: PathBuf,
-    /// Mechanically compare this Registry Mint configuration with Evidence authentication.
-    #[arg(long)]
-    mint_config: Option<PathBuf>,
 }
 
 /// Return the complete command tree without running Evidence adopter tooling.
@@ -336,7 +333,6 @@ pub fn main_entry() -> ExitCode {
         ),
         Command::Artifact(ArtifactCommand::Inspect(args)) => doctor::run(doctor::DoctorArgs {
             project: args.project,
-            mint_config: args.mint_config,
             json: format == OutputFormat::Json,
         }),
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),

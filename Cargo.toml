@@ -37,7 +37,6 @@ members = [
     "crates/registry-thunderid-tooling",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
-    "crates/registry-mint",
     "crates/registry-record",
     "crates/registry-breg-client",
     "crates/registry-breg-client-node",
@@ -97,7 +96,6 @@ registry-evidencectl = { path = "crates/registry-evidencectl", version = "0.30.0
 registry-language-server = { path = "crates/registry-language-server", version = "0.30.0" }
 registry-linkml = { path = "crates/registry-linkml", version = "0.30.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.30.0" }
-registry-mint = { path = "crates/registry-mint", version = "0.30.0" }
 registry-record = { path = "crates/registry-record", version = "0.30.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.30.0" }
 registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.30.0" }

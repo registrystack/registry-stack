@@ -84,7 +84,6 @@ pub fn catalog() -> Catalog {
         command_reference(registry_evidence::command(), None, None),
         command_reference(registry_evidence_oid4vci::command(), None, None),
         command_reference(registry_evidencectl::command(), None, None),
-        command_reference(registry_mint::command(), None, None),
         command_reference(registry_caseworkctl::command(), None, None),
         command_reference(registry_casework::command(), None, None),
         command_reference(registry_breg::command(), None, None),
@@ -617,7 +616,6 @@ mod tests {
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
-                "mint",
                 "relay",
                 "relayctl",
             ]
@@ -1195,18 +1193,6 @@ mod tests {
                 && constraint.arguments == ["--subject <SUBJECT>", "--subjects-file <PATH>"]
         }));
 
-        let mint_token = find_command(&catalog.binaries, "mint token");
-        for (when, required) in [
-            ("--actor <ACTOR>", "--subject-file <SUBJECT_FILE>"),
-            ("--subject-file <SUBJECT_FILE>", "--actor <ACTOR>"),
-        ] {
-            assert!(mint_token.constraints.iter().any(|constraint| {
-                constraint.kind == ConstraintKind::RequiresAll
-                    && constraint.when.as_deref() == Some(when)
-                    && constraint.arguments == [required]
-            }));
-        }
-
         let dev = find_command(&catalog.binaries, "evidencectl dev");
         assert_eq!(
             dev.usage,
@@ -1223,7 +1209,6 @@ mod tests {
         }));
 
         for (invocation, option) in [
-            ("mint check", "--config <CONFIG>"),
             ("evidence-oid4vci check", "--config <CONFIG>"),
             ("relay serve", "--runtime <RUNTIME>"),
         ] {
