@@ -118,8 +118,8 @@ async function main() {
 
   let written = 0;
   for (const [repoId, specPath] of Object.entries(SPEC_SOURCES)) {
-    if (repoId === 'registry-casework' && docset.id !== docsets.current) {
-      console.log(`Skipped ${repoId} OpenAPI spec for archived docset ${docset.id}.`);
+    if (repoId === 'registry-casework' && !docset.products[repoId]) {
+      console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }
     const repo = manifest.repos[repoId];
