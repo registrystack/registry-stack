@@ -117,7 +117,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
@@ -140,7 +140,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
@@ -201,7 +201,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
@@ -224,7 +224,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
@@ -358,7 +358,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
@@ -381,7 +381,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "synthetic-reviewer",
+            "principal": "professional-review-supervisor",
             "scopes": [
               "starter:reviewer"
             ],
