@@ -69,6 +69,15 @@ refusal that holds a durable attempt adds `Registry-Casework-Attempt`.
 Every Casework problem response carries one `code` from this closed catalogue, always answered with the
 HTTP status listed beside it.
 
+For a source-backed decision, `request.source-rejected` means you must fix the promoted action body,
+`source.record-missing` means the bound record is no longer at its registered location, and
+`source.reviewer-not-authorized` means you must check the selected source profile and credential.
+Only `work-item.not-offered` tells you to refresh the item because the action is stale.
+
+{/* Evidence: crates/registry-casework-core/src/adapter.rs, SourceAdapterError;
+    crates/registry-casework-breg/src/lib.rs, execute_prepared();
+    crates/registry-casework/src/http.rs, the ServiceError conversion. */}
+
 <ApiReferenceTable id="problem-codes" source="casework-api" />
 
 {/* Problem code table generated from docs/site/src/data/casework-api.yaml by

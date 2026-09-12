@@ -1282,7 +1282,12 @@ impl CaseworkService {
                     .await?;
                 Ok((settled, Some(receipt)))
             }
-            Err(SourceAdapterError::DefinitiveRefusal) => {
+            Err(
+                error @ (SourceAdapterError::RequestRejected
+                | SourceAdapterError::RecordMissing
+                | SourceAdapterError::ReviewerNotAuthorized
+                | SourceAdapterError::ActionNotOffered),
+            ) => {
                 if let Err(error) = self
                     .store
                     .refuse_original_attempt(actor, attempt.attempt_id, execution_token)
@@ -1293,7 +1298,7 @@ impl CaseworkService {
                     }
                     return Err(error.into());
                 }
-                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+                Err(ServiceError::Adapter(error))
             }
             Err(error) => {
                 let unsettled = match self
@@ -1390,7 +1395,12 @@ impl CaseworkService {
                     .await?;
                 Ok((settled, Some(receipt)))
             }
-            Err(SourceAdapterError::DefinitiveRefusal) => {
+            Err(
+                error @ (SourceAdapterError::RequestRejected
+                | SourceAdapterError::RecordMissing
+                | SourceAdapterError::ReviewerNotAuthorized
+                | SourceAdapterError::ActionNotOffered),
+            ) => {
                 if let Err(error) = self
                     .store
                     .refuse_original_attempt(actor, attempt_id, execution_token)
@@ -1401,7 +1411,7 @@ impl CaseworkService {
                     }
                     return Err(error.into());
                 }
-                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+                Err(ServiceError::Adapter(error))
             }
             Err(_) => {
                 let unsettled = match self
@@ -1494,7 +1504,12 @@ impl CaseworkService {
                     .await?;
                 Ok((settled, Some(receipt)))
             }
-            Err(SourceAdapterError::DefinitiveRefusal) => {
+            Err(
+                error @ (SourceAdapterError::RequestRejected
+                | SourceAdapterError::RecordMissing
+                | SourceAdapterError::ReviewerNotAuthorized
+                | SourceAdapterError::ActionNotOffered),
+            ) => {
                 if let Err(error) = self
                     .store
                     .refuse_original_attempt(actor, attempt_id, execution_token)
@@ -1505,7 +1520,7 @@ impl CaseworkService {
                     }
                     return Err(error.into());
                 }
-                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+                Err(ServiceError::Adapter(error))
             }
             Err(_) => {
                 let unsettled = match self

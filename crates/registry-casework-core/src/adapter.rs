@@ -181,10 +181,24 @@ pub enum SourceAdapterError {
     Concealed,
     #[error("the source refused this operation")]
     Denied,
-    /// The source definitively refused the original prepared write. Adapters
-    /// must not use this for a failed recovery or metadata preflight.
-    #[error("the source definitively refused the original operation")]
-    DefinitiveRefusal,
+    /// The source definitively rejected the original prepared request body.
+    /// Adapters must not use this for a failed recovery or metadata preflight.
+    #[error("the source rejected the original request")]
+    RequestRejected,
+    /// The source definitively reported that the bound record is missing.
+    /// Adapters must not use this for a failed recovery or metadata preflight.
+    #[error("the bound source record is missing")]
+    RecordMissing,
+    /// The source definitively refused the original operation under the
+    /// selected reviewer binding. Adapters must not use this for a failed
+    /// recovery or metadata preflight.
+    #[error("the source refused the reviewer binding")]
+    ReviewerNotAuthorized,
+    /// The source definitively reported that the original prepared action is
+    /// no longer offered. Adapters must not use this for a failed recovery or
+    /// metadata preflight.
+    #[error("the source no longer offers the original action")]
+    ActionNotOffered,
     #[error("the source is temporarily unavailable")]
     Unavailable,
     #[error("the displayed source binding is no longer current")]

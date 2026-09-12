@@ -102,7 +102,7 @@ struct MockSource {
     execute_calls: Arc<AtomicUsize>,
     execute_succeeds: bool,
     advance_binding_on_success: bool,
-    definitive_refusal_after: Option<usize>,
+    execution_error_after: Option<(usize, SourceAdapterError)>,
     approve_reads: HashSet<String>,
 }
 
@@ -131,7 +131,7 @@ impl MockSource {
             execute_calls: Arc::new(AtomicUsize::new(0)),
             execute_succeeds: false,
             advance_binding_on_success: false,
-            definitive_refusal_after: None,
+            execution_error_after: None,
             approve_reads: HashSet::new(),
         }
     }
@@ -164,10 +164,17 @@ impl MockSource {
 
     fn with_recovery_definitive_refusal(id: Uuid, read: CallerRead) -> (Self, Arc<AtomicUsize>) {
         let mut source = Self::with_reads([(id, read)]);
-        source.definitive_refusal_after = Some(1);
+        source.execution_error_after = Some((1, SourceAdapterError::ActionNotOffered));
         source.approve_reads.insert(id.to_string());
         let execute_calls = Arc::clone(&source.execute_calls);
         (source, execute_calls)
+    }
+
+    fn with_action_error(id: Uuid, error: SourceAdapterError) -> Self {
+        let mut source = Self::with_reads([(id, CallerRead::Visible("authorized"))]);
+        source.execution_error_after = Some((0, error));
+        source.approve_reads.insert(id.to_string());
+        source
     }
 
     fn with_unavailable_discovery_and_terminal_read(id: Uuid) -> Self {
@@ -536,11 +543,10 @@ impl SourceAdapter for MockSource {
         request: ExecutePreparedRequest<'_>,
     ) -> Result<SourceReceipt, SourceAdapterError> {
         let call_index = self.execute_calls.fetch_add(1, Ordering::SeqCst);
-        if self
-            .definitive_refusal_after
-            .is_some_and(|threshold| call_index >= threshold)
-        {
-            return Err(SourceAdapterError::DefinitiveRefusal);
+        if let Some((threshold, error)) = self.execution_error_after {
+            if call_index >= threshold {
+                return Err(error);
+            }
         }
         if !self.execute_succeeds {
             return Err(SourceAdapterError::Invalid);
@@ -1822,7 +1828,7 @@ async fn definitive_refusal_during_recovery_releases_the_attempt_fence() {
         assert!(
             matches!(
                 recovery,
-                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+                Err(ServiceError::Adapter(SourceAdapterError::ActionNotOffered))
             ),
             "{recovery:?}"
         );
@@ -2353,6 +2359,120 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
     assert_eq!(recovered["attempt"]["attemptId"], attempt_id.to_string());
     assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
     assert_eq!(execute_calls.load(Ordering::SeqCst), 2);
+}
+
+async fn assert_decision_refusal_problem(
+    source_error: SourceAdapterError,
+    expected_status: StatusCode,
+    expected_code: &str,
+    expected_detail: &str,
+) {
+    let subject_id = Uuid::from_u128(1_020);
+    let fixture = fixture_with_source(
+        MockSource::with_action_error(subject_id, source_error),
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let claimed = fixture
+        .service
+        .store()
+        .claim(
+            &fixture.staff,
+            item.item_id,
+            item.revision,
+            "claim-source-refusal",
+        )
+        .await
+        .unwrap();
+    let configured_project = project(policy(10, 1_000));
+    let app = router(HttpState {
+        service: fixture.service.clone(),
+        authenticator: Arc::new(authenticator(&configured_project)),
+        project: Arc::new(configured_project),
+    });
+    let decision_path = format!("/v1/work-items/{}/decisions", claimed.item_id);
+    let expected_revision = format!("\"{}\"", claimed.revision);
+    let response = app
+        .oneshot(authenticated_request(
+            "POST",
+            &decision_path,
+            &access_token("staff"),
+            "staff",
+            json!({
+                "displayedBinding": claimed.binding,
+                "sourceProfileId": "reader",
+                "operation": "approve"
+            }),
+            &[
+                (SOURCE_PROFILE_HEADER, "reader"),
+                (IF_MATCH_HEADER, expected_revision.as_str()),
+                (IDEMPOTENCY_KEY_HEADER, "source-refusal"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), expected_status);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], expected_code);
+    assert_eq!(problem["detail"], expected_detail);
+}
+
+#[tokio::test]
+async fn source_request_rejection_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::RequestRejected,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "request.source-rejected",
+        "The source refused the request body. Fix the request before trying again.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn missing_source_record_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::RecordMissing,
+        StatusCode::NOT_FOUND,
+        "source.record-missing",
+        "The bound source record is no longer at the registered location.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn refused_reviewer_binding_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::ReviewerNotAuthorized,
+        StatusCode::FORBIDDEN,
+        "source.reviewer-not-authorized",
+        "The source refused the reviewer binding. Check the selected source profile and credential.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stale_source_action_remains_not_offered() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::ActionNotOffered,
+        StatusCode::CONFLICT,
+        "work-item.not-offered",
+        "The registry did not offer this action to you. Refresh to check again.",
+    )
+    .await;
 }
 
 async fn zero_local_candidates_distinguish_empty_source_from_outage() {

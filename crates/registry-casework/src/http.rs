@@ -1268,6 +1268,9 @@ pub enum HttpError {
     SourceProfileRequired,
     SourceBadGateway,
     ReasonUnsupported,
+    SourceRecordMissing,
+    SourceRequestRejected,
+    SourceReviewerNotAuthorized,
     SourceSignatureInvalid,
     SourceUnavailable(Option<Uuid>),
     Internal,
@@ -1324,9 +1327,18 @@ impl From<ServiceError> for HttpError {
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::BindingMoved) => {
                 Self::ProposalChanged
             }
+            ServiceError::Adapter(registry_casework_core::SourceAdapterError::RequestRejected) => {
+                Self::SourceRequestRejected
+            }
+            ServiceError::Adapter(registry_casework_core::SourceAdapterError::RecordMissing) => {
+                Self::SourceRecordMissing
+            }
             ServiceError::Adapter(
-                registry_casework_core::SourceAdapterError::DefinitiveRefusal,
-            ) => Self::NotOffered,
+                registry_casework_core::SourceAdapterError::ReviewerNotAuthorized,
+            ) => Self::SourceReviewerNotAuthorized,
+            ServiceError::Adapter(registry_casework_core::SourceAdapterError::ActionNotOffered) => {
+                Self::NotOffered
+            }
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::Uncertain) => {
                 Self::RecoveryPending(None)
             }
@@ -1377,6 +1389,9 @@ impl HttpError {
             Self::SourceProfileRequired => ProblemCode::SourceProfileRequired,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
             Self::ReasonUnsupported => ProblemCode::RequestReasonUnsupported,
+            Self::SourceRecordMissing => ProblemCode::SourceRecordMissing,
+            Self::SourceRequestRejected => ProblemCode::RequestSourceRejected,
+            Self::SourceReviewerNotAuthorized => ProblemCode::SourceReviewerNotAuthorized,
             Self::SourceSignatureInvalid => ProblemCode::SourceSignatureInvalid,
             Self::SourceUnavailable(_) => ProblemCode::WorkItemSourceUnavailable,
             Self::Internal => ProblemCode::RuntimeFailure,
