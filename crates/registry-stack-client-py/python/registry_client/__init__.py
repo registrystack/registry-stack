@@ -7,4 +7,4 @@ import registry_client.evidence as evidence
 import registry_client.relay as relay
 
 __all__ = ["breg", "casework", "discovery", "evidence", "relay"]
-__version__ = "0.29.0"
+__version__ = "0.30.0"

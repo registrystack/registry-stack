@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.30.0 - 2026-09-12
+
 - Document the secret reference grammar, the owner-only file rules, and the
   requirement that every resolved secret value be non-empty NUL-free text of at
   most 64 KiB, with a command that generates the audit journal secret.
@@ -80,6 +82,6 @@ under the `system:clock` actor. A clock decides no outcome, changes nothing at
 the source, and sends nothing outward; an Administrator applies a reviewed
 recompute after a policy change.
 
-These changes are unreleased. The workspace version alone does not identify a
-published client package containing Casework; the demo builds a matching local
-candidate from the selected source trees.
+The unified Registry Stack Node.js and Python client packages include Casework
+in this release. The demo builds a matching local candidate from the selected
+source trees.
