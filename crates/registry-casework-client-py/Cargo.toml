@@ -21,7 +21,7 @@ extension-module = ["pyo3/extension-module"]
 [dependencies]
 pyo3.workspace = true
 # Keep the SDK name distinct from this extension's Python module name.
-casework-client-sdk = { package = "registry-casework-client", path = "../registry-casework-client", version = "0.29.0" }
+casework-client-sdk = { package = "registry-casework-client", path = "../registry-casework-client", version = "0.30.0" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

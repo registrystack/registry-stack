@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.30.0 - 2026-09-12
+
+- OIDC access-token type matching treats `at+jwt` and
+  `application/at+jwt` as equivalent RFC 9068 spellings when either is the
+  configured type. Other token types remain refused.
+
 ## v0.29.0 - 2026-09-10
 
 - The shared platform crates have no user-visible changes in this release.
