@@ -1254,11 +1254,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # The retained lifecycle owns a PostgreSQL container of its own, so
-          # this test stays in the Docker-backed job.
+          # Each retained lifecycle owns PostgreSQL, ThunderID and BREG.
+          # Run complete sessions serially on the bounded CI runner.
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo test --locked --profile ci -p registry-bregctl \
-            --test dev_lifecycle -- --ignored
+            --test dev_lifecycle -- --ignored --test-threads=1
 
       - name: Verify authored request attachment lifecycle
         run: >-
