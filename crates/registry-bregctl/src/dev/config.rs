@@ -28,6 +28,10 @@ pub(super) struct Clients {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct Client {
     pub id: String,
+    /// The access profiles this client is the one local binding for. Empty
+    /// means the client registers with Mint and appears in `allowedClients`
+    /// but binds no access profile: no journey step resolves to it and no
+    /// seed may reference it.
     pub access_profiles: Vec<String>,
     pub scopes: Vec<String>,
     pub claims: BTreeMap<String, Value>,
@@ -71,10 +75,9 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if client.id == "issuer"
             || !identifier(&client.id)
             || !ids.insert(&client.id)
-            || client.access_profiles.is_empty()
             || client.scopes.is_empty()
         {
-            bail!("local clients need unique bounded IDs, explicit profiles and scopes");
+            bail!("local clients need unique bounded IDs and explicit scopes");
         }
         for profile in &client.access_profiles {
             if !identifier(profile) || !profiles.insert(profile) {

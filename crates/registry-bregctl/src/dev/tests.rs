@@ -154,6 +154,117 @@ fn clients_require_explicit_unique_profile_bindings_and_closed_fields() {
     assert!(config::clients(&serde_json::to_vec(&value).unwrap()).is_err());
 }
 
+/// A client may bind no access profile. Such a client still needs its own
+/// unique ID and explicit scopes; it registers with Mint and appears in
+/// `allowedClients`, but no journey or seed can resolve it.
+#[test]
+fn clients_accept_an_explicitly_unbound_profile_free_client() {
+    let clients = config::clients(
+        br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: guest
+    accessProfiles: []
+    scopes: [registry:generic:introspect]
+    claims:
+      registry_principal: generic-registry-guest
+seed: []
+"#,
+    )
+    .expect("a profile-free client parses");
+    let guest = clients
+        .clients
+        .iter()
+        .find(|client| client.id == "guest")
+        .expect("the unbound client is retained");
+    assert!(guest.access_profiles.is_empty());
+}
+
+#[test]
+fn an_unbound_client_registers_with_mint_and_appears_in_allowed_clients() {
+    let (_temp, state, mut clients, files) = fixture();
+    clients.clients.push(config::Client {
+        id: "guest".into(),
+        access_profiles: vec![],
+        scopes: vec!["registry:generic:introspect".into()],
+        claims: BTreeMap::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    });
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let root = state.root();
+    private::read(&root.join("mint/clients/guest.yaml"), MAX_BYTES)
+        .expect("the unbound client still registers with the local Mint");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    let allowed = runtime["authentication"]["oidc"]["allowedClients"]
+        .as_array()
+        .expect("allowedClients is an array");
+    assert!(
+        allowed.iter().any(|id| id == "guest"),
+        "the unbound client is listed in allowedClients: {allowed:?}"
+    );
+}
+
+/// A client with no bound access profile never interferes with rehearsal
+/// binding: every journey step still resolves to the client that actually
+/// binds its profile.
+#[test]
+fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client() {
+    let (_temporary, project) = write_init_project();
+    let client_bytes = fs::read(project.join("dev-clients.yaml")).expect("init writes clients");
+    let mut clients = config::clients(&client_bytes).expect("the initialized clients parse");
+    clients.clients.push(config::Client {
+        id: "guest".into(),
+        access_profiles: vec![],
+        scopes: vec!["registry:generic:introspect".into()],
+        claims: BTreeMap::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    });
+    let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
+    bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
+        .expect("every journey profile still has its bound client");
+}
+
+#[test]
+fn a_seed_referencing_the_unbound_client_is_refused() {
+    let error = config::clients(
+        br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:generic:operate]
+    claims:
+      registry_principal: generic-registry-operator
+      registry_purpose: registry-operations
+  - id: guest
+    accessProfiles: []
+    scopes: [registry:generic:introspect]
+    claims:
+      registry_principal: generic-registry-guest
+seed:
+  - id: from-guest
+    client: guest
+    entity: record
+    accessProfile: operator
+    data: {}
+"#,
+    )
+    .expect_err("a seed cannot reference a client with no bound access profile");
+    assert!(
+        format!("{error:#}").contains("bound client and access profile"),
+        "{error:#}"
+    );
+}
+
 #[test]
 fn credential_publication_recovers_one_owned_half_and_refuses_conflicting_bytes() {
     let (_temp, state, mut clients, files) = fixture();
