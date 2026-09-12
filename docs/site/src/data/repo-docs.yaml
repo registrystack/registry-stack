@@ -5,10 +5,11 @@
 # standards_referenced and last_reviewed so future current-page reviews cannot
 # rewrite historical metadata.
 repos:
-  # Casework first appears in the current development docset. Its product-owned
+  # Casework first enters an archived docset at v0.30.0. Its product-owned
   # OpenAPI artifact is rendered directly; adopter prose remains hand-authored
   # in the Casework product lane rather than duplicating the long product README.
   registry-casework:
+    remote: https://github.com/registrystack/registry-stack
     ref: HEAD
     version: main source (unreleased)
     local: ../..

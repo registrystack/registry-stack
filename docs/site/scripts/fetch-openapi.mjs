@@ -104,10 +104,9 @@ async function main() {
   }
   const docsets = await loadDocsets({ dataDir });
   const docset = getDocset(docsets, selectedDocsetId(docsets));
-  // Filter before applying docset refs, as sync-repo-docs.mjs does: a repo
-  // whose docs are all excluded from this docset must not count as an active
-  // repo the docset is required to pin. Such a repo keeps its repo-docs ref,
-  // so its spec rides the current shell the way hand-authored pages do.
+  // Filter before applying docset refs, as sync-repo-docs.mjs does. Repos with
+  // published docs or an OpenAPI spec present in this docset use its product
+  // ref; Casework has only an OpenAPI source in repo-docs.yaml.
   filterRepoDocsForDocset(manifest, docset);
   if (docset.id !== docsets.current) {
     applyDocsetRefs(manifest, docset);
@@ -129,6 +128,10 @@ async function main() {
     const resolvedSpecPath = repo.openapi || specPath;
     if (!repo.ref) {
       fail(`${repoId}: no pinned ref in repo-docs.yaml for the OpenAPI spec`);
+    }
+    if (repoId === 'registry-casework' && docset.id !== docsets.current &&
+        repo.ref !== docset.products[repoId].ref) {
+      fail(`${repoId}: OpenAPI ref ${repo.ref} does not match docset ${docset.id} ref ${docset.products[repoId].ref}`);
     }
 
     const localPath = repo.local ? resolve(root, repo.local) : null;
