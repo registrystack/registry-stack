@@ -532,7 +532,11 @@ fn capture(
         .collect();
     let sources = source_projects(&declared, source_project_args, retained)?;
     let clients = config::clients(client_bytes)?;
-    let bound = config::bind(&clients, &policy)?;
+    let bound = if sources.is_empty() {
+        config::bind(&clients, &policy)
+    } else {
+        config::bind_source_backed(&clients, &policy)
+    }?;
     let reported = bound
         .iter()
         .map(|entry| ReportedClient {

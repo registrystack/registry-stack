@@ -587,6 +587,29 @@ fn a_project_declaring_sources_needs_a_registry_project_for_each() {
 }
 
 #[test]
+fn source_backed_sub_principals_use_the_borrowed_breg_mint_namespace() {
+    let root = tempfile::tempdir().unwrap();
+    let project = root.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    describe_professional_register(&project);
+    let policy_path = project.join("casework.yaml");
+    let policy = fs::read_to_string(&policy_path)
+        .unwrap()
+        .replace("principalClaim: registry_principal", "principalClaim: sub");
+    fs::write(&policy_path, policy).unwrap();
+    let registry = root.path().join("registry");
+    fs::create_dir(&registry).unwrap();
+    let clients = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let source = [registry.display().to_string()];
+
+    let captured = capture(&project, &clients, &source, &BTreeMap::new()).unwrap();
+
+    for client in &captured.reported {
+        assert_eq!(client.principal, format!("urn:breg:dev:{}", client.id));
+    }
+}
+
+#[test]
 fn source_projects_are_named_by_source_when_the_project_declares_several() {
     let root = tempfile::tempdir().unwrap();
     let registry = root.path().join("registry");

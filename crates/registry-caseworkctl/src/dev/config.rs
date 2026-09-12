@@ -186,6 +186,25 @@ pub(super) struct Bound<'a> {
 /// client's principal. Refusing here, before any container or service starts,
 /// tells the author which binding is missing while the fix is one edit away.
 pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Result<Vec<Bound<'a>>> {
+    bind_with_principal(clients, project, principal)
+}
+
+/// Resolve clients that authenticate through a BReg development session's
+/// Mint. Its automatic subject namespace differs from standalone Casework.
+pub(super) fn bind_source_backed<'a>(
+    clients: &'a Clients,
+    project: &CaseworkProject,
+) -> Result<Vec<Bound<'a>>> {
+    bind_with_principal(clients, project, |client_id| {
+        format!("urn:breg:dev:{client_id}")
+    })
+}
+
+fn bind_with_principal<'a>(
+    clients: &'a Clients,
+    project: &CaseworkProject,
+    mint_principal: impl Fn(&str) -> String,
+) -> Result<Vec<Bound<'a>>> {
     let mut bound = Vec::with_capacity(clients.clients.len());
     for client in &clients.clients {
         let profile = project
@@ -225,7 +244,7 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
             _ => (),
         }
         let principal = if profile.principal_claim == "sub" {
-            principal(&client.id)
+            mint_principal(&client.id)
         } else {
             client
                 .claims
