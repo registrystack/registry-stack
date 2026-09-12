@@ -40,6 +40,13 @@ pub struct EvidenceClientProfile {
     pub verification: VerificationProfile,
     #[serde(default)]
     pub expected: ExpectedServiceProfile,
+    /// Fixed OAuth request parameters for the token acquisition, for issuers
+    /// whose client-assertion audience, resource indicator, or requested
+    /// scopes are not derivable from discovery. Absent members keep the
+    /// discovery-driven behavior; this object never derives authority from
+    /// the catalog, it only states what the token request carries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OauthProfile>,
     #[serde(default = "default_metadata_cache_seconds")]
     pub maximum_metadata_cache_seconds: u64,
     #[serde(skip)]
@@ -90,6 +97,10 @@ impl EvidenceClientProfile {
             || self.verification.maximum_assertion_lifetime_seconds == 0
             || self.verification.maximum_assertion_lifetime_seconds > 31_536_000
             || self.verification.clock_skew_seconds > 300
+            || self
+                .oauth
+                .as_ref()
+                .is_some_and(|oauth| oauth.validate().is_err())
         {
             return Err(profile_error());
         }
@@ -404,6 +415,68 @@ pub struct ExpectedServiceProfile {
     pub provider: Option<String>,
 }
 
+/// The token-request parameters a profile fixes ahead of discovery.
+///
+/// `client_assertion_audience` is who checks the client's authentication JWT
+/// (for ThunderID v1.0.1, the issuer string); `resource` is the RFC 8707
+/// resource indicator the resulting token's audience must name. They answer
+/// different questions and are never substituted for one another, and neither
+/// is the response-verification `expected.audience`, which describes the
+/// Evidence assertion's audience instead.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OauthProfile {
+    #[serde(default)]
+    pub client_assertion_audience: Option<String>,
+    #[serde(default)]
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
+}
+
+impl OauthProfile {
+    /// The members the profile itself can check ahead of the provider's own
+    /// construction-time validation: shapes, bounds, and the scope-token
+    /// grammar, so a mis-authored profile fails at load rather than at the
+    /// first token request.
+    pub fn validate(&self) -> Result<(), EvidenceClientError> {
+        let valid = self
+            .client_assertion_audience
+            .as_deref()
+            .is_none_or(valid_expected_identity)
+            && self.resource.as_deref().is_none_or(|value| {
+                !value.is_empty()
+                    && value.len() <= MAXIMUM_PROFILE_REFERENCE_BYTES
+                    && url::Url::parse(value).is_ok_and(|url| {
+                        !url.scheme().is_empty()
+                            && url.fragment().is_none()
+                            && url.username().is_empty()
+                            && url.password().is_none()
+                    })
+            })
+            && self.scopes.as_ref().is_none_or(|scopes| {
+                !scopes.is_empty()
+                    && scopes.len() <= registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
+                    && scopes.iter().all(|scope| {
+                        !scope.is_empty()
+                            && scope.len()
+                                <= registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES
+                            && registry_platform_httputil::valid_scope_token(scope)
+                    })
+                    && scopes
+                        .iter()
+                        .collect::<std::collections::BTreeSet<_>>()
+                        .len()
+                        == scopes.len()
+            });
+        if valid {
+            Ok(())
+        } else {
+            Err(profile_error())
+        }
+    }
+}
+
 pub(crate) fn profile_error() -> EvidenceClientError {
     EvidenceClientError::configuration("the client profile is invalid or unavailable")
 }
@@ -467,6 +540,7 @@ mod tests {
             verification: VerificationProfile::default(),
             maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
             expected: ExpectedServiceProfile::default(),
+            oauth: None,
             origin_directory: None,
         };
         profile("https://evidence.example.org")
@@ -478,6 +552,72 @@ mod tests {
             "https://evidence.example.org/",
         ] {
             assert!(profile(rejected).validate().is_err(), "{rejected}");
+        }
+    }
+
+    /// The optional `oauth` object fixes the token request's assertion
+    /// audience, resource, and scopes. It validates against the same grammar
+    /// the provider enforces, so a mis-authored profile fails at load, and it
+    /// is absent from a profile that does not state it.
+    #[test]
+    fn the_optional_oauth_object_validates_and_round_trips() {
+        let base = r#"{"schema":"registry.evidence-client-profile/v1","baseUrl":"https://evidence.example.org","clientId":"client","privateKey":{"source":"environment","variable":"EVIDENCE_KEY"}}"#;
+        // `base` closes the profile object, so splice the oauth object in
+        // before its closing brace rather than appending after it.
+        let members = |oauth: &str| {
+            let mut value = base.to_owned();
+            value.pop();
+            value.push_str(",\"oauth\":");
+            value.push_str(oauth);
+            value.push('}');
+            value
+        };
+        let profile = EvidenceClientProfile::from_slice(
+            members(
+                r#"{"clientAssertionAudience":"https://issuer.example.org","resource":"urn:registry:evidence","scopes":["evidence:invoke"]}"#,
+            )
+            .as_bytes(),
+        )
+        .expect("the oauth object validates");
+        assert_eq!(
+            profile
+                .oauth
+                .as_ref()
+                .and_then(|oauth| oauth.resource.clone()),
+            Some("urn:registry:evidence".to_owned())
+        );
+        assert!(serde_json::to_string(&profile)
+            .expect("the profile serializes")
+            .contains("\"oauth\""));
+        assert!(
+            !serde_json::to_string(
+                &EvidenceClientProfile::from_slice(base.as_bytes())
+                    .expect("the plain profile parses")
+            )
+            .expect("the plain profile serializes")
+            .contains("\"oauth\""),
+            "an unstated oauth object must not appear in the profile"
+        );
+
+        for rejected in [
+            // A resource with a fragment or userinfo is not an RFC 8707
+            // resource indicator.
+            r#"{"resource":"urn:registry:evidence#fragment"}"#,
+            r#"{"resource":"https://user:pw@registry.example.org"}"#,
+            // Scopes are RFC 6749 scope-tokens, stated at least once, without
+            // repetition.
+            r#"{"scopes":[]}"#,
+            r#"{"scopes":[""]}"#,
+            r#"{"scopes":["records:read","records:read"]}"#,
+            r#"{"scopes":["re c"]}"#,
+            // An empty assertion audience is never useful.
+            r#"{"clientAssertionAudience":""}"#,
+        ] {
+            assert!(
+                EvidenceClientProfile::from_slice(members(rejected).as_bytes()).is_err(),
+                "accepted: {}",
+                members(rejected)
+            );
         }
     }
 
@@ -495,6 +635,7 @@ mod tests {
             verification: VerificationProfile::default(),
             maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
             expected: ExpectedServiceProfile::default(),
+            oauth: None,
             origin_directory: None,
         };
 
@@ -550,6 +691,7 @@ mod tests {
             verification: VerificationProfile::default(),
             maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
             expected,
+            oauth: None,
             origin_directory: None,
         };
         profile(ExpectedServiceProfile {
@@ -593,6 +735,7 @@ mod tests {
             verification: VerificationProfile::default(),
             maximum_metadata_cache_seconds: DEFAULT_METADATA_CACHE_SECONDS,
             expected: ExpectedServiceProfile::default(),
+            oauth: None,
             origin_directory: None,
         };
         profile(

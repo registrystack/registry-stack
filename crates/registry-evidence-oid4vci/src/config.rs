@@ -3,7 +3,7 @@
 //! Everything here is fixed for the lifetime of the serving process: the
 //! published credential issuer identifier, the listener, the Evidence
 //! deployment this service requests credentials from, the identity it
-//! authenticates to Mint with, and the bounds of the in-memory store.
+//! authenticates to the configured token issuer with, and the bounds of the in-memory store.
 //!
 //! The document is read whole and validated whole, so a deployment either
 //! starts on a coherent configuration or does not start. `check` runs this same
@@ -14,6 +14,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use registry_platform_httputil::client::{
+    valid_resource_uri, valid_scope_token, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
+    MAXIMUM_SCOPE_PARAMETER_BYTES,
+};
 use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
@@ -166,7 +170,7 @@ pub struct EvidenceConfig {
     pub base_url: String,
 }
 
-/// The identity this service authenticates to Mint with.
+/// The identity this service authenticates to its token issuer with.
 ///
 /// This is the client half of the process. It signs a private key JWT client
 /// assertion with its own key and receives an access token Evidence accepts.
@@ -175,7 +179,7 @@ pub struct EvidenceConfig {
 /// path.
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct MintClientConfig {
+pub struct TokenClientConfig {
     pub token_endpoint: String,
     pub client_id: String,
     /// The caller's own private JWK. Read owner-only when the outbound client
@@ -185,14 +189,49 @@ pub struct MintClientConfig {
     /// to the token endpoint, which is the usual registration.
     #[serde(default)]
     pub client_assertion_audience: Option<String>,
+    /// The fixed RFC 8707 resource identifier of the Evidence API.
+    #[serde(default)]
+    pub resource: Option<String>,
+    /// The exact scopes requested from the issuer for Evidence access.
+    #[serde(default)]
+    pub scopes: Option<Vec<String>>,
 }
 
-impl MintClientConfig {
+impl TokenClientConfig {
     #[must_use]
     pub fn client_assertion_audience(&self) -> &str {
         self.client_assertion_audience
             .as_deref()
             .unwrap_or(&self.token_endpoint)
+    }
+
+    fn validate_request(&self) -> Result<(), ConfigError> {
+        if let Some(resource) = self.resource.as_deref() {
+            if resource.len() > 2048 || !valid_resource_uri(resource) {
+                return Err(ConfigError::Invalid(
+                    "tokenClient.resource must be an absolute URI without fragment or userinfo, at most 2048 bytes",
+                ));
+            }
+        }
+        if let Some(scopes) = self.scopes.as_ref() {
+            if scopes.is_empty() || scopes.len() > MAXIMUM_REQUESTED_SCOPES {
+                return Err(ConfigError::Invalid(
+                    "tokenClient.scopes must contain 1..=32 scope tokens",
+                ));
+            }
+            let mut distinct = std::collections::HashSet::new();
+            if scopes.iter().any(|scope| {
+                scope.len() > MAXIMUM_REQUESTED_SCOPE_BYTES
+                    || !valid_scope_token(scope)
+                    || !distinct.insert(scope)
+            }) || scopes.join(" ").len() > MAXIMUM_SCOPE_PARAMETER_BYTES
+            {
+                return Err(ConfigError::Invalid(
+                    "tokenClient.scopes must be distinct bounded RFC 6749 scope tokens",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -219,8 +258,8 @@ fn default_maximum_token_lifetime_seconds() -> u64 {
 /// The authorization boundary of the adopter-facing offer endpoint.
 ///
 /// This is the resource-server half of the process, and it is deliberately a
-/// separate document from [`MintClientConfig`]: the identity this service
-/// authenticates to Mint with has nothing to do with the identities it accepts
+/// separate document from [`TokenClientConfig`]: the identity this service
+/// authenticates to the token issuer with has nothing to do with the identities it accepts
 /// tokens from, and nothing here is derived from that one.
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -239,6 +278,12 @@ pub struct OfferAuthorizationConfig {
     /// the issuer vouched for, which is the usual single-adopter deployment.
     #[serde(default)]
     pub authorized_clients: Vec<String>,
+    /// Scopes every offer token must carry, checked against the verified
+    /// token's scope set. Absent (`None`) keeps the no-scope-gate behavior;
+    /// present must be a nonempty list of RFC 6749 scope-tokens, and
+    /// generated configurations state `oid4vci:offer`.
+    #[serde(default)]
+    pub required_scopes: Option<Vec<String>>,
     #[serde(default = "default_maximum_token_lifetime_seconds")]
     pub maximum_token_lifetime_seconds: u64,
 }
@@ -280,6 +325,42 @@ impl OfferAuthorizationConfig {
             return Err(ConfigError::Invalid(
                 "every authorized offer client must be 1..=128 bytes",
             ));
+        }
+        // A present-but-empty required-scope list gates nothing and is almost
+        // certainly a mis-authored key, so like a present empty audience it is
+        // refused rather than silently permissive.
+        if let Some(scopes) = &self.required_scopes {
+            if scopes.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "offer requiredScopes, when stated, must list at least one scope",
+                ));
+            }
+            if scopes
+                .iter()
+                .any(|scope| scope.trim().is_empty() || scope.len() > 256)
+            {
+                return Err(ConfigError::Invalid(
+                    "every required offer scope must be 1..=256 bytes",
+                ));
+            }
+            if scopes
+                .iter()
+                .any(|scope| !registry_platform_httputil::valid_scope_token(scope))
+            {
+                return Err(ConfigError::Invalid(
+                    "offer requiredScopes must be RFC 6749 scope-tokens",
+                ));
+            }
+            if scopes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != scopes.len()
+            {
+                return Err(ConfigError::Invalid(
+                    "offer requiredScopes must not repeat a scope",
+                ));
+            }
         }
         if !(60..=3_600).contains(&self.maximum_token_lifetime_seconds) {
             return Err(ConfigError::Invalid(
@@ -416,7 +497,7 @@ pub struct DeliveryConfig {
     #[serde(default)]
     pub metrics_listener: Option<MetricsListenerConfig>,
     pub evidence: EvidenceConfig,
-    pub mint: MintClientConfig,
+    pub token_client: TokenClientConfig,
     pub offers: OfferAuthorizationConfig,
     #[serde(default)]
     pub store: StoreConfig,
@@ -427,6 +508,13 @@ impl DeliveryConfig {
     /// relative to its directory.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|_| ConfigError::Unavailable)?;
+        let keys: serde_norway::Value = serde_norway::from_str(&text)
+            .map_err(|error| ConfigError::Document(error.to_string()))?;
+        if keys.get("mint").is_some() {
+            return Err(ConfigError::Invalid(
+                "the mint configuration key is retired; use tokenClient",
+            ));
+        }
         let mut config: Self = serde_norway::from_str(&text)
             .map_err(|error| ConfigError::Document(error.to_string()))?;
         let root = path
@@ -452,10 +540,10 @@ impl DeliveryConfig {
     }
 
     fn resolve_paths(&mut self, root: &Path) {
-        if !self.mint.private_key_file.as_os_str().is_empty()
-            && self.mint.private_key_file.is_relative()
+        if !self.token_client.private_key_file.as_os_str().is_empty()
+            && self.token_client.private_key_file.is_relative()
         {
-            self.mint.private_key_file = root.join(&self.mint.private_key_file);
+            self.token_client.private_key_file = root.join(&self.token_client.private_key_file);
         }
     }
 
@@ -469,9 +557,9 @@ impl DeliveryConfig {
             ValidationMode::Strict => {
                 validate_https_credential_issuer(&self.credential_issuer)?;
                 validate_https_origin(&self.evidence.base_url, "the Evidence base URL")?;
-                validate_https_origin(&self.mint.token_endpoint, "the Mint token endpoint")?;
+                validate_https_origin(&self.token_client.token_endpoint, "the token endpoint")?;
                 validate_https_origin(
-                    self.mint.client_assertion_audience(),
+                    self.token_client.client_assertion_audience(),
                     "the client assertion audience",
                 )?;
                 validate_https_origin(&self.offers.issuer, "the offer token issuer")?;
@@ -487,14 +575,16 @@ impl DeliveryConfig {
             metrics.validate(&self.listener)?;
         }
 
-        if self.mint.client_id.trim().is_empty() || self.mint.client_id.len() > 128 {
+        if self.token_client.client_id.trim().is_empty() || self.token_client.client_id.len() > 128
+        {
             return Err(ConfigError::Invalid(
-                "the Mint client identifier must be 1..=128 bytes",
+                "the token client identifier must be 1..=128 bytes",
             ));
         }
-        if self.mint.private_key_file.as_os_str().is_empty() {
-            return Err(ConfigError::Invalid("a Mint client key file is required"));
+        if self.token_client.private_key_file.as_os_str().is_empty() {
+            return Err(ConfigError::Invalid("a token client key file is required"));
         }
+        self.token_client.validate_request()?;
         self.offers.validate()?;
         self.store.validate()?;
         Ok(())
@@ -505,7 +595,7 @@ impl DeliveryConfig {
     /// The credential issuer is published to wallets and compared byte for byte
     /// by a wallet proof's `aud`, so a supervised deployment has to serve
     /// exactly the origin it publishes. Every other origin this mode reaches is
-    /// loopback too: a supervised group that called a real Evidence or Mint
+    /// loopback too: a supervised group that called a real Evidence or token issuer
     /// deployment over plain HTTP would be a production deployment wearing a
     /// development label.
     fn validate_supervised_local_development_transport(&self) -> Result<(), ConfigError> {
@@ -521,9 +611,12 @@ impl DeliveryConfig {
         }
         for (endpoint, subject) in [
             (self.evidence.base_url.as_str(), "the Evidence base URL"),
-            (self.mint.token_endpoint.as_str(), "the Mint token endpoint"),
             (
-                self.mint.client_assertion_audience(),
+                self.token_client.token_endpoint.as_str(),
+                "the token endpoint",
+            ),
+            (
+                self.token_client.client_assertion_audience(),
                 "the client assertion audience",
             ),
             (self.offers.issuer.as_str(), "the offer token issuer"),
@@ -553,9 +646,7 @@ fn validate_https_origin(value: &str, subject: &'static str) -> Result<(), Confi
         "the Evidence base URL" => {
             ConfigError::Invalid("the Evidence base URL must be an absolute URL")
         }
-        "the Mint token endpoint" => {
-            ConfigError::Invalid("the Mint token endpoint must be an absolute URL")
-        }
+        "the token endpoint" => ConfigError::Invalid("the token endpoint must be an absolute URL"),
         "the offer token issuer" => {
             ConfigError::Invalid("the offer token issuer must be an absolute URL")
         }
@@ -659,7 +750,7 @@ credentialIssuer: https://wallet.example.org
 listener: {address: 127.0.0.1, port: 8090}
 evidence:
   baseUrl: https://evidence.example.org
-mint:
+tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyFile: keys/delivery-client.jwk.json
@@ -697,7 +788,7 @@ store:
         assert_eq!(config.credential_issuer, "https://wallet.example.org");
         assert_eq!(config.listener.port, 8090);
         assert_eq!(config.evidence.base_url, "https://evidence.example.org");
-        assert_eq!(config.mint.client_id, "evidence-oid4vci");
+        assert_eq!(config.token_client.client_id, "evidence-oid4vci");
         assert_eq!(config.store.maximum_transaction_code_attempts, 3);
         assert_eq!(config.validation_mode, ValidationMode::Strict);
     }
@@ -716,7 +807,7 @@ store:
     fn the_client_assertion_audience_defaults_to_the_token_endpoint() {
         let config = load_from(VALID).expect("the configuration loads");
         assert_eq!(
-            config.mint.client_assertion_audience(),
+            config.token_client.client_assertion_audience(),
             "https://mint.example.org/token"
         );
 
@@ -726,8 +817,60 @@ store:
         );
         let config = load_from(&text).expect("the configuration loads");
         assert_eq!(
-            config.mint.client_assertion_audience(),
+            config.token_client.client_assertion_audience(),
             "https://mint.example.org/other"
+        );
+    }
+
+    #[test]
+    fn the_token_client_accepts_fixed_evidence_resource_and_scopes() {
+        let text = VALID.replace(
+            "  clientId: evidence-oid4vci",
+            "  clientId: evidence-oid4vci\n  resource: urn:registry:evidence\n  scopes: [evidence:invoke, evidence:discover]",
+        );
+        let config = load_from(&text).expect("the token client configuration loads");
+        assert_eq!(
+            config.token_client.resource.as_deref(),
+            Some("urn:registry:evidence")
+        );
+        assert_eq!(
+            config.token_client.scopes.as_deref(),
+            Some(["evidence:invoke".to_owned(), "evidence:discover".to_owned()].as_slice())
+        );
+    }
+
+    #[test]
+    fn the_token_client_refuses_unsafe_resource_and_scope_configuration() {
+        for extra in [
+            "resource: /relative",
+            "resource: https://user@evidence.example.org",
+            "resource: https://evidence.example.org/#fragment",
+            "resource: https://evidence.example.org/a b",
+            "resource: https://evidence.example.org/é",
+            "resource: https://evidence.example.org/%GG",
+            "scopes: []",
+            "scopes: [evidence:invoke, evidence:invoke]",
+            "scopes: [\"not a scope\"]",
+        ] {
+            let text = VALID.replace(
+                "  clientId: evidence-oid4vci",
+                &format!("  clientId: evidence-oid4vci\n  {extra}"),
+            );
+            assert!(
+                matches!(load_from(&text), Err(ConfigError::Invalid(_))),
+                "token client accepted invalid {extra}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_old_mint_key_has_an_actionable_migration_error() {
+        let text = VALID.replace("tokenClient:", "mint:");
+        assert_eq!(
+            load_from(&text),
+            Err(ConfigError::Invalid(
+                "the mint configuration key is retired; use tokenClient"
+            ))
         );
     }
 
@@ -776,7 +919,7 @@ store:
         assert_eq!(config.offers.maximum_token_lifetime_seconds, 900);
         // Nothing in the offer boundary is derived from the Mint client
         // identity this service authenticates with.
-        assert_ne!(config.offers.issuer, config.mint.token_endpoint);
+        assert_ne!(config.offers.issuer, config.token_client.token_endpoint);
     }
 
     #[test]
@@ -798,9 +941,35 @@ store:
             ),
             (
                 "  authorizedClients: [adopter-front-end]",
-                "  authorizedClients: [\"\"]",
+                r#"  authorizedClients: [""]"#,
+            ),
+            // A stated requiredScopes list must be nonempty, scope-tokens,
+            // and free of repetition. (An absent or empty authorizedClients
+            // list stays legal: it accepts any issuer-vouched client.)
+            (
+                "  authorizedClients: [adopter-front-end]",
+                "  requiredScopes: []",
+            ),
+            (
+                "  authorizedClients: [adopter-front-end]",
+                "  requiredScopes: [oid4vci:offer, oid4vci:offer]",
+            ),
+            (
+                "  authorizedClients: [adopter-front-end]",
+                r#"  requiredScopes: ["not a scope"]"#,
             ),
         ] {
+            // The positive control beside the refusals: a stated, well-formed
+            // requiredScopes list is itself accepted.
+            let stated = VALID.replace(
+                "  authorizedClients: [adopter-front-end]",
+                "  authorizedClients: [adopter-front-end]\n  requiredScopes: [oid4vci:offer]",
+            );
+            assert!(
+                load_from(&stated).is_ok(),
+                "a stated, well-formed requiredScopes list was refused"
+            );
+
             let text = VALID.replace(from, to);
             assert!(
                 matches!(load_from(&text), Err(ConfigError::Invalid(_))),
@@ -1119,7 +1288,7 @@ store:
         fs::write(&path, VALID).expect("configuration is written");
         let config = DeliveryConfig::load(&path).expect("the configuration loads");
         assert_eq!(
-            config.mint.private_key_file,
+            config.token_client.private_key_file,
             root.path().join("keys/delivery-client.jwk.json")
         );
     }

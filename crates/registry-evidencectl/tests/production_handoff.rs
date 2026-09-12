@@ -691,11 +691,11 @@ fn production_build_checks_and_evaluates_every_neutral_authoring_shape() {
 }
 
 #[test]
-#[ignore = "exact gate: starts and stops real local Evidence and Mint before production build"]
+#[ignore = "exact gate: starts and stops real local Evidence and the pinned issuer before production build"]
 fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     let fixture = Fixture::new();
     let evidence = evidence_binary();
-    let mint = mint_binary();
+    let docker = installed_binary("DOCKER_BIN", "docker");
     let retained_openapi = fixture.root.join("lifecycle.openapi.yaml");
     fs::write(
         &retained_openapi,
@@ -731,10 +731,10 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
             .arg(&fixture.project)
             .arg("--evidence-bin")
             .arg(evidence)
-            .arg("--mint-bin")
-            .arg(mint)
+            .arg("--docker-bin")
+            .arg(docker)
             .args(["--evidence-port", &fixture.evidence_port.to_string()])
-            .args(["--mint-port", &fixture.mint_port.to_string()])
+            .args(["--issuer-port", &fixture.mint_port.to_string()])
             .args(["--ready-timeout-seconds", "20"])
             .output()
             .expect("public dev starts"),
@@ -747,7 +747,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
         fixture.evidence_port
     )));
     assert!(started_stdout.contains(&format!(
-        "Mint ready at http://127.0.0.1:{}",
+        "Issuer ready at http://127.0.0.1:{}",
         fixture.mint_port
     )));
     let dev_root = fixture.project.join(".evidence/dev");
@@ -2787,6 +2787,16 @@ fn evidence_binary() -> &'static Path {
             .find(|path| path.file_name().is_some_and(|name| name == "evidence"))
             .expect("Evidence executable path")
     })
+}
+
+fn installed_binary(variable: &str, name: &str) -> PathBuf {
+    if let Some(path) = std::env::var_os(variable) {
+        return PathBuf::from(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("set {variable} for this exact lifecycle gate"))
 }
 
 fn mint_binary() -> &'static Path {

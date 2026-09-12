@@ -722,9 +722,9 @@ tracing headers. For OAuth, token acquisition is credential bootstrap rather
 than an evidence-data source call, and a source authenticates either with a
 client secret or with a private-key JWT assertion, the asymmetric form health
 profiles require. Rust owns the fixed token endpoint, grant, client
-authentication form, credential placement, audience, token lifetime handling,
-bounds, and redaction. Rhai sees neither the credential flow, the signing key,
-nor the resulting token.
+authentication form, credential placement, audience, optional RFC 8707 resource
+indicator, token lifetime handling, bounds, and redaction. Rhai sees neither
+the credential flow, the signing key, nor the resulting token.
 
 The explicit local assurance profile may additionally use `kind: none` for a
 source at one canonical numeric-loopback HTTP origin with an explicit non-zero

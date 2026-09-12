@@ -141,7 +141,7 @@ const PROOF_MAX_FUTURE_SKEW: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
-    #[error("the Mint client key cannot be used: {0}")]
+    #[error("the token client key cannot be used: {0}")]
     ClientKey(#[from] SecretFileError),
     #[error("the outbound credential client cannot be built: {0}")]
     Issuer(#[from] IssuanceError),
@@ -178,7 +178,7 @@ impl DeliveryService {
     /// with it, and dropped. Nothing else in the process keeps a copy, and the
     /// offer boundary is built from its own document without seeing it.
     pub fn load(config: DeliveryConfig) -> Result<Self, ServiceError> {
-        let client_key = read_owner_only(&config.mint.private_key_file)?;
+        let client_key = read_owner_only(&config.token_client.private_key_file)?;
         let authorizer = Arc::new(MintResourceServer::from_config(
             &config.offers,
             config.validation_mode,
@@ -212,7 +212,7 @@ impl DeliveryService {
     /// Everything [`DeliveryService::load`] does, and no socket. The loaded key
     /// is dropped, and zeroized, before this returns.
     pub fn check(config: &DeliveryConfig) -> Result<(), ServiceError> {
-        let client_key = read_owner_only(&config.mint.private_key_file)?;
+        let client_key = read_owner_only(&config.token_client.private_key_file)?;
         EvidenceIssuer::new(config, &client_key)?;
         Ok(())
     }
@@ -1300,7 +1300,7 @@ mod tests {
              credentialIssuer: https://wallet.example.org\n\
              listener:\n  address: 127.0.0.1\n  port: {port}\n\
              evidence:\n  baseUrl: https://evidence.example.org\n\
-             mint:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyFile: delivery-client.jwk.json\n\
+             tokenClient:\n  tokenEndpoint: https://mint.example.org/token\n  clientId: evidence-oid4vci\n  privateKeyFile: delivery-client.jwk.json\n\
              offers:\n  issuer: https://mint.example.org\n  jwksUri: https://mint.example.org/.well-known/jwks.json\n  audiences: [\"https://wallet.example.org\"]\n"
         );
         fs::write(&path, text).expect("write the configuration document");

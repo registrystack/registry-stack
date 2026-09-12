@@ -594,20 +594,37 @@ impl EvidenceClient {
         // revalidation. That must not throw away a still-valid access token
         // when the revalidated token endpoint is byte-for-byte unchanged.
         // A changed endpoint gets a new provider before any credential is sent.
+        // The profile's fixed OAuth parameters travel with that provider, so
+        // the provider and the parameters cannot drift apart between requests.
         let token_provider = if let Some(snapshot) = previous.filter(|snapshot| {
             snapshot.authorization.issuer == authorization.value.issuer
                 && snapshot.authorization.token_endpoint == authorization.value.token_endpoint
         }) {
             Arc::clone(&snapshot.token_provider)
         } else {
-            Arc::new(PrivateKeyJwt::new(
-                PrivateKeyJwtConfig::new(
-                    token_endpoint,
-                    state.profile.client_id.clone(),
-                    state.private_key.clone(),
-                )
-                .with_fetch_url_policy(fetch_policy),
-            )?) as Arc<dyn TokenProvider>
+            let mut config = PrivateKeyJwtConfig::new(
+                token_endpoint,
+                state.profile.client_id.clone(),
+                state.private_key.clone(),
+            )
+            .with_fetch_url_policy(fetch_policy);
+            if let Some(oauth) = &state.profile.oauth {
+                // The assertion audience, the resource indicator, and the
+                // requested scopes are the deployment's fixed configuration.
+                // None of them is derived from the catalog, and the discovery
+                // token endpoint is never silently substituted for a stated
+                // assertion audience.
+                if let Some(audience) = &oauth.client_assertion_audience {
+                    config = config.with_audience(audience.clone());
+                }
+                if let Some(resource) = &oauth.resource {
+                    config = config.with_resource(resource.clone());
+                }
+                if let Some(scopes) = &oauth.scopes {
+                    config = config.with_scopes(scopes.iter().cloned());
+                }
+            }
+            Arc::new(PrivateKeyJwt::new(config)?) as Arc<dyn TokenProvider>
         };
         let cache_seconds = protected
             .cache_seconds

@@ -2,7 +2,7 @@
 
 use std::{
     sync::{Arc, Mutex, MutexGuard, PoisonError},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(test)]
@@ -10,7 +10,9 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedToken,
+    actor_kind, grant_claims, ActorKind, Audience, ClaimError, ClaimNames, GrantClaims,
+    GrantContextError, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig, VerifiedToken,
 };
 use serde_json::{Map, Value};
 use thiserror::Error;
@@ -60,8 +62,7 @@ pub struct AuthenticationClaimsConfig {
     pub principal_claim: String,
     pub requester_tags_claim: String,
     pub evidence_audience_claim: String,
-    pub grant_id_claim: String,
-    pub grant_authority_claim: String,
+    pub contextual_claims: ClaimNames,
     pub actor_claim: Option<String>,
 }
 
@@ -69,6 +70,14 @@ pub struct AuthenticationClaimsConfig {
 pub struct Authenticator {
     verifier: Arc<TokenVerifier>,
     claims: AuthenticationClaimsConfig,
+    /// Scopes every token must carry, checked after verification and before
+    /// any authority claim is read. Empty keeps the no-scope-gate behavior.
+    /// Client admission is not held here: it is configured on the platform
+    /// verifier, in its documented `client_id`/`azp` semantics.
+    required_scopes: Vec<String>,
+    /// Resource identifiers accepted by the verifier. A task grant must name
+    /// the one member that actually matched the token audience.
+    resources: Vec<String>,
     key_source: Arc<Mutex<KeySourceState>>,
 }
 
@@ -97,11 +106,25 @@ impl std::fmt::Debug for Authenticator {
 pub struct AuthenticatedContext {
     principal: String,
     actor: Option<String>,
+    actor_kind: ActorKind,
+    client: Option<String>,
     requester_tags: Vec<String>,
     evidence_audience: String,
-    grant_id: Option<String>,
-    grant_authority: Option<String>,
+    task_grant: Result<Option<GrantClaims>, TaskGrantError>,
     verified_claims: Value,
+}
+
+/// A redacted reason a present task-grant context cannot be trusted.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum TaskGrantError {
+    #[error("task-grant claims are invalid")]
+    Claims,
+    #[error("task-grant principal does not match the authenticated principal")]
+    PrincipalMismatch,
+    #[error("task-grant client context is invalid")]
+    Client,
+    #[error("task-grant resource context is invalid")]
+    Resource,
 }
 
 impl AuthenticatedContext {
@@ -113,6 +136,14 @@ impl AuthenticatedContext {
         self.actor.as_deref()
     }
 
+    pub const fn actor_kind(&self) -> ActorKind {
+        self.actor_kind
+    }
+
+    pub fn client(&self) -> Option<&str> {
+        self.client.as_deref()
+    }
+
     pub fn requester_tags(&self) -> &[String] {
         &self.requester_tags
     }
@@ -122,11 +153,18 @@ impl AuthenticatedContext {
     }
 
     pub fn grant_id(&self) -> Option<&str> {
-        self.grant_id.as_deref()
+        self.grant().ok().flatten().map(GrantClaims::id)
     }
 
     pub fn grant_authority(&self) -> Option<&str> {
-        self.grant_authority.as_deref()
+        self.grant().ok().flatten().map(GrantClaims::authority)
+    }
+
+    pub fn grant(&self) -> Result<Option<&GrantClaims>, TaskGrantError> {
+        self.task_grant
+            .as_ref()
+            .map(Option::as_ref)
+            .map_err(|error| *error)
     }
 
     pub fn claim_path(&self, path: &str) -> Option<&Value> {
@@ -141,17 +179,19 @@ impl AuthenticatedContext {
     pub(crate) fn offline_fixture_context(
         requester_tags: Vec<String>,
         evidence_audience: &str,
-        grant_id: Option<&str>,
-        grant_authority: Option<&str>,
+        actor_kind: ActorKind,
+        client: Option<&str>,
+        task_grant: Result<Option<GrantClaims>, TaskGrantError>,
         verified_claims: Value,
     ) -> Self {
         Self {
             principal: "offline-fixture-principal".to_owned(),
             actor: None,
+            actor_kind,
+            client: client.map(ToOwned::to_owned),
             requester_tags,
             evidence_audience: evidence_audience.to_owned(),
-            grant_id: grant_id.map(ToOwned::to_owned),
-            grant_authority: grant_authority.map(ToOwned::to_owned),
+            task_grant,
             verified_claims,
         }
     }
@@ -161,15 +201,15 @@ impl AuthenticatedContext {
         principal: &str,
         requester_tags: Vec<String>,
         evidence_audience: &str,
-        grant_id: Option<&str>,
-        grant_authority: Option<&str>,
+        task_grant: Result<Option<GrantClaims>, TaskGrantError>,
         verified_claims: Value,
     ) -> Self {
         let mut context = Self::offline_fixture_context(
             requester_tags,
             evidence_audience,
-            grant_id,
-            grant_authority,
+            ActorKind::Service,
+            None,
+            task_grant,
             verified_claims,
         );
         context.principal = principal.to_owned();
@@ -183,12 +223,13 @@ impl std::fmt::Debug for AuthenticatedContext {
             .debug_struct("AuthenticatedContext")
             .field("principal", &"<redacted>")
             .field("actor", &self.actor.as_ref().map(|_| "<redacted>"))
+            .field("actor_kind", &self.actor_kind)
+            .field("client", &self.client.as_ref().map(|_| "<redacted>"))
             .field("requester_tags", &"<redacted>")
             .field("evidence_audience", &self.evidence_audience)
-            .field("grant_id", &self.grant_id.as_ref().map(|_| "<redacted>"))
             .field(
-                "grant_authority",
-                &self.grant_authority.as_ref().map(|_| "<redacted>"),
+                "task_grant",
+                &self.task_grant.as_ref().map(|_| "<redacted>"),
             )
             .field("verified_claims", &"<redacted>")
             .finish()
@@ -241,7 +282,8 @@ impl Authenticator {
         .with_denied_kids(config.revoked_key_ids.iter().cloned().collect())
         .with_max_token_lifetime(Some(Duration::from_secs(
             config.maximum_token_lifetime_seconds,
-        )));
+        )))
+        .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default());
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
@@ -252,19 +294,37 @@ impl Authenticator {
             principal_claim: config.principal_claim.clone(),
             requester_tags_claim: config.requester_tags_claim.clone(),
             evidence_audience_claim: config.evidence_audience_claim.clone(),
-            grant_id_claim: config.grant_id_claim.clone(),
-            grant_authority_claim: config.grant_authority_claim.clone(),
+            contextual_claims: config.claims.clone(),
             actor_claim: config.actor_claim.clone(),
         };
         Self::new(verifier, claims)
+            .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
+            .with_resources(config.audiences.clone())
     }
 
     pub fn new(verifier: Arc<TokenVerifier>, claims: AuthenticationClaimsConfig) -> Self {
         Self {
             verifier,
             claims,
+            required_scopes: Vec::new(),
+            resources: Vec::new(),
             key_source: Arc::new(Mutex::new(KeySourceState::default())),
         }
+    }
+
+    /// State the scopes every token must carry. An empty list keeps the
+    /// permissive default, which is the behavior a configuration that states
+    /// no `requiredScopes` means.
+    #[must_use]
+    pub fn with_required_scopes(mut self, required_scopes: Vec<String>) -> Self {
+        self.required_scopes = required_scopes;
+        self
+    }
+
+    #[must_use]
+    pub fn with_resources(mut self, resources: Vec<String>) -> Self {
+        self.resources = resources;
+        self
     }
 
     pub async fn authenticate(
@@ -281,6 +341,24 @@ impl Authenticator {
                 return Err(AuthenticationError::Verification);
             }
         };
+        // The scope gate reads only the verified token's scope set. It runs
+        // after signature verification and before any authority claim is
+        // read, so a token that lacks a required scope reaches no protected
+        // source operation and no authority interpretation. A missing scope
+        // is never inferred from tags, principal, roles, `sub`, or request
+        // fields, and the refusal is the same closed authentication failure a
+        // refused client admission gets.
+        if !self.required_scopes.is_empty() {
+            let present: std::collections::HashSet<&str> =
+                verified.scopes.iter().map(String::as_str).collect();
+            if !self
+                .required_scopes
+                .iter()
+                .all(|scope| present.contains(scope.as_str()))
+            {
+                return Err(AuthenticationError::Verification);
+            }
+        }
         self.extract_context(verified)
     }
 
@@ -427,8 +505,17 @@ impl Authenticator {
         &self,
         verified: VerifiedToken,
     ) -> Result<AuthenticatedContext, AuthenticationError> {
+        let actor_kind = actor_kind(&verified.claims, &self.claims.contextual_claims)
+            .map_err(|_| AuthenticationError::Context)?;
+        let now_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| AuthenticationError::Context)?
+            .as_secs();
+        let mut task_grant =
+            grant_claims(&verified.claims, &self.claims.contextual_claims, now_unix)
+                .map_err(|_: ClaimError| TaskGrantError::Claims);
         let claims =
-            serde_json::to_value(verified.claims).map_err(|_| AuthenticationError::Context)?;
+            serde_json::to_value(&verified.claims).map_err(|_| AuthenticationError::Context)?;
         let claims_object = claims.as_object().ok_or(AuthenticationError::Context)?;
 
         // Version one validates no proof of possession. Treating a
@@ -460,29 +547,66 @@ impl Authenticator {
             .map(|claim| optional_direct_string(claims_object, claim, MAX_PRINCIPAL_BYTES))
             .transpose()?
             .flatten();
-        let grant_id = optional_direct_string(
-            claims_object,
-            &self.claims.grant_id_claim,
-            MAX_PRINCIPAL_BYTES,
-        )?;
-        let grant_authority = optional_direct_string(
-            claims_object,
-            &self.claims.grant_authority_claim,
-            MAX_PRINCIPAL_BYTES,
-        )?;
-        if grant_id.is_some() != grant_authority.is_some() {
-            return Err(AuthenticationError::Context);
+        if let Ok(Some(grant)) = &task_grant {
+            if grant.principal() != principal {
+                task_grant = Err(TaskGrantError::PrincipalMismatch);
+            } else {
+                match exactly_matched_resource(verified.claims.aud.as_ref(), &self.resources) {
+                    Some(resource) => {
+                        if let Err(error) = grant.verify_context(&verified, resource) {
+                            task_grant = Err(match error {
+                                GrantContextError::MissingVerifiedClient
+                                | GrantContextError::InvalidVerifiedClient
+                                | GrantContextError::ClientMismatch => TaskGrantError::Client,
+                                GrantContextError::ResourceMismatch => TaskGrantError::Resource,
+                                _ => TaskGrantError::Claims,
+                            });
+                        }
+                    }
+                    None => task_grant = Err(TaskGrantError::Resource),
+                }
+            }
         }
+        let client = verified
+            .matched_client_id()
+            .ok()
+            .flatten()
+            .or(verified.claims.azp.as_deref())
+            .or(verified.claims.client_id.as_deref())
+            .map(ToOwned::to_owned);
 
         Ok(AuthenticatedContext {
             principal,
             actor,
+            actor_kind,
+            client,
             requester_tags,
             evidence_audience,
-            grant_id,
-            grant_authority,
+            task_grant,
             verified_claims: claims,
         })
+    }
+}
+
+fn exactly_matched_resource<'a>(
+    audience: Option<&'a Audience>,
+    resources: &[String],
+) -> Option<&'a str> {
+    let matched = match audience? {
+        Audience::One(value) => resources
+            .contains(value)
+            .then_some(value.as_str())
+            .into_iter()
+            .collect(),
+        Audience::Many(values) => values
+            .iter()
+            .filter(|value| resources.contains(*value))
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+    };
+    match matched.as_slice() {
+        [only] => Some(*only),
+        _ => None,
     }
 }
 
@@ -490,7 +614,7 @@ fn jwks_fetch_policy(
     config: &AuthenticationConfig,
     assurance_profile: AssuranceProfile,
 ) -> FetchUrlPolicy {
-    if config.uses_local_mint_http(assurance_profile) {
+    if config.uses_local_issuer_http(assurance_profile) {
         return FetchUrlPolicy {
             allowed_schemes: vec!["http".to_owned()],
             allow_localhost: true,
@@ -662,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn jwks_fetch_policy_opens_http_only_for_exact_local_mint() {
+    fn jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer() {
         let mut exact = authentication_config();
         exact.issuer = "http://127.0.0.1:8081".to_owned();
         exact.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
@@ -670,6 +794,15 @@ mod tests {
         assert_eq!(local.allowed_schemes, ["http"]);
         assert!(local.allow_localhost);
         assert!(local.deny_private_ranges);
+
+        // The JWKS path is the issuer's to choose; what stays fixed is the
+        // exact same numeric loopback origin.
+        let mut other_path = exact.clone();
+        other_path.jwks_uri = "http://127.0.0.1:8081/oauth2/jwks".to_owned();
+        assert_eq!(
+            jwks_fetch_policy(&other_path, AssuranceProfile::Local).allowed_schemes,
+            ["http"]
+        );
 
         for (profile, issuer, jwks_uri) in [
             (
@@ -880,8 +1013,7 @@ mod tests {
                 principal_claim: "sub".to_owned(),
                 requester_tags_claim: "evidence_tags".to_owned(),
                 evidence_audience_claim: "evidence_audience".to_owned(),
-                grant_id_claim: "evidence_grant_id".to_owned(),
-                grant_authority_claim: "evidence_authority".to_owned(),
+                contextual_claims: ClaimNames::default(),
                 actor_claim: None,
             },
         );
@@ -920,8 +1052,7 @@ mod tests {
                 principal_claim: "sub".to_owned(),
                 requester_tags_claim: "evidence_tags".to_owned(),
                 evidence_audience_claim: "evidence_audience".to_owned(),
-                grant_id_claim: "evidence_grant_id".to_owned(),
-                grant_authority_claim: "evidence_authority".to_owned(),
+                contextual_claims: ClaimNames::default(),
                 actor_claim: None,
             },
         );
@@ -948,8 +1079,7 @@ mod tests {
             "principal-canary",
             vec!["tag-canary".to_string()],
             "urn:example:audience",
-            Some("grant-canary"),
-            Some("authority-canary"),
+            Err(TaskGrantError::Claims),
             serde_json::json!({"protected": "claim-canary"}),
         );
         context.actor = Some("actor-canary".to_string());
@@ -958,11 +1088,92 @@ mod tests {
             "principal-canary",
             "actor-canary",
             "tag-canary",
-            "grant-canary",
-            "authority-canary",
             "claim-canary",
         ] {
             assert!(!debug.contains(canary));
         }
+    }
+
+    fn context_extraction_authenticator(principal_claim: &str) -> Authenticator {
+        Authenticator::new(
+            Arc::new(TokenVerifier::new(
+                TokenVerifierConfig::access_token_profile(
+                    "https://issuer.invalid".to_owned(),
+                    vec!["evidence-resource".to_owned()],
+                    vec![jsonwebtoken::Algorithm::EdDSA],
+                    vec!["at+jwt".to_owned()],
+                )
+                .with_allowed_clients(vec!["evidence-agent".to_owned()]),
+                Arc::new(JwksFetcher::new(
+                    "https://issuer.invalid/jwks".to_owned(),
+                    JwksFetcherConfig::defaults(),
+                )),
+            )),
+            AuthenticationClaimsConfig {
+                principal_claim: principal_claim.to_owned(),
+                requester_tags_claim: "evidence_tags".to_owned(),
+                evidence_audience_claim: "evidence_audience".to_owned(),
+                contextual_claims: ClaimNames::default(),
+                actor_claim: None,
+            },
+        )
+        .with_resources(vec!["evidence-resource".to_owned()])
+    }
+
+    #[test]
+    fn evidence_principal_must_equal_the_grant_subject() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = serde_json::from_value(serde_json::json!({
+            "iss": "https://issuer.invalid",
+            "aud": "evidence-resource",
+            "sub": "institutional-agent",
+            "evidence_principal": "different-principal",
+            "exp": now + 300,
+            "registry_actor_kind": "agent",
+            "registry_purpose": "eligibility-check",
+            "registry_grant_id": "grant-1",
+            "registry_grant_authority": "authority-1",
+            "registry_grant_source_issuer": "https://casework.invalid",
+            "registry_grant_client": "evidence-agent",
+            "registry_grant_resource": "evidence-resource",
+            "registry_grant_exp": now + 300,
+            "registry_grant_bounds": {"type":"evidence", "requirement":"urn:example:requirement"},
+            "evidence_tags": ["caseworker"],
+            "evidence_audience": "https://relying-party.invalid"
+        }))
+        .expect("claims parse");
+        let context = context_extraction_authenticator("evidence_principal")
+            .extract_context(VerifiedToken {
+                claims,
+                matched_client: Some("client_id:evidence-agent".to_owned()),
+                scopes: Vec::new(),
+            })
+            .expect("verified product context extracts");
+        assert_eq!(context.grant(), Err(TaskGrantError::PrincipalMismatch));
+    }
+
+    #[test]
+    fn purpose_only_service_token_is_not_a_task_grant() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = serde_json::from_value(serde_json::json!({
+            "iss": "https://issuer.invalid",
+            "aud": "evidence-resource",
+            "sub": "service-principal",
+            "exp": now + 300,
+            "registry_actor_kind": "service",
+            "registry_purpose": "standing-service",
+            "evidence_tags": ["service"],
+            "evidence_audience": "https://relying-party.invalid"
+        }))
+        .expect("claims parse");
+        let context = context_extraction_authenticator("sub")
+            .extract_context(VerifiedToken {
+                claims,
+                matched_client: Some("client_id:evidence-agent".to_owned()),
+                scopes: Vec::new(),
+            })
+            .expect("standing token extracts");
+        assert_eq!(context.actor_kind(), ActorKind::Service);
+        assert!(matches!(context.grant(), Ok(None)));
     }
 }

@@ -1,41 +1,42 @@
-//! End-to-end proof that the offer boundary is a resource server for tokens
-//! Mint really issued.
+//! Proof that the offer boundary is a resource server for standards-based
+//! access tokens, including one issued by the pinned stock local issuer.
 //!
 //! The adopter-facing offer endpoint is the only authorization boundary this
-//! service has, so its verification profile is not something to assert against
-//! a token this test wrote itself. The deployment below is a real Mint on disk,
-//! driven through its real router, and the token handed to the resource server
-//! is the one Mint minted. Only the key source is substituted, for the same
-//! reason Mint's own compatibility test substitutes it: the key set is the one
-//! Mint published, read directly rather than over a network fetch.
+//! service has. Focused cases use a deterministic signer to vary one claim at a
+//! time. The ignored exact gate provisions the installed pinned issuer, obtains
+//! a token with `private_key_jwt`, and verifies it against the issuer's own
+//! public key snapshot.
 //!
-//! Nothing here touches the client half of the process. This service's own Mint
+//! Nothing here touches the client half of the process. This service's own token
 //! client identity has no part in any decision below, which is the separation
 //! [`registry_evidence_oid4vci::authorizer`] exists to keep.
 
-use std::{fs, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    net::TcpListener,
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
-use axum_test::TestServer;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_evidence_client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_evidence_oid4vci::{
     authorizer::{verifier_profile, AuthorizationError, MintResourceServer, OfferAuthorizer},
     config::{AccessTokenAlgorithm, OfferAuthorizationConfig},
 };
-use registry_mint::{
-    config::MintConfig,
-    server::{build_app, MintService},
-    CLIENT_ASSERTION_TYPE, GRANT_TYPE_CLIENT_CREDENTIALS,
-};
 use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifier};
+use registry_thunderid_tooling::{
+    container::Session,
+    description::SessionIdentity,
+    local::{self, TypedLocalClient},
+    render,
+    version::ThunderIdPin,
+};
 use serde_json::{json, Value};
 
-/// A fixed, non-secret audit HMAC key. Held as a byte literal rather than
-/// written inline so a secret scanner does not read the write call as an
-/// assignment of a live credential.
-const AUDIT_HASH_KEY: &[u8] = b"0123456789abcdef0123456789abcdef";
-const ISSUER: &str = "http://127.0.0.1:18091";
-const ASSERTION_AUDIENCE: &str = "http://127.0.0.1:18091/token";
+const FIXTURE_ISSUER: &str = "https://issuer.example.org";
 const OFFER_AUDIENCE: &str = "https://delivery.example.org";
 const CLIENT_ID: &str = "offer-caller";
 const PRINCIPAL: &str = "urn:example:offer-caller";
@@ -76,169 +77,10 @@ fn signing_key_pair(seed: u8) -> (Value, Value) {
     )
 }
 
-struct Deployment {
-    /// Held so the directory outlives the service that reads from it.
-    _directory: tempfile::TempDir,
-    service: Arc<MintService>,
-}
-
-/// Write a complete Mint deployment to disk and load it exactly as the binary
-/// would, including the owner-only permission requirement on the signing key.
-async fn deployment() -> Deployment {
-    let directory = tempfile::tempdir().expect("a temporary directory");
-    let root = directory.path();
-    for child in ["secrets", "clients", "public-keys"] {
-        fs::create_dir(root.join(child)).expect("create a deployment directory");
-    }
-
-    let (signing_public, signing_document) = signing_key_pair(7);
-    let public_file = format!(
-        "{}.jwk.json",
-        signing_public["kid"].as_str().expect("the key has an id")
-    );
-    fs::write(
-        root.join("public-keys").join(&public_file),
-        signing_public.to_string(),
-    )
-    .expect("write the published public key");
-    write_owner_only(
-        &root.join("secrets/signing.jwk"),
-        signing_document.to_string().as_bytes(),
-    );
-    write_owner_only(&root.join("secrets/audit-hmac-key"), AUDIT_HASH_KEY);
-
-    let (_, client_public) = client_key_pair(3);
-    fs::write(
-        root.join(format!("clients/{CLIENT_ID}.yaml")),
-        format!(
-            "clientId: {CLIENT_ID}\nprincipal: {PRINCIPAL}\nevidenceAudience: {OFFER_AUDIENCE}\nrequesterTags: [{CLIENT_ID}]\nkeys: [{client_public}]\n"
-        ),
-    )
-    .expect("write the client registration");
-
-    let config_path = root.join("mint.yaml");
-    fs::write(
-        &config_path,
-        format!(
-            r#"
-version: 1
-validationMode: supervised-local-development
-issuer: {ISSUER}
-listener: {{address: 127.0.0.1, port: 18091}}
-signing:
-  algorithm: ES256
-  activePublicJwkFile: public-keys/{public_file}
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-signer:
-  kind: local-jwk
-  privateKeyRef: secret:file/signing.jwk
-secretProviders:
-  file: {{root: {}}}
-audit:
-  path: audit/mint.jsonl
-  maximumFileBytes: 1073741824
-  hashKeyRef: secret:file/audit-hmac-key
-  hashKeyVersion: 1
-accessTokens:
-  audiences: [{OFFER_AUDIENCE}]
-  lifetimeSeconds: 300
-  claims:
-    principal: sub
-    requesterTags: evidence_tags
-    evidenceAudience: evidence_audience
-    grantId: evidence_grant_id
-    grantAuthority: evidence_authority
-clientAssertion:
-  audience: {ASSERTION_AUDIENCE}
-  algorithms: [EdDSA]
-clients:
-  directory: clients
-"#,
-            root.join("secrets").display()
-        ),
-    )
-    .expect("write the deployment configuration");
-
-    let config = MintConfig::load(&config_path).expect("the deployment configuration is valid");
-    let service = Arc::new(
-        MintService::load(config)
-            .await
-            .expect("the deployment loads"),
-    );
-    Deployment {
-        _directory: directory,
-        service,
-    }
-}
-
-fn write_owner_only(path: &Path, contents: &[u8]) {
-    fs::write(path, contents).expect("write a deployment secret");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .expect("restrict a deployment secret");
-}
-
-fn sign_assertion(private: &PrivateJwk, claims: &Value) -> String {
-    let kid = private.kid.clone().expect("the test key has an id");
-    let header = json!({"alg": "EdDSA", "typ": "JWT", "kid": kid});
-    let encode = |value: &Value| {
-        URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).expect("value serializes"))
-    };
-    let signing_input = format!("{}.{}", encode(&header), encode(claims));
-    let signature = sign(signing_input.as_bytes(), private).expect("the key signs");
-    format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature))
-}
-
-/// Drive the real Mint router and return the token it issued together with the
-/// key set it published.
-async fn minted_offer_token() -> (String, Value) {
-    let deployment = deployment().await;
-    let http = TestServer::new(build_app(Arc::clone(&deployment.service)));
-
-    let published = http.get("/.well-known/jwks.json").await;
-    published.assert_status_ok();
-    let key_set = published.json::<Value>();
-
-    let (private, _) = client_key_pair(3);
-    let now = chrono::Utc::now().timestamp();
-    let assertion = sign_assertion(
-        &private,
-        &json!({
-            "iss": CLIENT_ID,
-            "sub": CLIENT_ID,
-            "aud": ASSERTION_AUDIENCE,
-            "iat": now,
-            "exp": now + 120,
-            "jti": "offer-authorization-1",
-        }),
-    );
-    let response = http
-        .post("/token")
-        .form(&vec![
-            (
-                "grant_type".to_owned(),
-                GRANT_TYPE_CLIENT_CREDENTIALS.to_owned(),
-            ),
-            (
-                "client_assertion_type".to_owned(),
-                CLIENT_ASSERTION_TYPE.to_owned(),
-            ),
-            ("client_assertion".to_owned(), assertion),
-        ])
-        .await;
-    response.assert_status_ok();
-    let token = response.json::<Value>()["access_token"]
-        .as_str()
-        .expect("the response carries an access token")
-        .to_owned();
-    (token, key_set)
-}
-
-/// The offer boundary, built over the profile the deployment configuration
-/// states and over the key set Mint published.
+/// The offer boundary, built over the profile and a trusted key snapshot.
 fn resource_server(config: &OfferAuthorizationConfig, key_set: &Value) -> MintResourceServer {
     let parsed: jsonwebtoken::jwk::JwkSet =
-        serde_json::from_value(key_set.clone()).expect("Mint publishes a parsable key set");
+        serde_json::from_value(key_set.clone()).expect("the issuer publishes a parsable key set");
     let fetcher = Arc::new(JwksFetcher::new_static(
         parsed,
         JwksFetcherConfig::defaults(),
@@ -247,41 +89,148 @@ fn resource_server(config: &OfferAuthorizationConfig, key_set: &Value) -> MintRe
         verifier_profile(config),
         fetcher,
     )))
+    .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
 }
 
-fn offer_config(audience: &str) -> OfferAuthorizationConfig {
+fn offer_config(issuer: &str, audience: &str, algorithm: AccessTokenAlgorithm) -> OfferAuthorizationConfig {
     OfferAuthorizationConfig {
-        issuer: ISSUER.to_owned(),
-        jwks_uri: format!("{ISSUER}/.well-known/jwks.json"),
+        issuer: issuer.to_owned(),
+        jwks_uri: format!("{issuer}/oauth2/jwks"),
         audiences: vec![audience.to_owned()],
-        algorithms: vec![AccessTokenAlgorithm::ES256],
+        algorithms: vec![algorithm],
         authorized_clients: Vec::new(),
+        required_scopes: None,
         maximum_token_lifetime_seconds: 900,
     }
 }
 
+/// The required-scope gate: a correctly signed, audience-matching token whose
+/// scope set omits the configured offer permission authorizes nothing.
 #[tokio::test]
-async fn a_token_mint_issued_authorizes_an_offer() {
-    let (token, key_set) = minted_offer_token().await;
-    let authorized = resource_server(&offer_config(OFFER_AUDIENCE), &key_set)
-        .authorize(&token)
-        .await
-        .expect("the offer boundary accepts a token Mint issued");
+async fn a_token_without_the_required_offer_scope_is_refused() {
+    let (issued, key_set) = signed_offer_fixture(json!({"scope":"offers:read"}));
+    let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+    assert_eq!(
+        resource_server(&config, &key_set).authorize(&issued).await,
+        Err(AuthorizationError::Refused),
+        "a correctly signed audience-matching token with no offer scope authorized an offer"
+    );
 
-    // Both come from the server-side registration Mint holds, never from
-    // anything the caller asserted.
-    assert_eq!(authorized.client.as_deref(), Some(CLIENT_ID));
-    assert_eq!(authorized.subject.as_deref(), Some(PRINCIPAL));
+    let (signing_public, signing_document) = signing_key_pair(7);
+    let private =
+        PrivateJwk::parse(&signing_document.to_string()).expect("the fixture signing key parses");
+    let kid = signing_public["kid"].as_str().expect("the key has an id");
+    let now = chrono::Utc::now().timestamp();
+    let header = json!({"alg": "ES256", "typ": "at+jwt", "kid": kid});
+    let claims = json!({
+        "iss": FIXTURE_ISSUER,
+        "aud": OFFER_AUDIENCE,
+        "sub": PRINCIPAL,
+        "iat": now,
+        "exp": now + 300,
+        "scope": "oid4vci:offer offers:read",
+    });
+    let encode =
+        |value: &Value| URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).expect("serializes"));
+    let signing_input = format!("{}.{}", encode(&header), encode(&claims));
+    let signature = sign(signing_input.as_bytes(), &private).expect("the fixture signs");
+    let fixture = format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature));
+
+    let key_set = json!({"keys": [signing_public]});
+    resource_server(&config, &key_set)
+        .authorize(&fixture)
+        .await
+        .expect("a token carrying the required offer scope authorizes an offer");
+}
+
+fn signed_offer_fixture(extra: Value) -> (String, Value) {
+    let (signing_public, signing_document) = signing_key_pair(7);
+    let private =
+        PrivateJwk::parse(&signing_document.to_string()).expect("the fixture signing key parses");
+    let kid = signing_public["kid"].as_str().expect("the key has an id");
+    let now = chrono::Utc::now().timestamp();
+    let header = json!({"alg": "ES256", "typ": "at+jwt", "kid": kid});
+    let mut claims = json!({
+        "iss": FIXTURE_ISSUER,
+        "aud": OFFER_AUDIENCE,
+        "sub": PRINCIPAL,
+        "iat": now,
+        "exp": now + 300,
+        "scope": "oid4vci:offer",
+    });
+    claims
+        .as_object_mut()
+        .expect("claims are an object")
+        .extend(
+            extra
+                .as_object()
+                .expect("extra claims are an object")
+                .clone(),
+        );
+    let encode =
+        |value: &Value| URL_SAFE_NO_PAD.encode(serde_json::to_vec(value).expect("serializes"));
+    let signing_input = format!("{}.{}", encode(&header), encode(&claims));
+    let signature = sign(signing_input.as_bytes(), &private).expect("the fixture signs");
+    (
+        format!("{signing_input}.{}", URL_SAFE_NO_PAD.encode(signature)),
+        json!({"keys": [signing_public]}),
+    )
 }
 
 #[tokio::test]
-async fn a_token_mint_issued_for_another_resource_server_is_refused() {
-    let (token, key_set) = minted_offer_token().await;
+async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
+    let now = chrono::Utc::now().timestamp();
+    let (task_bound, keys) = signed_offer_fixture(json!({
+        "registry_actor_kind":"agent",
+        "registry_grant_id":"grant-a",
+        "registry_grant_authority":"authority-a",
+        "registry_grant_source_issuer":"https://casework.example",
+        "registry_grant_client":"offer-caller",
+        "registry_grant_resource":OFFER_AUDIENCE,
+        "registry_purpose":"credential-delivery",
+        "registry_grant_exp":now + 300,
+        "registry_grant_bounds":{"type":"evidence","requirement":"urn:example:requirement"}
+    }));
+    let config = {
+        let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+        config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+        config
+    };
+    assert_eq!(
+        resource_server(&config, &keys).authorize(&task_bound).await,
+        Err(AuthorizationError::Refused)
+    );
+
+    let (partial, keys) = signed_offer_fixture(json!({"registry_grant_id":"grant-a"}));
+    assert_eq!(
+        resource_server(&config, &keys).authorize(&partial).await,
+        Err(AuthorizationError::Refused)
+    );
+}
+
+#[tokio::test]
+async fn an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported() {
+    let (ordinary, keys) = signed_offer_fixture(json!({
+        "registry_actor_kind":"service",
+        "registry_purpose":"credential-delivery"
+    }));
+    let mut config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
+    config.required_scopes = Some(vec!["oid4vci:offer".to_owned()]);
+    resource_server(&config, &keys)
+        .authorize(&ordinary)
+        .await
+        .expect("an ordinary service offer remains supported");
+}
+
+#[tokio::test]
+async fn a_token_issued_for_another_resource_server_is_refused() {
+    let (token, key_set) = signed_offer_fixture(json!({}));
     // The same real token, presented to a deployment that answers to a
     // different audience. An adopter's token for another resource server is
     // not an offer authorization here.
     assert_eq!(
-        resource_server(&offer_config("https://elsewhere.example.org"), &key_set)
+        resource_server(&offer_config(FIXTURE_ISSUER, "https://elsewhere.example.org", AccessTokenAlgorithm::ES256), &key_set)
             .authorize(&token)
             .await,
         Err(AuthorizationError::Refused)
@@ -290,8 +239,8 @@ async fn a_token_mint_issued_for_another_resource_server_is_refused() {
 
 #[tokio::test]
 async fn a_token_this_issuer_did_not_sign_is_refused() {
-    let (token, key_set) = minted_offer_token().await;
-    let config = offer_config(OFFER_AUDIENCE);
+    let (token, key_set) = signed_offer_fixture(json!({}));
+    let config = offer_config(FIXTURE_ISSUER, OFFER_AUDIENCE, AccessTokenAlgorithm::ES256);
     let server = resource_server(&config, &key_set);
 
     // A token whose signature was replaced, presented otherwise unchanged.
@@ -307,4 +256,129 @@ async fn a_token_this_issuer_did_not_sign_is_refused() {
         Err(AuthorizationError::Refused)
     );
     assert_eq!(server.authorize("").await, Err(AuthorizationError::Missing));
+}
+
+struct OwnedStockSession {
+    label: String,
+    id: String,
+    port: u16,
+    state_root: PathBuf,
+    image: String,
+    docker: PathBuf,
+}
+
+impl Drop for OwnedStockSession {
+    fn drop(&mut self) {
+        let session = Session {
+            label: &self.label,
+            id: &self.id,
+            port: self.port,
+            state_root: &self.state_root,
+            image: &self.image,
+        };
+        let _ = local::stop(&session, &self.docker);
+    }
+}
+
+fn installed_or_env(variable: &str, binary: &str) -> PathBuf {
+    if let Some(path) = std::env::var_os(variable) {
+        return PathBuf::from(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(binary))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("set {variable} for the exact stock-issuer gate"))
+}
+
+/// Replacement acceptance for the former in-process Mint fixture. This gate
+/// uses the installed pinned issuer, its native private-key-JWT registration,
+/// its real token endpoint, and the exact public RS256 keys it served.
+#[test]
+#[ignore = "exact gate: starts the pinned stock issuer container"]
+fn stock_issuer_service_token_authorizes_the_offer_boundary() {
+    let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve issuer port");
+    let port = reservation.local_addr().expect("issuer address").port();
+    let issuer = format!("http://127.0.0.1:{port}");
+    let directory = tempfile::tempdir().expect("private stock issuer state");
+    std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700))
+        .expect("issuer state is owner-only");
+    let state_root = directory.path().join("issuer");
+    let label = format!("oid4vci-offer-{port}");
+    let id = format!("oid4vci-offer-session-{port}");
+    let (public, private) = signing_key_pair(11);
+    let description = local::typed_local_description(
+        SessionIdentity {
+            label: label.clone(),
+            id: id.clone(),
+        },
+        port,
+        state_root.clone(),
+        OFFER_AUDIENCE.to_owned(),
+        vec![TypedLocalClient {
+            client_id: CLIENT_ID.to_owned(),
+            public_jwks: json!({"keys":[public]}).to_string(),
+            claims: BTreeMap::from([
+                ("registry_actor_kind".to_owned(), json!("service")),
+                ("registry_purpose".to_owned(), json!("credential-delivery")),
+            ]),
+            scopes: vec!["oid4vci:offer".to_owned()],
+            allow_human_fixture: false,
+        }],
+    )
+    .expect("the stock issuer description is valid");
+    render::render(&description).expect("the stock issuer resources render");
+    let pin = ThunderIdPin::load().expect("the maintained stock issuer pin loads");
+    let docker = installed_or_env("DOCKER_BIN", "docker");
+    let session = Session {
+        label: &label,
+        id: &id,
+        port,
+        state_root: &state_root,
+        image: &pin.image,
+    };
+    drop(reservation);
+    let keys = local::start(&session, &docker, &mut || false)
+        .expect("the pinned stock issuer starts");
+    let _owned = OwnedStockSession {
+        label,
+        id,
+        port,
+        state_root,
+        image: pin.image,
+        docker,
+    };
+
+    let private = PrivateJwk::parse(&private.to_string()).expect("the client key parses");
+    let provider = PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(
+            format!("{issuer}/oauth2/token")
+                .parse()
+                .expect("the token endpoint parses"),
+            CLIENT_ID,
+            private,
+        )
+        .with_audience(issuer.clone())
+        .with_resource(OFFER_AUDIENCE)
+        .with_scopes(["oid4vci:offer".to_owned()]),
+    )
+    .expect("the private-key-JWT client is valid");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("the HTTP runtime builds");
+    let issued = runtime
+        .block_on(provider.bearer_token())
+        .expect("the stock issuer issues an offer token");
+    let authorization = issued.authorization_header_value();
+    let compact = authorization
+        .to_str()
+        .expect("the issued token is header-safe")
+        .strip_prefix("Bearer ")
+        .expect("the provider uses the bearer scheme");
+    let config = offer_config(&issuer, OFFER_AUDIENCE, AccessTokenAlgorithm::RS256);
+    let authorized = runtime
+        .block_on(resource_server(&config, &keys).authorize(compact))
+        .expect("the offer boundary accepts the stock issuer token");
+    assert_eq!(authorized.client.as_deref(), Some(CLIENT_ID));
+    assert!(authorized.subject.is_some());
 }

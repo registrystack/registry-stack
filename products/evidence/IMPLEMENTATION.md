@@ -343,9 +343,10 @@ request and selects one generic authentication profile:
 - static API-key header with a fixed allowlisted header name and secret
   reference;
 - OAuth 2.0 client credentials with a client identifier reference, a fixed
-  HTTPS token endpoint, a fixed grant, an optional fixed scope and audience,
-  and exactly one client authentication form: a client secret reference with a
-  fixed placement, or a private-key reference the runtime signs a JWT client
+  HTTPS token endpoint, a fixed grant, optional fixed scope and audience, an
+  optional RFC 8707 resource indicator, and exactly one client authentication
+  form: a client secret reference with a fixed placement, or a private-key
+  reference the runtime signs a JWT client
   assertion with.
 
 Credential acquisition is not available to Rhai. OAuth token acquisition may

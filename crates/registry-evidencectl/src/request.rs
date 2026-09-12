@@ -3,7 +3,8 @@
 //! The Evidence runtime supplies trusted local relying-procedure metadata and
 //! exact pinned subject bindings without making an authorization decision. The
 //! relying-party client owns the request, nonce, and retained verification
-//! context. Mint separately supplies the bearer used by the tutorial's curl.
+//! context. The retained local issuer separately supplies the bearer used by
+//! the tutorial's curl.
 
 use std::{
     collections::BTreeMap,
@@ -39,7 +40,6 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 // that the profile legitimately permits.
 const MAX_SELECTOR_VALUE_BYTES: usize = 8 * 1024;
 const MAX_SUBJECTS_FILE_BYTES: u64 = 16 * 1024;
-const MAX_TOKEN_BYTES: usize = 64 * 1024;
 const MAX_CONTEXT_BYTES: u64 = 256 * 1024;
 const LOCAL_PROCEDURE_INPUT_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure-input/v1";
 const LOCAL_PROCEDURE_SCHEMA_V1: &str = "registry.evidence.local-relying-procedure/v1";
@@ -489,6 +489,9 @@ fn progressive_curl_config(
 }
 
 fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
+    if args.mint_bin.is_some() {
+        bail!("--mint-bin was removed with the local Registry Mint lifecycle; the ready dev session owns its pinned issuer")
+    }
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
     let (question, subjects) = validate_closed_inputs(&ready, &args)?;
@@ -497,11 +500,6 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         "evidence",
         args.evidence_bin.as_deref(),
         "EVIDENCECTL_TEST_EVIDENCE_BIN",
-    )?;
-    let mint = dev::resolve_tool_binary(
-        "mint",
-        args.mint_bin.as_deref(),
-        "EVIDENCECTL_TEST_MINT_BIN",
     )?;
 
     let requests_root = ensure_requests_root(&ready.project)?;
@@ -521,16 +519,10 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
         .context("failed to remove the private relying procedure input")?;
     validate_local_relying_procedure(&procedure, question, &client.evidence_audience, args.format)?;
 
-    let token = obtain_token(
-        &mint,
-        &ready.token_url,
-        &client.client_id,
-        &client.private_key_path,
-        &client.assertion_audience,
-    )?;
+    let token = dev::obtain_issuer_token(&ready, &client.client_id, &client.private_key_path)?;
     let token_provider = Arc::new(
         StaticToken::new(token.as_str().to_owned())
-            .context("Registry Mint returned an unusable token")?,
+            .context("the local issuer returned an unusable token")?,
     );
     let evidence_origin =
         url::Url::parse(&ready.evidence_origin).context("the active Evidence origin is invalid")?;
@@ -584,7 +576,6 @@ fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
 struct RequestClient {
     client_id: String,
     private_key_path: PathBuf,
-    assertion_audience: String,
     evidence_audience: String,
 }
 
@@ -603,7 +594,6 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
             Ok(RequestClient {
                 client_id: client.client_id,
                 private_key_path: client.private_key_path,
-                assertion_audience: ready.token_url.clone(),
                 evidence_audience: client.evidence_audience,
             })
         }
@@ -614,7 +604,6 @@ fn resolve_request_client(ready: &ReadyDevState, client_id: Option<&str>) -> Res
             Ok(RequestClient {
                 client_id: caller.client_id.clone(),
                 private_key_path: caller.private_key_path.clone(),
-                assertion_audience: caller.assertion_audience.clone(),
                 evidence_audience: caller.evidence_audience.clone(),
             })
         }
@@ -918,67 +907,6 @@ fn evidence_request_spec(
     }
 }
 
-fn obtain_token(
-    mint: &Path,
-    token_url: &str,
-    client_id: &str,
-    private_key_path: &Path,
-    assertion_audience: &str,
-) -> Result<Zeroizing<String>> {
-    let mut child = Command::new(mint)
-        .arg("token")
-        .arg("--url")
-        .arg(token_url)
-        .arg("--client-id")
-        .arg(client_id)
-        .arg("--key")
-        .arg(private_key_path)
-        .arg("--audience")
-        .arg(assertion_audience)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("failed to invoke Mint")?;
-    let mut stdout = Zeroizing::new(Vec::with_capacity(MAX_TOKEN_BYTES + 2));
-    let read_result = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("failed to open Mint token output"))?
-        .take((MAX_TOKEN_BYTES + 3) as u64)
-        .read_to_end(&mut stdout);
-    if read_result.is_err() || stdout.len() > MAX_TOKEN_BYTES + 2 {
-        let _ = child.kill();
-        let _ = child.wait();
-        bail!("Registry Mint refused a token for client {client_id}");
-    }
-    let status = child.wait().context("failed to wait for Mint")?;
-    if !status.success() {
-        bail!("Registry Mint refused a token for client {client_id}");
-    }
-    if std::str::from_utf8(&stdout).is_err() {
-        bail!("Registry Mint refused a token for client {client_id}");
-    }
-    let mut token = Zeroizing::new(
-        String::from_utf8(std::mem::take(&mut stdout)).expect("Mint output was validated as UTF-8"),
-    );
-    if token.ends_with('\n') {
-        token.pop();
-        if token.ends_with('\r') {
-            token.pop();
-        }
-    }
-    if token.is_empty()
-        || token.len() > MAX_TOKEN_BYTES
-        || token
-            .bytes()
-            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-')))
-    {
-        bail!("Registry Mint refused a token for client {client_id}");
-    }
-    Ok(token)
-}
-
 fn write_authorization(path: &Path, token: &str) -> Result<()> {
     let mut contents = Zeroizing::new(String::with_capacity(token.len() + 36));
     contents.push_str("header = \"Authorization: Bearer ");
@@ -1208,8 +1136,8 @@ mod tests {
             project: PathBuf::from("/tmp/project"),
             runtime_path: PathBuf::from("/tmp/runtime.yaml"),
             evidence_origin: "http://127.0.0.1:8080".to_owned(),
-            mint_origin: "http://127.0.0.1:8081".to_owned(),
-            token_url: "http://127.0.0.1:8081/token".to_owned(),
+            issuer_origin: "http://127.0.0.1:8081".to_owned(),
+            token_url: "http://127.0.0.1:8081/oauth2/token".to_owned(),
             access_token_audience: "local".to_owned(),
             caller: None,
             access_policies: vec![],

@@ -117,6 +117,10 @@ struct Endpoints {
     breg_url: String,
     token_endpoint: String,
     audience: String,
+    #[serde(default)]
+    client_assertion_audience: Option<String>,
+    #[serde(default)]
+    resource: Option<String>,
 }
 
 struct Selection {
@@ -248,8 +252,18 @@ fn configure(
         prepare.push("--all-records".into());
     }
     let preview = invoke(&prepare)?;
-    validate_preparation(&preview, &selection, &inspection.endpoints)?;
-    let binding = connection(&inspection.endpoints, &args.connection);
+    let prepared_scope = prepared_client_scope(&preview)?;
+    validate_preparation(
+        &preview,
+        &selection,
+        &inspection.endpoints,
+        prepared_scope.as_deref(),
+    )?;
+    let binding = connection(
+        &inspection.endpoints,
+        prepared_scope.as_deref(),
+        &args.connection,
+    );
     target::check_local_connection(&target_path, &args.connection, &binding)?;
     if project.exists() {
         check_credential_outputs(
@@ -278,6 +292,15 @@ fn configure(
         "requiresRestart": preview["requiresRestart"],
         "recoveredPriorApply": inspection.recovered_prior_apply || preview["recoveredPriorApply"] == true,
     });
+    if let Some(resource) = &inspection.endpoints.resource {
+        report["resource"] = json!(resource);
+    }
+    if let Some(audience) = &inspection.endpoints.client_assertion_audience {
+        report["clientAssertionAudience"] = json!(audience);
+    }
+    if let Some(scope) = &prepared_scope {
+        report["scope"] = json!(scope);
+    }
     if !args.apply {
         eprintln!(
             "Reviewed a {}.{} lookup for facts [{}], scope {}, and dedicated client {}. No new choices were applied.",
@@ -316,7 +339,12 @@ fn configure(
     // Its identical retry contract preserves the same pending activation.
     prepare.push("--apply".into());
     let prepared = invoke(&prepare)?;
-    validate_preparation(&prepared, &selection, &inspection.endpoints)?;
+    validate_preparation(
+        &prepared,
+        &selection,
+        &inspection.endpoints,
+        prepared_scope.as_deref(),
+    )?;
 
     let exported = tempfile::tempdir().context("staging the public source export")?;
     let export = fs::canonicalize(exported.path())
@@ -639,7 +667,12 @@ fn add_pair(arguments: &mut Vec<OsString>, flag: &str, value: impl AsRef<std::ff
     arguments.push(value.as_ref().into());
 }
 
-fn validate_preparation(report: &Value, selected: &Selection, expected: &Endpoints) -> Result<()> {
+fn validate_preparation(
+    report: &Value,
+    selected: &Selection,
+    expected: &Endpoints,
+    expected_scope: Option<&str>,
+) -> Result<()> {
     let endpoints: Endpoints = serde_json::from_value(report.clone())
         .map_err(|_| anyhow::anyhow!("BReg preparation omitted its connection endpoints"))?;
     if &endpoints != expected
@@ -650,6 +683,7 @@ fn validate_preparation(report: &Value, selected: &Selection, expected: &Endpoin
         || report["accessProfile"] != selected.access_profile
         || report["client"] != selected.client
         || report["readableFields"] != json!(selected.fields)
+        || prepared_client_scope(report)?.as_deref() != expected_scope
     {
         bail!("BReg preparation differs from the reviewed source choices; inspect the registry before retrying");
     }
@@ -663,10 +697,37 @@ fn validate_preparation(report: &Value, selected: &Selection, expected: &Endpoin
     Ok(())
 }
 
+/// A selected BReg preparation reports the exact permission scope it will
+/// register for this dedicated client. Older handoffs omit the member and
+/// retain their existing scope-free source connection behavior.
+fn prepared_client_scope(report: &Value) -> Result<Option<String>> {
+    let Some(scopes) = report.get("preparedClientScopes") else {
+        return Ok(None);
+    };
+    let scopes: Vec<String> = serde_json::from_value(scopes.clone())
+        .map_err(|_| anyhow::anyhow!("BReg reported invalid prepared client scopes"))?;
+    if scopes.is_empty()
+        || scopes.len() > 16
+        || scopes.iter().any(|scope| {
+            scope.is_empty()
+                || !scope
+                    .bytes()
+                    .all(|byte| (0x21..=0x7e).contains(&byte) && byte != b'"' && byte != b'\\')
+        })
+    {
+        bail!("BReg reported invalid prepared client scopes");
+    }
+    let joined = scopes.join(" ");
+    if joined.len() > 512 {
+        bail!("BReg reported invalid prepared client scopes");
+    }
+    Ok(Some(joined))
+}
+
 fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
-    for (value, path) in [
-        (&endpoints.breg_url, "/"),
-        (&endpoints.token_endpoint, "/token"),
+    for (value, token_endpoint) in [
+        (&endpoints.breg_url, false),
+        (&endpoints.token_endpoint, true),
     ] {
         let url = url::Url::parse(value).context("BReg reported an invalid local endpoint")?;
         let loopback = match url.host() {
@@ -674,10 +735,15 @@ fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
             Some(url::Host::Ipv6(address)) => address.is_loopback(),
             _ => false,
         };
+        let fixed_path = if token_endpoint {
+            matches!(url.path(), "/token" | "/oauth2/token")
+        } else {
+            url.path() == "/"
+        };
         if url.scheme() != "http"
             || !loopback
             || url.port().is_none()
-            || url.path() != path
+            || !fixed_path
             || !url.username().is_empty()
             || url.password().is_some()
             || url.query().is_some()
@@ -692,11 +758,57 @@ fn validate_endpoints(endpoints: &Endpoints) -> Result<()> {
     {
         bail!("BReg reported an invalid token audience");
     }
+    if let Some(resource) = &endpoints.resource {
+        // Keep the standalone author's URI boundary aligned with Evidence's
+        // runtime check; Url alone normalizes bytes that must be sent intact.
+        if resource.is_empty()
+            || resource.len() > 512
+            || !resource.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || b"-._~:/?[]@!$&'()*+,;=%#".contains(&byte)
+            })
+        {
+            bail!("BReg reported an invalid OAuth resource");
+        }
+        let parsed =
+            url::Url::parse(resource).context("BReg reported an invalid OAuth resource")?;
+        if parsed.fragment().is_some()
+            || !parsed.username().is_empty()
+            || parsed.password().is_some()
+            || matches!(parsed.scheme(), "http" | "https") && parsed.host().is_none()
+        {
+            bail!("BReg reported an invalid OAuth resource");
+        }
+    }
+    if let Some(audience) = &endpoints.client_assertion_audience {
+        if audience.is_empty()
+            || audience.len() > 512
+            || !audience.bytes().all(|byte| (0x21..=0x7e).contains(&byte))
+        {
+            bail!("BReg reported an invalid client assertion audience");
+        }
+        let url = url::Url::parse(audience)
+            .context("BReg reported an invalid client assertion audience")?;
+        let token = url::Url::parse(&endpoints.token_endpoint)
+            .context("BReg reported an invalid local token endpoint")?;
+        if url.scheme() != "http"
+            || !matches!(url.host(), Some(url::Host::Ipv4(address)) if address.is_loopback())
+                && !matches!(url.host(), Some(url::Host::Ipv6(address)) if address.is_loopback())
+            || url.port().is_none()
+            || url.path() != "/"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.origin() != token.origin()
+        {
+            bail!("BReg reported an invalid client assertion audience");
+        }
+    }
     Ok(())
 }
 
-fn connection(endpoints: &Endpoints, name: &str) -> Value {
-    json!({
+fn connection(endpoints: &Endpoints, scope: Option<&str>, name: &str) -> Value {
+    let mut binding = json!({
         "baseUrl": endpoints.breg_url,
         "authentication": {
             "kind": "oauth2-client-credentials", "tokenEndpoint": endpoints.token_endpoint,
@@ -705,7 +817,17 @@ fn connection(endpoints: &Endpoints, name: &str) -> Value {
             "audience": endpoints.audience, "maximumCacheSeconds": 60,
         },
         "concurrencyLimit": 4, "admissionTimeoutMilliseconds": 5000, "tokenTimeoutMilliseconds": 5000,
-    })
+    });
+    if let Some(resource) = &endpoints.resource {
+        binding["authentication"]["resource"] = json!(resource);
+    }
+    if let Some(audience) = &endpoints.client_assertion_audience {
+        binding["authentication"]["clientAssertionAudience"] = json!(audience);
+    }
+    if let Some(scope) = scope {
+        binding["authentication"]["scope"] = json!(scope);
+    }
+    binding
 }
 
 fn plain_directory(path: &Path, what: &str) -> Result<PathBuf> {
@@ -961,7 +1083,8 @@ mod tests {
             self.calls.push(arguments.to_vec());
             if arguments.iter().any(|arg| arg == "prepare-source") {
                 let mut report = json!({"ok":true,"status":"inspect","requiresRestart":true,
-                    "bregUrl":"http://127.0.0.1:19090","tokenEndpoint":"http://127.0.0.1:19091/token","audience":"urn:test:retained-session",
+                    "bregUrl":"http://127.0.0.1:19090","tokenEndpoint":"http://127.0.0.1:19091/oauth2/token","audience":"urn:test:retained-session",
+                    "clientAssertionAudience":"http://127.0.0.1:19091","resource":"urn:test:retained-session",
                     "entities":[{"id":"record","selectorFields":[{"id":"code","type":"string"}],
                         "readableFields":[{"id":"code","type":"string"},{"id":"name","type":"string"},{"id":"group","type":"string"}],
                         "rowFields":[{"id":"group","type":"string"}]}]});
@@ -984,6 +1107,8 @@ mod tests {
                     report["readableFields"] = json!(option(arguments, "--readable-fields")
                         .split(',')
                         .collect::<Vec<_>>());
+                    report["preparedClientScopes"] =
+                        json!([format!("registry:{}:lookup", option(arguments, "--client"))]);
                     report["rowScope"] = if arguments.iter().any(|arg| arg == "--all-records") {
                         json!({"kind":"all-records"})
                     } else {
@@ -1106,6 +1231,9 @@ mod tests {
             json!({"registry-name":"record-code"})
         );
         assert_eq!(first["requiresRestart"], true);
+        assert_eq!(first["resource"], "urn:test:retained-session");
+        assert_eq!(first["clientAssertionAudience"], "http://127.0.0.1:19091");
+        assert_eq!(first["scope"], "registry:registry-name:lookup");
         assert_eq!(first["target"], json!(project.join("targets/local")));
         assert_eq!(fs::read_dir(project.join("questions")).unwrap().count(), 0);
         assert!(project.join("sources/registry-name.yaml").is_file());
@@ -1114,11 +1242,23 @@ mod tests {
         assert_eq!(connections["registry"]["baseUrl"], "http://127.0.0.1:19090");
         assert_eq!(
             connections["registry"]["authentication"]["tokenEndpoint"],
-            "http://127.0.0.1:19091/token"
+            "http://127.0.0.1:19091/oauth2/token"
         );
         assert_eq!(
             connections["registry"]["authentication"]["audience"],
             "urn:test:retained-session"
+        );
+        assert_eq!(
+            connections["registry"]["authentication"]["resource"],
+            "urn:test:retained-session"
+        );
+        assert_eq!(
+            connections["registry"]["authentication"]["clientAssertionAudience"],
+            "http://127.0.0.1:19091"
+        );
+        assert_eq!(
+            connections["registry"]["authentication"]["scope"],
+            "registry:registry-name:lookup"
         );
         let signing = fs::read(project.join("secrets/signing-p256-private-jwk")).unwrap();
         let target = fs::read(project.join("targets/local/governance.yaml")).unwrap();
@@ -1513,8 +1653,106 @@ mod tests {
             breg_url: "https://provider.example".into(),
             token_endpoint: "http://127.0.0.1:9091/token".into(),
             audience: "urn:test".into(),
+            client_assertion_audience: None,
+            resource: None,
         };
         assert!(validate_endpoints(&endpoints).is_err());
+    }
+
+    #[test]
+    fn older_source_handoff_keeps_optional_token_parameters_absent() {
+        let endpoints: Endpoints = serde_json::from_value(json!({
+            "bregUrl": "http://127.0.0.1:19090/",
+            "tokenEndpoint": "http://127.0.0.1:19091/token",
+            "audience": "urn:legacy:registry"
+        }))
+        .unwrap();
+        assert!(validate_endpoints(&endpoints).is_ok());
+        assert_eq!(prepared_client_scope(&json!({})).unwrap(), None);
+        let authentication = connection(&endpoints, None, "registry")["authentication"].clone();
+        assert!(authentication.get("resource").is_none());
+        assert!(authentication.get("clientAssertionAudience").is_none());
+        assert!(authentication.get("scope").is_none());
+        assert_eq!(authentication["audience"], "urn:legacy:registry");
+    }
+
+    #[test]
+    fn malformed_prepared_client_scopes_are_refused_before_project_authoring() {
+        for scopes in [
+            json!([]),
+            json!(["registry:one:lookup", "bad scope"]),
+            json!(["registry:one:lookup\nnext"]),
+            json!("registry:one:lookup"),
+        ] {
+            assert!(prepared_client_scope(&json!({"preparedClientScopes": scopes})).is_err());
+        }
+    }
+
+    #[test]
+    fn source_add_refuses_scope_drift_between_preview_and_prepared_reports() {
+        let root = tempfile::tempdir().unwrap();
+        let registry = root.path().join("registry");
+        fs::create_dir(&registry).unwrap();
+        let project = root.path().join("evidence");
+        let mut provider = Provider::new();
+        let error = configure(args(&registry, &project), false, &mut |arguments| {
+            let mut report = provider.invoke(arguments)?;
+            if arguments.iter().any(|arg| arg == "prepare-source")
+                && arguments.iter().any(|arg| arg == "--apply")
+            {
+                report["preparedClientScopes"] = json!(["registry:different:lookup"]);
+            }
+            Ok(report)
+        })
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("BReg preparation differs from the reviewed source choices"));
+    }
+
+    #[test]
+    fn client_assertion_audience_must_be_the_exact_local_issuer_origin() {
+        let mut endpoints = Endpoints {
+            breg_url: "http://127.0.0.1:19090/".into(),
+            token_endpoint: "http://127.0.0.1:19091/token".into(),
+            audience: "urn:test:registry".into(),
+            client_assertion_audience: Some("http://127.0.0.1:19091".into()),
+            resource: None,
+        };
+        assert!(validate_endpoints(&endpoints).is_ok());
+        for invalid in [
+            " http://127.0.0.1:19091",
+            "http://127.0.0.1:19091\n",
+            "http://127.0.0.1:19091/other",
+            "http://user@127.0.0.1:19091",
+            "http://127.0.0.1:19092",
+            "https://127.0.0.1:19091",
+            "http://127.0.0.1:19091/#fragment",
+        ] {
+            endpoints.client_assertion_audience = Some(invalid.into());
+            assert!(validate_endpoints(&endpoints).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn reported_oauth_resource_must_be_an_exact_absolute_uri() {
+        let mut endpoints = Endpoints {
+            breg_url: "http://127.0.0.1:19090/".into(),
+            token_endpoint: "http://127.0.0.1:19091/oauth2/token".into(),
+            audience: "urn:test:registry".into(),
+            client_assertion_audience: None,
+            resource: Some("https://[::1]/records".into()),
+        };
+        assert!(validate_endpoints(&endpoints).is_ok());
+        for invalid in [
+            "records",
+            "https://user@registry.invalid/records",
+            "https://registry.invalid/records#fragment",
+            "https://registry.invalid/records with space",
+        ] {
+            endpoints.resource = Some(invalid.into());
+            assert!(validate_endpoints(&endpoints).is_err(), "{invalid}");
+        }
     }
 
     #[test]

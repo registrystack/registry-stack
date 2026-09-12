@@ -2,7 +2,8 @@
 //!
 //! The final `.evidence/dev` directory is compiled in place because the
 //! runtime contains absolute paths. A resident supervisor owns both service
-//! children and is the only process allowed to stop them.
+//! child and the retained issuer container, and is the only process allowed
+//! to stop them.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,7 +12,7 @@ use std::{
     net::TcpListener,
     os::unix::{
         fs::{
-            symlink, DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
+            DirBuilderExt as _, FileTypeExt as _, MetadataExt as _, OpenOptionsExt as _,
             PermissionsExt as _,
         },
         net::{UnixListener, UnixStream},
@@ -33,30 +34,32 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+use std::os::unix::fs::symlink;
+
 use crate::{
     access,
     authoring::{
         access_policy_requester_tag, compile_local_project_with_ports,
         compile_local_project_with_target_inputs, CompiledAccessPolicy, CompiledConceptForm,
-        CompiledProject, CompiledQuestion, LocalServicePorts,
+        CompiledQuestion, LocalServicePorts,
     },
     keygen, OutputFormat,
 };
 
-const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v5";
+const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v6";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
 const CALLER_ID: &str = "local-tutorial-caller";
-const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "registry-evidence-local";
+const LOCAL_ACCESS_TOKEN_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
 const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:caller";
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
-const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
 const FAILED_START_LOGS: &str = "failed-start";
 const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
-const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
+const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 120;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
 
 #[derive(Debug)]
@@ -91,13 +94,35 @@ impl std::fmt::Display for DevStartFailure {
 
 impl std::error::Error for DevStartFailure {}
 
+#[derive(Debug)]
+pub(crate) struct RetiredMintDevelopment;
+
+impl std::fmt::Display for RetiredMintDevelopment {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the retired Registry Mint development flags were used")
+    }
+}
+
+impl std::error::Error for RetiredMintDevelopment {}
+
+#[derive(Debug)]
+pub(crate) struct TaskGrantAuthorityRequired;
+
+impl std::fmt::Display for TaskGrantAuthorityRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("task grants must come from the configured Casework authority")
+    }
+}
+
+impl std::error::Error for TaskGrantAuthorityRequired {}
+
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
 
-    /// Return after Registry Mint and Evidence Gateway are ready on loopback.
+    /// Return after the local issuer and Evidence Gateway are ready on loopback.
     #[arg(long)]
     detach: bool,
 
@@ -105,8 +130,12 @@ pub struct DevArgs {
     #[arg(long, global = true)]
     evidence_port: Option<u16>,
 
-    /// Loopback port for the local Mint service.
+    /// Loopback port for the local issuer service.
     #[arg(long, global = true)]
+    issuer_port: Option<u16>,
+
+    /// Retained Mint-era spelling, refused with migration guidance.
+    #[arg(long, global = true, hide = true)]
     mint_port: Option<u16>,
 
     /// Project root. Defaults to the current directory.
@@ -121,8 +150,12 @@ pub struct DevArgs {
     #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
 
+    /// Retained Mint-era spelling, refused with migration guidance.
     #[arg(long, hide = true, global = true)]
     mint_bin: Option<PathBuf>,
+
+    #[arg(long, hide = true, global = true)]
+    docker_bin: Option<PathBuf>,
 
     #[arg(
         long,
@@ -136,12 +169,33 @@ pub struct DevArgs {
 
 #[derive(Debug, Subcommand)]
 enum DevAction {
-    /// Start or restart the retained local Registry Mint and Evidence pair.
+    /// Start or restart the retained local issuer and Evidence pair.
     Start(StartArgs),
-    /// Stop the active local Registry Mint and Evidence Gateway pair.
+    /// Stop the active local issuer and Evidence Gateway pair.
     Stop(StopArgs),
     /// Remove one completed stopped local generation.
     Clean(CleanArgs),
+    /// Acquire a fresh local service token and report its private header-file path.
+    Token(TokenArgs),
+    /// Retained only to explain the authority-backed task-grant workflow.
+    #[command(hide = true)]
+    Grant(RetiredGrantArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(trailing_var_arg = true)]
+struct RetiredGrantArgs {
+    #[arg(value_name = "ARG", allow_hyphen_values = true)]
+    _arguments: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+struct TokenArgs {
+    /// Registered local client ID.
+    client: String,
+    /// Ready local project. Defaults to the current directory.
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -173,7 +227,7 @@ pub struct SupervisorArgs {
     #[arg(long)]
     evidence_bin: PathBuf,
     #[arg(long)]
-    mint_bin: PathBuf,
+    docker_bin: PathBuf,
     #[arg(long)]
     ready_timeout_seconds: u64,
 }
@@ -191,8 +245,7 @@ enum DevStatus {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 enum FailureKind {
-    MintStart,
-    MintReadiness,
+    IssuerStart,
     EvidenceStart,
     EvidenceReadiness,
     ChildExited,
@@ -208,7 +261,8 @@ struct DevState {
     project: PathBuf,
     runtime_path: PathBuf,
     evidence_origin: String,
-    mint_origin: String,
+    issuer_origin: String,
+    issuer_session_id: String,
     token_url: String,
     access_token_audience: String,
     caller: Option<CallerState>,
@@ -305,7 +359,7 @@ pub(crate) struct ReadyDevState {
     pub(crate) project: PathBuf,
     pub(crate) runtime_path: PathBuf,
     pub(crate) evidence_origin: String,
-    pub(crate) mint_origin: String,
+    pub(crate) issuer_origin: String,
     pub(crate) token_url: String,
     pub(crate) access_token_audience: String,
     pub(crate) caller: Option<ReadyCallerState>,
@@ -364,14 +418,12 @@ pub(crate) struct LifecycleLock {
 #[derive(Default)]
 struct OwnedChildren {
     evidence: Option<Child>,
-    mint: Option<Child>,
 }
 
 impl OwnedChildren {
     fn stop(&mut self) {
-        stop_children(self.evidence.as_mut(), self.mint.as_mut());
+        stop_child(self.evidence.as_mut());
         self.evidence = None;
-        self.mint = None;
     }
 }
 
@@ -382,16 +434,19 @@ impl Drop for OwnedChildren {
 }
 
 pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
+    if args.mint_port.is_some() || args.mint_bin.is_some() {
+        return Err(RetiredMintDevelopment.into());
+    }
     match args.action {
         Some(DevAction::Start(start)) => {
             if args.detach || args.project.is_some() {
                 bail!("`dev start` does not accept the compatibility flags --detach or --project");
             }
-            let ports = selected_ports(&start.project, args.evidence_port, args.mint_port)?;
+            let ports = selected_ports(&start.project, args.evidence_port, args.issuer_port)?;
             start_detached(
                 &start.project,
                 args.evidence_bin.as_deref(),
-                args.mint_bin.as_deref(),
+                args.docker_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
@@ -415,16 +470,18 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             }
             clean_dev(&clean.project, format)
         }
+        Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
+        Some(DevAction::Grant(_)) => Err(TaskGrantAuthorityRequired.into()),
         None => {
             if !args.detach {
                 bail!("the local development lifecycle requires `evidencectl dev --detach`");
             }
             let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-            let ports = selected_ports(project, args.evidence_port, args.mint_port)?;
+            let ports = selected_ports(project, args.evidence_port, args.issuer_port)?;
             start_detached(
                 project,
                 args.evidence_bin.as_deref(),
-                args.mint_bin.as_deref(),
+                args.docker_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
@@ -437,9 +494,9 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
 fn selected_ports(
     project: &Path,
     evidence_port: Option<u16>,
-    mint_port: Option<u16>,
+    issuer_port: Option<u16>,
 ) -> Result<LocalServicePorts> {
-    let retained = if evidence_port.is_none() || mint_port.is_none() {
+    let retained = if evidence_port.is_none() || issuer_port.is_none() {
         canonical_project(project)
             .ok()
             .and_then(|project| {
@@ -453,7 +510,7 @@ fn selected_ports(
             .and_then(|state| {
                 Some((
                     state.evidence_origin.rsplit(':').next()?.parse().ok()?,
-                    state.mint_origin.rsplit(':').next()?.parse().ok()?,
+                    state.issuer_origin.rsplit(':').next()?.parse().ok()?,
                 ))
             })
     } else {
@@ -463,8 +520,88 @@ fn selected_ports(
         evidence_port
             .or(retained.map(|ports| ports.0))
             .unwrap_or(8080),
-        mint_port.or(retained.map(|ports| ports.1)).unwrap_or(8081),
+        issuer_port
+            .or(retained.map(|ports| ports.1))
+            .unwrap_or(8081),
     )
+}
+
+fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<ExitCode> {
+    if !valid_local_identifier(client_id) {
+        bail!("a registered bounded local client ID is required");
+    }
+    let ready = load_ready_state(project)?;
+    let private_key_path = if let Some(caller) = &ready.caller {
+        if caller.client_id != client_id {
+            bail!("the local client is not registered");
+        }
+        caller.private_key_path.clone()
+    } else {
+        let policy_tags = ready
+            .access_policies
+            .iter()
+            .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
+            .collect::<BTreeMap<_, _>>();
+        access::resolve_ready_client(&ready.project, client_id, &policy_tags)?.private_key_path
+    };
+    let token = obtain_issuer_token(&ready, client_id, &private_key_path)?;
+    let output = ready
+        .project
+        .join(".evidence/dev/generated/keys")
+        .join(format!("{client_id}.header"));
+    let mut header = Zeroizing::new(b"Authorization: Bearer ".to_vec());
+    header.extend_from_slice(token.as_bytes());
+    header.push(b'\n');
+    replace_private_file(&output, &header)?;
+    match format {
+        OutputFormat::Human => println!("Wrote fresh authorization header to {}", output.display()),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-token","status":"ready","headerFile":output})
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+pub(crate) fn obtain_issuer_token(
+    ready: &ReadyDevState,
+    client_id: &str,
+    private_key_path: &Path,
+) -> Result<Zeroizing<String>> {
+    use registry_evidence_client::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+
+    let key_bytes = read_owner_file(private_key_path, 16 * 1024)?;
+    let key_text = std::str::from_utf8(&key_bytes)
+        .context("the retained client assertion key is unreadable")?;
+    let key = registry_platform_crypto::PrivateJwk::parse(key_text)
+        .map_err(|_| anyhow!("the retained client assertion key is unusable"))?;
+    let endpoint = ready
+        .token_url
+        .parse()
+        .context("the local issuer token endpoint is invalid")?;
+    let provider = PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(endpoint, client_id.to_owned(), key)
+            .with_audience(ready.issuer_origin.clone())
+            .with_resource(ready.access_token_audience.clone())
+            .with_scopes(["evidence:invoke".to_owned()]),
+    )
+    .map_err(|error| anyhow!("the local token provider is unusable: {error}"))?;
+    let token = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build the local token runtime")?
+        .block_on(provider.bearer_token())
+        .map_err(|error| anyhow!("the local issuer declined to issue a token: {error}"))?;
+    let value = token.authorization_header_value();
+    let compact = value
+        .to_str()
+        .context("the issued credential is not header-safe")?
+        .strip_prefix("Bearer ")
+        .unwrap_or_default();
+    if compact.len() > 64 * 1024 || compact.split('.').count() != 3 {
+        bail!("the local issuer returned an invalid compact token");
+    }
+    Ok(Zeroizing::new(compact.to_owned()))
 }
 
 pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
@@ -513,7 +650,7 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
         project,
         runtime_path: state.runtime_path,
         evidence_origin: state.evidence_origin,
-        mint_origin: state.mint_origin,
+        issuer_origin: state.issuer_origin,
         token_url: state.token_url,
         access_token_audience: state.access_token_audience,
         caller: state.caller.map(|caller| ReadyCallerState {
@@ -585,26 +722,7 @@ pub(crate) fn load_stopped_state(project: &Path) -> Result<StoppedDevState> {
     })
 }
 
-/// Ask the private local supervisor to make Mint reload its complete client
-/// registry. This confirms only that SIGHUP was delivered. The next token
-/// request remains the functional proof that Mint accepted the new registry.
-#[allow(dead_code)] // Consumed by the access-management CLI slice.
-pub(crate) fn request_mint_reload(project: &Path) -> Result<()> {
-    let project = canonical_project(project)?;
-    let generated_root = existing_private_generated_root(&project)?;
-    let dev_root = generated_root.join("dev");
-    validate_private_directory(&dev_root)?;
-    let state = read_state(&dev_root.join("state.json"))?;
-    if state.status != DevStatus::Ready || state.failure.is_some() {
-        bail!("the local development state is not ready for a Mint reload");
-    }
-    validate_closed_state(&state, &project, &dev_root)?;
-    let socket = dev_root.join(CONTROL_SOCKET_NAME);
-    validate_control_socket(&socket)?;
-    send_control_request(&socket, b"reload-mint\n", b"reload-requested\n")
-        .context("the local supervisor did not accept the Mint reload request")
-}
-
+#[cfg(test)]
 fn send_control_request(socket: &Path, request: &[u8], expected: &[u8]) -> Result<()> {
     let parent = socket
         .parent()
@@ -631,9 +749,14 @@ fn send_control_request(socket: &Path, request: &[u8], expected: &[u8]) -> Resul
 
 fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> Result<()> {
     let evidence_port = local_origin_port(&state.evidence_origin);
-    let mint_port = local_origin_port(&state.mint_origin);
-    let origins_are_closed = matches!((evidence_port, mint_port), (Some(evidence), Some(mint)) if evidence != mint)
-        && state.token_url == format!("{}/token", state.mint_origin);
+    let issuer_port = local_origin_port(&state.issuer_origin);
+    let origins_are_closed = matches!((evidence_port, issuer_port), (Some(evidence), Some(issuer)) if evidence != issuer)
+        && state.token_url == format!("{}/oauth2/token", state.issuer_origin)
+        && state.issuer_session_id.len() == 48
+        && state
+            .issuer_session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'));
     let questions_are_closed = !state.questions.is_empty()
         && state.questions.len() <= 128
         && state.questions.iter().all(valid_question_state)
@@ -673,10 +796,9 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
         }
         DevStatus::Stopped => state.caller.is_none(),
         DevStatus::Stopping | DevStatus::Failed => true,
-    } && state
-        .caller
-        .as_ref()
-        .is_none_or(|caller| validate_closed_caller(caller, dev_root, &state.token_url).is_ok());
+    } && state.caller.as_ref().is_none_or(|caller| {
+        validate_closed_caller(caller, dev_root, &state.issuer_origin).is_ok()
+    });
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
         || !origins_are_closed
@@ -979,10 +1101,14 @@ fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
         })
 }
 
-fn validate_closed_caller(caller: &CallerState, dev_root: &Path, token_url: &str) -> Result<()> {
+fn validate_closed_caller(
+    caller: &CallerState,
+    dev_root: &Path,
+    issuer_origin: &str,
+) -> Result<()> {
     if caller.client_id != CALLER_ID
         || caller.private_key_path != dev_root.join("generated/keys/caller-private.jwk")
-        || caller.assertion_audience != token_url
+        || caller.assertion_audience != issuer_origin
         || caller.evidence_audience != LOCAL_CALLER_EVIDENCE_AUDIENCE
         || caller.requester_tag != LOCAL_REQUESTER_TAG
     {
@@ -1012,7 +1138,7 @@ fn valid_local_identifier(value: &str) -> bool {
 fn start_detached(
     project: &Path,
     evidence_override: Option<&Path>,
-    mint_override: Option<&Path>,
+    docker_override: Option<&Path>,
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
@@ -1041,7 +1167,7 @@ fn start_detached(
             &project,
             &dev_root,
             evidence_override,
-            mint_override,
+            docker_override,
             ready_timeout_seconds,
             ports,
             target,
@@ -1084,7 +1210,7 @@ fn start_detached(
 fn probe_local_ports(ports: LocalServicePorts) -> Result<()> {
     for (port, service, flag) in [
         (ports.evidence, "Evidence Gateway", "--evidence-port"),
-        (ports.mint, "Registry Mint", "--mint-port"),
+        (ports.issuer, "issuer", "--issuer-port"),
     ] {
         if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
             if error.kind() == std::io::ErrorKind::AddrInUse {
@@ -1315,7 +1441,7 @@ fn prepare_and_start(
     project: &Path,
     dev_root: &Path,
     evidence_override: Option<&Path>,
-    mint_override: Option<&Path>,
+    docker_override: Option<&Path>,
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
@@ -1326,10 +1452,10 @@ fn prepare_and_start(
         evidence_override,
         "EVIDENCECTL_TEST_EVIDENCE_BIN",
     )?)?;
-    let mint_bin = canonical_tool_binary(resolve_tool_binary(
-        "mint",
-        mint_override,
-        "EVIDENCECTL_TEST_MINT_BIN",
+    let docker_bin = command_binary(resolve_tool_binary(
+        "docker",
+        docker_override,
+        "EVIDENCECTL_TEST_DOCKER_BIN",
     )?)?;
     let compiled = {
         let _project_lock = crate::source_import::ProjectLock::acquire(project)?;
@@ -1345,7 +1471,7 @@ fn prepare_and_start(
                     outbound_tls,
                 )?;
                 if format == OutputFormat::Human {
-                    println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                    println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
                 }
                 compiled
             }
@@ -1353,36 +1479,40 @@ fn prepare_and_start(
         }
     };
     let evidence_origin = local_origin(ports.evidence);
-    let mint_origin = local_origin(ports.mint);
-    let token_url = format!("{mint_origin}/token");
+    let issuer_origin = local_origin(ports.issuer);
+    let token_url = format!("{issuer_origin}/oauth2/token");
 
     let generated = dev_root.join("generated");
     let keys = generated.join("keys");
-    let clients = generated.join("clients");
-    let mint_audit = generated.join("audit");
     let logs = dev_root.join("logs");
-    for directory in [&generated, &keys, &clients, &mint_audit] {
+    for directory in [&generated, &keys] {
         create_private_directory(directory)?;
     }
 
-    let mint_public = generate_service_and_holder_keys(&keys)?;
-    let mint_audit_key = keys.join(MINT_AUDIT_KEY_FILENAME);
-    generate_mint_audit_key(&mint_audit_key)?;
-    let mint_config = mint_config(&compiled, &mint_public, &keys, ports);
-    let mint_config_path = generated.join("mint.yaml");
-    write_private_yaml(&mint_config_path, &mint_config)?;
+    generate_holder_key(&keys)?;
+    let mut issuer_clients = Vec::new();
     let caller = if compiled.access_policies.is_empty() {
         let (caller_private, caller_public) =
             keygen::generate_dev_keypair(&keys, "caller-private.jwk", "caller-public.jwk.json")?;
         let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
-        write_private_yaml(
-            &clients.join("caller.yaml"),
-            &local_caller_registration(&compiled, caller_public),
-        )?;
+        issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
+            client_id: CALLER_ID.to_owned(),
+            public_jwks: serde_json::to_string(&json!({"keys":[caller_public]}))?,
+            claims: BTreeMap::from([
+                ("registry_actor_kind".to_owned(), json!("service")),
+                ("evidence_tags".to_owned(), json!([compiled.requester_tag])),
+                (
+                    "evidence_audience".to_owned(),
+                    json!(compiled.caller_evidence_audience),
+                ),
+            ]),
+            scopes: vec!["evidence:invoke".to_owned()],
+            allow_human_fixture: false,
+        });
         Some(CallerState {
             client_id: CALLER_ID.to_owned(),
             private_key_path: caller_private,
-            assertion_audience: token_url.clone(),
+            assertion_audience: issuer_origin.clone(),
             evidence_audience: compiled.caller_evidence_audience.clone(),
             requester_tag: compiled.requester_tag.clone(),
         })
@@ -1397,14 +1527,41 @@ fn prepare_and_start(
             bail!("explicit access policies require at least one active client");
         }
         for registration in registrations {
-            write_private_yaml(
-                &clients.join(format!("{}.yaml", registration.client_id)),
-                &registration.registration,
-            )?;
+            issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
+                client_id: registration.client_id,
+                public_jwks: registration.public_jwks,
+                claims: BTreeMap::from([
+                    ("registry_actor_kind".to_owned(), json!("service")),
+                    (
+                        "evidence_tags".to_owned(),
+                        json!(registration.requester_tags),
+                    ),
+                    (
+                        "evidence_audience".to_owned(),
+                        json!(registration.evidence_audience),
+                    ),
+                ]),
+                scopes: vec!["evidence:invoke".to_owned()],
+                allow_human_fixture: false,
+            });
         }
         None
     };
-    run_check(&mint_bin, &["check", "--config"], &mint_config_path, "Mint")?;
+    let mut random = [0_u8; 24];
+    getrandom::fill(&mut random)?;
+    let issuer_session_id = hex::encode(random);
+    let issuer_label = format!("evidence-dev-{}", &issuer_session_id[..12]);
+    let description = registry_thunderid_tooling::local::typed_local_description(
+        registry_thunderid_tooling::description::SessionIdentity {
+            label: issuer_label,
+            id: issuer_session_id.clone(),
+        },
+        ports.issuer,
+        generated.join("issuer"),
+        compiled.local_audience.clone(),
+        issuer_clients,
+    )?;
+    registry_thunderid_tooling::render::render(&description)?;
 
     let state = DevState {
         schema: STATE_SCHEMA.to_owned(),
@@ -1412,7 +1569,8 @@ fn prepare_and_start(
         project: project.to_path_buf(),
         runtime_path: compiled.runtime_path.clone(),
         evidence_origin: evidence_origin.clone(),
-        mint_origin: mint_origin.clone(),
+        issuer_origin: issuer_origin.clone(),
+        issuer_session_id,
         token_url: token_url.clone(),
         access_token_audience: compiled.local_audience.clone(),
         caller,
@@ -1441,8 +1599,8 @@ fn prepare_and_start(
         .arg(dev_root)
         .arg("--evidence-bin")
         .arg(&evidence_bin)
-        .arg("--mint-bin")
-        .arg(&mint_bin)
+        .arg("--docker-bin")
+        .arg(&docker_bin)
         .arg("--ready-timeout-seconds")
         .arg(ready_timeout_seconds.to_string())
         .stdin(Stdio::null())
@@ -1467,7 +1625,7 @@ fn prepare_and_start(
     match format {
         OutputFormat::Human => {
             println!("Evidence ready at {evidence_origin}");
-            println!("Mint ready at {mint_origin}");
+            println!("Issuer ready at {issuer_origin}");
         }
         OutputFormat::Json => println!(
             "{}",
@@ -1476,7 +1634,8 @@ fn prepare_and_start(
                 "status": "ready",
                 "project": project,
                 "evidenceOrigin": evidence_origin,
-                "mintOrigin": mint_origin,
+                "issuer": issuer_origin,
+                "tokenEndpoint": token_url,
                 "proofBoundary": "both retained local services reached readiness"
             })
         ),
@@ -1484,55 +1643,20 @@ fn prepare_and_start(
     Ok(ExitCode::SUCCESS)
 }
 
-fn generate_service_and_holder_keys(keys: &Path) -> Result<PathBuf> {
-    for name in [
-        "mint-private.jwk",
-        "mint-public.jwk.json",
-        "holder-private.jwk",
-        "holder-public.jwk.json",
-    ] {
+fn generate_holder_key(keys: &Path) -> Result<()> {
+    for name in ["holder-private.jwk", "holder-public.jwk.json"] {
         match fs::symlink_metadata(keys.join(name)) {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Ok(_) => bail!("refusing to replace existing private dev key material"),
             Err(error) => return Err(error).context("inspecting private dev key material"),
         }
     }
-    let (_mint_private, staged_mint_public) =
-        keygen::generate_dev_keypair(keys, "mint-private.jwk", "mint-public.jwk.json")?;
-    let mint_public = publish_thumbprint_named_public_jwk(&staged_mint_public)?;
     // Keep one disposable holder pair beside the other private local session
     // keys so wallet-binding examples need no extra setup. Evidence does not
     // consume the private half and neither half leaves supervised dev state.
     let _holder =
         keygen::generate_dev_keypair(keys, "holder-private.jwk", "holder-public.jwk.json")?;
-    Ok(mint_public)
-}
-
-fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
-    let bytes = read_owner_file(staged, 16 * 1024)?;
-    let encoded = std::str::from_utf8(&bytes).context("generated public JWK is not UTF-8")?;
-    let public = registry_platform_crypto::PublicJwk::parse(encoded)
-        .context("generated public JWK failed validation")?;
-    let kid = public
-        .kid
-        .as_deref()
-        .ok_or_else(|| anyhow!("generated public JWK has no key id"))?;
-    if public
-        .jkt()
-        .context("generated public JWK has no thumbprint")?
-        != kid
-    {
-        bail!("generated public JWK key id is not its RFC 7638 thumbprint");
-    }
-    let published = staged
-        .parent()
-        .ok_or_else(|| anyhow!("generated public JWK has no parent directory"))?
-        .join(format!("{kid}.jwk.json"));
-    let mut file = create_private_file(&published)?;
-    file.write_all(&bytes)?;
-    file.sync_all()?;
-    fs::remove_file(staged).context("failed to remove the staged public JWK")?;
-    Ok(published)
+    Ok(())
 }
 
 fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
@@ -1685,37 +1809,26 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     listener.set_nonblocking(true)?;
     injected_supervisor_failure("after-socket")?;
 
-    let mut children = OwnedChildren::default();
-    children.mint = Some(
-        match spawn_service(
-            &args.mint_bin,
-            &["serve", "--config"],
-            &dev_root.join("generated/mint.yaml"),
-            &dev_root.join("logs/mint.log"),
-        ) {
-            Ok(child) => child,
-            Err(error) => {
-                eprintln!("Mint start failed before child ownership: {error:#}");
-                return fail_before_evidence(&state_path, &mut state, FailureKind::MintStart);
-            }
-        },
-    );
-    publish_test_service_pid(
-        "mint",
-        children.mint.as_ref().expect("Mint child was assigned"),
-    )?;
-    if wait_for_http(
-        &format!("{}/.well-known/jwks.json", state.mint_origin),
-        children.mint.as_mut().expect("Mint child was assigned"),
-        HttpProof::MintEs256Key,
-        args.ready_timeout_seconds,
-        terminate,
-    )
-    .is_err()
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
+    let issuer_label = format!("evidence-dev-{}", &state.issuer_session_id[..12]);
+    let issuer_root = dev_root.join("generated/issuer");
+    let issuer_session = registry_thunderid_tooling::container::Session {
+        label: &issuer_label,
+        id: &state.issuer_session_id,
+        port: local_origin_port(&state.issuer_origin).expect("closed issuer origin"),
+        state_root: &issuer_root,
+        image: &pin.image,
+    };
+    if let Err(error) =
+        registry_thunderid_tooling::local::start(&issuer_session, &args.docker_bin, &mut || {
+            terminate.load(Ordering::Relaxed)
+        })
     {
-        eprintln!("Mint did not reach its fixed local JWKS readiness proof");
-        return fail_before_evidence(&state_path, &mut state, FailureKind::MintReadiness);
+        eprintln!("Issuer start failed: {error}");
+        return fail_before_evidence(&state_path, &mut state, FailureKind::IssuerStart);
     }
+
+    let mut children = OwnedChildren::default();
 
     children.evidence = Some(
         match spawn_evidence(
@@ -1726,6 +1839,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
             Ok(child) => child,
             Err(error) => {
                 eprintln!("Evidence start failed: {error:#}");
+                let _ = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
                 return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceStart);
             }
         },
@@ -1750,6 +1864,7 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     .is_err()
     {
         eprintln!("Evidence did not reach its fixed local readiness proof");
+        let _ = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
         return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceReadiness);
     }
 
@@ -1762,14 +1877,16 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
             .evidence
             .as_mut()
             .expect("Evidence child was assigned"),
-        children.mint.as_mut().expect("Mint child was assigned"),
         terminate,
     )
     .unwrap_or(SupervisorOutcome::Failed(FailureKind::Supervisor));
     state.status = DevStatus::Stopping;
     let stopping_state = replace_state(&state_path, &state);
     children.stop();
+    let issuer_cleanup = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin)
+        .map_err(anyhow::Error::from);
     stopping_state?;
+    issuer_cleanup?;
 
     match outcome {
         SupervisorOutcome::Stop(mut stream) => {
@@ -1806,14 +1923,13 @@ enum SupervisorOutcome {
 fn supervisor_loop(
     listener: &UnixListener,
     evidence: &mut Child,
-    mint: &mut Child,
     terminate: &AtomicBool,
 ) -> Result<SupervisorOutcome> {
     loop {
         if terminate.load(Ordering::Relaxed) {
             return Ok(SupervisorOutcome::Failed(FailureKind::SupervisorSignal));
         }
-        if evidence.try_wait()?.is_some() || mint.try_wait()?.is_some() {
+        if evidence.try_wait()?.is_some() {
             return Ok(SupervisorOutcome::Failed(FailureKind::ChildExited));
         }
         match listener.accept() {
@@ -1824,11 +1940,6 @@ fn supervisor_loop(
                 if request == b"stop\n" {
                     return Ok(SupervisorOutcome::Stop(stream));
                 }
-                if request == b"reload-mint\n" {
-                    signal_child_with(mint, rustix::process::Signal::HUP)?;
-                    stream.write_all(b"reload-requested\n")?;
-                    continue;
-                }
                 let _ = stream.write_all(b"invalid\n");
             }
             Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1837,19 +1948,6 @@ fn supervisor_loop(
             Err(_) => return Ok(SupervisorOutcome::Failed(FailureKind::Supervisor)),
         }
     }
-}
-
-fn spawn_service(binary: &Path, prefix: &[&str], value: &Path, log: &Path) -> Result<Child> {
-    let stdout = create_private_file(log)?;
-    let stderr = stdout.try_clone()?;
-    Command::new(binary)
-        .args(prefix)
-        .arg(value)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .with_context(|| format!("failed to start {}", binary.display()))
 }
 
 fn spawn_evidence(binary: &Path, runtime: &Path, log: &Path) -> Result<Child> {
@@ -1867,7 +1965,6 @@ fn spawn_evidence(binary: &Path, runtime: &Path, log: &Path) -> Result<Child> {
 }
 
 enum HttpProof {
-    MintEs256Key,
     EvidenceReady,
 }
 
@@ -1899,14 +1996,6 @@ fn wait_for_http(
             if bytes.len() as u64 <= MAX_HTTP_BODY_BYTES {
                 let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let matches = match proof {
-                    HttpProof::MintEs256Key => value["keys"].as_array().is_some_and(|keys| {
-                        keys.iter().any(|key| {
-                            key["kty"] == "EC"
-                                && key["crv"] == "P-256"
-                                && key["alg"] == "ES256"
-                                && key["kid"].as_str().is_some_and(|kid| kid.len() == 43)
-                        })
-                    }),
                     HttpProof::EvidenceReady => value == json!({"status": "ready"}),
                 };
                 if matches && child.try_wait()?.is_none() {
@@ -1926,13 +2015,9 @@ fn ensure_supervisor_active(terminate: &AtomicBool) -> Result<()> {
     Ok(())
 }
 
-fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
+fn stop_child(evidence: Option<&mut Child>) {
     let mut evidence = evidence;
-    let mut mint = mint;
     if let Some(child) = evidence.as_deref_mut() {
-        let _ = signal_child(child);
-    }
-    if let Some(child) = mint.as_deref_mut() {
         let _ = signal_child(child);
     }
     let deadline = Instant::now() + Duration::from_secs(SHUTDOWN_TIMEOUT_SECONDS);
@@ -1940,10 +2025,7 @@ fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
         let evidence_done = evidence
             .as_deref_mut()
             .is_none_or(|child| child.try_wait().ok().flatten().is_some());
-        let mint_done = mint
-            .as_deref_mut()
-            .is_none_or(|child| child.try_wait().ok().flatten().is_some());
-        if evidence_done && mint_done {
+        if evidence_done {
             return;
         }
         if Instant::now() >= deadline {
@@ -1951,7 +2033,7 @@ fn stop_children(evidence: Option<&mut Child>, mint: Option<&mut Child>) {
         }
         thread::sleep(Duration::from_millis(50));
     }
-    for child in [evidence, mint].into_iter().flatten() {
+    for child in [evidence].into_iter().flatten() {
         // A child that ignores TERM is killed only after the bounded graceful
         // deadline. Child::kill is SIGKILL on Unix and cannot run child cleanup.
         let _ = child.kill();
@@ -2010,13 +2092,10 @@ fn wait_for_supervisor_ready(
 /// reader in this file rather than in the session that just failed.
 fn startup_failure_summary(failure: Option<FailureKind>, ports: LocalServicePorts) -> String {
     let evidence = ports.evidence;
-    let mint = ports.mint;
+    let issuer = ports.issuer;
     match failure {
-        Some(FailureKind::MintStart) => {
-            format!("the local Registry Mint service could not be started on 127.0.0.1:{mint}")
-        }
-        Some(FailureKind::MintReadiness) => {
-            format!("the local Registry Mint service did not become ready on 127.0.0.1:{mint}")
+        Some(FailureKind::IssuerStart) => {
+            format!("the local issuer could not be started on 127.0.0.1:{issuer}")
         }
         Some(FailureKind::EvidenceStart) => {
             format!(
@@ -2029,7 +2108,7 @@ fn startup_failure_summary(failure: Option<FailureKind>, ports: LocalServicePort
             )
         }
         Some(FailureKind::ChildExited) => {
-            "a local service exited before the session was ready".to_owned()
+            "the local Evidence service exited after readiness".to_owned()
         }
         Some(FailureKind::Supervisor) => {
             "the local supervisor failed before the services were ready".to_owned()
@@ -2052,87 +2131,6 @@ fn abort_start(supervisor: &mut Child) -> Result<()> {
     // waits for that cleanup instead of abandoning the owner process.
     supervisor.wait()?;
     Ok(())
-}
-
-fn mint_config(
-    compiled: &CompiledProject,
-    mint_public: &Path,
-    secret_root: &Path,
-    ports: LocalServicePorts,
-) -> Value {
-    let mint_origin = ports.mint_origin();
-    let token_url = format!("{mint_origin}/token");
-    json!({
-        "version": 1,
-        "validationMode": "supervised-local-development",
-        "issuer": mint_origin,
-        "listener": {
-            "address": "127.0.0.1",
-            "port": ports.mint,
-            "maximumRequestBytes": 16384,
-            "requestTimeoutMilliseconds": 5000,
-        },
-        "signing": {
-            "algorithm": "ES256",
-            "activePublicJwkFile": mint_public,
-            "publishedPublicJwkFiles": [],
-            "revokedKeyIds": [],
-            "jwksPath": "/.well-known/jwks.json",
-        },
-        "signer": {
-            "kind": "local-jwk",
-            "privateKeyRef": "secret:file/mint-private.jwk",
-        },
-        "secretProviders": {"file": {"root": secret_root}},
-        "audit": {
-            "path": "audit/mint.jsonl",
-            // Mint rotates a sealed segment at this threshold. A local
-            // tutorial session never reaches it, and the value matches the
-            // documented deployment example.
-            "maximumFileBytes": 1_073_741_824u64,
-            "hashKeyRef": "secret:file/mint-audit-hmac-key",
-            "hashKeyVersion": 1,
-        },
-        "accessTokens": {
-            "audiences": [compiled.local_audience],
-            "lifetimeSeconds": 300,
-            "claims": {
-                "principal": "sub",
-                "requesterTags": "evidence_tags",
-                "evidenceAudience": "evidence_audience",
-                "grantId": "evidence_grant_id",
-                "grantAuthority": "evidence_authority",
-            },
-        },
-        "clientAssertion": {
-            "audience": token_url,
-            "maximumLifetimeSeconds": 120,
-            "algorithms": ["ES256"],
-            "replayCacheEntries": 256,
-        },
-        "clients": {"directory": "clients"},
-    })
-}
-
-fn generate_mint_audit_key(path: &Path) -> Result<()> {
-    let mut entropy = Zeroizing::new([0_u8; 32]);
-    getrandom::fill(entropy.as_mut_slice())
-        .context("failed to generate local Mint audit key material")?;
-    let key = Zeroizing::new(URL_SAFE_NO_PAD.encode(entropy.as_slice()));
-    let mut file = create_private_file(path)?;
-    file.write_all(key.as_bytes())?;
-    file.sync_all()?;
-    Ok(())
-}
-
-fn local_caller_registration(compiled: &CompiledProject, caller_public: Value) -> Value {
-    json!({
-        "clientId": CALLER_ID,
-        "principal": "urn:registrystack:evidence:local:caller",
-        "evidenceAudience": compiled.caller_evidence_audience,
-        "requesterTags": [compiled.requester_tag],
-        "keys": [caller_public],
-    })
 }
 
 impl From<&CompiledAccessPolicy> for AccessPolicyState {
@@ -2177,21 +2175,6 @@ impl From<&CompiledQuestion> for QuestionState {
     }
 }
 
-fn run_check(binary: &Path, prefix: &[&str], config: &Path, name: &str) -> Result<()> {
-    let status = Command::new(binary)
-        .args(prefix)
-        .arg(config)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .with_context(|| format!("failed to run {name} check"))?;
-    if !status.success() {
-        bail!("{name} rejected the generated local configuration");
-    }
-    Ok(())
-}
-
 #[allow(dead_code)] // Shared by the immediately following request and audit slices.
 pub(crate) fn resolve_tool_binary(
     name: &str,
@@ -2216,6 +2199,35 @@ pub(crate) fn resolve_tool_binary(
 fn canonical_tool_binary(path: PathBuf) -> Result<PathBuf> {
     fs::canonicalize(&path)
         .with_context(|| format!("failed to resolve tool binary {}", path.display()))
+}
+
+/// Resolve an argv-dispatching executable without replacing its final symlink.
+/// Docker Desktop and OrbStack select the command from argv[0], so canonicalizing
+/// `docker` into their shared `docker-tools` target changes the program invoked.
+fn command_binary(path: PathBuf) -> Result<PathBuf> {
+    let candidate = if path.components().count() == 1 {
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+            .map(|directory| directory.join(&path))
+            .find(|candidate| candidate.is_file())
+            .ok_or_else(|| anyhow!("failed to resolve tool binary {}", path.display()))?
+    } else if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()?.join(path)
+    };
+    let parent = candidate
+        .parent()
+        .ok_or_else(|| anyhow!("tool binary has no parent"))?;
+    let name = candidate
+        .file_name()
+        .ok_or_else(|| anyhow!("tool binary has no file name"))?;
+    let candidate = fs::canonicalize(parent)?.join(name);
+    let metadata = fs::metadata(&candidate)
+        .with_context(|| format!("failed to resolve tool binary {}", candidate.display()))?;
+    if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+        bail!("tool binary is not an executable file");
+    }
+    Ok(candidate)
 }
 
 fn canonical_project(path: &Path) -> Result<PathBuf> {
@@ -2362,17 +2374,6 @@ fn create_private_file(path: &Path) -> Result<File> {
     Ok(file)
 }
 
-fn write_private_yaml(path: &Path, value: &Value) -> Result<()> {
-    let mut text = serde_norway::to_string(value)?;
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    let mut file = create_private_file(path)?;
-    file.write_all(text.as_bytes())?;
-    file.sync_all()?;
-    Ok(())
-}
-
 fn read_owner_json(path: &Path, maximum: u64) -> Result<Value> {
     let bytes = read_owner_file(path, maximum)?;
     serde_json::from_slice(&bytes).context("owner-only JSON is invalid")
@@ -2423,12 +2424,39 @@ fn replace_state(path: &Path, state: &DevState) -> Result<()> {
     Ok(())
 }
 
+fn replace_private_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        require_owned_regular_file(path, PRIVATE_FILE_MODE)?;
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("private output has no parent"))?;
+    validate_private_directory(parent)?;
+    let mut random = [0_u8; 9];
+    getrandom::fill(&mut random)?;
+    let temporary = parent.join(format!(".output-{}", URL_SAFE_NO_PAD.encode(random)));
+    let mut file = create_private_file(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
+    Ok(())
+}
+
 fn read_state(path: &Path) -> Result<DevState> {
     let bytes = read_owner_file(path, MAX_STATE_BYTES)?;
-    let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
-    if state.schema != STATE_SCHEMA {
+    let shape: Value = serde_json::from_slice(&bytes).context("local state is invalid")?;
+    if shape.get("schema").and_then(Value::as_str) != Some(STATE_SCHEMA) {
+        if shape.get("mintOrigin").is_some()
+            || shape
+                .get("schema")
+                .and_then(Value::as_str)
+                .is_some_and(|schema| schema.starts_with("registry.evidencectl.dev-state/v"))
+        {
+            bail!("this retained local session uses the retired Mint lifecycle; stop it with its matching Mint-era evidencectl, then start a fresh issuer-backed session. Nothing was changed");
+        }
         bail!("local state schema is unsupported");
     }
+    let state: DevState = serde_json::from_slice(&bytes).context("local state is invalid")?;
     Ok(state)
 }
 
@@ -2534,6 +2562,7 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::authoring::CompiledProject;
 
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
@@ -2557,7 +2586,7 @@ mod tests {
                     concept_form: CompiledConceptForm::Boolean,
                 }],
             }],
-            local_audience: "registry-evidence-local".to_owned(),
+            local_audience: "urn:registrystack:evidence:local:gateway".to_owned(),
             requester_tag: "local-caller".to_owned(),
             caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
             access_policies: Vec::new(),
@@ -2576,73 +2605,18 @@ mod tests {
     }
 
     #[test]
-    fn mint_documents_are_closed_and_derive_authority_from_the_compiler() {
-        let compiled = compiled(Path::new("/private/runtime.yaml"));
-        let config = mint_config(
-            &compiled,
-            Path::new("/private/mint-public.jwk.json"),
-            Path::new("/private"),
-            LocalServicePorts::default(),
-        );
-        let caller = local_caller_registration(
-            &compiled,
-            json!({"kty":"EC","crv":"P-256","kid":"caller","alg":"ES256","x":"public","y":"public"}),
-        );
-        assert_eq!(config["validationMode"], "supervised-local-development");
-        assert_eq!(config["issuer"], "http://127.0.0.1:8081");
-        assert_eq!(
-            config["listener"],
-            json!({
-                "address": "127.0.0.1", "port": 8081,
-                "maximumRequestBytes": 16384, "requestTimeoutMilliseconds": 5000
-            })
-        );
-        assert_eq!(
-            config["accessTokens"]["audiences"],
-            json!([compiled.local_audience])
-        );
-        assert_eq!(
-            config["audit"],
-            json!({
-                "path": "audit/mint.jsonl",
-                "maximumFileBytes": 1_073_741_824u64,
-                "hashKeyRef": "secret:file/mint-audit-hmac-key",
-                "hashKeyVersion": 1,
-            })
-        );
-        assert_eq!(caller["requesterTags"], json!([compiled.requester_tag]));
-        assert_eq!(
-            caller["evidenceAudience"],
-            compiled.caller_evidence_audience
-        );
-        assert!(caller.to_string().find("private").is_none());
-    }
-
-    #[test]
-    fn supervised_dev_generates_create_only_private_p256_mint_and_holder_pairs() {
+    fn supervised_dev_generates_create_only_private_p256_holder_pair() {
         let root = tempfile::tempdir().expect("tempdir");
         let keys = root.path().join("keys");
-        let mint_public = generate_service_and_holder_keys(&keys).expect("generate dev keys");
+        generate_holder_key(&keys).expect("generate dev key");
 
-        for name in ["mint", "holder"] {
+        for name in ["holder"] {
             let private_path = keys.join(format!("{name}-private.jwk"));
             let private = registry_platform_crypto::PrivateJwk::parse(
                 &fs::read_to_string(&private_path).expect("private JWK"),
             )
             .expect("private JWK parses");
-            let public_path = if name == "mint" {
-                assert_eq!(
-                    mint_public.file_name().and_then(|value| value.to_str()),
-                    private
-                        .kid
-                        .as_deref()
-                        .map(|kid| format!("{kid}.jwk.json"))
-                        .as_deref()
-                );
-                mint_public.clone()
-            } else {
-                keys.join("holder-public.jwk.json")
-            };
+            let public_path = keys.join("holder-public.jwk.json");
             let public = registry_platform_crypto::PublicJwk::parse(
                 &fs::read_to_string(&public_path).expect("public JWK"),
             )
@@ -2668,10 +2642,8 @@ mod tests {
                 PRIVATE_FILE_MODE
             );
         }
-        assert!(!keys.join("mint-public.jwk.json").exists());
-
         let before = fs::read(keys.join("holder-private.jwk")).expect("holder private JWK");
-        assert!(generate_service_and_holder_keys(&keys).is_err());
+        assert!(generate_holder_key(&keys).is_err());
         assert_eq!(
             fs::read(keys.join("holder-private.jwk")).expect("holder private JWK"),
             before,
@@ -2799,13 +2771,14 @@ requirements:
             project: project.clone(),
             runtime_path: runtime.clone(),
             evidence_origin: local_origin(8080),
-            mint_origin: local_origin(8081),
-            token_url: format!("{}/token", local_origin(8081)),
+            issuer_origin: local_origin(8081),
+            issuer_session_id: "0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            token_url: format!("{}/oauth2/token", local_origin(8081)),
             access_token_audience: compiled.local_audience.clone(),
             caller: Some(CallerState {
                 client_id: CALLER_ID.to_owned(),
                 private_key_path: caller_key,
-                assertion_audience: format!("{}/token", local_origin(8081)),
+                assertion_audience: local_origin(8081),
                 evidence_audience: compiled.caller_evidence_audience.clone(),
                 requester_tag: compiled.requester_tag.clone(),
             }),
@@ -2930,7 +2903,7 @@ requirements:
     }
 
     #[test]
-    fn supervisor_reload_control_signals_only_mint_and_keeps_serving() {
+    fn supervisor_stop_control_keeps_evidence_owned_until_cleanup() {
         let temporary = tempfile::tempdir().expect("tempdir");
         let socket = temporary.path().join("control.sock");
         let listener = UnixListener::bind(&socket).expect("control listener");
@@ -2938,41 +2911,15 @@ requirements:
             .set_nonblocking(true)
             .expect("nonblocking listener");
 
-        let mint_script = temporary.path().join("mint-child");
-        let mint_ready = temporary.path().join("mint-ready");
-        fs::write(
-            &mint_script,
-            "#!/bin/sh\ntrap ':' HUP\nprintf ready > \"$MINT_READY\"\nwhile :; do sleep 1; done\n",
-        )
-        .expect("mint script");
-        fs::set_permissions(&mint_script, fs::Permissions::from_mode(0o700)).expect("script mode");
-        let mut mint = Command::new(&mint_script)
-            .env("MINT_READY", &mint_ready)
-            .spawn()
-            .expect("mint child");
         let mut evidence = Command::new("/bin/sleep")
             .arg("30")
             .spawn()
             .expect("evidence child");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !mint_ready.is_file() {
-            if let Some(status) = mint.try_wait().expect("mint child status") {
-                panic!("mint child exited before installing its HUP handler: {status}");
-            }
-            assert!(
-                Instant::now() < deadline,
-                "mint child did not install its HUP handler within 10 seconds"
-            );
-            thread::sleep(Duration::from_millis(10));
-        }
-
         let client_socket = socket.clone();
         let client = thread::spawn(move || {
-            send_control_request(&client_socket, b"reload-mint\n", b"reload-requested\n")
-                .expect("reload response");
             send_control_request(&client_socket, b"stop\n", b"stopped\n").expect("stop response");
         });
-        let outcome = supervisor_loop(&listener, &mut evidence, &mut mint, &AtomicBool::new(false))
+        let outcome = supervisor_loop(&listener, &mut evidence, &AtomicBool::new(false))
             .expect("supervisor loop");
         match outcome {
             SupervisorOutcome::Stop(mut stream) => {
@@ -2982,11 +2929,8 @@ requirements:
         }
         client.join().expect("control client");
         assert!(evidence.try_wait().expect("evidence status").is_none());
-        assert!(mint.try_wait().expect("mint status").is_none());
         signal_child(&evidence).expect("stop evidence");
-        signal_child(&mint).expect("stop mint");
         evidence.wait().expect("wait evidence");
-        mint.wait().expect("wait mint");
     }
 
     #[test]
@@ -3016,11 +2960,10 @@ requirements:
                 .take(16)
                 .read_to_end(&mut request)
                 .expect("request");
-            assert_eq!(request, b"reload-mint\n");
-            stream.write_all(b"reload-requested\n").expect("response");
+            assert_eq!(request, b"status\n");
+            stream.write_all(b"ready\n").expect("response");
         });
-        send_control_request(&long_socket, b"reload-mint\n", b"reload-requested\n")
-            .expect("long control path");
+        send_control_request(&long_socket, b"status\n", b"ready\n").expect("long control path");
         server.join().expect("server");
     }
 
@@ -3028,8 +2971,7 @@ requirements:
     fn every_startup_failure_reads_as_a_sentence_about_this_session() {
         let ports = LocalServicePorts::new(18080, 18081).expect("distinct ports");
         let recorded = [
-            Some(FailureKind::MintStart),
-            Some(FailureKind::MintReadiness),
+            Some(FailureKind::IssuerStart),
             Some(FailureKind::EvidenceStart),
             Some(FailureKind::EvidenceReadiness),
             Some(FailureKind::ChildExited),
@@ -3047,9 +2989,8 @@ requirements:
         // The port is the fact the operator can act on, so a failure that
         // belongs to one service names that service's own port.
         assert!(summaries[0].contains("127.0.0.1:18081"), "{}", summaries[0]);
-        assert!(summaries[1].contains("127.0.0.1:18081"), "{}", summaries[1]);
+        assert!(summaries[1].contains("127.0.0.1:18080"), "{}", summaries[1]);
         assert!(summaries[2].contains("127.0.0.1:18080"), "{}", summaries[2]);
-        assert!(summaries[3].contains("127.0.0.1:18080"), "{}", summaries[3]);
     }
 
     #[test]
@@ -3068,13 +3009,33 @@ requirements:
         assert!(error.contains("--evidence-port"), "{error}");
 
         let error = probe_local_ports(LocalServicePorts::new(free_port, port).expect("ports"))
-            .expect_err("a held Mint port is refused")
+            .expect_err("a held issuer port is refused")
             .to_string();
-        assert!(error.contains("--mint-port"), "{error}");
+        assert!(error.contains("--issuer-port"), "{error}");
 
         drop(held);
         probe_local_ports(LocalServicePorts::new(port, free_port).expect("ports"))
             .expect("a released port passes the probe");
+    }
+
+    #[test]
+    fn argv_dispatching_tool_keeps_its_final_symlink_name() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("docker-tools");
+        fs::write(&target, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
+        let docker = temporary.path().join("docker");
+        symlink("docker-tools", &docker).unwrap();
+
+        let resolved = command_binary(docker).unwrap();
+        assert_eq!(
+            resolved.file_name().and_then(|name| name.to_str()),
+            Some("docker")
+        );
+        assert!(fs::symlink_metadata(resolved)
+            .unwrap()
+            .file_type()
+            .is_symlink());
     }
 
     #[test]

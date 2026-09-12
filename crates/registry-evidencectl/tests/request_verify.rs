@@ -1,20 +1,27 @@
 use std::{
     fs,
+    net::TcpListener,
     os::unix::{
         fs::{symlink, PermissionsExt as _},
         net::UnixListener,
     },
     path::{Path, PathBuf},
     process::{Command, Output},
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
 };
 
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::post, Json, Router};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{Duration, SecondsFormat, Utc};
 use p256::ecdsa::{signature::Signer as _, Signature, SigningKey};
 use registry_platform_crypto::PublicJwk;
 use serde_json::{json, Value};
 
-const TOKEN: &str = "secret.token-canary";
+const TOKEN: &str = "secret.token.canary";
 const BINDING: &str = "urn:evidence:subject:v1_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const AGE_CHECKS_TAG: &str =
     "policy-v1-bc8c04f766133dc6ffd6e395caa64f9c3b43301c1d308716668c71b8b839c0dc";
@@ -98,8 +105,6 @@ fn owner_only_subjects_file_keeps_selector_values_out_of_command_arguments() {
             "--evidence-bin",
         ])
         .arg(&fixture.evidence)
-        .arg("--mint-bin")
-        .arg(&fixture.mint)
         .output()
         .expect("prepare from subjects file");
     assert_success(&prepared);
@@ -149,8 +154,6 @@ fn owner_only_subjects_file_keeps_selector_values_out_of_command_arguments() {
             "--evidence-bin",
         ])
         .arg(&fixture.evidence)
-        .arg("--mint-bin")
-        .arg(&fixture.mint)
         .output()
         .expect("refuse unsafe subjects file");
     assert!(!refused.status.success());
@@ -226,25 +229,7 @@ fn prepare_and_verify_delegate_exactly_and_publish_only_safe_artifacts() {
         format!("header = \"Authorization: Bearer {TOKEN}\"\n")
     );
 
-    let mint_args = fs::read_to_string(fixture.mint.with_extension("args")).unwrap();
-    assert_eq!(
-        mint_args.lines().collect::<Vec<_>>(),
-        [
-            "token",
-            "--url",
-            "http://127.0.0.1:8081/token",
-            "--client-id",
-            "local-tutorial-caller",
-            "--key",
-            fs::canonicalize(&fixture.root)
-                .unwrap()
-                .join(".evidence/dev/generated/keys/caller-private.jwk")
-                .to_str()
-                .unwrap(),
-            "--audience",
-            "http://127.0.0.1:8081/token",
-        ]
-    );
+    assert!(fixture.token_server.request_count() >= 1);
     let evidence_args = fs::read_to_string(fixture.evidence.with_extension("prepare.args"))
         .expect("Evidence prepare argv");
     let evidence_args = evidence_args.lines().collect::<Vec<_>>();
@@ -376,25 +361,7 @@ fn named_client_prepare_uses_the_registered_identity() {
 
     let prepared = fixture.prepare_as("age-checker", "named-client");
     assert_success(&prepared);
-    let mint_args = fs::read_to_string(fixture.mint.with_extension("args")).unwrap();
-    assert_eq!(
-        mint_args.lines().collect::<Vec<_>>(),
-        [
-            "token",
-            "--url",
-            "http://127.0.0.1:8081/token",
-            "--client-id",
-            "age-checker",
-            "--key",
-            fs::canonicalize(&fixture.root)
-                .unwrap()
-                .join(".evidence/clients/age-checker/private.jwk")
-                .to_str()
-                .unwrap(),
-            "--audience",
-            "http://127.0.0.1:8081/token",
-        ]
-    );
+    assert!(fixture.token_server.request_count() >= 1);
     assert!(fixture
         .root
         .join(".evidence/requests/named-client/request.json")
@@ -427,7 +394,7 @@ fn named_client_prepare_uses_the_registered_identity() {
 }
 
 #[test]
-fn unusable_named_clients_and_mint_refusal_publish_no_request_artifacts() {
+fn unusable_named_clients_and_issuer_refusal_publish_no_request_artifacts() {
     let unknown = Fixture::new();
     unknown.add_named_client("other-client", "active", 0o600);
     unknown.use_explicit_access();
@@ -489,14 +456,11 @@ fn unusable_named_clients_and_mint_refusal_publish_no_request_artifacts() {
     let refused = Fixture::new();
     refused.add_named_client("refused-client", "active", 0o600);
     refused.use_explicit_access();
-    fs::write(refused.mint.with_extension("fail"), b"").unwrap();
+    refused.token_server.refuse();
     let output = refused.prepare_as("refused-client", "refused-client");
     assert!(!output.status.success());
     assert!(!String::from_utf8_lossy(&output.stderr).contains(TOKEN));
-    assert_eq!(
-        String::from_utf8_lossy(&output.stderr),
-        "evidencectl: Registry Mint refused a token for client refused-client\n"
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("local issuer declined"));
     assert_no_request_artifacts(&refused.root, "refused-client");
 }
 
@@ -731,12 +695,109 @@ fn failed_client_verification_removes_the_unpublished_output() {
         .all(|name| !name.starts_with(".verify-")));
 }
 
+struct TokenServer {
+    address: std::net::SocketAddr,
+    refuse: Arc<AtomicBool>,
+    requests: Arc<AtomicUsize>,
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+#[derive(Clone)]
+struct TokenServerState {
+    refuse: Arc<AtomicBool>,
+    requests: Arc<AtomicUsize>,
+}
+
+impl TokenServer {
+    fn start() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("token endpoint");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking token endpoint");
+        let address = listener.local_addr().expect("token endpoint address");
+        let refuse = Arc::new(AtomicBool::new(false));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let state = TokenServerState {
+            refuse: Arc::clone(&refuse),
+            requests: Arc::clone(&requests),
+        };
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let thread = thread::spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("token runtime")
+                .block_on(async move {
+                    let listener =
+                        tokio::net::TcpListener::from_std(listener).expect("async token listener");
+                    let app = Router::new()
+                        .route("/oauth2/token", post(test_token_endpoint))
+                        .with_state(state);
+                    axum::serve(listener, app)
+                        .with_graceful_shutdown(async {
+                            let _ = stopped.await;
+                        })
+                        .await
+                        .expect("test token endpoint");
+                });
+        });
+        Self {
+            address,
+            refuse,
+            requests,
+            shutdown: Some(shutdown),
+            thread: Some(thread),
+        }
+    }
+
+    fn address(&self) -> std::net::SocketAddr {
+        self.address
+    }
+
+    fn refuse(&self) {
+        self.refuse.store(true, Ordering::Relaxed);
+    }
+
+    fn request_count(&self) -> usize {
+        self.requests.load(Ordering::Relaxed)
+    }
+}
+
+async fn test_token_endpoint(State(state): State<TokenServerState>) -> impl IntoResponse {
+    state.requests.fetch_add(1, Ordering::Relaxed);
+    if state.refuse.load(Ordering::Relaxed) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":"invalid_client"})),
+        )
+            .into_response();
+    }
+    Json(json!({
+        "access_token": TOKEN,
+        "token_type": "Bearer",
+        "expires_in": 300
+    }))
+    .into_response()
+}
+
+impl Drop for TokenServer {
+    fn drop(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("token endpoint thread");
+        }
+    }
+}
+
 struct Fixture {
     _temporary: tempfile::TempDir,
     _listener: UnixListener,
+    token_server: TokenServer,
     root: PathBuf,
     evidence: PathBuf,
-    mint: PathBuf,
     signing_key: SigningKey,
     signing_jwk: Value,
 }
@@ -752,24 +813,31 @@ impl Fixture {
         private_directory(&root.join(".evidence/dev/generated/keys"));
         private_file(&root.join(".evidence/dev/runtime.yaml"), b"runtime", 0o400);
         let caller_key = root.join(".evidence/dev/generated/keys/caller-private.jwk");
-        private_file(&caller_key, b"{}", 0o600);
+        private_file(
+            &caller_key,
+            br#"{"kty":"OKP","crv":"Ed25519","kid":"local-tutorial-caller-key-1","alg":"EdDSA","x":"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo","d":"nWGxne_9WmC6hEr0kuwsxERJxWl7MmkZcDusAxyuf2A"}"#,
+            0o600,
+        );
         let socket = root.join(".evidence/dev/control.sock");
         let listener = UnixListener::bind(&socket).expect("control socket");
         fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
         let canonical = fs::canonicalize(&root).unwrap();
+        let token_server = TokenServer::start();
+        let issuer_origin = format!("http://{}", token_server.address());
         let state = json!({
-            "schema": "registry.evidencectl.dev-state/v5",
+            "schema": "registry.evidencectl.dev-state/v6",
             "status": "ready",
             "project": canonical,
             "runtimePath": canonical.join(".evidence/dev/runtime.yaml"),
             "evidenceOrigin": "http://127.0.0.1:8080",
-            "mintOrigin": "http://127.0.0.1:8081",
-            "tokenUrl": "http://127.0.0.1:8081/token",
-            "accessTokenAudience": "registry-evidence-local",
+            "issuerOrigin": issuer_origin,
+            "issuerSessionId": "0123456789abcdef0123456789abcdef0123456789abcdef",
+            "tokenUrl": format!("{issuer_origin}/oauth2/token"),
+            "accessTokenAudience": "urn:registrystack:evidence:local:gateway",
             "caller": {
                 "clientId": "local-tutorial-caller",
                 "privateKeyPath": canonical.join(".evidence/dev/generated/keys/caller-private.jwk"),
-                "assertionAudience": "http://127.0.0.1:8081/token",
+                "assertionAudience": issuer_origin,
                 "evidenceAudience": "urn:registrystack:evidence:local:caller",
                 "requesterTag": "local-caller"
             },
@@ -837,14 +905,6 @@ impl Fixture {
         );
         write_sealed_bundle(&root, &state);
 
-        let mint = temporary.path().join("mint-stub");
-        executable(
-            &mint,
-            format!(
-                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$0.args\"\n[ ! -f \"$0.fail\" ] || exit 31\nprintf '%s\\n' '{TOKEN}'\n"
-            )
-            .as_bytes(),
-        );
         let signing_key = SigningKey::from_slice(&[7_u8; 32]).expect("test signing key");
         let point = signing_key.verifying_key().to_encoded_point(false);
         let mut signing_jwk = json!({
@@ -865,9 +925,9 @@ impl Fixture {
         Self {
             _temporary: temporary,
             _listener: listener,
+            token_server,
             root,
             evidence,
-            mint,
             signing_key,
             signing_jwk,
         }
@@ -982,8 +1042,6 @@ impl Fixture {
             .args(inputs)
             .args(["--name", name, "--project", ".", "--evidence-bin"])
             .arg(&self.evidence)
-            .arg("--mint-bin")
-            .arg(&self.mint)
             .output()
             .expect("prepare command")
     }
