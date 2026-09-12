@@ -236,7 +236,7 @@ test('the caller-access replay expects the privacy-safe refusal audit line', asy
   assert.ok(branch, 'the caller-access replay spec must exist');
   assert.match(
     branch,
-    /"run:Revoke an application\|1"\s+"run:Revoke an application\|2"\s+"run-fails:Revoke an application\|3"/u,
+    /"run:Revoke an application\|1"\s+"run:Revoke an application\|2"\s+"run-fails:Revoke an application\|3"\s+"run:Stop the final generation"\s+"run:Clean up"/u,
   );
   assert.match(branch, /"ACCESS REFUSED requester="/u);
   assert.match(branch, /"reason=not_authorized"/u);

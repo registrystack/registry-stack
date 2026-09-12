@@ -319,6 +319,7 @@ load_spec() {
 			"run:Revoke an application|1"
 			"run:Revoke an application|2"
 			"run-fails:Revoke an application|3"
+			"run:Stop the final generation"
 			"run:Clean up"
 		)
 		# This tutorial teaches refusal, so the refusals are what must hold.
