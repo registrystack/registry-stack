@@ -27,12 +27,13 @@ seed: []
     )
     .expect("clients");
     let state = State {
-        version: 1,
+        version: 2,
         project: project.clone(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
         breg_port: 8094,
-        mint_port: 8095,
+        issuer_port: 8095,
+        issuer_image: None,
         database_port: 55448,
         webhook_port: None,
         clients_file: project.join("clients.yaml"),
@@ -65,11 +66,34 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     initialize(&state.root(), &state, &clients, &files).expect("initialize");
     let root = state.root();
     private::validate_tree(&root).expect("all generated state is private");
-    let issuer = private::read(
-        &root.join("credentials/issuer/assertion-key.jwk"),
-        MAX_BYTES,
-    )
-    .expect("issuer");
+    let issuer_state = fs::read_dir(root.join("issuer"))
+        .expect("the upstream issuer session state exists")
+        .count();
+    assert!(issuer_state > 0);
+    let server_file = fs::read_dir(root.join("issuer/resources/resource_servers"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let server: Value =
+        serde_norway::from_slice(&private::read(&server_file, MAX_BYTES).unwrap()).unwrap();
+    let resources = server["resources"].as_array().unwrap();
+    assert!(resources
+        .iter()
+        .any(|resource| resource["handle"] == "registry"));
+    assert!(
+        resources.iter().any(|resource| {
+            resource["handle"] == "generic"
+                && resource["parent"] == "registry"
+                && resource["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action["handle"] == "operate")
+        }),
+        "three-segment authored scopes need the upstream parent resource chain"
+    );
     let operator = private::read(
         &root.join("credentials/operator/assertion-key.jwk"),
         MAX_BYTES,
@@ -80,9 +104,9 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
         MAX_BYTES,
     )
     .expect("source");
-    assert!(issuer != operator);
+    assert!(operator.len() > 32);
     assert!(source != operator);
-    assert!(source != issuer);
+    assert!(source != operator);
     let report = serde_json::to_string(&state.report().unwrap()).expect("report");
     assert!(!report.contains("\"d\""));
     let runtime: Value = serde_norway::from_slice(
@@ -359,6 +383,34 @@ fn state_refuses_changed_ownership_without_touching_paths() {
 }
 
 #[test]
+fn a_retained_mint_state_is_named_before_v2_deserialization_without_mutation() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let state_file = root.join("state.json");
+    let mut old: Value =
+        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
+    old["version"] = json!(1);
+    let fields = old.as_object_mut().unwrap();
+    let port = fields.remove("issuerPort").unwrap();
+    fields.insert("mintPort".to_owned(), port);
+    let bytes = serde_json::to_vec(&old).unwrap();
+    private::replace(&state_file, &bytes).unwrap();
+
+    let refusal = read_state(&root).unwrap_err().to_string();
+    assert!(
+        refusal.contains("Mint-based issuer (state v1)"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("does not implement retained issuer migration"),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("migrate-issuer PROJECT"), "{refusal}");
+    assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+}
+
+#[test]
 fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());
@@ -422,10 +474,9 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
     };
     // Docker belongs to no release of this stack and names itself in its own
     // shape, so it is never compared against the stack's version.
-    let session = |breg: String, mint: String| {
+    let session = |breg: String| {
         BTreeMap::from([
             ("breg".to_owned(), installed(&breg)),
-            ("mint".to_owned(), installed(&mint)),
             (
                 "docker".to_owned(),
                 installed("Docker version 29.4.0, build 1a2b3c4"),
@@ -433,19 +484,10 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
         ])
     };
 
-    matching_versions(&session(format!("breg {own}"), format!("mint {own}")))
-        .expect("the three binaries of one release start a session");
+    matching_versions(&session(format!("breg {own}")))
+        .expect("the stack binaries of one release start a session");
 
-    for (name, binaries) in [
-        (
-            "breg",
-            session("breg 0.26.1".to_owned(), format!("mint {own}")),
-        ),
-        (
-            "mint",
-            session(format!("breg {own}"), "mint 0.26.1".to_owned()),
-        ),
-    ] {
+    for (name, binaries) in [("breg", session("breg 0.26.1".to_owned()))] {
         let refusal = format!(
             "{:#}",
             matching_versions(&binaries).expect_err("a prerequisite from another release")
@@ -457,11 +499,8 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
 
     // A prerequisite that declines to identify itself still serves the
     // session, as the installed lifecycle proof starts one that never answers.
-    matching_versions(&session(
-        UNREPORTED_VERSION.to_owned(),
-        format!("mint {own}"),
-    ))
-    .expect("a prerequisite that reports no version is not compared");
+    matching_versions(&session(UNREPORTED_VERSION.to_owned()))
+        .expect("a prerequisite that reports no version is not compared");
 
     // A start resolves the prerequisites and compares them before it inspects
     // a container or launches the supervisor.
@@ -470,21 +509,23 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
     fs::create_dir(&prerequisites).unwrap();
     for (name, reported) in [
         ("breg", "breg 0.26.1".to_owned()),
-        ("mint", format!("mint {own}")),
         ("docker", "Docker version 29.4.0, build 1a2b3c4".to_owned()),
     ] {
         script(&prerequisites.join(name), &format!("echo '{reported}'"));
     }
+    let ports = unused_ports();
     let refused = format!(
         "{:#}",
         start(StartArgs {
             project: project.clone(),
             clients_file: None,
-            breg_port: None,
-            mint_port: None,
-            database_port: None,
+            breg_port: Some(ports[0]),
+            issuer_port: Some(ports[1]),
+            issuer_image: None,
+            database_port: Some(ports[2]),
             breg_bin: Some(prerequisites.join("breg")),
-            mint_bin: Some(prerequisites.join("mint")),
+            mint_port: None,
+            mint_bin: None,
             docker_bin: Some(prerequisites.join("docker")),
         })
         .expect_err("a breg from another release never starts a session")
@@ -551,7 +592,7 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
     assert!(runtime.password() != migration.password());
     assert!(!environment.contains(runtime.password().unwrap()));
     assert!(!environment.contains(migration.password().unwrap()));
-    for file in ["audit-key", "cursor-key", "mint-audit-key"] {
+    for file in ["audit-key", "cursor-key"] {
         let bytes = private::read(&root.join("secrets").join(file), 64).unwrap();
         assert_eq!(bytes.len(), 43);
         assert!(bytes
@@ -977,12 +1018,13 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
     let captured = capture(project, &client_bytes).unwrap();
     private::directory(&project.join(".breg")).unwrap();
     let state = State {
-        version: 1,
+        version: 2,
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
         breg_port: 8094,
-        mint_port: 8095,
+        issuer_port: 8095,
+        issuer_image: None,
         database_port: 55448,
         webhook_port: None,
         clients_file: project.join("dev-clients.yaml"),
@@ -1010,9 +1052,11 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
         project: project.to_path_buf(),
         clients_file: None,
         breg_port: None,
-        mint_port: None,
+        issuer_port: None,
+        issuer_image: None,
         database_port: None,
         breg_bin: Some(project.join("missing-breg")),
+        mint_port: None,
         mint_bin: None,
         docker_bin: None,
     })
@@ -1079,7 +1123,12 @@ fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     // After `dev stop --remove` nothing remains for the source pin to protect,
     // so an edited project starts a fresh session on the retained ports.
     let (_temporary, project) = write_init_project();
-    let state = retained_session(&project, None);
+    let mut state = retained_session(&project, None);
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
+    state.save().unwrap();
     let previous_key =
         fs::read(state.root().join("credentials/operator/assertion-key.jwk")).unwrap();
     let registry = project.join("registry.yaml");
@@ -1102,10 +1151,10 @@ fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     assert_eq!(
         (
             replaced.breg_port,
-            replaced.mint_port,
+            replaced.issuer_port,
             replaced.database_port
         ),
-        (8094, 8095, 55448)
+        (ports[0], ports[1], ports[2])
     );
     assert_eq!(replaced.clients_file, state.clients_file);
     assert!(replaced.container_id.is_none());
@@ -1141,12 +1190,23 @@ fn export_args(state: &State) -> export_client::ExportClientArgs {
     }
 }
 
+/// The rendered machine registration for the fixture's `source` client: the
+/// one agent document under the issuer provisioning tree.
+fn source_agent_path(state: &State) -> std::path::PathBuf {
+    let directory = state.root().join("issuer/registry-schema/agents");
+    let entry = std::fs::read_dir(&directory)
+        .expect("the issuer provisioning tree exists")
+        .find_map(|entry| entry.ok())
+        .expect("at least one rendered agent");
+    directory.join(entry.path().file_name().expect("a file name"))
+}
+
 #[test]
 fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_changes() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let before = fs::read(state.root().join("state.json")).unwrap();
-    let registrations = fs::read(state.root().join("mint/clients/source.yaml")).unwrap();
+    let registrations = fs::read(source_agent_path(&state)).unwrap();
     let retained_clients = fs::read(state.root().join("clients.json")).unwrap();
     // Authored input is deliberately absent: only the retained session is used.
     let report = export_client::run(export_args(&state)).unwrap();
@@ -1168,10 +1228,7 @@ fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_change
         fs::read(state.root().join("clients.json")).unwrap(),
         retained_clients
     );
-    assert_eq!(
-        fs::read(state.root().join("mint/clients/source.yaml")).unwrap(),
-        registrations
-    );
+    assert_eq!(fs::read(source_agent_path(&state)).unwrap(), registrations);
     assert_eq!(
         fs::read(&export_args(&state).assertion_key_file).unwrap(),
         key
@@ -1286,7 +1343,7 @@ fn plain_init_source_client_has_only_the_explicit_lookup_profile_and_a_distinct_
     state.status = Status::Stopped;
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
-    for other in ["operator", "reader", "issuer"] {
+    for other in ["operator", "reader"] {
         assert_ne!(
             key,
             fs::read(
@@ -1585,4 +1642,53 @@ fn old_event_free_sessions_keep_working_without_receiver_state() {
     assert!(!state.root().join("secrets/webhook-key").exists());
     let report = events::report(&state.root(), false).unwrap();
     assert_eq!(report["deliveries"], json!([]));
+}
+
+#[test]
+fn fresh_token_rejects_path_clients_and_stopped_sessions_without_network() {
+    let (_temp, state, clients, files) = fixture();
+    for client in ["../operator", "/operator", "", "operator/header"] {
+        assert!(fresh_token(&state.project, client)
+            .unwrap_err()
+            .to_string()
+            .contains("bounded local client"));
+    }
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    assert!(fresh_token(&state.project, "operator")
+        .unwrap_err()
+        .to_string()
+        .contains("must be ready"));
+    assert!(!state.root().join("secrets/operator.header").exists());
+}
+
+fn unused_ports() -> [u16; 3] {
+    let sockets = [0; 3].map(|_| std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    sockets
+        .each_ref()
+        .map(|socket| socket.local_addr().unwrap().port())
+}
+
+#[test]
+fn candidate_issuer_image_is_immutable_and_retained() {
+    let image = format!("sha256:{}", "a".repeat(64));
+    assert_eq!(candidate_issuer_image(&image).unwrap(), image);
+    for invalid in [
+        "latest",
+        "ghcr.io/example/candidate:latest",
+        "sha256:short",
+        &format!("sha256:{}", "A".repeat(64)),
+    ] {
+        assert!(candidate_issuer_image(invalid).is_err());
+    }
+    let (_temporary, mut state, _clients, _files) = fixture();
+    state.issuer_image = Some(image.clone());
+    let encoded = serde_json::to_vec(&state).unwrap();
+    let restored: State = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(restored.issuer_image, Some(image));
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("issuerImage");
+    assert!(serde_json::from_value::<State>(legacy)
+        .unwrap()
+        .issuer_image
+        .is_none());
 }

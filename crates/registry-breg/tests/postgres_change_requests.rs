@@ -908,7 +908,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         });
     for profile in &mut project.access_profiles {
         for grant in profile
-            .grants
+            .permissions
             .iter_mut()
             .filter(|grant| grant.entity == "correction-request")
         {
@@ -916,7 +916,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
             for stage in &mut grant.review_stages {
                 stage
                     .targets
-                    .push(registry_breg::contract::ReviewStageTargetGrantSource {
+                    .push(registry_breg::contract::ReviewStageTargetPermissionSource {
                         entity: "correction-request".to_owned(),
                         readable_fields: BTreeSet::from(["evidence".to_owned()]),
                         row_boundaries: vec![],
@@ -937,8 +937,8 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .unwrap()
         .clone();
     hidden.id = "hidden-owner".to_owned();
-    hidden.grants[0].readable_fields.remove("evidence");
-    hidden.grants[0].writable_fields.remove("evidence");
+    hidden.permissions[0].readable_fields.remove("evidence");
+    hidden.permissions[0].writable_fields.remove("evidence");
     project.access_profiles.push(hidden);
     let mut other_target = project
         .access_profiles
@@ -948,7 +948,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .clone();
     other_target.id = "other-target-reviewer".to_owned();
     other_target.default = false;
-    other_target.grants[0].review_stages[0].targets[0].row_boundaries[0].claim =
+    other_target.permissions[0].review_stages[0].targets[0].row_boundaries[0].claim =
         "target_tenant_claim".to_owned();
     project.access_profiles.push(other_target);
 
@@ -966,7 +966,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
             .clone();
         profile.id = variant.to_owned();
         profile.default = false;
-        let grant = &mut profile.grants[0];
+        let grant = &mut profile.permissions[0];
         let stage = &mut grant.review_stages[0];
         match variant {
             "reviewer-no-slot" => stage
@@ -983,7 +983,7 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
                 let target = stage.targets.pop().unwrap();
                 grant
                     .review_stages
-                    .push(registry_breg::contract::ReviewStageGrantSource {
+                    .push(registry_breg::contract::ReviewStagePermissionSource {
                         stage: "final".to_owned(),
                         targets: vec![target],
                     });
@@ -1010,16 +1010,16 @@ fn attachment_project() -> registry_breg::contract::RegistryProject {
         .clone();
     self_applier.id = "applier-self-reason".to_owned();
     self_applier.default = false;
-    self_applier.grants[0]
-        .apply_targets
-        .push(registry_breg::contract::ApplyTargetGrantSource {
+    self_applier.permissions[0].apply_targets.push(
+        registry_breg::contract::ApplyTargetPermissionSource {
             entity: "correction-request".to_owned(),
             row_boundaries: vec![registry_breg::contract::RowBoundarySource {
                 field: "reason".to_owned(),
                 claim: "self_reason_claim".to_owned(),
                 operator: registry_breg::contract::BoundaryOperator::Equals,
             }],
-        });
+        },
+    );
     project.access_profiles.push(self_applier);
 
     project
@@ -6619,7 +6619,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -6636,7 +6636,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
                 "revisionAccess":true,
@@ -6647,7 +6647,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -6661,7 +6661,7 @@ fn bounded_snapshot_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -6718,7 +6718,7 @@ fn long_logical_id_registry() -> registry_breg::CompiledRegistry {
             }
           ],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","list","submit_request","approve_request","apply_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
@@ -6791,7 +6791,7 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"household",
                 "operations":["create"],
                 "readableFields":["tenant","label","contact-person"],
@@ -6802,7 +6802,7 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
             },
             {
               "id":"operator","default":true,"principalClaim":"registry_principal",
-              "grants":[
+              "permissions":[
                 {
                   "entity":"registration-request",
                   "operations":["create","get","list","revisions","patch","submit_request","approve_request","reject_request","request_revision","revise_request","cancel_request","apply_request"],
@@ -6869,9 +6869,9 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
         applier.id = "blind-applier".to_owned();
         applier.default = false;
         applier
-            .grants
+            .permissions
             .retain(|grant| grant.entity == "registration-request");
-        let grant = &mut applier.grants[0];
+        let grant = &mut applier.permissions[0];
         grant.operations = BTreeSet::from([
             registry_breg::contract::Operation::Get,
             registry_breg::contract::Operation::ApplyRequest,
@@ -6936,7 +6936,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -6953,7 +6953,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
             },
             {
               "id":"submitter","principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
                 "revisionAccess":true,
@@ -6964,7 +6964,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
             },
             {
               "id":"reviewer","default":true,"principalClaim":"registry_principal","requiredPurposes":["review"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -6978,7 +6978,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
             },
             {
               "id":"final-reviewer","principalClaim":"registry_principal","requiredPurposes":["final"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -6992,7 +6992,7 @@ fn two_stage_project() -> registry_breg::contract::RegistryProject {
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -7058,7 +7058,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -7076,7 +7076,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
                 "revisionAccess":true,
@@ -7087,7 +7087,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -7104,7 +7104,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -7182,7 +7182,7 @@ async fn reviewed_native_pattern_failure_rolls_back_prior_effect_and_preserves_f
         .change_request
         .as_ref()
         .unwrap()
-        .review_grants
+        .review_permissions
         .iter()
         .all(|grant| grant.profile_id != "blind-applier"));
     let blind_request = get_record(

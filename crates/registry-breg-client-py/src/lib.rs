@@ -2546,9 +2546,62 @@ impl BaseRegistryClient {
     }
 }
 
+/// Synchronous wrapper over the canonical shared OAuth provider.
+#[pyclass(name = "PrivateKeyJwt", module = "registry_breg_client")]
+struct PrivateKeyJwtBinding {
+    inner: breg_client_sdk::PrivateKeyJwt,
+    runtime: tokio::runtime::Runtime,
+}
+
+#[pymethods]
+impl PrivateKeyJwtBinding {
+    #[new]
+    fn new(py: Python<'_>, config: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let outer = PyDict::new(py);
+        outer.set_item("private_key_jwt", config)?;
+        let (value, roots) = authorization_from_python(Some(outer.as_any()))
+            .map_err(|error| conversion_error(py, "configuration", error))?;
+        let inner = convert::private_key_jwt(&value["private_key_jwt"], roots)
+            .map_err(|error| config_error(py, error))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| PyRuntimeError::new_err("the token runtime could not be created"))?;
+        Ok(Self { inner, runtime })
+    }
+
+    fn exchange(&self, py: Python<'_>, subject_token: &str) -> PyResult<String> {
+        let token = py
+            .detach(|| self.runtime.block_on(self.inner.exchange(subject_token)))
+            .map_err(|error| token_error(py, error))?;
+        Self::bearer_value(token)
+    }
+
+    fn bearer_token(&self, py: Python<'_>) -> PyResult<String> {
+        use breg_client_sdk::TokenProvider;
+        let token = py
+            .detach(|| self.runtime.block_on(self.inner.bearer_token()))
+            .map_err(|error| token_error(py, error))?;
+        Self::bearer_value(token)
+    }
+}
+
+impl PrivateKeyJwtBinding {
+    fn bearer_value(token: breg_client_sdk::BearerToken) -> PyResult<String> {
+        let header = token.authorization_header_value();
+        header
+            .to_str()
+            .ok()
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .map(str::to_owned)
+            .ok_or_else(|| PyRuntimeError::new_err("the issued credential is invalid"))
+    }
+}
+
 #[pymodule]
 fn registry_breg_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<BaseRegistryClient>()?;
+    module.add_class::<PrivateKeyJwtBinding>()?;
     module.add_class::<Metadata>()?;
     module.add_class::<CreateBinding>()?;
     module.add_class::<PatchBinding>()?;

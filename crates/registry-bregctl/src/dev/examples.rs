@@ -705,13 +705,7 @@ async fn execute(
             bail!("scenario client/profile is not explicitly declared in dev clients");
         }
         if !native.contains_key(&step.client) {
-            let mint = state
-                .binaries
-                .get("mint")
-                .map(|b| b.path.clone())
-                .map(Ok)
-                .unwrap_or_else(|| super::executable("mint", None))?;
-            super::token(&mint, state, &step.client)?;
+            super::token(state, &step.client)?;
             let token = private::read(
                 &state
                     .root()
@@ -1406,7 +1400,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["grants"]
+        let grant = editor["permissions"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -1436,7 +1430,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["grants"]
+        let grant = editor["permissions"]
             .as_array_mut()
             .unwrap()
             .iter_mut()

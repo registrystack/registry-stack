@@ -807,6 +807,9 @@ async fn finish_prepared_server(
     let evidence = config
         .activate_evidence(&registry)
         .map_err(StartupError::RuntimeConfig)?;
+    let task_status = config
+        .activate_task_status(&registry)
+        .map_err(StartupError::RuntimeConfig)?;
     let attachment_verification_worker = if matches!(
         attachment_verification,
         crate::attachment_verification::AttachmentVerification::Disabled
@@ -832,6 +835,7 @@ async fn finish_prepared_server(
         audit_profile,
         Some(event_destinations),
     )
+    .with_task_status(task_status)
     .with_attachment_storage(attachment_storage)
     .with_attachment_verification(attachment_verification);
     let mutations = Arc::new(match evidence {

@@ -121,6 +121,8 @@ pub mod schema;
 pub mod startup;
 #[cfg(feature = "runtime")]
 pub(crate) mod stored_bytes;
+#[cfg(feature = "runtime")]
+pub mod task_grant;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
 #[cfg(feature = "runtime")]

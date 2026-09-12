@@ -70,7 +70,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: public-record
         rowBoundaries: []
         operations: [list]

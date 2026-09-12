@@ -206,7 +206,7 @@ accessProfiles:
   - registry:landholding:register
   requiredPurposes:
   - land-registration
-  grants:
+  permissions:
   - action: register-landholding
     operations:
     - invoke
@@ -230,7 +230,7 @@ accessProfiles:
   - registry:landholding:read
   requiredPurposes:
   - land-registration-audit
-  grants:
+  permissions:
   - entity: landholding
     operations:
     - get

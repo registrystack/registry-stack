@@ -84,7 +84,7 @@ limit bounds released response bytes, not total database or process memory.
 
 The in-process `/v1/gis` adapter serves the QGIS OAPIF provider. Its collection
 IDs are `entity-id.profile-id`, so changing a profile cannot silently select
-another profile's authority. Only direct list grants with readable primary
+another profile's authority. Only direct list permissions with readable primary
 geometry and explicit bbox capability are advertised.
 
 GIS deployments require an operator-configured origin:

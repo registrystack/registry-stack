@@ -49,7 +49,7 @@ fn registry() -> registry_breg::CompiledRegistry {
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"registry_principal",
         "requiredPurposes":["case-management"],
-        "grants":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
+        "permissions":[{"entity":"entry","operations":["create","get","list","patch","batch","tombstone","revisions","snapshot"],
           "readableFields":["code","label","valid-from","valid-to"],"writableFields":["code","label","valid-from","valid-to"],
           "filterableFields":["code"],"sortableFields":["valid-from"],"allowCount":true,"revisionAccess":true,"rowBoundaries":[]
         },{"entity":"timestamp-entry","operations":["snapshot"],

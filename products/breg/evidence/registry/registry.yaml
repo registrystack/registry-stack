@@ -85,7 +85,7 @@ accessProfiles:
   - registry:generic:operate
   requiredPurposes:
   - registry-operations
-  grants:
+  permissions:
   - entity: record
     operations:
     - create
@@ -108,7 +108,7 @@ accessProfiles:
   - registry:evidence:lookup
   requiredPurposes:
   - evidence-source-read
-  grants:
+  permissions:
   - entity: record
     operations:
     - lookup

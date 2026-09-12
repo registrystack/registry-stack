@@ -10,7 +10,7 @@ fn source() -> Value {
         "entities":[{"id":"entry","primaryDataset":"test-dataset","route":"entries","mutationMode":"mutable","classification":"internal",
           "fields":[{"id":"district","type":"string","maxLength":32,"classification":"internal"}]}],
         "accessProfiles":[{"id":"clerk","principalClaim":"registry_principal","requiredScopes":["entry:edit"],
-          "grants":[{"entity":"entry","operations":["get","patch"],"readableFields":["district"],"writableFields":["district"],
+          "permissions":[{"entity":"entry","operations":["get","patch"],"readableFields":["district"],"writableFields":["district"],
             "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}]
     })
 }
@@ -44,7 +44,7 @@ fn membership_source() -> Value {
             ]}),
     ]);
     source["accessProfiles"][0]["principalClaim"] = json!("sub");
-    let grant = &mut source["accessProfiles"][0]["grants"][0];
+    let grant = &mut source["accessProfiles"][0]["permissions"][0];
     grant["operations"] = json!(["get", "list"]);
     grant["writableFields"] = json!([]);
     grant["rowBoundaries"] = json!([]);
@@ -82,7 +82,7 @@ fn access_explanation_connects_row_reach_to_typed_claim_requirements() {
         .contains("not evaluated"));
 
     let mut broad = source();
-    broad["accessProfiles"][0]["grants"][0]["rowBoundaries"] = json!([]);
+    broad["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
     let registry = compile(&broad);
     assert!(registry
         .findings()
@@ -144,7 +144,7 @@ fn membership_row_reach_is_explicit_and_uses_the_selected_principal() {
         ),
     ] {
         let mut source = membership_source();
-        source["accessProfiles"][0]["grants"][0]["rowBoundaries"] = boundaries;
+        source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = boundaries;
         let registry = compile(&source);
         let explanation = registry_breg::access::explain_access(&registry);
         let reach = explanation
@@ -195,16 +195,16 @@ fn membership_changes_report_authority_narrowing_and_widening() {
         .unwrap()
         .push(json!({"id":"approved", "type":"boolean", "classification":"internal"}));
     let mut additional =
-        source["accessProfiles"][0]["grants"][0]["membershipBoundaries"][0].clone();
+        source["accessProfiles"][0]["permissions"][0]["membershipBoundaries"][0].clone();
     additional["activeField"] = json!("approved");
-    let mut boundaries = source["accessProfiles"][0]["grants"][0]["membershipBoundaries"]
+    let mut boundaries = source["accessProfiles"][0]["permissions"][0]["membershipBoundaries"]
         .as_array()
         .unwrap()
         .clone();
     boundaries.push(additional);
     let registries = (0..=2)
         .map(|count| {
-            source["accessProfiles"][0]["grants"][0]["membershipBoundaries"] =
+            source["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] =
                 json!(&boundaries[..count]);
             compile(&source)
         })
@@ -230,7 +230,7 @@ fn membership_changes_report_authority_narrowing_and_widening() {
 #[test]
 fn synthetic_own_record_preview_reuses_principal_and_refuses_identity_override() {
     let mut source = source();
-    source["accessProfiles"][0]["grants"][0]["rowBoundaries"] =
+    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
         json!([{"field":"district","claim":"registry_principal","operator":"equals"}]);
     let registry = compile(&source);
     let mut scenario = json!({

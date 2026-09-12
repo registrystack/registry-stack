@@ -173,7 +173,7 @@ accessProfiles:
       - registry:business:operate
     requiredPurposes:
       - business-administration
-    grants:
+    permissions:
       - entity: establishment
         rowBoundaries: []
         operations:
@@ -298,7 +298,7 @@ accessProfiles:
       - registry:business:view
     requiredPurposes:
       - business-view
-    grants:
+    permissions:
       - entity: business
         operations:
           - get

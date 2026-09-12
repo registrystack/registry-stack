@@ -34,7 +34,7 @@ fn fixture(effects: Value) -> CompiledRegistry {
             ],
             "changeRequest":{"effects":effects,"review":{"stages":[{"id":"review","approvals":1}]}}
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
             "entity":"request","operations":["get","submit_request","approve_request","apply_request"],"readableFields":["one","two","value"],
             "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first","second","parent"], "rowBoundaries": []}]}],
             "applyTargets":[{"entity":"target", "rowBoundaries": []}],
@@ -137,7 +137,7 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
                 ],
                 "changeRequest":change_request
             }],
-            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
+            "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
                 "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
                 "readableFields":["one","value"],
                 "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["first"], "rowBoundaries": []}]}],
@@ -396,7 +396,7 @@ fn rhai_planner_refuses_authority_ceiling_escape_before_target_locks() {
                 "review":{"stages":[{"id":"review","approvals":1}]}
             }
         }],
-        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","grants":[{
+        "accessProfiles":[{"id":"submitter","default":true,"principalClaim":"sub","permissions":[{
             "entity":"request","operations":["get","submit_request","approve_request","apply_request"],
             "readableFields":["target-ref","value"],
             "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["allowed"], "rowBoundaries": []}]}],

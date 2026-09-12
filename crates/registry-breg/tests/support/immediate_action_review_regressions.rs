@@ -619,7 +619,7 @@ fn compiled_lock_order_action_registry() -> registry_breg::CompiledRegistry {
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
             "requiredPurposes": ["contact-registration"],
-            "grants": [{
+            "permissions": [{
                 "action": "cross-link-lock-record",
                 "operations": ["invoke"],
                 "targets": [{
@@ -989,7 +989,7 @@ fn compiled_wide_action_registry() -> registry_breg::CompiledRegistry {
             "principalClaim": "registry_principal",
             "requiredScopes": ["registry:contact:register"],
             "requiredPurposes": ["contact-registration"],
-            "grants": [{
+            "permissions": [{
                 "action": "patch-wide-flags",
                 "operations": ["invoke"],
                 "targets": [{

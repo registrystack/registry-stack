@@ -420,12 +420,12 @@ mod tests {
         assert!(!schema.is_valid(&old_purposes));
 
         let mut old_actions = fixture("asset-site-placement");
-        let operations = old_actions["accessProfiles"][0]["grants"][0]
+        let operations = old_actions["accessProfiles"][0]["permissions"][0]
             .as_object_mut()
-            .expect("access grant is an object")
+            .expect("access permission is an object")
             .remove("operations")
             .expect("fixture uses canonical operations");
-        old_actions["accessProfiles"][0]["grants"][0]["actions"] = operations;
+        old_actions["accessProfiles"][0]["permissions"][0]["actions"] = operations;
         assert!(!schema.is_valid(&old_actions));
     }
 
@@ -459,11 +459,11 @@ mod tests {
                 "classification":"internal"
             }));
         instance["entities"][0]["geojson"] = serde_json::json!({"geometryField":"location"});
-        instance["accessProfiles"][0]["grants"][0]["readableFields"]
+        instance["accessProfiles"][0]["permissions"][0]["readableFields"]
             .as_array_mut()
             .unwrap()
             .push(Value::String("location".to_owned()));
-        instance["accessProfiles"][0]["grants"][0]["spatialQueries"] = serde_json::json!({
+        instance["accessProfiles"][0]["permissions"][0]["spatialQueries"] = serde_json::json!({
             "bbox":{
                 "maximumLongitudeSpanDegrees":0.25,
                 "maximumLatitudeSpanDegrees":1.5
@@ -471,8 +471,8 @@ mod tests {
         });
         assert!(schema.is_valid(&instance));
 
-        instance["accessProfiles"][0]["grants"][0]["spatialQueries"]["bbox"]["geometryField"] =
-            Value::String("location".to_owned());
+        instance["accessProfiles"][0]["permissions"][0]["spatialQueries"]["bbox"]
+            ["geometryField"] = Value::String("location".to_owned());
         assert!(!schema.is_valid(&instance));
     }
 

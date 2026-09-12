@@ -217,7 +217,7 @@ accessProfiles:
   - id: public-register
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: legal-entity
         rowBoundaries: []
         operations:
@@ -255,7 +255,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes:
       - business-registry
-    grants:
+    permissions:
       - entity: legal-entity
         rowBoundaries: []
         operations:

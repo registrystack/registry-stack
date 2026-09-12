@@ -1016,7 +1016,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"seed-writer","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-site",
                 "operations":["create"],
                 "readableFields":["tenant","name"],
@@ -1032,7 +1032,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-placement",
                 "operations":["get","list"],
                 "readableFields":["tenant","site"],
@@ -1042,7 +1042,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"plain-viewer","principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"asset-placement",
                 "operations":["get","list"],
                 "readableFields":["tenant","site"],
@@ -1051,7 +1051,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"submitter","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -1061,7 +1061,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"observer","principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -1070,7 +1070,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
-              "grants":[{
+              "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -1087,7 +1087,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-              "grants":[{
+              "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"],

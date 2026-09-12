@@ -2035,7 +2035,7 @@ fn request_action_target_authority(
             plan.target_entities
                 .iter()
                 .map(|target_entity_id| {
-                    let grant = plan.review_grants.iter().find(|grant| {
+                    let grant = plan.review_permissions.iter().find(|grant| {
                         grant.profile_id == context.selected_profile()
                             && grant.stage == stage
                             && grant.target_entity_id == *target_entity_id
@@ -2055,7 +2055,7 @@ fn request_action_target_authority(
             .target_entities
             .iter()
             .map(|target_entity_id| {
-                let grant = plan.apply_grants.iter().find(|grant| {
+                let grant = plan.apply_permissions.iter().find(|grant| {
                     grant.profile_id == context.selected_profile()
                         && grant.target_entity_id == *target_entity_id
                 })?;
@@ -2084,7 +2084,7 @@ fn request_automatic_apply_authority(
     plan.target_entities
         .iter()
         .map(|target_entity_id| {
-            let grant = plan.apply_grants.iter().find(|grant| {
+            let grant = plan.apply_permissions.iter().find(|grant| {
                 grant.profile_id == selected_profile && grant.target_entity_id == *target_entity_id
             })?;
             Some(RequestActionTargetAuthority {
@@ -2163,7 +2163,7 @@ fn request_visibility_authority(
                     None
                 } else {
                     let grant = if route.operation == Operation::ApplyRequest {
-                        plan.apply_grants
+                        plan.apply_permissions
                             .iter()
                             .find(|grant| {
                                 grant.profile_id == selected_profile
@@ -2171,7 +2171,7 @@ fn request_visibility_authority(
                             })
                             .map(|grant| (BTreeSet::new(), &grant.row_boundaries))
                     } else {
-                        plan.review_grants
+                        plan.review_permissions
                             .iter()
                             .find(|grant| {
                                 grant.profile_id == selected_profile
@@ -2242,7 +2242,7 @@ fn request_visibility_authority(
                 .get(&grant.request_type)?
                 .change_request
                 .as_ref()?;
-            if !plan.presence_grants.iter().any(|compiled| {
+            if !plan.presence_permissions.iter().any(|compiled| {
                 compiled.profile_id == selected_profile
                     && compiled.target_entity_id == entity.id
                     && compiled.request_row_boundaries == grant.row_boundaries
@@ -2537,7 +2537,8 @@ fn authorize_direct_route_base<'a>(
         claims.purpose().map(str::to_owned),
         selected_profile.to_owned(),
         row_boundaries,
-    );
+    )
+    .with_task_grant(task_grant_binding(profile, claims).ok()?);
     let submitter_targets = profile
         .submitter_targets
         .iter()
@@ -2632,7 +2633,8 @@ fn authorize_read_path_route<'a>(
             claims.purpose().map(str::to_owned),
             selected_profile.to_owned(),
             row_boundaries,
-        ),
+        )
+        .with_task_grant(task_grant_binding(profile, claims).ok()?),
         readable_fields,
         read_path: Some(read_path),
     })
@@ -2770,7 +2772,104 @@ pub(crate) fn authorize_profile_claims(
     {
         return Err("purpose_missing_or_not_allowed");
     }
+    if claims.actor_kind().is_some() && profile.actor_kind.is_none() {
+        return Err("actor_bound_profile_required");
+    }
+    if let Some(expected) = profile.actor_kind {
+        let actual = claims.actor_kind().ok_or("actor_kind_missing")?;
+        let matches = matches!(
+            (expected, actual),
+            (
+                crate::contract::ActorKindSource::Human,
+                registry_platform_oidc::ActorKind::Human
+            ) | (
+                crate::contract::ActorKindSource::Agent,
+                registry_platform_oidc::ActorKind::Agent
+            ) | (
+                crate::contract::ActorKindSource::Service,
+                registry_platform_oidc::ActorKind::Service
+            )
+        );
+        if !matches {
+            return Err("actor_kind_mismatched");
+        }
+    }
+    if !profile.requester_clients.is_empty()
+        && !claims
+            .requester_client()
+            .is_some_and(|client| profile.requester_clients.contains(client))
+    {
+        return Err("requester_client_missing_or_mismatched");
+    }
+    match (&profile.task_grant, claims.grant()) {
+        (Some(_), None) => return Err("task_grant_missing"),
+        (None, Some(_)) => return Err("task_grant_profile_required"),
+        (None, None)
+            if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+                && claims.actor_subject().is_none() =>
+        {
+            return Err("trusted_actor_missing")
+        }
+        _ => {}
+    }
     verified_row_boundaries(profile, claims).ok_or("row_claim_missing_or_wrong_cardinality")
+}
+
+fn task_grant_binding(
+    profile: &AccessProfileSource,
+    claims: &VerifiedRequestClaims,
+) -> Result<Option<crate::task_grant::TaskGrantBinding>, &'static str> {
+    let Some(expected) = &profile.task_grant else {
+        return Ok(None);
+    };
+    let grant = claims.grant().ok_or("task_grant_missing")?;
+    if grant.authority() != expected.authority
+        || grant.source_issuer() != expected.source_issuer
+        || Some(grant.client()) != claims.requester_client()
+        || !profile.required_purposes.contains(grant.purpose())
+    {
+        return Err("task_grant_binding_mismatched");
+    }
+    let actual = grant
+        .bounds()
+        .breg_permissions()
+        .ok_or("task_grant_bounds_wrong_type")?;
+    let actual = actual
+        .iter()
+        .map(|permission| {
+            (
+                permission.collection().to_owned(),
+                permission
+                    .operations()
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let expected_bounds = expected
+        .permissions
+        .iter()
+        .map(|permission| {
+            let operations = permission
+                .operations
+                .iter()
+                .map(|operation| {
+                    serde_json::to_value(operation)
+                        .ok()
+                        .and_then(|value| value.as_str().map(str::to_owned))
+                })
+                .collect::<Option<BTreeSet<_>>>()?;
+            Some((permission.collection.clone(), operations))
+        })
+        .collect::<Option<BTreeMap<_, _>>>()
+        .ok_or("task_grant_bounds_invalid")?;
+    if actual.len() != expected.permissions.len() || actual != expected_bounds {
+        return Err("task_grant_bounds_mismatched");
+    }
+    crate::task_grant::TaskGrantBinding::from_verified(grant, claims.grant_subjects().clone())
+        .map(Some)
+        .map_err(|_| "task_grant_invalid")
 }
 
 fn verified_row_boundaries(
@@ -4209,7 +4308,7 @@ fn lookup_request_values(
 fn lookup_verified_claim_values(
     entity: &CompiledEntity,
     selector: &crate::model::CompiledSelectorProfile,
-    grant: &crate::contract::LookupGrantSource,
+    grant: &crate::contract::LookupPermissionSource,
     claims: &VerifiedRequestClaims,
 ) -> Result<Vec<LookupSelectorValue>, LookupResolutionError> {
     selector
@@ -4314,7 +4413,7 @@ fn filtered_schema(
                 .is_some_and(|field| readable_api_names.contains(field))
         });
     }
-    // Generated authoring artifacts contain complete effects and grants. The
+    // Generated authoring artifacts contain complete effects and permissions. The
     // served schema is a caller projection, so it must not copy that authority
     // inventory or identify request types hidden from the selected context.
     if let Some(control) = object.get_mut("x-registry-changeControl") {

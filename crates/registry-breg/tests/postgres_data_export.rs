@@ -377,7 +377,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal",
                 "requiredPurposes":["data-export"],
-            "grants":[{
+            "permissions":[{
                 "entity":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],

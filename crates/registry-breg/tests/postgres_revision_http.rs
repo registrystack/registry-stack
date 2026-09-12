@@ -885,7 +885,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],
@@ -894,7 +894,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"provenance","principalClaim":"registry_principal",
             "requiredScopes":["history.read"],"requiredPurposes":["case-review"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget",
               "operations":["revisions"],"revisionAccess":true,
               "readableFields":["label"],

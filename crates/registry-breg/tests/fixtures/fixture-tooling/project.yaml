@@ -54,7 +54,7 @@ accessProfiles:
     default: true
     principalClaim: registry_principal
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: widget
         operations: [create, get, list, patch, batch]
         readableFields: [jurisdiction, label, note, quantity]
