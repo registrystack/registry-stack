@@ -7,10 +7,13 @@
 //!
 //! It is plain OAuth. Nothing here knows which authorization server it is talking
 //! to, and the provider carries no claim, route, or vocabulary belonging to any
-//! particular issuer. The request body carries only `grant_type`,
-//! `client_assertion_type`, and `client_assertion`; a server that also requires a
-//! scope, a resource indicator, or a body `client_id` on this grant must use a
-//! custom [`TokenProvider`].
+//! particular issuer. The request body carries `grant_type`, `client_id`,
+//! `client_assertion_type`, and `client_assertion`, plus the optional
+//! RFC 8707 `resource` indicator and RFC 6749 `scope` string of
+//! [`PrivateKeyJwtConfig`]. The resource and scopes are fixed configuration of
+//! the provider, not per-request arguments: one provider instance holds exactly
+//! one client, resource, and scope set, so its cache can never hand one
+//! configuration's credential to another.
 //!
 //! The assertion itself is built by
 //! [`registry_platform_authcommon::client_assertion`]. Nothing else in the
@@ -94,6 +97,9 @@ const _: () = assert!(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS == 86_400);
 /// The grant this provider asks for. The client authenticates as itself, on its
 /// own behalf, which is the closed grant this provider supports.
 const GRANT_TYPE: &str = "client_credentials";
+const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+const JWT_SUBJECT_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:jwt";
+const ACCESS_TOKEN_TYPE: &str = "urn:ietf:params:oauth:token-type:access_token";
 
 /// The client authentication method of RFC 7523 section 2.2.
 const CLIENT_ASSERTION_TYPE: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
@@ -111,6 +117,99 @@ const BEARER_TOKEN_TYPE: &str = "bearer";
 /// Authorization servers may use this value to reject registered authority
 /// that could only produce a response this provider would refuse.
 pub const MAXIMUM_TOKEN_RESPONSE_BYTES: u64 = 16 * 1024;
+
+/// Longest individual scope this provider will request, and the most scopes it
+/// will request at once.
+///
+/// The per-token bound is the one the stack's client registries already hold
+/// (a 1..=256 byte RFC 6749 scope-token); the count bound keeps one
+/// configuration's canonical `scope` value inside the form-encoding budget
+/// below on its own.
+pub const MAXIMUM_REQUESTED_SCOPE_BYTES: usize = 256;
+pub const MAXIMUM_REQUESTED_SCOPES: usize = 32;
+
+/// Longest canonical `scope` value this provider will send, and longest
+/// response `scope` value it will read.
+///
+/// `MAXIMUM_REQUESTED_SCOPES` tokens of `MAXIMUM_REQUESTED_SCOPE_BYTES` bytes
+/// plus separators bound the sent value at 8_288 bytes; the tighter budget
+/// here keeps the encoded form parameter inside ordinary transport limits
+/// while leaving room for a server that answers with the granted superset.
+pub const MAXIMUM_SCOPE_PARAMETER_BYTES: usize = 4 * 1024;
+
+/// Longest RFC 8707 resource indicator this provider will send.
+const MAXIMUM_RESOURCE_URI_BYTES: usize = 4 * 1024;
+
+/// Validate the caller's original URI bytes before a parser can trim or encode
+/// them into a different identifier. Percent escapes must be complete.
+fn valid_resource_uri_bytes(resource: &str) -> bool {
+    let bytes = resource.as_bytes();
+    if bytes.is_empty() || bytes.len() > MAXIMUM_RESOURCE_URI_BYTES {
+        return false;
+    }
+    let mut index = 0;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+            {
+                return false;
+            }
+            index += 3;
+            continue;
+        }
+        if !byte.is_ascii_alphanumeric() && !b"-._~:/?[]@!$&'()*+,;=".contains(&byte) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+/// Whether `resource` is one bounded RFC 8707 absolute URI, represented in
+/// exact ASCII URI bytes with no fragment or userinfo.
+///
+/// This checks the original string before URL parsing can trim whitespace or
+/// percent-encode raw Unicode. It is suitable for configuration preflight as
+/// well as [`PrivateKeyJwt`] construction.
+pub fn valid_resource_uri(resource: &str) -> bool {
+    if !valid_resource_uri_bytes(resource) {
+        return false;
+    }
+    Url::parse(resource).is_ok_and(|parsed| {
+        !parsed.scheme().is_empty()
+            && parsed.fragment().is_none()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+    })
+}
+
+/// One RFC 6749 scope-token: at least one byte, and only the bytes the
+/// grammar's `scope-token` production allows.
+pub fn valid_scope_token(value: &str) -> bool {
+    !value.is_empty()
+        && value.bytes().all(|byte| {
+            byte == 0x21 || (0x23..=0x5b).contains(&byte) || (0x5d..=0x7e).contains(&byte)
+        })
+}
+
+/// Split a scope string as RFC 6749 defines it: one or more scope-tokens
+/// separated by exactly one space each. An empty string, a leading or trailing
+/// space, a doubled space, or a byte outside the `scope-token` set is a value
+/// no conformance-checking server would have sent or accepted, so it is
+/// refused rather than guessed at.
+fn split_scope_string(value: &str) -> Result<Vec<&str>, ()> {
+    if value.is_empty() || value.len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
+        return Err(());
+    }
+    let tokens: Vec<&str> = value.split(' ').collect();
+    if tokens.iter().any(|token| !valid_scope_token(token)) {
+        return Err(());
+    }
+    Ok(tokens)
+}
 
 /// The two readings the provider reasons about.
 ///
@@ -146,6 +245,8 @@ pub struct PrivateKeyJwtConfig {
     client_id: String,
     client_key: PrivateJwk,
     audience: Option<String>,
+    resource: Option<String>,
+    scopes: Option<Vec<String>>,
     assertion_lifetime_seconds: i64,
     refresh_margin_seconds: i64,
     request_timeout: Duration,
@@ -171,6 +272,8 @@ impl PrivateKeyJwtConfig {
             client_id: client_id.into(),
             client_key,
             audience: None,
+            resource: None,
+            scopes: None,
             assertion_lifetime_seconds: DEFAULT_ASSERTION_LIFETIME_SECONDS,
             refresh_margin_seconds: DEFAULT_REFRESH_MARGIN_SECONDS,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
@@ -193,6 +296,43 @@ impl PrivateKeyJwtConfig {
     #[must_use]
     pub fn with_audience(mut self, audience: impl Into<String>) -> Self {
         self.audience = Some(audience.into());
+        self
+    }
+
+    /// State the RFC 8707 resource indicator the token is requested for.
+    ///
+    /// The value is the resource server's registered identifier — what the
+    /// issued access token's audience must name back — not a URL the client
+    /// fetches. It must be one absolute URI carrying no fragment and no
+    /// userinfo; a value that breaks that rule is refused when the provider is
+    /// built rather than here.
+    ///
+    /// The resource is fixed configuration of this provider. A deployment that
+    /// must address a second resource server configures a second provider, so
+    /// neither provider's cache can substitute the other's credential.
+    #[must_use]
+    pub fn with_resource(mut self, resource: impl Into<String>) -> Self {
+        self.resource = Some(resource.into());
+        self
+    }
+
+    /// State the scopes the token is requested for, in the order requested.
+    ///
+    /// Each value must be a nonempty RFC 6749 scope-token of at most
+    /// [`MAXIMUM_REQUESTED_SCOPE_BYTES`] bytes, no two may repeat, at most
+    /// [`MAXIMUM_REQUESTED_SCOPES`] may be stated, and their canonical
+    /// space-delimited encoding must stay within
+    /// [`MAXIMUM_SCOPE_PARAMETER_BYTES`]; a set that breaks any of those is
+    /// refused when the provider is built rather than here. A requested scope
+    /// may narrow the client's registered permission set; it can never widen
+    /// it, and this provider does not ask the server to.
+    ///
+    /// When scopes are configured and the token response states a `scope`, the
+    /// provider requires every configured scope to be present in it before the
+    /// credential is used or cached.
+    #[must_use]
+    pub fn with_scopes(mut self, scopes: impl IntoIterator<Item: Into<String>>) -> Self {
+        self.scopes = Some(scopes.into_iter().map(Into::into).collect());
         self
     }
 
@@ -266,6 +406,8 @@ impl fmt::Debug for PrivateKeyJwtConfig {
             )
             .field("client_id", &self.client_id)
             .field("audience", &self.audience)
+            .field("resource", &self.resource)
+            .field("scopes", &self.scopes)
             .field(
                 "assertion_lifetime_seconds",
                 &self.assertion_lifetime_seconds,
@@ -293,6 +435,12 @@ pub struct PrivateKeyJwt {
     client_id: String,
     audience: String,
     audience_is_token_endpoint: bool,
+    resource: Option<String>,
+    /// The configured scopes in their canonical space-delimited encoding,
+    /// parsed once when the provider is built.
+    scope: Option<String>,
+    /// The configured scopes as a set, for the response-scope check.
+    requested_scopes: Vec<String>,
     assertion_lifetime_seconds: i64,
     refresh_margin_seconds: i64,
     client_key: PrivateJwk,
@@ -311,6 +459,36 @@ pub struct PrivateKeyJwt {
 }
 
 impl PrivateKeyJwt {
+    /// Exchange one externally signed JWT assertion for an access token.
+    ///
+    /// The resource and scopes are fixed when this provider is constructed.
+    /// Each call authenticates with a fresh client assertion and performs its
+    /// own request. Task credentials never read or replace the service-token
+    /// cache, including when two tasks use the same client concurrently.
+    /// The consuming resource server must verify the returned token's bounds.
+    pub async fn exchange(&self, subject_token: &str) -> Result<BearerToken, TokenError> {
+        if self.resource.is_none() || self.scope.is_none() {
+            return Err(TokenError::Configuration {
+                reason: "token exchange requires a configured resource and scopes",
+            });
+        }
+        if subject_token.is_empty()
+            || subject_token.len() > 32 * 1024
+            || !subject_token.bytes().all(|byte| byte.is_ascii_graphic())
+        {
+            return Err(TokenError::Invalid {
+                reason: "the subject assertion must be bounded non-empty visible ASCII",
+            });
+        }
+        self.acquire_for_grant(
+            self.clock.unix_seconds(),
+            self.clock.monotonic(),
+            Some(subject_token),
+        )
+        .await
+        .map(|acquired| acquired.token)
+    }
+
     /// Refuse a configuration that cannot authenticate, cannot protect its
     /// assertion in transit, or cannot produce an assertion the server it
     /// registered with can verify.
@@ -417,6 +595,47 @@ impl PrivateKeyJwt {
         if config.request_timeout.is_zero() || config.connect_timeout.is_zero() {
             return Err(refuse("the timeouts must be greater than zero"));
         }
+        // The resource indicator is an identifier, not a URL this client
+        // fetches, so it is validated as RFC 8707 section 2.1 defines the
+        // parameter: one absolute URI carrying no fragment. Userinfo has no
+        // meaning in an identifier and would smuggle a credential into the
+        // form body, so it is refused outright.
+        if let Some(resource) = &config.resource {
+            let invalid =
+                || refuse("the resource must be one absolute URI without a fragment or userinfo");
+            if !valid_resource_uri(resource) {
+                return Err(invalid());
+            }
+        }
+        // Scope grammar and bounds are checked here rather than per request,
+        // for the same reason as every other refusal above: a set the provider
+        // would refuse to send belongs in one construction-time failure.
+        let (scope, requested_scopes) = if let Some(scopes) = &config.scopes {
+            if scopes.is_empty() {
+                return Err(refuse("the requested scopes must state at least one scope"));
+            }
+            if scopes.len() > MAXIMUM_REQUESTED_SCOPES {
+                return Err(refuse("the requested scopes must be at most 32 values"));
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            for value in scopes {
+                if value.len() > MAXIMUM_REQUESTED_SCOPE_BYTES || !valid_scope_token(value) {
+                    return Err(refuse(
+                        "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+                    ));
+                }
+                if !seen.insert(value.as_str()) {
+                    return Err(refuse("the requested scopes must not repeat a value"));
+                }
+            }
+            let canonical = scopes.join(" ");
+            if canonical.len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
+                return Err(refuse("the requested scopes must encode within 4096 bytes"));
+            }
+            (Some(canonical), scopes.clone())
+        } else {
+            (None, Vec::new())
+        };
 
         let http = outbound::build_client(OutboundOptions {
             request_timeout: config.request_timeout,
@@ -436,6 +655,9 @@ impl PrivateKeyJwt {
                 .audience
                 .unwrap_or_else(|| config.token_endpoint.as_str().to_owned()),
             audience_is_token_endpoint,
+            resource: config.resource,
+            scope,
+            requested_scopes,
             token_endpoint: config.token_endpoint,
             client_id: config.client_id,
             assertion_lifetime_seconds: config.assertion_lifetime_seconds,
@@ -489,17 +711,52 @@ impl PrivateKeyJwt {
     /// `monotonic_now` is what the cache deadline of whatever it issues is
     /// measured from.
     async fn acquire(&self, now: i64, monotonic_now: Instant) -> Result<AcquiredToken, TokenError> {
+        self.acquire_for_grant(now, monotonic_now, None).await
+    }
+
+    async fn acquire_for_grant(
+        &self,
+        now: i64,
+        monotonic_now: Instant,
+        subject_token: Option<&str>,
+    ) -> Result<AcquiredToken, TokenError> {
         let assertion = self.sign_assertion(now)?;
         // The assertion is a credential, so it lives in a scrubbed buffer here.
         // The body reqwest owns afterwards cannot be wiped, which is why the
         // assertion is single use and its lifetime is bounded.
-        let body = Zeroizing::new(
-            url::form_urlencoded::Serializer::new(String::new())
-                .append_pair("grant_type", GRANT_TYPE)
-                .append_pair("client_assertion_type", CLIENT_ASSERTION_TYPE)
-                .append_pair("client_assertion", &assertion)
-                .finish(),
-        );
+        //
+        // The body `client_id` repeats the identity the assertion proves, which
+        // RFC 6749 section 3.2.1 permits for this client-authentication method
+        // and servers that route on it require. The resource and scope
+        // parameters appear exactly once each, and only when configured. The
+        // serializer is scoped to this block so it is dropped before the
+        // exchange below, keeping the future this runs in `Send`.
+        let body = Zeroizing::new({
+            let mut form = url::form_urlencoded::Serializer::new(String::new());
+            form.append_pair(
+                "grant_type",
+                if subject_token.is_some() {
+                    TOKEN_EXCHANGE_GRANT_TYPE
+                } else {
+                    GRANT_TYPE
+                },
+            );
+            form.append_pair("client_id", &self.client_id);
+            form.append_pair("client_assertion_type", CLIENT_ASSERTION_TYPE);
+            form.append_pair("client_assertion", &assertion);
+            if let Some(subject_token) = subject_token {
+                form.append_pair("subject_token", subject_token);
+                form.append_pair("subject_token_type", JWT_SUBJECT_TOKEN_TYPE);
+                form.append_pair("requested_token_type", ACCESS_TOKEN_TYPE);
+            }
+            if let Some(scope) = &self.scope {
+                form.append_pair("scope", scope);
+            }
+            if let Some(resource) = &self.resource {
+                form.append_pair("resource", resource);
+            }
+            form.finish()
+        });
 
         let request = if let Some(policy) = &self.fetch_url_policy {
             let validated = policy
@@ -566,6 +823,27 @@ impl PrivateKeyJwt {
         };
         if !issued.token_type.eq_ignore_ascii_case(BEARER_TOKEN_TYPE) {
             return Err(TokenError::Protocol { status });
+        }
+        if subject_token.is_some() && issued.issued_token_type.as_deref() != Some(ACCESS_TOKEN_TYPE)
+        {
+            return Err(TokenError::Protocol { status });
+        }
+        // A stated response scope is a claim about what the credential may do,
+        // so it is held to the same grammar as the request scope and checked
+        // before the credential is used or cached. An absent scope keeps
+        // RFC 6749 section 5.1's meaning: unchanged from what was requested,
+        // and the consumers of this credential still enforce their own scopes.
+        if let Some(granted) = &issued.scope {
+            let granted_tokens =
+                split_scope_string(granted).map_err(|_| TokenError::Protocol { status })?;
+            if !self.requested_scopes.is_empty()
+                && self
+                    .requested_scopes
+                    .iter()
+                    .any(|scope| !granted_tokens.contains(&scope.as_str()))
+            {
+                return Err(TokenError::ScopeNarrowed);
+            }
         }
         Ok(AcquiredToken {
             // Moved rather than copied, so the credential ends up in the buffer
@@ -661,6 +939,8 @@ impl fmt::Debug for PrivateKeyJwt {
                     std::borrow::Cow::Borrowed(self.audience.as_str())
                 },
             )
+            .field("resource", &self.resource)
+            .field("scopes", &self.requested_scopes.as_slice())
             .field(
                 "assertion_lifetime_seconds",
                 &self.assertion_lifetime_seconds,
@@ -683,6 +963,8 @@ struct IssuedToken {
     access_token: String,
     token_type: String,
     expires_in: Option<i64>,
+    scope: Option<String>,
+    issued_token_type: Option<String>,
 }
 
 /// The error response of RFC 6749 section 5.2.
@@ -983,12 +1265,21 @@ mod tests {
 
     /// The token response a compliant authorization server returns.
     fn issued(expires_in: Option<i64>) -> ResponseTemplate {
+        issued_with_scope(expires_in, None)
+    }
+
+    /// The token response a compliant authorization server returns, with the
+    /// optional `scope` member of RFC 6749 section 5.1 stated.
+    fn issued_with_scope(expires_in: Option<i64>, scope: Option<&str>) -> ResponseTemplate {
         let mut body = json!({
             "access_token": ISSUED_CREDENTIAL,
             "token_type": "Bearer",
         });
         if let Some(expires_in) = expires_in {
             body["expires_in"] = json!(expires_in);
+        }
+        if let Some(scope) = scope {
+            body["scope"] = json!(scope);
         }
         ResponseTemplate::new(200).set_body_json(body)
     }
@@ -1268,6 +1559,9 @@ mod tests {
             .and(header("accept", "application/json"))
             .and(body_string_contains("grant_type=client_credentials"))
             .and(body_string_contains(
+                "client_id=urn%3Aexample%3Aclient%3Arelying-party",
+            ))
+            .and(body_string_contains(
                 "client_assertion_type=urn%3Aietf%3Aparams%3Aoauth%3Aclient-assertion-type%3Ajwt-bearer",
             ))
             .and(body_string_contains("client_assertion="))
@@ -1284,6 +1578,411 @@ mod tests {
 
         assert_eq!(token.expose(), ISSUED_CREDENTIAL);
         assert_eq!(token_requests(&server).await, 1);
+    }
+
+    /// The body of the one request a provider makes, decoded from form
+    /// encoding, so a test can count parameters rather than substring-match a
+    /// body it cannot parse.
+    async fn request_form_body(server: &MockServer) -> Vec<(String, String)> {
+        let requests = server
+            .received_requests()
+            .await
+            .expect("the mock server records its requests");
+        let body = String::from_utf8(requests[0].body.clone())
+            .expect("the token request body is form-encoded ASCII");
+        url::form_urlencoded::parse(body.as_bytes())
+            .map(|(name, value)| (name.into_owned(), value.into_owned()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn task_exchanges_do_not_share_or_replace_the_service_token_cache() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path(TOKEN_PATH))
+            .and(body_string_contains("grant_type=client_credentials"))
+            .respond_with(issued(Some(TOKEN_LIFETIME_SECONDS)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        for (subject, credential) in [("grant-one", "task-one"), ("grant-two", "task-two")] {
+            Mock::given(method("POST"))
+                .and(path(TOKEN_PATH))
+                .and(body_string_contains(format!("subject_token={subject}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "access_token": credential,
+                    "token_type": "Bearer",
+                    "issued_token_type": ACCESS_TOKEN_TYPE,
+                    "expires_in": 300,
+                    "scope": "records:read"
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let clock = Arc::new(TestClock::new(NOW));
+        let configured = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:records")
+                .with_scopes(["records:read"]),
+            clock,
+        )
+        .unwrap();
+        assert_eq!(
+            configured.bearer_token().await.unwrap().expose(),
+            ISSUED_CREDENTIAL
+        );
+        let (first, second) = tokio::join!(
+            configured.exchange("grant-one"),
+            configured.exchange("grant-two")
+        );
+        assert_eq!(first.unwrap().expose(), "task-one");
+        assert_eq!(second.unwrap().expose(), "task-two");
+        assert_eq!(
+            configured.bearer_token().await.unwrap().expose(),
+            ISSUED_CREDENTIAL
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3);
+        let mut assertion_ids = std::collections::BTreeSet::new();
+        for request in requests {
+            let form: std::collections::BTreeMap<_, _> = url::form_urlencoded::parse(&request.body)
+                .into_owned()
+                .collect();
+            let (_, claims, _) = parts(&form["client_assertion"]);
+            assert!(assertion_ids.insert(claims["jti"].as_str().unwrap().to_owned()));
+            assert!(!form.contains_key("client_secret"));
+            assert!(!form.contains_key("actor_token"));
+            if form.contains_key("subject_token") {
+                assert_eq!(form["grant_type"], TOKEN_EXCHANGE_GRANT_TYPE);
+                assert_eq!(form["subject_token_type"], JWT_SUBJECT_TOKEN_TYPE);
+                assert_eq!(form["requested_token_type"], ACCESS_TOKEN_TYPE);
+                assert_eq!(form["resource"], "urn:registry:records");
+                assert_eq!(form["scope"], "records:read");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn exchange_requires_explicit_destination_and_bounded_subject_before_io() {
+        let server = MockServer::start().await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let ordinary = provider(endpoint(&server.uri()), &clock);
+        assert!(matches!(
+            ordinary.exchange("grant").await,
+            Err(TokenError::Configuration { .. })
+        ));
+        let configured = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:records")
+                .with_scopes(["records:read"]),
+            clock,
+        )
+        .unwrap();
+        for invalid in ["", "subject\r\ncanary", &"a".repeat(32 * 1024 + 1)] {
+            let error = configured.exchange(invalid).await.unwrap_err();
+            assert!(matches!(error, TokenError::Invalid { .. }));
+            assert!(!error.to_string().contains("canary"));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn exchange_rejects_missing_or_wrong_issued_type_and_narrowed_scope() {
+        for (issued_type, scope) in [
+            (None, "records:read"),
+            (Some(JWT_SUBJECT_TOKEN_TYPE), "records:read"),
+            (Some(ACCESS_TOKEN_TYPE), "other:read"),
+        ] {
+            let mut body = json!({
+                "access_token": "synthetic-credential-canary",
+                "token_type": "Bearer", "expires_in": 300, "scope": scope
+            });
+            if let Some(kind) = issued_type {
+                body["issued_token_type"] = json!(kind);
+            }
+            let server =
+                token_endpoint_serving(ResponseTemplate::new(200).set_body_json(body)).await;
+            let configured = PrivateKeyJwt::with_clock(
+                config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                    .with_resource("urn:registry:records")
+                    .with_scopes(["records:read"]),
+                Arc::new(TestClock::new(NOW)),
+            )
+            .unwrap();
+            let error = configured.exchange("grant").await.unwrap_err();
+            assert!(!error.to_string().contains("canary"));
+            if issued_type == Some(ACCESS_TOKEN_TYPE) {
+                assert_eq!(error, TokenError::ScopeNarrowed);
+            } else {
+                assert!(matches!(error, TokenError::Protocol { status: 200 }));
+            }
+        }
+    }
+
+    /// A configured resource and scope set are sent once each, the scope as one
+    /// canonical space-delimited parameter, and nothing of either when no
+    /// configuration states them. This is the request half of RFC 8707 and
+    /// RFC 6749 section 3.3 as the ThunderID-style issuers read them.
+    #[tokio::test]
+    async fn a_configured_resource_and_scopes_are_sent_once_each() {
+        let server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let configured = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:evidence")
+                .with_scopes(["evidence:invoke", "records:read"]),
+            clock.clone(),
+        )
+        .expect("the provider is usable as configured");
+
+        configured.bearer_token().await.expect("a credential");
+        let body = request_form_body(&server).await;
+        let count = |name: &str| body.iter().filter(|(key, _)| key == name).count();
+        assert_eq!(count("resource"), 1, "the resource parameter is not unique");
+        assert_eq!(count("scope"), 1, "the scope parameter is not unique");
+        assert_eq!(
+            body.iter()
+                .find(|(key, _)| key == "resource")
+                .expect("the resource is present")
+                .1,
+            "urn:registry:evidence"
+        );
+        assert_eq!(
+            body.iter()
+                .find(|(key, _)| key == "scope")
+                .expect("the scope is present")
+                .1,
+            "evidence:invoke records:read",
+            "the scopes are one canonical space-delimited parameter"
+        );
+
+        // Unconfigured: the parameters are absent, not empty.
+        let plain_server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let unconfigured = provider(endpoint(&plain_server.uri()), &clock);
+        unconfigured.bearer_token().await.expect("a credential");
+        let body = request_form_body(&plain_server).await;
+        assert!(!body.iter().any(|(key, _)| key == "resource"));
+        assert!(!body.iter().any(|(key, _)| key == "scope"));
+    }
+
+    /// The assertion audience and the resource indicator answer different
+    /// questions — who checks the client's authentication versus which
+    /// resource server the credential is for — so a provider configured with
+    /// both must not let one stand in for the other, and an issuer that
+    /// expects the issuer identifier as the assertion audience keeps that
+    /// default behavior with a resource configured.
+    #[tokio::test]
+    async fn the_assertion_audience_is_never_the_resource_indicator() {
+        let server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_audience("https://issuer.example.org")
+                .with_resource("urn:registry:evidence")
+                .with_scopes(["evidence:invoke"]),
+            clock.clone(),
+        )
+        .expect("the provider is usable as configured");
+
+        let assertion = provider
+            .sign_assertion(NOW)
+            .expect("the assertion is signed");
+        let (_, claims, _) = parts(&assertion);
+        assert_eq!(claims["aud"], json!("https://issuer.example.org"));
+        assert_ne!(
+            claims["aud"],
+            json!("urn:registry:evidence"),
+            "the resource indicator was substituted for the assertion audience"
+        );
+        provider.bearer_token().await.expect("a credential");
+        let body = request_form_body(&server).await;
+        assert_eq!(
+            body.iter()
+                .find(|(key, _)| key == "resource")
+                .expect("the resource is present")
+                .1,
+            "urn:registry:evidence"
+        );
+
+        // With no audience override, the assertion keeps its token-endpoint
+        // default even while a resource is configured.
+        let default_audience = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:evidence"),
+            clock,
+        )
+        .expect("the provider is usable as configured");
+        let assertion = default_audience
+            .sign_assertion(NOW)
+            .expect("the assertion is signed");
+        let (_, claims, _) = parts(&assertion);
+        assert_eq!(
+            claims["aud"],
+            json!(format!("{}{TOKEN_PATH}", server.uri()))
+        );
+    }
+
+    /// Two providers built from two configurations never hand each other a
+    /// credential: the cache belongs to one immutable configuration, and the
+    /// second provider's request carries its own resource and scopes. This is
+    /// the configuration-isolation half of the scope and resource contract.
+    #[tokio::test]
+    async fn providers_do_not_share_credentials_across_configurations() {
+        let read_server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let write_server = token_endpoint_serving(issued(Some(TOKEN_LIFETIME_SECONDS))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let reader = PrivateKeyJwt::with_clock(
+            config(endpoint(&read_server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:evidence")
+                .with_scopes(["evidence:invoke"]),
+            clock.clone(),
+        )
+        .expect("the provider is usable as configured");
+        let writer = PrivateKeyJwt::with_clock(
+            config(endpoint(&write_server.uri()), client_key(Some(KEY_ID)))
+                .with_resource("urn:registry:other")
+                .with_scopes(["evidence:invoke", "records:write"]),
+            clock,
+        )
+        .expect("the provider is usable as configured");
+
+        let first = reader
+            .bearer_token()
+            .await
+            .expect("the reader acquires a credential");
+        let second = writer
+            .bearer_token()
+            .await
+            .expect("the writer acquires its own credential");
+        assert_eq!(first.expose(), ISSUED_CREDENTIAL);
+        assert_eq!(second.expose(), ISSUED_CREDENTIAL);
+        // Each provider made exactly its own request; neither reused the other.
+        assert_eq!(token_requests(&read_server).await, 1);
+        assert_eq!(token_requests(&write_server).await, 1);
+        // A reuse of the reader is served from its own cache, still alone.
+        reader.bearer_token().await.expect("the cached credential");
+        assert_eq!(token_requests(&read_server).await, 1);
+        let writer_body = request_form_body(&write_server).await;
+        assert_eq!(
+            writer_body
+                .iter()
+                .find(|(key, _)| key == "scope")
+                .expect("the writer states its scopes")
+                .1,
+            "evidence:invoke records:write"
+        );
+    }
+
+    /// A server that states a `scope` missing a requested scope has issued a
+    /// credential the deployment cannot use where it meant to. The provider
+    /// refuses it before use and caches nothing, so the next caller asks the
+    /// server again rather than replaying the narrowed credential.
+    #[tokio::test]
+    async fn a_response_scope_missing_a_requested_scope_is_refused_and_not_cached() {
+        let server = token_endpoint_serving(issued_with_scope(
+            Some(TOKEN_LIFETIME_SECONDS),
+            Some("records:read"),
+        ))
+        .await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                .with_scopes(["records:read", "records:write"]),
+            clock,
+        )
+        .expect("the provider is usable as configured");
+
+        assert_eq!(
+            provider
+                .bearer_token()
+                .await
+                .expect_err("the scope was narrowed"),
+            TokenError::ScopeNarrowed
+        );
+        // Nothing was cached: the next acquisition reaches the server again.
+        assert_eq!(
+            provider
+                .bearer_token()
+                .await
+                .expect_err("the narrowed credential was cached"),
+            TokenError::ScopeNarrowed
+        );
+        assert_eq!(
+            token_requests(&server).await,
+            2,
+            "a refused credential was replayed from the cache"
+        );
+    }
+
+    /// A stated response scope that covers the request, or one that grants
+    /// more than was requested, is accepted and cached; an absent scope keeps
+    /// RFC 6749's unchanged-scope meaning and is accepted for the same
+    /// lifetime.
+    #[tokio::test]
+    async fn a_covering_or_absent_response_scope_is_accepted_and_cached() {
+        for granted in [
+            Some("records:read records:write"),
+            Some("records:read records:write admin"),
+            None,
+        ] {
+            let server =
+                token_endpoint_serving(issued_with_scope(Some(TOKEN_LIFETIME_SECONDS), granted))
+                    .await;
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = PrivateKeyJwt::with_clock(
+                config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                    .with_scopes(["records:read", "records:write"]),
+                clock,
+            )
+            .expect("the provider is usable as configured");
+
+            provider.bearer_token().await.expect("a credential");
+            provider
+                .bearer_token()
+                .await
+                .expect("the cached credential");
+            assert_eq!(
+                token_requests(&server).await,
+                1,
+                "the credential for granted scope {granted:?} was not cached"
+            );
+        }
+    }
+
+    /// A malformed stated scope — empty, doubled separators, or bytes outside
+    /// the scope-token set — is a response this provider cannot reason about,
+    /// so it is refused as a protocol failure and cached nothing.
+    #[tokio::test]
+    async fn a_malformed_response_scope_is_a_protocol_failure() {
+        for malformed in [
+            "",
+            "records:read  records:write",
+            "records:read ",
+            "re\u{00e9}cords",
+        ] {
+            let server = token_endpoint_serving(issued_with_scope(
+                Some(TOKEN_LIFETIME_SECONDS),
+                Some(malformed),
+            ))
+            .await;
+            let clock = Arc::new(TestClock::new(NOW));
+            let provider = PrivateKeyJwt::with_clock(
+                config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                    .with_scopes(["records:read"]),
+                clock,
+            )
+            .expect("the provider is usable as configured");
+
+            assert_eq!(
+                provider
+                    .bearer_token()
+                    .await
+                    .expect_err("a malformed scope string is not a usable response"),
+                TokenError::Protocol { status: 200 },
+                "malformed scope {malformed:?}"
+            );
+        }
     }
 
     /// A credential is reused while it has more life left than the refresh margin,
@@ -1847,6 +2546,86 @@ mod tests {
                     b"-----BEGIN CERTIFICATE-----\n!!!!\n-----END CERTIFICATE-----\n".to_vec(),
                 ),
             ),
+            (
+                "the resource must be one absolute URI without a fragment or userinfo",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_resource("registry:evidence#fragment"),
+            ),
+            (
+                "the resource must be one absolute URI without a fragment or userinfo",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_resource("https://client:canary@registry.example.org/"),
+            ),
+            (
+                "the resource must be one absolute URI without a fragment or userinfo",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_resource("/relative/path"),
+            ),
+            (
+                "the resource must be one absolute URI without a fragment or userinfo",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_resource(""),
+            ),
+            (
+                "the requested scopes must state at least one scope",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes(Vec::<String>::new()),
+            ),
+            (
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes(["records:read", ""]),
+            ),
+            (
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes(["records:read", "re\u{00e9}cords"]),
+            ),
+            (
+                "the requested scopes must be 1..=256 byte RFC 6749 scope-tokens",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes(["a".repeat(MAXIMUM_REQUESTED_SCOPE_BYTES + 1)]),
+            ),
+            (
+                "the requested scopes must not repeat a value",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes(["records:read", "records:read"]),
+            ),
+            (
+                "the requested scopes must be at most 32 values",
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_scopes((0..=MAXIMUM_REQUESTED_SCOPES).map(|index| format!("scope:{index}"))),
+            ),
         ];
 
         for (reason, candidate) in cases {
@@ -1914,5 +2693,52 @@ mod tests {
         assert!(!rendered.contains("secret-query"), "{rendered}");
         assert!(!rendered.contains("canary"), "{rendered}");
         assert!(rendered.contains("issuer.example.org/token"), "{rendered}");
+    }
+    #[test]
+    fn resource_indicator_requires_exact_ascii_uri_bytes() {
+        for resource in [
+            " urn:registry:evidence",
+            "urn:registry:evidence ",
+            "urn:registry:evidence\n",
+            "urn:registry:café",
+            "https://registry.example.org/{record}",
+            "urn:registry:evidence%GG",
+            "urn:registry:evidence%2",
+        ] {
+            assert!(!valid_resource_uri(resource));
+            let error = PrivateKeyJwt::new(
+                config(
+                    endpoint("https://tokens.example.org"),
+                    client_key(Some(KEY_ID)),
+                )
+                .with_resource(resource),
+            )
+            .expect_err("the raw resource bytes are not an RFC 3986 URI");
+            assert_eq!(
+                error,
+                TokenError::Configuration {
+                    reason: "the resource must be one absolute URI without a fragment or userinfo"
+                }
+            );
+        }
+        let overlong = format!("urn:registry:{}", "a".repeat(MAXIMUM_RESOURCE_URI_BYTES));
+        assert!(!valid_resource_uri(&overlong));
+        assert!(PrivateKeyJwt::new(
+            config(
+                endpoint("https://tokens.example.org"),
+                client_key(Some(KEY_ID))
+            )
+            .with_resource(overlong)
+        )
+        .is_err());
+        assert!(valid_resource_uri("urn:registry:evidence%20record"));
+        PrivateKeyJwt::new(
+            config(
+                endpoint("https://tokens.example.org"),
+                client_key(Some(KEY_ID)),
+            )
+            .with_resource("urn:registry:evidence%20record"),
+        )
+        .expect("a complete ASCII percent escape is accepted");
     }
 }

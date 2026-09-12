@@ -34,6 +34,7 @@ members = [
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
+    "crates/registry-thunderid-tooling",
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-mint",
@@ -71,6 +72,7 @@ repository = "https://github.com/registrystack/registry-stack"
 unsafe_code = "forbid"
 
 [workspace.dependencies]
+registry-thunderid-tooling = { path = "crates/registry-thunderid-tooling", version = "0.30.0" }
 registry-casework = { path = "crates/registry-casework", version = "0.30.0" }
 registry-casework-client-node = { path = "crates/registry-casework-client-node", version = "0.30.0" }
 registry-casework-client-py = { path = "crates/registry-casework-client-py", version = "0.30.0" }

@@ -5,6 +5,13 @@
 //! identity, and scopes; it does not implement browser login, OAuth
 //! authorization endpoints, PKCE, token minting, or refresh flows.
 
+mod authorization_claims;
+
+pub use authorization_claims::{
+    actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
+    GrantBounds, GrantClaims, GrantContextError, MatchedClientError,
+};
+
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
@@ -983,6 +990,26 @@ pub struct VerifiedToken {
     pub scopes: Vec<String>,
 }
 
+impl VerifiedToken {
+    /// Return the client id selected by [`TokenVerifier`] without its claim-source prefix.
+    ///
+    /// The verifier records whether `azp` or `client_id` supplied the matched
+    /// value. Authorization consumers normally need the verified client id,
+    /// but must not accidentally compare a grant with the prefixed internal
+    /// representation.
+    pub fn matched_client_id(&self) -> Result<Option<&str>, MatchedClientError> {
+        let Some(matched) = self.matched_client.as_deref() else {
+            return Ok(None);
+        };
+        matched
+            .strip_prefix("azp:")
+            .or_else(|| matched.strip_prefix("client_id:"))
+            .filter(|client| !client.is_empty())
+            .map(Some)
+            .ok_or(MatchedClientError::Malformed)
+    }
+}
+
 #[derive(Debug)]
 pub struct TokenVerifier {
     config: TokenVerifierConfig,
@@ -1444,16 +1471,11 @@ fn issuer_from_untrusted_payload(token: &str) -> Option<String> {
 }
 
 fn matched_client_audience(access_token: &VerifiedToken) -> Result<String, OidcError> {
-    let matched_client = access_token
-        .matched_client
-        .as_deref()
-        .ok_or(OidcError::ClientNotAllowed)?;
-    matched_client
-        .strip_prefix("azp:")
-        .or_else(|| matched_client.strip_prefix("client_id:"))
-        .filter(|audience| !audience.is_empty())
-        .map(ToOwned::to_owned)
+    access_token
+        .matched_client_id()
+        .map_err(|_| OidcError::ClientNotAllowed)?
         .ok_or(OidcError::ClientNotAllowed)
+        .map(ToOwned::to_owned)
 }
 
 #[derive(Debug, thiserror::Error)]

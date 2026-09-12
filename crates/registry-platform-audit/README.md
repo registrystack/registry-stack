@@ -21,6 +21,8 @@ helpers for registry services.
   handles whose service-owned canonical input stays outside the platform domain.
 - `AuditKeyHasher::sensitive_value_hash` for generic field-bound audit lookup
   values used by redaction helpers.
+- `AuthorizationAuditEvent` for one privacy-safe authorization event shape
+  across products, using pseudonyms from each product's existing audit profile.
 
 ## Typical Use
 
@@ -85,6 +87,9 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
 - Use `AuditKeyHasher::audit_reference_hash` for audit references
   instead of concatenating ad hoc hash inputs in each service. Keep service
   semantics and canonicalization in the consuming service.
+- `AuthorizationAuditEvent` accepts only platform hash handles and Evidence's
+  established key-versioned pseudonyms for identity-bearing fields. It does
+  not derive keys or replace a product's pseudonym scope policy.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 

@@ -136,6 +136,13 @@ pub enum TokenError {
     #[error("the authorization server declined to issue a token: {code}")]
     Refused { code: OAuthErrorCode },
 
+    /// The token response stated a scope that does not include every scope
+    /// this provider was configured to request. The credential is neither used
+    /// nor cached: presenting it would let the deployment's first protected
+    /// request fail in place of its token acquisition.
+    #[error("the token response does not include every requested scope")]
+    ScopeNarrowed,
+
     /// The answer was not a token response this crate can use: an unexpected
     /// status, an unexpected media type, an unreadable body, or a token type the
     /// service request cannot present.
@@ -160,6 +167,7 @@ impl TokenError {
             Self::Configuration { .. } => "configuration",
             Self::Transport { .. } => "transport",
             Self::Refused { .. } => "refused",
+            Self::ScopeNarrowed => "scope_narrowed",
             Self::Protocol { .. } => "protocol",
         }
     }
@@ -291,6 +299,10 @@ mod tests {
                 "the authorization server declined to issue a token: unregistered_error_code",
             ),
             (
+                TokenError::ScopeNarrowed,
+                "the token response does not include every requested scope",
+            ),
+            (
                 TokenError::Protocol { status: 500 },
                 "the token response does not satisfy the OAuth 2.0 contract: status 500",
             ),
@@ -333,10 +345,11 @@ mod tests {
             ),
             (
                 TokenError::Refused {
-                    code: OAuthErrorCode::InvalidClient,
+                    code: OAuthErrorCode::InvalidScope,
                 },
                 "refused",
             ),
+            (TokenError::ScopeNarrowed, "scope_narrowed"),
             (TokenError::Protocol { status: 500 }, "protocol"),
         ];
         for (error, kind) in &cases {
