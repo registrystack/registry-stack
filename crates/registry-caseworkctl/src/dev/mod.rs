@@ -117,8 +117,10 @@ enum DevAction {
 
 #[derive(Debug, Args)]
 struct TokenArgs {
+    /// Registered local teaching client identifier from the retained dev state.
     #[arg(value_name = "CLIENT")]
     client: String,
+    /// Existing authored Casework project directory.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
 }
