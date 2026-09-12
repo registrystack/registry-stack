@@ -680,18 +680,7 @@ fn export_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Resul
                 &directory.join("assertion-key.jwk"),
             )?;
         }
-        let text = |field: &str| -> Result<String> {
-            report[field]
-                .as_str()
-                .map(str::to_owned)
-                .with_context(|| format!("bregctl dev export-client reported no {field}"))
-        };
-        let binding = SourceBinding {
-            breg_url: text("bregUrl")?,
-            token_endpoint: text("tokenEndpoint")?,
-            audience: text("audience")?,
-            event_source,
-        };
+        let binding = source_binding(&report, event_source)?;
         // The registry session routes its events to its own receiver; this
         // key authenticates the receiver Casework publishes regardless.
         let webhook = secrets.join(format!("{id}-webhook-key"));
@@ -714,6 +703,50 @@ fn export_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Resul
         }
     }
     state.save()
+}
+
+fn source_binding(report: &Value, event_source: String) -> Result<SourceBinding> {
+    let text = |field: &str| -> Result<String> {
+        report[field]
+            .as_str()
+            .map(str::to_owned)
+            .with_context(|| format!("bregctl dev export-client reported no {field}"))
+    };
+    Ok(SourceBinding {
+        breg_url: text("bregUrl")?,
+        token_endpoint: text("tokenEndpoint")?,
+        audience: text("audience")?,
+        event_source,
+    })
+}
+
+/// Refuse an idempotent start when a registry project now names a different
+/// retained BReg session. Its Mint audience and keys are part of the running
+/// Casework process, so replacing them requires an explicit Casework restart.
+fn require_active_source_bindings(bregctl: &Path, state: &State) -> Result<()> {
+    let scratch = tempfile::Builder::new()
+        .prefix(".active-source-check-")
+        .tempdir_in(state.root())
+        .context("creating private active-source check directory")?;
+    fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
+    private::check(scratch.path(), true)?;
+    for (id, source) in &state.sources {
+        let report = export_client(
+            bregctl,
+            &state.root(),
+            &source.project,
+            "casework-reader",
+            &scratch.path().join(format!("{id}-client-id")),
+            &scratch.path().join(format!("{id}-assertion-key.jwk")),
+        )?;
+        let current = source_binding(&report, event_source(&source.project)?)?;
+        if source.binding.as_ref() != Some(&current) {
+            bail!(
+                "the active local development session still uses an earlier BReg session for source {id}; stop Casework and start it again to bind the current registry issuer and credentials"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Export one client pair from a registry session. The session owns the
@@ -796,7 +829,7 @@ fn issuer_keys(issuer: &str) -> Result<Vec<u8>> {
             format!("the registry issuer at {issuer} names no key document of its own")
         })?;
     let (status, keys) = http_with_timeout("GET", jwks_uri, None, &[], None, HTTP_TIMEOUT, None)?;
-    if status != 200 || !keys["keys"].as_array().is_some_and(|keys| !keys.is_empty()) {
+    if status != 200 || keys["keys"].as_array().is_none_or(|keys| keys.is_empty()) {
         bail!("the registry issuer at {issuer} publishes no keys");
     }
     Ok(serde_json::to_vec(&keys)?)
@@ -853,6 +886,10 @@ fn start(args: StartArgs) -> Result<Value> {
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             if args.clients_file.is_some() && state.clients_file != clients_file {
                 bail!("the active local development session still uses {}; stop it before selecting a different --clients-file path", state.clients_file.display());
+            }
+            if !state.sources.is_empty() {
+                let bregctl = executable("bregctl", args.bregctl_bin.as_deref())?;
+                require_active_source_bindings(&bregctl, &state)?;
             }
             return Ok(state.report());
         }
@@ -1093,7 +1130,7 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if service_ports_must_be_free(&state.status) {
-        for port in [state.casework_port, state.mint_port] {
+        for port in state.listening_ports() {
             probe(port)?;
         }
     }

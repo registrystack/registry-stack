@@ -191,6 +191,8 @@ pub enum SourceAdapterError {
     BindingMoved,
     #[error("the prepared source operation has an uncertain result")]
     Uncertain,
+    #[error("the source operation does not support a reason")]
+    ReasonUnsupported,
     #[error("the source response is invalid")]
     Invalid,
 }

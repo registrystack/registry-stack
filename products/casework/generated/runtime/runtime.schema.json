@@ -64,7 +64,8 @@
         "reconciliationIntervalMilliseconds": {
           "default": 60000,
           "format": "uint64",
-          "minimum": 0,
+          "maximum": 3600000,
+          "minimum": 1000,
           "type": "integer"
         },
         "requestTimeoutMilliseconds": {

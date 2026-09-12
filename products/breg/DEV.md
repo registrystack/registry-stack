@@ -129,6 +129,10 @@ local issuer registrations; it does not add or infer BReg access profiles.
 Every protected profile used by `tests/journeys.yaml` needs exactly one client
 binding with scopes and claims matching the authored journey.
 
+Set `accessProfiles: []` for a machine client that carries only scopes or
+claims for another product, such as Casework. The empty list gives that client
+no BReg access-profile binding.
+
 ```yaml
 version: 1
 clients:

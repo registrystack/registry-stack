@@ -786,6 +786,7 @@ struct RegistrySession {
     executable: PathBuf,
     project: PathBuf,
     calls: PathBuf,
+    audience: PathBuf,
 }
 
 impl RegistrySession {
@@ -810,6 +811,7 @@ set -eu
 fixture=$(dirname "$0")
 printf '%s
 ' "$*" >> "$fixture/calls"
+audience=$(cat "$fixture/audience")
 client=""
 id_file=""
 key_file=""
@@ -824,14 +826,17 @@ done
 umask 077
 printf '%s' "$client" > "$id_file"
 printf '{"kty":"EC"}' > "$key_file"
-printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http://127.0.0.1:8090","tokenEndpoint":"http://127.0.0.1:8191/token","audience":"urn:breg:dev:fixture"}
-' "$client"
+printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http://127.0.0.1:8090","tokenEndpoint":"http://127.0.0.1:8191/token","audience":"%s"}
+' "$client" "$audience"
 "#,
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let audience = root.path().join("audience");
+        fs::write(&audience, "urn:breg:dev:fixture").unwrap();
         Self {
             calls: root.path().join("calls"),
+            audience,
             _root: root,
             executable,
             project: fs::canonicalize(project).unwrap(),
@@ -844,6 +849,10 @@ printf '{"ok":true,"command":"dev export-client","client":"%s","bregUrl":"http:/
             .lines()
             .map(str::to_owned)
             .collect()
+    }
+
+    fn recreate(&self) {
+        fs::write(&self.audience, "urn:breg:dev:replacement").unwrap();
     }
 }
 
@@ -1332,6 +1341,93 @@ fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
 }
 
 #[test]
+fn an_active_source_backed_session_refuses_a_recreated_registry_session() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("project");
+    crate::project::init(&project, "professional-review").unwrap();
+    let project = fs::canonicalize(project).unwrap();
+    let registry = RegistrySession::new();
+    let clients_bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let source_argument = [registry.project.display().to_string()];
+    let captured = capture(&project, &clients_bytes, &source_argument, &BTreeMap::new()).unwrap();
+    let mut state = session(&project);
+    state.status = Status::Ready;
+    state.source_digest = captured.digest;
+    state.clients = captured.reported;
+    state.sources.insert(
+        "professional-register".into(),
+        bound_source(&registry.project),
+    );
+    parent_directory(&project).unwrap();
+    initialize(&state.root(), &state, &captured.clients).unwrap();
+    let control_root = control_directory(&state.root()).unwrap();
+    private::directory(&control_root).unwrap();
+    let socket = control_root.join("control.sock");
+    let listener = UnixListener::bind(&socket).unwrap();
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+    let server = thread::spawn(move || {
+        for _ in 0..2 {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 7];
+            stream.read_exact(&mut request).unwrap();
+            assert_eq!(&request, b"status\n");
+            stream.write_all(b"ready\n").unwrap();
+        }
+    });
+
+    let report = start(StartArgs {
+        project: project.clone(),
+        clients_file: None,
+        casework_port: None,
+        mint_port: None,
+        database_port: None,
+        source_project: source_argument.to_vec(),
+        casework_bin: None,
+        mint_bin: None,
+        docker_bin: None,
+        bregctl_bin: Some(registry.executable.clone()),
+    })
+    .unwrap();
+    assert_eq!(report["status"], "ready");
+
+    registry.recreate();
+    let refusal = format!(
+        "{:#}",
+        start(StartArgs {
+            project: project.clone(),
+            clients_file: None,
+            casework_port: None,
+            mint_port: None,
+            database_port: None,
+            source_project: source_argument.to_vec(),
+            casework_bin: None,
+            mint_bin: None,
+            docker_bin: None,
+            bregctl_bin: Some(registry.executable.clone()),
+        })
+        .unwrap_err()
+    );
+    server.join().unwrap();
+
+    assert!(
+        refusal.contains("active local development session"),
+        "{refusal}"
+    );
+    assert!(refusal.contains("professional-register"), "{refusal}");
+    assert!(refusal.contains("stop Casework"), "{refusal}");
+    assert!(refusal.contains("start it again"), "{refusal}");
+    assert_eq!(
+        read_state(&state.root()).unwrap().sources["professional-register"]
+            .binding
+            .as_ref()
+            .unwrap()
+            .audience,
+        "urn:breg:dev:fixture"
+    );
+    remove_socket(&state.root()).unwrap();
+}
+
+#[test]
 fn the_report_names_every_local_credential_without_a_secret() {
     let root = tempfile::tempdir().unwrap();
     let project = standalone(root.path());
@@ -1379,6 +1475,25 @@ fn a_completed_session_can_be_reclaimed_after_its_ports_are_reused() {
     assert!(service_ports_must_be_free(&Status::Starting));
     assert!(service_ports_must_be_free(&Status::Ready));
     assert!(service_ports_must_be_free(&Status::Stopping));
+}
+
+#[test]
+fn source_backed_sessions_listen_only_on_the_casework_port() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let mut state = session(&project);
+    assert_eq!(
+        state.listening_ports(),
+        vec![state.casework_port, state.mint_port]
+    );
+    state.sources.insert(
+        "registry".to_owned(),
+        SourceSession {
+            project: project.clone(),
+            binding: None,
+        },
+    );
+    assert_eq!(state.listening_ports(), vec![state.casework_port]);
 }
 
 struct DockerInventory {

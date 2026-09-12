@@ -521,6 +521,9 @@ impl SourceAdapter for MockSource {
         request: PrepareActionRequest<'_>,
     ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
+        if request.reason.is_some() && matches!(request.operation.as_str(), "approve" | "apply") {
+            return Err(SourceAdapterError::ReasonUnsupported);
+        }
         Ok(PreparedSourceAttempt {
             source_binding: request.displayed_binding.clone(),
             recovery_evidence: RecoveryEvidence::new(vec![1])?,
@@ -3313,6 +3316,22 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         .expect("seeded work item");
     let item_path = format!("/v1/work-items/{}", item.item_id);
 
+    let missing_source_profile = authenticated_request(
+        "GET",
+        "/v1/work-items?view=my_teams",
+        &access_token("staff"),
+        "staff",
+        json!(null),
+        &[],
+    );
+    let response = app.clone().oneshot(missing_source_profile).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], "source-profile.required");
+    assert!(problem["detail"]
+        .as_str()
+        .is_some_and(|detail| detail.contains("Registry-Source-Profile")));
+
     let next = authenticated_request(
         "GET",
         "/v1/work-items/next",
@@ -3532,6 +3551,44 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     }
     assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
     assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+
+    let unsupported_reason = authenticated_request(
+        "POST",
+        &format!("{item_path}/decisions"),
+        &access_token("staff"),
+        "staff",
+        json!({
+            "displayedBinding": binding(),
+            "sourceProfileId": "reader",
+            "operation": "approve",
+            "reason": "not accepted by this source operation"
+        }),
+        &[
+            (SOURCE_PROFILE_HEADER, "reader"),
+            (IF_MATCH_HEADER, "\"2\""),
+            (IDEMPOTENCY_KEY_HEADER, "approve-with-reason"),
+        ],
+    );
+    let response = app.clone().oneshot(unsupported_reason).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], "request.reason-unsupported");
+    assert!(problem["detail"]
+        .as_str()
+        .is_some_and(|detail| detail.contains("reason")));
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        service
+            .store()
+            .load_prepared_attempt_by_key(
+                &would_be_service_actor,
+                item.item_id,
+                "approve-with-reason"
+            )
+            .await,
+        Err(StoreError::NotFound)
+    ));
 }
 
 fn authenticator(project: &CaseworkProject) -> CaseworkAuthenticator {

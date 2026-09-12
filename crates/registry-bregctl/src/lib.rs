@@ -214,6 +214,7 @@ struct InitArgs {
     #[arg(
         long,
         value_name = "ID",
+        value_parser = starters::value_parser(),
         conflicts_with_all = ["from", "selection", "starter"]
     )]
     template: Option<String>,
@@ -10099,6 +10100,47 @@ mod tests {
             let mut arguments = vec!["bregctl", "init", "project", "--template", "seed-lots"];
             arguments.extend(conflicting);
             assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn init_template_publishes_and_enforces_every_shipped_id() {
+        let mut init = command()
+            .find_subcommand("init")
+            .expect("init command exists")
+            .clone();
+        let template = init
+            .get_arguments()
+            .find(|argument| argument.get_id() == "template")
+            .expect("template argument exists");
+        let possible_values = template
+            .get_value_parser()
+            .possible_values()
+            .expect("template has possible values")
+            .map(|value| value.get_name().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(possible_values, starters::ids());
+
+        let help = init.render_long_help().to_string();
+        for id in starters::ids() {
+            assert!(help.contains(id), "init help omits {id}: {help}");
+        }
+
+        let error = Cli::try_parse_from([
+            "bregctl",
+            "init",
+            "project",
+            "--template",
+            "not-a-real-starter",
+        ])
+        .expect_err("an unknown template must be refused by Clap");
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidValue);
+        let message = error.to_string();
+        for id in starters::ids() {
+            assert!(
+                message.contains(id),
+                "invalid-value error omits {id}: {message}"
+            );
         }
     }
 

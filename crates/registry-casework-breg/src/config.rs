@@ -67,6 +67,13 @@ pub struct BregBinding {
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout_milliseconds: u64,
     #[serde(default = "default_reconciliation_interval")]
+    #[cfg_attr(
+        feature = "schema",
+        schemars(range(
+            min = MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS,
+            max = MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
+        ))
+    )]
     pub reconciliation_interval_milliseconds: u64,
 }
 

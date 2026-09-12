@@ -394,6 +394,17 @@ async fn list_items(
 ) -> Result<Json<registry_casework_core::WorkItemPage>, HttpError> {
     let (actor, token) = authenticate(&state, &headers).await?;
     let source_profile = source_profile_optional(&headers)?;
+    if source_profile.is_none()
+        && matches!(actor.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
+        && !state.project.sources.is_empty()
+        && !state.project.hosted_kinds.iter().any(|kind| {
+            kind.deciding_profiles
+                .iter()
+                .any(|profile| profile == &actor.profile_id)
+        })
+    {
+        return Err(HttpError::SourceProfileRequired);
+    }
     let limit = page_limit(&state, query.limit)?;
     let subject = query.subject().map_err(|_| HttpError::Invalid)?;
     let reference = query.reference().map_err(|_| HttpError::Invalid)?;
@@ -1142,6 +1153,9 @@ async fn authenticate<'a>(
 }
 
 fn source_profile(headers: &HeaderMap) -> Result<&str, HttpError> {
+    if !headers.contains_key(SOURCE_PROFILE_HEADER) {
+        return Err(HttpError::SourceProfileRequired);
+    }
     profile_header(headers, SOURCE_PROFILE_HEADER)
 }
 
@@ -1246,7 +1260,9 @@ pub enum HttpError {
     Invalid,
     ServiceUnavailable,
     SourceNotFound,
+    SourceProfileRequired,
     SourceBadGateway,
+    ReasonUnsupported,
     SourceSignatureInvalid,
     SourceUnavailable(Option<Uuid>),
     Internal,
@@ -1309,6 +1325,9 @@ impl From<ServiceError> for HttpError {
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::Uncertain) => {
                 Self::RecoveryPending(None)
             }
+            ServiceError::Adapter(
+                registry_casework_core::SourceAdapterError::ReasonUnsupported,
+            ) => Self::ReasonUnsupported,
             ServiceError::Adapter(registry_casework_core::SourceAdapterError::Invalid) => {
                 Self::SourceBadGateway
             }
@@ -1349,7 +1368,9 @@ impl HttpError {
             Self::Invalid => ProblemCode::RequestInvalid,
             Self::ServiceUnavailable => ProblemCode::ServiceUnavailable,
             Self::SourceNotFound => ProblemCode::SourceNotFound,
+            Self::SourceProfileRequired => ProblemCode::SourceProfileRequired,
             Self::SourceBadGateway => ProblemCode::SourceBadGateway,
+            Self::ReasonUnsupported => ProblemCode::RequestReasonUnsupported,
             Self::SourceSignatureInvalid => ProblemCode::SourceSignatureInvalid,
             Self::SourceUnavailable(_) => ProblemCode::WorkItemSourceUnavailable,
             Self::Internal => ProblemCode::RuntimeFailure,
@@ -1540,7 +1561,7 @@ mod tests {
                 ),
         );
         let cases = [
-            ("history", None, Some(ProblemCode::RequestInvalid)),
+            ("history", None, Some(ProblemCode::SourceProfileRequired)),
             ("history", Some("reader"), None),
             ("hosted-history", None, None),
             (
@@ -1573,9 +1594,29 @@ mod tests {
                     let body: serde_json::Value =
                         serde_json::from_slice(&body).expect("problem JSON");
                     assert_eq!(body["code"], problem.code(), "{label}");
+                    assert_eq!(body["detail"], problem.detail(), "{label}");
                 }
             }
         }
+    }
+
+    #[test]
+    fn unsupported_source_reason_is_a_client_problem_without_hiding_bad_gateway() {
+        let unsupported = HttpError::from(ServiceError::Adapter(
+            registry_casework_core::SourceAdapterError::ReasonUnsupported,
+        ));
+        assert_eq!(unsupported.problem(), ProblemCode::RequestReasonUnsupported);
+        assert_eq!(
+            unsupported.problem().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert!(unsupported.problem().detail().contains("reason"));
+
+        let malformed = HttpError::from(ServiceError::Adapter(
+            registry_casework_core::SourceAdapterError::Invalid,
+        ));
+        assert_eq!(malformed.problem(), ProblemCode::SourceBadGateway);
+        assert_eq!(malformed.problem().status(), StatusCode::BAD_GATEWAY);
     }
 
     /// The published contract keeps both reads, so a client that meets the

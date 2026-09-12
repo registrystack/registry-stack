@@ -10,6 +10,8 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use clap::builder::PossibleValuesParser;
+
 use crate::{
     artifact_report, compile, compiler_findings, diagnostic, init_media_type, source_failure,
     tool_diagnostic, DiagnosticArtifact, FailureReport, ProfileArg, SuccessReport, SuggestedAction,
@@ -331,6 +333,11 @@ const STARTERS: &[Starter] = &[
 /// The starter ids this binary ships, in the order they are declared.
 pub(crate) fn ids() -> Vec<&'static str> {
     STARTERS.iter().map(|starter| starter.id).collect()
+}
+
+/// A Clap parser exposing the shipped starter ids from the catalog itself.
+pub(crate) fn value_parser() -> PossibleValuesParser {
+    PossibleValuesParser::new(ids())
 }
 
 fn lookup(id: &str) -> Option<&'static Starter> {

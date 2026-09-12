@@ -78,7 +78,7 @@ the item, so a later configuration change does not rewrite existing work.
 `GET /v1/work-items/{itemId}/history` is the separate source-scoped history
 read. It requires a `Registry-Source-Profile` header and answers from the
 source, so hosted work has no usable answer there and a call without that
-header returns `request.invalid` with HTTP 400. `hosted-history` is the
+header returns `source-profile.required` with HTTP 400. `hosted-history` is the
 staff-readable route for hosted work and refuses a source-profile header for the
 same reason. A profile with no source, such as every profile in the
 `standalone-decision` starter, therefore reads `hosted-history`.
@@ -155,7 +155,10 @@ person, and traversed absence ids. If the chain ends without an eligible staff
 member, the item remains open in its serving queue with
 `staffingDiagnostic: no_cover_available`; this staffing state is returned on
 the item rather than as a problem response. A source-backed item requires
-`Registry-Source-Profile`. Omitting that header selects hosted work.
+`Registry-Source-Profile`. Omitting that header selects hosted work when the
+selected Casework profile is a deciding profile for at least one hosted kind;
+otherwise a deployment with a configured source returns
+`source-profile.required`.
 
 Caseload movement is a review-then-apply operation for Supervisor profiles in
 currently served queues. Preview returns only caller-visible items held by the
@@ -439,7 +442,10 @@ record reference plus explicitly configured routing and display reference
 fields, requests no reviewer reason fields, and carries no decision or
 application operation.
 Human review and application calls use the person's token and explicitly
-selected BReg profile.
+selected BReg profile. BReg `reject` and `request_correction` actions accept a
+bounded reason. `approve` and `apply` do not; Casework refuses a reason on those
+actions as `request.reason-unsupported` before preparing a durable source
+attempt.
 
 Synchronization orders observations by the physical BReg record revision. At
 the same revision, a changed HTTP representation ETag refreshes the existing

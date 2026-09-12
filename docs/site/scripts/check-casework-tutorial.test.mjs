@@ -13,7 +13,6 @@ const scriptDir = dirname(fileURLToPath(import.meta.url));
 const gate = resolve(scriptDir, 'check-casework-tutorial.sh');
 const docsRoot = resolve(scriptDir, '../src/content/docs');
 const firstCasework = resolve(docsRoot, 'tutorials/first-casework.mdx');
-const reviewBregChanges = resolve(docsRoot, 'tutorials/review-breg-changes-in-casework.mdx');
 
 async function runGate(env = {}, args = ['--dry-run']) {
   try {

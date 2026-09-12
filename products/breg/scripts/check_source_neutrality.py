@@ -132,6 +132,10 @@ PRODUCTION_INPUT_DIRECTORIES = ("resources", "schemas", "migrations", "templates
 EXCLUDED_SOURCE_DIRECTORIES = {"tests", "fixtures", "examples", "benches"}
 RAW_STRING_START = re.compile(r'(?:br|r)(?P<hashes>#{0,255})"')
 PUBLIC_KERNEL_CONTRACTS = ("products/breg/contracts/package-layout.yaml",)
+SHIPPED_STARTER_CATALOG = Path("crates/registry-bregctl/src/starters.rs")
+SHIPPED_STARTER_ROOT = Path("products/breg/starters")
+STARTER_ID_ASSIGNMENT = re.compile(r'^\s*id:\s*"(?P<value>[a-z0-9-]+)",\s*$', re.MULTILINE)
+STARTER_FILE_INCLUDE = re.compile(r'include_bytes!\(\s*"(?P<value>[^"]+)"\s*\)')
 DOMAIN_COMPONENT = re.compile(
     r"(?i)(?:^|[._:/-])(?:"
     + "|".join(re.escape(value) for value in FORBIDDEN_DOMAIN_COMPONENTS)
@@ -365,6 +369,36 @@ def is_production_input(path: Path, crate_root: Path) -> bool:
     return bool(set(path.relative_to(crate_root).parts) & set(PRODUCTION_INPUT_DIRECTORIES))
 
 
+def shipped_starter_catalog_literals(
+    repository_root: Path, source: Path, text: str
+) -> set[str]:
+    """Return catalog ids and embedded paths backed by shipped starter files."""
+    if source.relative_to(repository_root) != SHIPPED_STARTER_CATALOG:
+        return set()
+
+    starter_root = (repository_root / SHIPPED_STARTER_ROOT).resolve()
+    allowed: set[str] = set()
+    for match in STARTER_ID_ASSIGNMENT.finditer(text):
+        value = match.group("value")
+        core = (starter_root / value / "core").resolve()
+        if core.is_dir() and core.is_relative_to(starter_root):
+            allowed.add(value)
+    for match in STARTER_FILE_INCLUDE.finditer(text):
+        value = match.group("value")
+        target = (source.parent / value).resolve()
+        relative_target = (
+            target.relative_to(starter_root) if target.is_relative_to(starter_root) else None
+        )
+        if (
+            target.is_file()
+            and relative_target is not None
+            and len(relative_target.parts) >= 3
+            and relative_target.parts[1] == "core"
+        ):
+            allowed.add(value)
+    return allowed
+
+
 def find_violations(repository_root: Path) -> list[str]:
     violations: list[str] = []
     for source in source_files(repository_root):
@@ -378,6 +412,9 @@ def find_violations(repository_root: Path) -> list[str]:
             None,
         )
         inspected = without_cfg_test_items(text) if source.suffix == ".rs" else text
+        starter_catalog_literals = shipped_starter_catalog_literals(
+            repository_root, source, inspected
+        )
         lowered = inspected.lower()
         for marker in FORBIDDEN_FIXTURE_IDENTIFIERS:
             if marker in lowered:
@@ -390,6 +427,11 @@ def find_violations(repository_root: Path) -> list[str]:
                         f"{relative}: contains fixture Rust type identifier {identifier}"
                     )
             for literal in rust_string_literals(inspected):
+                # Shipped starters are deliberately authored examples embedded by
+                # bregctl. Exempt only catalog ids backed by a core directory and
+                # include_bytes! paths resolving to files beneath that directory.
+                if literal in starter_catalog_literals:
+                    continue
                 identifier = domain_identifier(literal)
                 if identifier is not None:
                     violations.append(

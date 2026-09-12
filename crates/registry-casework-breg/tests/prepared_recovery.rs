@@ -132,6 +132,13 @@ fn json_response(value: Value) -> ResponseTemplate {
 async fn prepare_for_recovery(
     server: &MockServer,
 ) -> (BregAdapter, ActorContext, PreparedSourceAttempt) {
+    prepare(server, None).await.expect("prepared source action")
+}
+
+async fn prepare(
+    server: &MockServer,
+    reason: Option<&str>,
+) -> Result<(BregAdapter, ActorContext, PreparedSourceAttempt), SourceAdapterError> {
     Mock::given(method("GET"))
         .and(path(format!("/v1/records/companies/{ID}")))
         .and(header("authorization", "Bearer first-human-token"))
@@ -164,15 +171,14 @@ async fn prepare_for_recovery(
             subject: &subject(),
             displayed_binding: &displayed,
             operation: OperationName::parse("apply").expect("apply operation"),
-            reason: None,
+            reason,
             actor: &actor,
             source_profile_id: "reviewer",
             idempotency_key: "casework-attempt-1",
             credential: EphemeralCredential::new("first-human-token"),
         })
-        .await
-        .unwrap();
-    (source, actor, prepared)
+        .await?;
+    Ok((source, actor, prepared))
 }
 
 async fn mount_recovery_metadata(server: &MockServer, response: ResponseTemplate) {
@@ -183,6 +189,19 @@ async fn mount_recovery_metadata(server: &MockServer, response: ResponseTemplate
         .expect(1)
         .mount(server)
         .await;
+}
+
+#[tokio::test]
+async fn apply_reason_is_a_typed_input_refusal_before_an_attempt_can_be_prepared() {
+    let server = MockServer::start().await;
+    let result = prepare(&server, Some("not supported for application")).await;
+    assert!(matches!(result, Err(SourceAdapterError::ReasonUnsupported)));
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.method.as_str() == "GET"));
 }
 
 async fn execute_recovery(

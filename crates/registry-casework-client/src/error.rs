@@ -6,13 +6,14 @@ use registry_casework_core::{
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
+    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
+    REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
     REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
-    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
-    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
-    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
-    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
-    WORK_ITEM_SUPERSEDED_PROBLEM,
+    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
+    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
+    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
+    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
+    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
@@ -51,10 +52,12 @@ pub enum CaseworkProblemCode {
     RequestInvalid,
     RequestMethodNotAllowed,
     RequestNotFound,
+    RequestReasonUnsupported,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     RuntimeFailure,
     ServiceUnavailable,
+    SourceProfileRequired,
     SourceBadGateway,
     SourceNotFound,
     SourceSignatureInvalid,
@@ -75,7 +78,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 36] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -95,10 +98,12 @@ impl CaseworkProblemCode {
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
+        Self::RequestReasonUnsupported,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::SourceProfileRequired,
         Self::SourceBadGateway,
         Self::SourceNotFound,
         Self::SourceSignatureInvalid,
@@ -134,10 +139,12 @@ impl CaseworkProblemCode {
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
+            Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
+            Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
             Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
@@ -174,10 +181,12 @@ impl CaseworkProblemCode {
             REQUEST_INVALID_PROBLEM => Self::RequestInvalid,
             REQUEST_METHOD_NOT_ALLOWED_PROBLEM => Self::RequestMethodNotAllowed,
             REQUEST_NOT_FOUND_PROBLEM => Self::RequestNotFound,
+            REQUEST_REASON_UNSUPPORTED_PROBLEM => Self::RequestReasonUnsupported,
             REQUEST_UNPROCESSABLE_PROBLEM => Self::RequestUnprocessable,
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
+            SOURCE_PROFILE_REQUIRED_PROBLEM => Self::SourceProfileRequired,
             SOURCE_BAD_GATEWAY_PROBLEM => Self::SourceBadGateway,
             SOURCE_NOT_FOUND_PROBLEM => Self::SourceNotFound,
             SOURCE_SIGNATURE_INVALID_PROBLEM => Self::SourceSignatureInvalid,
@@ -209,7 +218,9 @@ impl CaseworkProblemCode {
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 403
             }
-            Self::RequestInvalid | Self::SourceSignatureInvalid => 400,
+            Self::RequestInvalid | Self::SourceProfileRequired | Self::SourceSignatureInvalid => {
+                400
+            }
             Self::RequestNotFound | Self::SourceNotFound | Self::WorkItemNotVisible => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
@@ -222,7 +233,7 @@ impl CaseworkProblemCode {
             Self::PreconditionFailed => 412,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::RequestUnprocessable => 422,
+            Self::RequestReasonUnsupported | Self::RequestUnprocessable => 422,
             Self::PreconditionRequired => 428,
             Self::SourceBadGateway => 502,
             Self::RuntimeFailure => 500,
@@ -300,6 +311,10 @@ impl CaseworkProblemCode {
                 "Route not found",
                 "The requested Casework route does not exist.",
             ),
+            Self::RequestReasonUnsupported => (
+                "Reason not supported",
+                "The reason field is not supported for approve or apply on this source. Omit it and try again.",
+            ),
             Self::RequestUnprocessable => (
                 "Request could not be processed",
                 "The request body does not match the Casework contract.",
@@ -315,6 +330,10 @@ impl CaseworkProblemCode {
             Self::ServiceUnavailable => (
                 "Casework service unavailable",
                 "Casework storage is unavailable. Try again after the service recovers.",
+            ),
+            Self::SourceProfileRequired => (
+                "Source profile required",
+                "Send the Registry-Source-Profile header to select the source profile for this request.",
             ),
             Self::SourceBadGateway => (
                 "Invalid source response",

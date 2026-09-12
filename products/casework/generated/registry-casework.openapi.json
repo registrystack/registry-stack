@@ -2381,10 +2381,12 @@
               "request.invalid",
               "request.method-not-allowed",
               "request.not-found",
+              "request.reason-unsupported",
               "request.unprocessable",
               "request.unsupported-media-type",
               "runtime.failure",
               "service.unavailable",
+              "source-profile.required",
               "source.bad-gateway",
               "source.not-found",
               "source.signature-invalid",
@@ -2939,6 +2941,33 @@
           }
         ]
       },
+      "ProblemRequestReasonUnsupported": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.reason-unsupported"
+              },
+              "detail": {
+                "const": "The reason field is not supported for approve or apply on this source. Omit it and try again."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Reason not supported"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/request/reason-unsupported"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
       "ProblemRequestUnprocessable": {
         "allOf": [
           {
@@ -3095,6 +3124,33 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/source/not-found"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemSourceProfileRequired": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source-profile.required"
+              },
+              "detail": {
+                "const": "Send the Registry-Source-Profile header to select the source profile for this request."
+              },
+              "status": {
+                "const": 400
+              },
+              "title": {
+                "const": "Source profile required"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source-profile/required"
               }
             },
             "type": "object"
@@ -8525,11 +8581,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10578,7 +10641,7 @@
     },
     "/v1/work-items": {
       "get": {
-        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. An exact reference lookup first uses the explicitly retained source field as a bounded candidate index, then returns an item only when the current caller read still discloses the same reference. Callers must follow every page and handle every visible occurrence rather than assuming a subject or reference is unique. The cursor is bound to the full selector, including a hash of the reference, and the selected sort; the raw reference is not stored in the cursor context. Without Registry-Source-Profile, a human Staff profile reads hosted work for currently served queues in ascending createdAt and itemId order; hosted requests reject subject and reference selectors and non-default sorts.",
+        "description": "With Registry-Source-Profile, reads BReg-backed work under that separate authority. A complete sourceId, subjectKind, and subjectId selector filters by one exact source-neutral subject. An exact reference lookup first uses the explicitly retained source field as a bounded candidate index, then returns an item only when the current caller read still discloses the same reference. Callers must follow every page and handle every visible occurrence rather than assuming a subject or reference is unique. The cursor is bound to the full selector, including a hash of the reference, and the selected sort; the raw reference is not stored in the cursor context. Without Registry-Source-Profile, a human Staff or Supervisor profile configured to decide at least one hosted kind reads hosted work for currently served queues in ascending createdAt and itemId order. If the deployment configures a source and the selected profile decides no hosted kind, omission returns source-profile.required instead of an empty hosted page. Hosted requests reject subject and reference selectors and non-default sorts.",
         "operationId": "listWorkItems",
         "parameters": [
           {
@@ -10737,11 +10800,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -10993,11 +11063,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11228,11 +11305,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -11847,11 +11931,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12170,11 +12261,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -12784,11 +12882,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13067,11 +13172,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13242,11 +13354,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestReasonUnsupported"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestUnprocessable"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.unprocessable",
+            "description": "Problem response: request.reason-unsupported, request.unprocessable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13790,11 +13909,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14090,11 +14216,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14356,11 +14489,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: request.invalid",
+            "description": "Problem response: request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -14685,12 +14825,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRequestInvalid"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceProfileRequired"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: cursor.invalid, request.invalid",
+            "description": "Problem response: cursor.invalid, request.invalid, source-profile.required",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
