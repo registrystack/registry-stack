@@ -238,8 +238,7 @@ fn retired_mint_compatibility_option_is_not_accepted() {
         assert_eq!(output.status.code(), Some(2));
         let stderr = stderr_of(&output);
         assert!(
-            stderr.contains("error[evidencectl.usage]")
-                && stderr.contains("unsupported arguments"),
+            stderr.contains("error[evidencectl.usage]") && stderr.contains("unsupported arguments"),
             "retired Mint compatibility option was not refused by the parser: {stderr}"
         );
         assert!(
