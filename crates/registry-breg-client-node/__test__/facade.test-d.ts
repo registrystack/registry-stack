@@ -68,7 +68,7 @@ verifiedWebhook.generation.toUpperCase()
 verifiedWebhook.attempt.toUpperCase()
 verifiedWebhook.deliveryTime.toUpperCase()
 verifiedWebhook.idempotencyKey.toUpperCase()
-verifiedWebhook.body.byteLength
+verifiedWebhook.body.byteLength.toFixed()
 const webhookRefusal: WebhookVerificationRefusalCode = 'signature_mismatch'
 webhookRefusal.toUpperCase()
 // @ts-expect-error Webhook bodies must remain exact bytes.
