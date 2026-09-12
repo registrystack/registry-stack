@@ -98,7 +98,11 @@ pub struct PrepareArgs {
     client: Option<String>,
 
     /// Response format to request and verify.
-    #[arg(long, value_enum, default_value_t = PreparedResponseFormat::SignedJws)]
+    #[arg(
+        long = "response-format",
+        value_enum,
+        default_value_t = PreparedResponseFormat::SignedJws
+    )]
     format: PreparedResponseFormat,
 
     /// Project root. Defaults to the current directory.

@@ -8,6 +8,8 @@ mod hosted;
 mod http;
 pub mod problem;
 mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 mod service;
 mod source_retention;
 mod store;

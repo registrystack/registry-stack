@@ -167,10 +167,10 @@ class ProductContractTests(unittest.TestCase):
         readme = README.read_text(encoding="utf-8")
 
         self.assertIn(
-            "casework --config /etc/registry-casework/operator.yaml migrate", readme
+            "casework --runtime-config /etc/registry-casework/runtime.yaml migrate", readme
         )
         self.assertIn(
-            "casework --config /etc/registry-casework/operator.yaml serve", readme
+            "casework --runtime-config /etc/registry-casework/runtime.yaml serve", readme
         )
         self.assertNotIn("caseworkctl dev start ./casework", readme)
 

@@ -41,12 +41,12 @@ cargo run --locked -p registry-caseworkctl -- package \
   deploy/casework-authoring --output deploy/casework-package
 ```
 
-Copy the generated `operator.example.yaml` to a private operator file and set
-its `project` to `/etc/registry-casework/package/casework.yaml`, its file secret
-root to `/run/secrets/registry-casework`, its audit path below
-`/var/lib/registry-casework`, and its listener to a container-private address.
+Copy the generated `runtime.example.yaml` to a private runtime file and set its
+`package.root` to `/etc/registry-casework/package`, its file secret root to
+`/run/secrets/registry-casework`, its audit path below
+`/var/lib/registry-casework`, and `listener.bind` to a container-private address.
 Supply PostgreSQL URLs through the secret references already declared in that
-file. The operator file and secrets stay outside the image.
+file. The runtime file and secrets stay outside the image.
 
 Build and run the source image directly, or use the maintained Compose adapter:
 
@@ -55,7 +55,7 @@ docker build -f docker/Dockerfile --target casework -t registry-casework .
 docker compose -f docker/compose/docker-compose.casework.yaml up
 ```
 
-The Compose adapter requires `CASEWORK_OPERATOR_FILE`, `CASEWORK_PACKAGE_DIR`,
+The Compose adapter requires `CASEWORK_RUNTIME_CONFIG_FILE`, `CASEWORK_PACKAGE_DIR`,
 and `CASEWORK_SECRET_ROOT`. It mounts the local audit directory on a named
 volume and publishes no host port by default.
 

@@ -241,7 +241,8 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         args.directory.display()
     );
     println!(
-        "Next: run `evidencectl fixtures run --project <editable-project> --target {}` before `evidencectl build`.",
+        "Next: run `evidencectl check <editable-project> --target {}` and `evidencectl test <editable-project> --target {}` before `evidencectl package`.",
+        args.directory.display(),
         args.directory.display()
     );
     Ok(ExitCode::SUCCESS)

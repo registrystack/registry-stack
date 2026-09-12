@@ -4,12 +4,13 @@
 //!
 //! Every filesystem assertion here is about a mode or an owner the Evidence
 //! runtime refuses at startup. The filesystem is intentionally assembled as a
-//! doctor fixture because `evidencectl new` no longer invents a runnable
+//! artifact-inspection fixture because `evidencectl init` no longer invents a runnable
 //! deployment. No `evidence` binary is involved anywhere in this file:
 //! `doctor` is a filesystem walk, and an adopter who cannot yet start the
 //! service is exactly the one who needs it. Nothing here prints key material.
 
 use std::{
+    collections::BTreeSet,
     fs,
     os::unix::fs::PermissionsExt as _,
     path::Path,
@@ -1365,11 +1366,11 @@ fn doctor_names_the_next_commands_when_the_project_is_still_editable() {
         "the refusal must name the shape it was handed: {message}"
     );
     assert!(
-        message.contains("evidencectl build"),
+        message.contains("evidencectl package"),
         "the refusal must name the command that produces a candidate: {message}"
     );
     assert!(
-        message.contains("evidencectl fixtures run"),
+        message.contains("evidencectl test"),
         "the refusal must name the command that checks an editable project: {message}"
     );
 }
@@ -1391,9 +1392,283 @@ fn doctor_names_the_build_command_for_a_directory_that_is_neither_shape() {
         "the refusal must name the shape it needs: {message}"
     );
     assert!(
-        message.contains("evidencectl build"),
+        message.contains("evidencectl package"),
         "the refusal must name the command that produces one: {message}"
     );
+}
+
+#[test]
+fn doctor_project_shape_refusal_is_one_value_safe_json_diagnostic() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["--format", "json", "doctor"])
+        .current_dir(workspace.path())
+        .output()
+        .expect("running evidencectl doctor");
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor refusal JSON");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostics = report["diagnostics"].as_array().expect("diagnostics array");
+    assert_eq!(diagnostics.len(), 1);
+    let diagnostic = diagnostics[0].as_object().expect("diagnostic object");
+    assert_eq!(
+        diagnostic
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        [
+            "artifact",
+            "code",
+            "message",
+            "path",
+            "severity",
+            "suggestedAction",
+        ]
+        .into_iter()
+        .collect()
+    );
+    assert_eq!(diagnostic["code"], "evidence.doctor.project-shape");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("deployment project"));
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .expect("suggested action")
+        .contains("evidencectl package"));
+}
+
+#[test]
+fn delegated_runtime_bounds_are_operational_and_never_disclose_child_output() {
+    const CHILD_CANARY: &str = "delegated-runtime-output-canary";
+    let cases = [
+        ("timeout", "sleep 60", Some("20")),
+        (
+            "output-limit",
+            "yes delegated-runtime-output-canary | head -c 1050000",
+            None,
+        ),
+    ];
+
+    for (case, behavior, deadline) in cases {
+        for format in ["human", "json"] {
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let runtime = workspace.path().join("runtime.yaml");
+            fs::write(&runtime, "version: 1\n").expect("runtime");
+            let binary = workspace.path().join("evidence");
+            fs::write(
+                &binary,
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'evidence {}\\n'; exit 0; fi\n{behavior}\n",
+                    registry_platform_buildinfo::DISPLAY_VERSION
+                ),
+            )
+            .expect("Evidence stub");
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+                .expect("Evidence stub mode");
+
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+            command
+                .args(["--format", format, "doctor", "--runtime-config"])
+                .arg(&runtime)
+                .arg("--evidence-bin")
+                .arg(&binary);
+            if let Some(deadline) = deadline {
+                command.env("EVIDENCECTL_TEST_DOCTOR_DEADLINE_MS", deadline);
+            }
+            let output = command.output().expect("runtime doctor");
+            assert_eq!(output.status.code(), Some(3), "{case} in {format}");
+            let rendered = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !rendered.contains(CHILD_CANARY),
+                "{case} leaked: {rendered}"
+            );
+            assert!(
+                rendered.contains("evidence.doctor.runtime-check-unavailable"),
+                "{case} in {format}: {rendered}"
+            );
+            assert_eq!(
+                rendered
+                    .matches("evidence.doctor.runtime-check-unavailable")
+                    .count(),
+                1,
+                "{case} emitted more than one diagnostic in {format}: {rendered}"
+            );
+
+            if format == "json" {
+                assert!(output.stderr.is_empty(), "JSON wrote stderr: {rendered}");
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("operational JSON");
+                assert_eq!(report["status"], "operational-failure");
+                let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+                assert_eq!(diagnostics.len(), 1);
+                let diagnostic = diagnostics[0].as_object().expect("diagnostic");
+                assert_eq!(
+                    diagnostic
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
+                    [
+                        "artifact",
+                        "code",
+                        "message",
+                        "path",
+                        "severity",
+                        "suggestedAction",
+                    ]
+                    .into_iter()
+                    .collect()
+                );
+            } else {
+                assert!(output.stdout.is_empty(), "human output wrote stdout");
+            }
+        }
+    }
+}
+
+#[test]
+fn delegated_runtime_version_handshake_bounds_are_operational_and_value_safe() {
+    const CHILD_CANARY: &str = "delegated-version-handshake-canary";
+    let cases = [
+        ("timeout", "sleep 60", Some("20")),
+        (
+            "output-limit",
+            "yes delegated-version-handshake-canary | head -c 100000",
+            None,
+        ),
+    ];
+
+    for (case, version_behavior, deadline) in cases {
+        for format in ["human", "json"] {
+            let workspace = tempfile::tempdir().expect("tempdir");
+            let runtime = workspace.path().join("runtime.yaml");
+            fs::write(&runtime, "version: 1\n").expect("runtime");
+            let binary = workspace.path().join("evidence");
+            fs::write(
+                &binary,
+                format!(
+                    "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then {version_behavior}; exit 0; fi\nexit 0\n"
+                ),
+            )
+            .expect("Evidence stub");
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+                .expect("Evidence stub mode");
+
+            let mut command = Command::new(env!("CARGO_BIN_EXE_evidencectl"));
+            command
+                .args(["--format", format, "doctor", "--runtime-config"])
+                .arg(&runtime)
+                .arg("--evidence-bin")
+                .arg(&binary);
+            if let Some(deadline) = deadline {
+                command.env("EVIDENCECTL_TEST_DOCTOR_VERSION_DEADLINE_MS", deadline);
+            }
+            let output = command.output().expect("runtime doctor");
+            assert_eq!(output.status.code(), Some(3), "{case} in {format}");
+            let rendered = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                !rendered.contains(CHILD_CANARY),
+                "{case} leaked: {rendered}"
+            );
+            assert_eq!(
+                rendered
+                    .matches("evidence.doctor.runtime-check-unavailable")
+                    .count(),
+                1,
+                "{case} emitted the wrong diagnostics in {format}: {rendered}"
+            );
+
+            if format == "json" {
+                assert!(output.stderr.is_empty(), "JSON wrote stderr: {rendered}");
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("operational JSON");
+                assert_eq!(report["status"], "operational-failure");
+                let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+                assert_eq!(diagnostics.len(), 1);
+                assert_eq!(
+                    diagnostics[0]
+                        .as_object()
+                        .expect("diagnostic")
+                        .keys()
+                        .map(String::as_str)
+                        .collect::<BTreeSet<_>>(),
+                    [
+                        "artifact",
+                        "code",
+                        "message",
+                        "path",
+                        "severity",
+                        "suggestedAction",
+                    ]
+                    .into_iter()
+                    .collect()
+                );
+            } else {
+                assert!(output.stdout.is_empty(), "human output wrote stdout");
+            }
+        }
+    }
+}
+
+#[test]
+fn delegated_runtime_configuration_refusal_remains_a_domain_failure() {
+    for format in ["human", "json"] {
+        let workspace = tempfile::tempdir().expect("tempdir");
+        let runtime = workspace.path().join("runtime.yaml");
+        fs::write(&runtime, "version: 1\n").expect("runtime");
+        let binary = workspace.path().join("evidence");
+        fs::write(
+            &binary,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then printf 'evidence {}\\n'; exit 0; fi\nprintf 'evidence: runtime configuration is invalid\\n' >&2\nexit 1\n",
+                registry_platform_buildinfo::DISPLAY_VERSION
+            ),
+        )
+        .expect("Evidence stub");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))
+            .expect("Evidence stub mode");
+
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", format, "doctor", "--runtime-config"])
+            .arg(&runtime)
+            .arg("--evidence-bin")
+            .arg(&binary)
+            .output()
+            .expect("runtime doctor");
+        assert_eq!(output.status.code(), Some(1), "{format}");
+        let rendered = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            rendered.contains("runtime configuration is invalid"),
+            "{format}: {rendered}"
+        );
+        if format == "json" {
+            assert!(output.stderr.is_empty());
+            let report: serde_json::Value =
+                serde_json::from_slice(&output.stdout).expect("domain JSON");
+            assert_eq!(report["status"], "domain-refusal");
+            assert_eq!(
+                report["diagnostics"][0]["code"],
+                "evidence.runtime.configuration-refused"
+            );
+        } else {
+            assert!(output.stdout.is_empty());
+        }
+    }
 }
 
 /// An all-green report that never mentions the signer reads as a ready target

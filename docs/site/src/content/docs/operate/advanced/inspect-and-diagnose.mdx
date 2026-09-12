@@ -197,7 +197,7 @@ stage it stopped at. Ask the Evidence Gateway fixture run to explain itself:
 
 ```sh
 evidence --runtime runtime.yaml evaluate --fixture "bundle/fixtures/<cases>.yaml" --explain
-evidencectl fixtures run --project "<candidate>" --explain
+evidencectl test "<candidate>" --explain
 ```
 
 The trace records, for every case, each stage it reached (`prepare`, `acquire`, `extract`,

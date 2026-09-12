@@ -491,7 +491,13 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     config::write_yaml(&path, &config::operator(&state)).unwrap();
 
     let config = RuntimeConfig::load(&path).unwrap();
-    assert_eq!(config.listen, "127.0.0.1:8092".parse().unwrap());
+    assert_eq!(
+        config.api_version,
+        registry_casework::RUNTIME_CONFIG_API_VERSION
+    );
+    assert_eq!(config.kind, registry_casework::RUNTIME_CONFIG_KIND);
+    assert_eq!(config.package.root, project);
+    assert_eq!(config.listener.bind, "127.0.0.1:8092".parse().unwrap());
     // Mint emits one space-delimited `scope` claim, not the deployment default.
     assert_eq!(config.authentication.oidc.scope_claim, "scope");
     assert!(matches!(
@@ -500,16 +506,36 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
             if document_ref == "secret:file/mint-jwks"
     ));
     assert_eq!(
-        config.tls_termination,
+        config.listener.tls_termination,
         registry_casework::TlsTermination::DevelopmentLoopback
     );
-    assert_eq!(config.audit.secret_ref, "secret:file/casework-audit-key");
+    assert_eq!(
+        config.listener.network_exposure,
+        registry_casework::ListenerNetworkExposure::PrivateAddress
+    );
+    assert_eq!(
+        config
+            .secret_providers
+            .file
+            .as_ref()
+            .map(|provider| provider.root.as_path()),
+        Some(session_root.join("secrets").as_path())
+    );
+    assert!(config.secret_providers.environment.is_none());
+    assert_eq!(config.audit.hash_key_ref, "secret:file/casework-audit-key");
+    assert_eq!(
+        config.database.runtime_url_ref,
+        "secret:file/runtime-database-url"
+    );
+    assert_eq!(
+        config.database.migration_url_ref,
+        "secret:file/migration-database-url"
+    );
     assert_eq!(
         config.database.trusted_root_certificate_ref.as_deref(),
         Some("secret:file/database-root.pem")
     );
-    // The authored project the reader edits is what the session serves.
-    assert_eq!(config.project, project.join("casework.yaml"));
+    assert!(config.sources.is_empty());
     assert_eq!(config.authentication.oidc.issuer, state.mint_origin());
     assert_eq!(config.authentication.oidc.audience, state.audience());
 }
@@ -2186,32 +2212,27 @@ fn nonzero_guard_exit_is_detected_without_waiting_for_pump_eof() {
 fn live_guard_timeout_kills_the_pinned_group_before_reaping() {
     let root = tempfile::tempdir().unwrap();
     private::directory(&root.path().join("logs")).unwrap();
-    let service_binary = root.path().join("service.sh");
     let guard_binary = root.path().join("guard.sh");
     let service_pid_file = root.path().join("service.pid");
-    fs::write(
-        &service_binary,
-        b"#!/bin/sh\ntrap '' TERM\nprintf '%s' \"$$\" > \"$1\"\nwhile :; do sleep 0.02; done\n",
-    )
-    .unwrap();
+    // Publish the descendant PID from the guard that created it. This proves
+    // the group member exists without depending on when that child is scheduled.
     fs::write(
         &guard_binary,
-        b"#!/bin/sh\ntrap '' TERM\n\"$1\" \"$2\" &\nwhile [ ! -s \"$2\" ]; do sleep 0.01; done\nwhile :; do sleep 0.02; done\n",
+        b"#!/bin/sh\ntrap '' TERM\n/bin/sleep 60 &\nprintf '%s' \"$!\" > \"$1\"\nexec /bin/sleep 60\n",
     )
     .unwrap();
-    fs::set_permissions(&service_binary, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&guard_binary, fs::Permissions::from_mode(0o700)).unwrap();
     let mut guard = Command::new(&guard_binary);
-    guard.arg(&service_binary).arg(&service_pid_file);
+    guard.arg(&service_pid_file);
     let mut service = service_with_guard_command(guard, root.path(), "guarded").unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     while !file_has_bytes(&service_pid_file) && Instant::now() < deadline {
         thread::sleep(Duration::from_millis(5));
     }
-    assert!(
-        file_has_bytes(&service_pid_file),
-        "guarded service did not start"
-    );
+    if !file_has_bytes(&service_pid_file) {
+        let _ = service.stop_with_grace(Duration::from_millis(75), Duration::from_millis(10));
+        panic!("guarded service did not start");
+    }
     let service_pid = rustix::process::Pid::from_raw(
         fs::read_to_string(&service_pid_file)
             .unwrap()
@@ -2219,6 +2240,12 @@ fn live_guard_timeout_kills_the_pinned_group_before_reaping() {
             .unwrap(),
     )
     .unwrap();
+    assert!(rustix::process::test_kill_process(service_pid).is_ok());
+    assert_eq!(
+        rustix::process::getpgid(Some(service_pid)).unwrap(),
+        service.guard_pgid,
+        "the descendant must join the guard's pinned group"
+    );
     let started = Instant::now();
 
     let refusal = format!(

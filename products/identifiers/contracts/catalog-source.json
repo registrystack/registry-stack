@@ -150,6 +150,14 @@
       "status": "active",
       "compatibilityLine": "v1alpha1",
       "description": "Base Registry Engine runtime configuration JSON Schema."
+    },
+    {
+      "glob": "products/casework/generated/runtime/*.schema.json",
+      "sourcePath": "crates/registry-casework/src/schema.rs",
+      "owner": "casework",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "description": "Registry Casework runtime configuration JSON Schema."
     }
   ],
   "records": [

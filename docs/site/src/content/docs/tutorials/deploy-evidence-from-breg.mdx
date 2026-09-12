@@ -174,7 +174,7 @@ evidencectl target new ./evidence/targets/production \
   --settings ./production-settings.yaml \
   --signing-public-key ./evidence-signing-public.jwk.json
 evidencectl target explain ./evidence/targets/production --project ./evidence --json
-evidencectl fixtures run --project ./evidence --target ./evidence/targets/production
+evidencectl test ./evidence --target ./evidence/targets/production
 ```
 
 The explanation compiles the project and reports its fixture and public-key files
@@ -188,7 +188,7 @@ ordinary files or choose another directory.
 ## Build and hand over exact bytes
 
 ```sh
-evidencectl build --project ./evidence --target ./evidence/targets/production \
+evidencectl package ./evidence --target ./evidence/targets/production \
   --output ./candidate-operated-001
 evidence --runtime ./candidate-operated-001/runtime.yaml check
 ```
@@ -196,7 +196,7 @@ evidence --runtime ./candidate-operated-001/runtime.yaml check
 Build uses the matching Evidence runtime to validate the bundle and required
 fixtures before publishing. A refused build reports which check objected
 (`Evidence rejected the generated deployment bundle` or `Evidence rejected a
-deployment fixture`) and names the exact `evidencectl fixtures run` command to
+deployment fixture`) and names the exact `evidencectl test` command to
 rerun for the full diagnosis; it publishes nothing at `--output` until every
 check passes. The check then validates and compiles the complete
 immutable bundle and validates the mounted secret material exactly as startup
@@ -241,7 +241,7 @@ as disclosed and replaced through the operator's own provisioning.
 Under the intended service identity, after those dependencies exist:
 
 ```sh
-evidencectl doctor --project /srv/evidence/candidates/operated-001
+evidencectl doctor --runtime-config /srv/evidence/candidates/operated-001/runtime.yaml
 evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml check --require-runtime-dependencies
 evidence --runtime /srv/evidence/candidates/operated-001/runtime.yaml serve
 ```

@@ -67,7 +67,7 @@ Keep this terminal in the same directory for the rest of the tutorial; every pat
 
 ```sh
 mkdir -p tutorial-work
-caseworkctl init tutorial-work/casework --template standalone-decision
+caseworkctl --format json init tutorial-work/casework --template standalone-decision
 ```
 
 ```json
@@ -75,13 +75,15 @@ caseworkctl init tutorial-work/casework --template standalone-decision
   "command": "init",
   "created": [
     "casework.yaml",
-    "operator.example.yaml",
+    "runtime.example.yaml",
     "dev-clients.yaml",
     "fixtures/standalone-decision.yaml",
-    "sources/"
+    "sources/",
+    ".casework/schemas/runtime.schema.json",
+    ".vscode/settings.json"
   ],
   "next": [
-    "Run caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
+    "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
   ],
   "ok": true,
   "project": "tutorial-work/casework",
@@ -97,10 +99,12 @@ with no source system behind it:
 - `casework.yaml`: the access profiles, the `decisions` queue, and one
   [hosted kind](../../reference/glossary/#hosted-kind) named `decision`
 - `dev-clients.yaml`: the local callers, one per profile, and the team that serves the queue
-- `operator.example.yaml`: an operator's runtime configuration, for a deployment rather than this
+- `runtime.example.yaml`: an operator's runtime configuration, for a deployment rather than this
   tutorial
 - `fixtures/standalone-decision.yaml`: the requests `caseworkctl test` replays
 - `sources/`: where a source descriptor goes when Casework presents work a registry owns
+- `.casework/schemas/runtime.schema.json` and `.vscode/settings.json`: editor validation for the
+  runtime example
 
 The `decision` kind carries a display schema of `summary` and `reference`, two outcomes, `confirmed`
 and `rejected`, and the single profile allowed to decide it, `staff`.
@@ -134,7 +138,7 @@ Nothing here is configured for anyone else's data.
 Start the project and keep its report:
 
 ```sh
-caseworkctl dev tutorial-work/casework | tee tutorial-work/dev-report.json
+caseworkctl --format json dev tutorial-work/casework | tee tutorial-work/dev-report.json
 ```
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.

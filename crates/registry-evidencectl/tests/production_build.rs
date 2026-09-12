@@ -126,7 +126,7 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
     let message = stderr(&output);
     assert!(
         message.contains(&format!(
-            "Run `evidencectl fixtures run --project {}` to read the diagnosis Evidence prints.",
+            "Run `evidencectl test {}` to read the diagnosis Evidence prints.",
             project.display()
         )),
         "the refusal names the command that shows the diagnosis: {message}"
@@ -146,7 +146,7 @@ fn a_rejected_bundle_and_fixture_name_the_command_that_shows_the_diagnosis() {
     let message = stderr(&output);
     assert!(
         message.contains(&format!(
-            "Run `evidencectl fixtures run --project {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
+            "Run `evidencectl test {} --fixture fixtures/answer.yaml` to read the diagnosis Evidence prints.",
             project.display()
         )),
         "the refusal names the rejected fixture with the command: {message}"
@@ -350,6 +350,64 @@ fn local_target_build_accepts_local_source_without_production_transport_requirem
     assert!(bundle.contains("baseUrl: http://127.0.0.1:8088"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("source-token"));
     fixture.assert_no_staging_residue();
+}
+
+#[test]
+fn package_refuses_a_local_target_without_publishing_or_exposing_values() {
+    for format in ["human", "json"] {
+        let fixture = Fixture::new();
+        fs::write(
+            &fixture.governance,
+            GOVERNANCE
+                .replace("assuranceProfile: production", "assuranceProfile: local")
+                .replace("urn:example:providers:evidence", SECRET_CANARY),
+        )
+        .expect("local target governance");
+        fs::write(
+            fixture.project.join("sources/registry.yaml"),
+            SOURCE
+                .replace(
+                    "baseUrl: https://registry.invalid",
+                    "baseUrl: http://127.0.0.1:8088",
+                )
+                .replace(
+                    "authentication: {kind: static-authorization, tokenRef: 'secret:file/source-token'}",
+                    "authentication: {kind: none}",
+                ),
+        )
+        .expect("local source");
+
+        let output = fixture.package(format);
+
+        assert_eq!(output.status.code(), Some(1), "{format} domain refusal");
+        assert!(!fixture.output.exists());
+        assert!(fixture.invocations().is_empty());
+        assert_value_free(&output);
+        match format {
+            "human" => {
+                assert!(output.stdout.is_empty());
+                let message = stderr(&output);
+                assert!(message.contains("evidence.package.production-profile-required"));
+                assert!(message.contains("governance.yaml:/assuranceProfile"));
+            }
+            "json" => {
+                assert!(output.stderr.is_empty());
+                let report: serde_json::Value =
+                    serde_json::from_slice(&output.stdout).expect("JSON refusal report");
+                assert_eq!(report["status"], "domain-refusal");
+                assert_eq!(
+                    report["diagnostics"][0]["code"],
+                    "evidence.package.production-profile-required"
+                );
+                assert_eq!(
+                    report["diagnostics"][0]["path"],
+                    "governance.yaml:/assuranceProfile"
+                );
+            }
+            _ => unreachable!(),
+        }
+        fixture.assert_no_staging_residue();
+    }
 }
 
 #[test]
@@ -798,6 +856,24 @@ impl Fixture {
             .expect("evidencectl build starts")
     }
 
+    fn package(&self, format: &str) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", format, "package"])
+            .arg(&self.project)
+            .arg("--target")
+            .arg(&self.target)
+            .arg("--output")
+            .arg(&self.output)
+            .env("EVIDENCE_BIN", &self.evidence)
+            .env("FAKE_EVIDENCE_LOG", &self.log)
+            .env(
+                "FAKE_EVIDENCE_VERSION",
+                registry_platform_buildinfo::DISPLAY_VERSION,
+            )
+            .output()
+            .expect("evidencectl package starts")
+    }
+
     fn build_with(&self, project: &Path, target: &Path, output: &Path) -> Output {
         self.command(project, target, output)
             .output()
@@ -806,12 +882,12 @@ impl Fixture {
 
     fn explain(&self) -> Output {
         Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", "json"])
             .arg("target")
             .arg("explain")
             .arg(&self.target)
             .arg("--project")
             .arg(&self.project)
-            .arg("--json")
             .env("EVIDENCE_BIN", &self.evidence)
             .env("FAKE_EVIDENCE_LOG", &self.log)
             .env(
@@ -1075,7 +1151,7 @@ fn assert_report(output: &Output, candidate: &Path) {
     assert_eq!(
         stdout,
         format!(
-            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --project {}` and the target-host Evidence check.\n",
+            "Bundle revision: {REVISION}\nCandidate: {}\nProvision secret:file/audit-hmac-key\nProvision secret:file/source-token\nProvision secret:file/subject-binding-hmac-key\nTarget runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.\n",
             candidate.display(),
             candidate.display(),
         )

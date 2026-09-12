@@ -120,7 +120,7 @@ COPY --from=casework-builder /workspace/target/release/casework /usr/local/bin/c
 COPY LICENSE /licenses/registry-casework/LICENSE
 
 WORKDIR /var/lib/registry-casework
-EXPOSE 8091
+EXPOSE 8100
 
 ENTRYPOINT ["/usr/local/bin/casework"]
-CMD ["--config", "/etc/registry-casework/operator.yaml", "serve"]
+CMD ["--runtime-config", "/etc/registry-casework/runtime.yaml", "serve"]

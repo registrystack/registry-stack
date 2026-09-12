@@ -30,6 +30,7 @@ struct Session {
 impl Session {
     fn ctl(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_caseworkctl"))
+            .args(["--format", "json"])
             .args(args)
             // The journal assertion below needs the default service event even
             // when a maintainer's shell sets a quieter global tracing filter.
@@ -40,17 +41,18 @@ impl Session {
 
     /// The machine-readable report of one successful command, with the refusal
     /// it printed on failure. A report never carries a key or a token.
-    fn report(&self, output: Output) -> Value {
+    fn report(&self, args: &[&str], output: Output) -> Value {
         assert!(
             output.status.success(),
-            "caseworkctl refused: {}",
+            "caseworkctl {args:?} refused: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         serde_json::from_slice(&output.stdout).expect("a JSON report")
     }
 
     fn success(&self, args: &[&str]) -> Value {
-        self.report(self.ctl(args))
+        self.report(args, self.ctl(args))
     }
 
     /// Start the retained session. Every start names the same three ports, so
@@ -310,8 +312,7 @@ fn dev_serves_a_tutorial_project_and_retains_its_records() {
     // including the seeded directory the reader never had to fill in.
     let doctor = session.success(&[
         "doctor",
-        project,
-        "--operator",
+        "--runtime-config",
         first["operatorConfig"]
             .as_str()
             .expect("an operator config"),

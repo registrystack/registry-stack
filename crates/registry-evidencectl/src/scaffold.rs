@@ -15,7 +15,7 @@ use std::{
 use anyhow::{bail, Context as _, Result};
 use clap::{ArgGroup, Args, ValueEnum};
 
-use crate::{keygen, suggest, tooling_editor};
+use crate::{keygen, suggest, tooling_editor, OutputFormat};
 
 const RETAINED_OPENAPI_FILE: &str = "source.openapi.yaml";
 const MAX_STARTER_FILES: usize = 512;
@@ -79,8 +79,8 @@ pub struct NewArgs {
     pub _generate_keys: bool,
 }
 
-pub fn run(args: NewArgs) -> anyhow::Result<ExitCode> {
-    create(args, true)
+pub(crate) fn run_with_format(args: NewArgs, format: OutputFormat) -> anyhow::Result<ExitCode> {
+    create(args, true, format)
 }
 
 /// Start source-first authoring through the same staged project and key setup
@@ -102,11 +102,12 @@ pub(crate) fn create_source_project(directory: &Path) -> Result<()> {
             _generate_keys: false,
         },
         false,
+        OutputFormat::Human,
     )?;
     Ok(())
 }
 
-fn create(args: NewArgs, report: bool) -> anyhow::Result<ExitCode> {
+fn create(args: NewArgs, report: bool, format: OutputFormat) -> anyhow::Result<ExitCode> {
     let source = match (args.openapi.as_deref(), args.transport, args.starter.as_deref()) {
         (Some(openapi), None, None) => AuthoringSource::OpenApi(openapi),
         (None, Some(AuthoringTransport::SqliteExtract), None) => AuthoringSource::SqliteExtract,
@@ -217,6 +218,19 @@ fn create(args: NewArgs, report: bool) -> anyhow::Result<ExitCode> {
     if !report {
         return Ok(ExitCode::SUCCESS);
     }
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "operation": "init",
+                "status": "created",
+                "project": args.directory,
+                "profile": "local",
+                "proofBoundary": "project scaffold only; no authoring or deployment validation was performed"
+            }))?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     println!(
         "Created an editable {} authoring project in {}",
         source.label(),
@@ -263,16 +277,19 @@ fn create(args: NewArgs, report: bool) -> anyhow::Result<ExitCode> {
         ),
         AuthoringSource::SqliteExtract => {
             println!(
-                "Next: run `evidencectl fixtures run --project {}` to prove the synthetic starter, then edit its source, statement, schemas, derivation, and fixtures together.",
+            "Next: run `evidencectl check {}` and `evidencectl test {}` to prove the synthetic starter, then edit its source, statement, schemas, derivation, and fixtures together.",
+                args.directory.display(),
                 args.directory.display()
             );
         }
         AuthoringSource::Starter(_) if starter_ships_a_source => println!(
-            "Next: run `evidencectl fixtures run --project {}` to prove the copied starter before live credentials.",
+            "Next: run `evidencectl check {}` and `evidencectl test {}` to prove the copied starter before live credentials.",
+            args.directory.display(),
             args.directory.display()
         ),
         AuthoringSource::Starter(_) => println!(
-            "Next: follow {}/README.md; this starter ships no source, so import or author one before `evidencectl fixtures run --project {}`.",
+            "Next: follow {}/README.md; this starter ships no source, so import or author one before `evidencectl check {}` and `evidencectl test {}`.",
+            args.directory.display(),
             args.directory.display(),
             args.directory.display()
         ),

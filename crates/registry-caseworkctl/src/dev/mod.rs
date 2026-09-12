@@ -1083,7 +1083,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         // that now own it; this is the only step using the migration credential.
         command_cancellable(
             Command::new(&args.casework_bin)
-                .arg("--config")
+                .arg("--runtime-config")
                 .arg(root.join("operator.yaml"))
                 .arg("migrate"),
             &root,
@@ -1097,7 +1097,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         ensure_active(&terminate)?;
         children.casework = Some(service(
             &args.casework_bin,
-            &["--config"],
+            &["--runtime-config"],
             &root.join("operator.yaml"),
             &["serve"],
             &root,

@@ -173,7 +173,7 @@ tar -xzf breg-evidence-starter.tar.gz -C teaching-inputs
 cp -R ./teaching-inputs/named-starter/questions \
   ./teaching-inputs/named-starter/derivations \
   ./teaching-inputs/named-starter/fixtures ./evidence/
-evidencectl fixtures run --project ./evidence --target ./evidence/targets/local --local
+evidencectl test ./evidence --target ./evidence/targets/local --local
 ```
 
 The 11 synthetic cases check the name-present answer, empty name, absent facts,
@@ -223,7 +223,7 @@ Start the local caller rehearsal using the configured source connection:
 
 ```sh
 cd evidence
-evidencectl dev --target ./targets/local --detach
+evidencectl dev --target ./targets/local start .
 evidencectl request prepare record-named --purpose record-verification \
   --subject subject@breg-8-registry-6-record-7-by-code:code=SYNTHETIC-ORG-001 \
   --name by-code
@@ -235,8 +235,8 @@ and authority. It is a local integration rehearsal; it does not serve the full
 target's caller governance. Production targets are refused by this command.
 
 If Evidence's default ports `8080` and `8081` are occupied, start with
-`evidencectl dev --target ./targets/local --detach --evidence-port 8180
---mint-port 8181` instead. Use that Evidence port in each curl command in this
+`evidencectl dev --target ./targets/local --evidence-port 8180
+--mint-port 8181 start .` instead. Use that Evidence port in each curl command in this
 section. BReg's two ports
 are separate and stay as configured in the source connection.
 
@@ -282,22 +282,16 @@ bregctl dev stop ../registry
 bregctl dev start ../registry
 ```
 
-Restart Evidence with the same ports you selected earlier. Evidence does not retain
-port overrides between starts. For the default ports:
+Restart Evidence. The retained session remembers the ports selected on the
+previous start:
 
 ```sh
-evidencectl dev --target ./targets/local --detach
+evidencectl dev --target ./targets/local start .
 ```
 
-If you used the alternate ports `8180` and `8181`, repeat both flags instead:
-
-```sh
-evidencectl dev --target ./targets/local --detach \
-  --evidence-port 8180 --mint-port 8181
-```
-
-Substitute your own pair if you selected different ports. Repeat these flags after
-`dev clean` as well.
+The command reports the actual Evidence Gateway and Registry Mint endpoints it
+reused. After `dev clean`, select any nondefault ports again with
+`--evidence-port` and `--mint-port`.
 
 BReg retains its database, generated identities, audit history and seed
 checkpoints. Existing record edits survive this restart. A lost checkpoint is

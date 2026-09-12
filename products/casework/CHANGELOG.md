@@ -14,6 +14,13 @@
   connection, the audit journal, or a static OIDC JWKS document cannot resolve
   its secret at startup, and name the source whose binding was refused. The
   refusal never carries the resolved secret value.
+- Version the runtime configuration as `casework-runtime/v1alpha1`, select the
+  fixed `casework.yaml` through an absolute `package.root`, move listener fields
+  under `listener` with port 8100, require explicit secret providers, adopt
+  `audit.hashKeyRef`, and generate its JSON Schema from the owning Rust types.
+- Remove the unused runtime OIDC `principalClaim` and direct operators to the
+  enforced `accessProfiles[].principalClaim`; add field paths for invalid
+  routing, queue, clock, and hosted-kind references.
 - Add an explicit source-owned display reference for exact, case-sensitive
   inbox lookup, current-caller disclosure rechecks, and `due`, `age`, or `type`
   inbox ordering with cursor context bound to the selected lookup and sort.

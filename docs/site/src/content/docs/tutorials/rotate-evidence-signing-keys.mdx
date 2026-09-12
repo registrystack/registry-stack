@@ -69,11 +69,10 @@ files. Do not publish a separate operator-built JWKS.
 Build a new candidate, run its fixtures, and run `evidence check` in the target execution context:
 
 ```sh
-evidencectl build \
-  --project "<deployment-repository>/shared/evidence-project" \
+evidencectl package "<deployment-repository>/shared/evidence-project" \
   --target "<deployment-repository>/environments/<environment>/evidence" \
   --output "<new-candidate-directory>"
-evidencectl fixtures run --project "<new-candidate-directory>"
+evidencectl test "<new-candidate-directory>"
 evidence check --runtime "<new-candidate-directory>/runtime.yaml"
 ```
 

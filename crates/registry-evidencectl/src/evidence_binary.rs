@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 
 /// How long a delegated `evidence` run may take before evidencectl stops it.
 ///
@@ -24,7 +24,7 @@ pub(crate) const DELEGATED_RUN_DEADLINE: Duration = Duration::from_secs(600);
 ///
 /// The runtime prints one line and exits, so thirty seconds bounds a binary
 /// that hangs before evidencectl has handed it any work.
-const VERSION_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
+pub(crate) const VERSION_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The most `evidence --version` may print before evidencectl stops reading.
 ///
@@ -35,30 +35,50 @@ const MAX_VERSION_OUTPUT_BYTES: u64 = 64 * 1024;
 /// How often a delegated run is checked while it is still running.
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 
+#[derive(Debug)]
+pub(crate) struct DelegatedRunBoundError {
+    message: String,
+}
+
+impl std::fmt::Display for DelegatedRunBoundError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DelegatedRunBoundError {}
+
 /// Resolve an explicit binary, `EVIDENCE_BIN`, or the first executable on
 /// `PATH`, in that order.
 pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
     if let Some(path) = explicit {
         if !path.is_file() {
-            bail!("evidence binary not found at {}", path.display());
+            return Err(operational_error(format!(
+                "evidence binary not found at {}",
+                path.display()
+            )));
         }
         return Ok(path.to_path_buf());
     }
     if let Ok(env_path) = env::var("EVIDENCE_BIN") {
         let path = PathBuf::from(&env_path);
         if !path.is_file() {
-            bail!(
+            return Err(operational_error(format!(
                 "evidence binary not found at {} (from EVIDENCE_BIN)",
                 path.display()
-            );
+            )));
         }
         return Ok(path);
     }
     find_on_path("evidence").ok_or_else(|| {
-        anyhow!(
-            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH"
+        operational_error(
+            "evidence binary not found: pass --evidence-bin, set EVIDENCE_BIN, or add `evidence` to PATH",
         )
     })
+}
+
+fn operational_error(message: impl Into<String>) -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::NotFound, message.into()).into()
 }
 
 /// Resolve the Evidence runtime binary and refuse one that is not this
@@ -71,6 +91,15 @@ pub(crate) fn resolve(explicit: Option<&Path>) -> Result<PathBuf> {
 pub(crate) fn resolve_matching(explicit: Option<&Path>) -> Result<PathBuf> {
     let evidence_bin = resolve(explicit)?;
     ensure_matching_version(&evidence_bin)?;
+    Ok(evidence_bin)
+}
+
+pub(crate) fn resolve_matching_within(
+    explicit: Option<&Path>,
+    deadline: Duration,
+) -> Result<PathBuf> {
+    let evidence_bin = resolve(explicit)?;
+    ensure_matching_version_within(&evidence_bin, deadline)?;
     Ok(evidence_bin)
 }
 
@@ -102,18 +131,22 @@ fn ensure_matching_version_within(evidence_bin: &Path, deadline: Duration) -> Re
         None
     };
     let Some(reported) = reported else {
-        bail!(
+        return Err(operational_invalid_data(format!(
             "{} did not report an Evidence runtime version; evidencectl {expected} delegates every fixture decision to the matching evidence binary, so pass --evidence-bin pointing at it, set EVIDENCE_BIN, or put it on PATH",
             evidence_bin.display()
-        );
+        )));
     };
     if reported != expected {
-        bail!(
+        return Err(operational_invalid_data(format!(
             "evidence at {} reports version {reported}, and this evidencectl is {expected}; the two must match, so pass --evidence-bin pointing at evidence {expected}, set EVIDENCE_BIN to it, or put it on PATH",
             evidence_bin.display()
-        );
+        )));
     }
     Ok(())
+}
+
+fn operational_invalid_data(message: impl Into<String>) -> anyhow::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, message.into()).into()
 }
 
 /// Ask the binary to identify itself, under the bounds every delegated run is
@@ -160,11 +193,17 @@ pub(crate) fn wait_bounded(
         }
         if over_limit() {
             terminate_child(child);
-            bail!("{what} output exceeded its byte limit");
+            return Err(DelegatedRunBoundError {
+                message: format!("{what} output exceeded its byte limit"),
+            }
+            .into());
         }
         if started.elapsed() > deadline {
             terminate_child(child);
-            bail!("{what} did not finish within its {deadline:?} deadline");
+            return Err(DelegatedRunBoundError {
+                message: format!("{what} did not finish within its {deadline:?} deadline"),
+            }
+            .into());
         }
         match child.try_wait() {
             Ok(Some(status)) => return Ok(status),
@@ -188,7 +227,10 @@ pub(crate) fn drain_capture(file: &mut File, limit: u64, what: &str) -> Result<V
     file.rewind()?;
     file.take(limit + 1).read_to_end(&mut captured)?;
     if captured.len() as u64 > limit {
-        bail!("{what} output exceeded its byte limit");
+        return Err(DelegatedRunBoundError {
+            message: format!("{what} output exceeded its byte limit"),
+        }
+        .into());
     }
     Ok(captured)
 }

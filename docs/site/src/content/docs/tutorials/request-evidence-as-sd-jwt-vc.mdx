@@ -77,7 +77,7 @@ closed list to the local bundle ceiling and this question's local authority gran
 Start a fresh local generation:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text
@@ -92,7 +92,7 @@ exists:
 evidencectl request prepare adult-status \
   --purpose age-check \
   --subject person_id=person-123 \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name scalar-vc
 ```
 
@@ -291,7 +291,7 @@ Stop and clean the old immutable generation, then compile the updated project:
 ```sh
 evidencectl dev stop
 evidencectl dev clean
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 Prepare the structured request:
@@ -300,7 +300,7 @@ Prepare the structured request:
 evidencectl request prepare adult-assessment \
   --purpose age-assessment-review \
   --subject person_id=person-123 \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name structured-vc
 ```
 

@@ -38,8 +38,8 @@ environments/
 ```
 
 For staging or production, copy the reviewed shared project at one source
-revision, select `environments/<name>/evidence/` as the `evidencectl build`
-target, and create a new candidate. `evidencectl build` resolves governed
+revision, select `environments/<name>/evidence/` as the `evidencectl package`
+target, and create a new candidate. `evidencectl package` resolves governed
 service public keys from that target's `public-keys/` directory. Build staging
 and production separately from the same source revision. Do not promote a
 staging candidate by editing its bytes.
@@ -67,7 +67,7 @@ raises it immediately, removes the public JWK, and deny-lists the thumbprint in
 affected consumers.
 
 Local private JWKs and audit masters are disposable files created outside Git.
-`evidencectl new` and `evidencectl dev` remain the normal application-developer
+`evidencectl init` and `evidencectl dev` remain the normal application-developer
 path; the local target documents the generated bindings and is not passed to
 the strict deployment compiler.
 

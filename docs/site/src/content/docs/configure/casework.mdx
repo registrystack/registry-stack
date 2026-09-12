@@ -24,7 +24,8 @@ caseworkctl --version
 ```
 
 Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
-Every `caseworkctl` command prints one JSON report on standard output, and a refused command prints a `caseworkctl.refused` diagnostic and exits non-zero.
+`caseworkctl` prints human-readable results by default. Pass `--format json` for a JSON report on
+standard output. A refused command exits nonzero and reports a diagnostic in the selected format.
 
 {/* Evidence: crates/registry-casework/install.sh;
     crates/registry-caseworkctl/src/lib.rs, Command and run(). */}
@@ -35,7 +36,7 @@ Every `caseworkctl` command prints one JSON report on standard output, and a ref
 The `standalone-decision` template declares a policy with no source: Casework stores the work, presents it, and records the decision itself.
 
 ```sh
-caseworkctl init ./decisions --template standalone-decision
+caseworkctl --format json init ./decisions --template standalone-decision
 ```
 
 ```json
@@ -43,13 +44,15 @@ caseworkctl init ./decisions --template standalone-decision
   "command": "init",
   "created": [
     "casework.yaml",
-    "operator.example.yaml",
+    "runtime.example.yaml",
     "dev-clients.yaml",
     "fixtures/standalone-decision.yaml",
-    "sources/"
+    "sources/",
+    ".casework/schemas/runtime.schema.json",
+    ".vscode/settings.json"
   ],
   "next": [
-    "Run caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
+    "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
   ],
   "ok": true,
   "project": "./decisions",
@@ -57,9 +60,9 @@ caseworkctl init ./decisions --template standalone-decision
 }
 ```
 
-`init` refuses a destination that already exists, with `casework command refused: destination already exists; init never overwrites a project`.
+`init` refuses a destination that already exists; it never overwrites a project.
 Point it at a new directory, or edit the project you already have.
-`casework.yaml` is the policy a deployment serves: `operator.example.yaml` is a starting point for the deployment's own file, `dev-clients.yaml` describes local callers, `fixtures/` holds the synthetic cases `caseworkctl test` runs, and `sources/` waits for the imported description of any source you connect.
+`casework.yaml` is the policy a deployment serves: `runtime.example.yaml` is a starting point for the deployment's own file, `dev-clients.yaml` describes local callers, `fixtures/` holds the synthetic cases `caseworkctl test` runs, and `sources/` waits for the imported description of any source you connect. The project also includes an editor schema and VS Code settings for the runtime file.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, init() and CASEWORK_YAML;
     products/casework/examples/standalone-decision/casework.yaml. */}
@@ -383,7 +386,7 @@ For the standalone project it reports `"mode": "standalone"`, the resolved hoste
 For a project that declares a source it reports the request entity, the fallback queue, the routing rule count, and the state of the imported source description, which reads `pending_source_add` before you connect the source and `checked` after.
 
 ```sh
-caseworkctl check ./decisions
+caseworkctl --format json check ./decisions
 ```
 
 `caseworkctl explain` answers a narrower question: what the runtime enforces, with the defaults resolved and the authoring noise gone.
@@ -431,18 +434,18 @@ A simulation fixture is not a test fixture: pass a `test` fixture to `simulate` 
 It prints one entry per fixture with `"status": "passed"` or the failure, so it belongs in the same loop as `check`.
 
 ```sh
-caseworkctl test ./decisions
+caseworkctl --format json test ./decisions
 ```
 
 `caseworkctl package` writes the reviewed policy and the exact imported source descriptions into a new directory, which is the [policy package](../../reference/glossary/#policy-package) an operator serves.
 
 ```sh
-caseworkctl package ./decisions --output ./decisions-package
+caseworkctl --format json package ./decisions --output ./decisions-package
 ```
 
 The output is a directory, not an archive: `casework.yaml`, every source description the policy names, and `casework.package.json`, a manifest carrying a `policyDigest` over the sorted list of path, sha256, and byte count for each file.
-The report repeats the digest and states `"secretsIncluded": false` and `"operatorConfigurationIncluded": false`, because the operator file and its secrets stay outside the package and outside review.
-Packaging refuses an existing output directory with `casework command refused: policy package output already exists`, so each candidate lands in its own new directory.
+The report repeats the digest and states `"secretsIncluded": false` and `"runtimeConfigurationIncluded": false`, because the runtime file and its secrets stay outside the package and outside review.
+Packaging refuses an existing output directory, so each candidate lands in its own new directory.
 
 :::caution[A packaged policy is verified by byte, not by intent]
 The runtime rebuilds the manifest from the directory at startup and refuses any difference: a changed byte, a missing file, or an extra file left beside the policy. Adding one blank line to a packaged `casework.yaml` is enough to make `casework` exit with `casework: the Casework policy package is invalid`, and so is dropping an unrelated note into the package root. A running process keeps the policy it verified at startup, so editing in place changes nothing it is serving and breaks the next restart.
@@ -488,10 +491,11 @@ Until the description exists, `caseworkctl check` reports `"sourceDescription": 
 Continue from the register you built in [Create and query your first registry](../../tutorials/first-breg/), which leaves its project at `tutorial-work/project`.
 One thing has to be true of that register before Casework can present its work: the entity you name in `casework.yaml` declares a change request with staged review and manual application, because Casework presents reviewed work and never applies the change itself.
 [Declare change requests and actions](../breg-change-control/) covers how to add one.
-When the register carries no entity by that name, the connection refuses with `casework command refused: declared request entity is absent from BReg compiled metadata`.
+When the register carries no entity by that name, the connection refuses. Check the entity name
+against BReg's compiled metadata before retrying.
 
 ```sh
-caseworkctl source add ./tutorial-work/project \
+caseworkctl --format json source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-register
 ```
 
@@ -500,7 +504,7 @@ Without `--apply` it previews: it reports the two changes it would make to the B
 Read the patch before you take the next step.
 
 ```sh
-caseworkctl source add ./tutorial-work/project \
+caseworkctl --format json source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-register --apply
 ```
 
@@ -515,7 +519,7 @@ Run `caseworkctl check` again, and the source description flips to `"checked"`.
 
 Connecting a source is authoring, and serving one is deployment.
 `caseworkctl dev` refuses a project that declares a source, because every source binding needs a running source system and its own reader credential, and it points you back at the `standalone-decision` template for local work.
-Package the connected project and hand it to an operator, who adds the matching source binding to the operator file.
+Package the connected project and hand it to an operator, who adds the matching source binding to the runtime file.
 
 {/* Evidence: crates/registry-caseworkctl/src/source_add.rs, run(), select_request(),
     candidate_fragments(), and runtime_binding(); crates/registry-caseworkctl/src/dev/mod.rs,
@@ -529,15 +533,15 @@ An operator receives three things from you and nothing else.
 | ------------------------ | ------------------------------------------------------------ |
 | The package directory | The policy the runtime verifies and serves |
 | The manifest digest | The one value that says which policy this is |
-| `operator.example.yaml` | The starting point for the deployment's own file |
+| `runtime.example.yaml` | The starting point for the deployment's own file |
 
 Send the `policyDigest` out of band and have the operator confirm it against `casework.package.json` in the directory they received, because that digest is what distinguishes the reviewed policy from a copy of it.
-The operator file, the database credentials, the identity provider, the audit key, and the source bindings are theirs, and none of them belongs in your project or your package.
+The runtime file, the database credentials, the identity provider, the audit key, and the source bindings are theirs, and none of them belongs in your project or your package.
 Tell them which queues need teams, since the inbox stays closed until every declared queue has one.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, package();
     crates/registry-casework/src/config.rs, PolicyPackageManifest and RuntimeConfig::check;
-    products/casework/examples/professional-review/operator.example.yaml. */}
+    products/casework/examples/professional-review/runtime.example.yaml. */}
 
 ## Next
 

@@ -73,15 +73,15 @@ the key may be reused.
 ## Before you run either command
 
 Run both commands on the operator host, where the secret root and the migration database
-credential are readable. Each one loads the authored project directory, resolves the operator file
-(`operator.yaml` inside that directory unless you pass `--operator`), and refuses when the operator
-file's `project` key does not resolve to that directory's `casework.yaml`. Each connects with the
-migration credential, not the runtime credential.
+credential are readable. Each one loads `runtime.yaml` in the project directory unless you pass
+`--runtime-config`. That file's `package.root` selects the authored `casework.yaml`; inspect it
+before applying a command. Each connects with the migration credential, not the runtime credential.
 
 Both commands preview by default and write nothing until you repeat the exact invocation with
-`--apply`. A successful run prints one JSON object on standard output and exits 0. A refusal prints
-`{"ok": false}` with a single `caseworkctl.refused` diagnostic on standard error and exits 1, so a
-wrapper script can tell the two apart without parsing prose.
+`--apply`. The examples use `--format json` to put one report on standard output. A successful run
+exits 0. A refusal puts `{"ok": false}` with a diagnostic on standard output and exits 1 for an
+invalid project or configuration, or 3 for an operational failure. Without `--format json`,
+Casework prints a human-readable result and sends refusal diagnostics to standard error.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, load_runtime() and retention_erase();
     crates/registry-caseworkctl/src/lib.rs, main_entry() and RetentionCommand;
@@ -94,8 +94,8 @@ Casework holds locally about one exact source request, named by its source ident
 kind, and request identifier. Preview it first:
 
 ```sh
-caseworkctl retention erase /etc/registry-casework/package \
-  --operator /etc/registry-casework/operator.yaml \
+caseworkctl --format json retention erase /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
   --source-id professional-register \
   --request-kind "<request-kind>" \
   --request-id "<request-id>"
@@ -118,8 +118,8 @@ result rather than an error. Casework holds no way back, and a source-side copy 
 :::
 
 ```sh
-caseworkctl retention erase /etc/registry-casework/package \
-  --operator /etc/registry-casework/operator.yaml \
+caseworkctl --format json retention erase /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
   --source-id professional-register \
   --request-kind "<request-kind>" \
   --request-id "<request-id>" \
@@ -156,9 +156,8 @@ means an attempt on this request is pending or uncertain; recover it through the
 or settle it, then run the erasure again. `the requested resource was not found` means no local
 subject matches the three selector values, which is the usual shape of a typo in one of them.
 `the request is invalid` means one selector value is empty, longer than 512 bytes, or carries a
-control character. `operator configuration is bound to a different Casework project` means the
-project directory and the operator file disagree; name the directory whose `casework.yaml` the
-operator file points at.
+control character. If the selected package is unexpected, inspect `package.root` in the selected
+runtime configuration and pass the intended file.
 
 {/* Evidence: crates/registry-casework/src/source_retention.rs, validate_selector() and
     lock_subject();
@@ -173,8 +172,8 @@ of the source repairs most of the rest. What remains is the case where neither c
 outcome. Establish with the source owner what the source actually did, then preview the settlement:
 
 ```sh
-caseworkctl attempt settle /etc/registry-casework/package \
-  --operator /etc/registry-casework/operator.yaml \
+caseworkctl --format json attempt settle /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
   --attempt-id "<attempt-id>" \
   --outcome not-applied \
   --reason "<what the source owner confirmed, and how>" \
@@ -203,8 +202,8 @@ discards the holder's claim.
 :::
 
 ```sh
-caseworkctl attempt settle /etc/registry-casework/package \
-  --operator /etc/registry-casework/operator.yaml \
+caseworkctl --format json attempt settle /etc/registry-casework/package \
+  --runtime-config /etc/registry-casework/runtime.yaml \
   --attempt-id "<attempt-id>" \
   --outcome not-applied \
   --reason "<what the source owner confirmed, and how>" \
@@ -260,9 +259,9 @@ one machine's disk.
     crates/registry-platform-audit/src/lib.rs, JsonlFileSink, DEFAULT_MAX_SIZE_BYTES, and
     DEFAULT_MAX_FILES. */}
 
-The chain is keyed with the audit secret named by the operator file's `audit.secretRef`, which
+The chain is keyed with the audit secret named by the runtime file's `audit.hashKeyRef`, which
 authenticates the retained file against a writer that cannot read the deployment secret. Provide at
-least 32 bytes of NUL-free text through a secret provider, never in the operator file:
+least 32 bytes of NUL-free text through a secret provider, never in the runtime file:
 
 ```sh
 (umask 077 && openssl rand -hex 32 > /run/secrets/registry-casework/casework-audit-key)
@@ -301,7 +300,7 @@ sentinel lock beside the file.
 | The erasure preview reports a nonzero `blockedLiveAttempts` | A pending or uncertain attempt is open on that request. Recover it through the holder's client, or settle it, then preview again. |
 | `retention erase --apply` refuses with `a source attempt is still pending recovery` | An attempt reached one of those states between your preview and your apply run. Resolve it and repeat both runs. |
 | `retention erase` refuses with `the requested resource was not found` | No local subject matches all three selector values. Confirm the source identifier, request kind, and request identifier with the source owner. |
-| Either command refuses with `operator configuration is bound to a different Casework project` | The project directory and the operator file's `project` key name different projects. Pass the directory holding the `casework.yaml` that the operator file points at. |
+| A command inspects an unexpected Casework package | Check `package.root` in the selected runtime configuration and pass the intended `--runtime-config` file. |
 | `attempt settle` refuses with `the source attempt still holds a live execution lease` | A client acquired the attempt within the last 330 seconds. Wait for the lease to expire, then preview again. |
 | `attempt settle` refuses with `only an uncertain attempt can be settled` | The attempt is pending, completed, or refused. A terminal attempt already carries its outcome; a pending one is still recoverable by its holder. |
 | `attempt settle` refuses with `only a work item awaiting its source outcome can be settled` | Recovery or source readback already moved the item out of synchronizing. No settlement is needed. |

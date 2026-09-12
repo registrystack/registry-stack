@@ -1,16 +1,21 @@
-project: casework.yaml
-listen: 127.0.0.1:8091
-tlsTermination: development-loopback
-networkExposure: private-address
+apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+kind: CaseworkRuntimeConfig
+package:
+  # The selected package always contains the policy at casework.yaml.
+  root: /srv/registry-casework/package
+listener:
+  bind: 127.0.0.1:8100
+  tlsTermination: development-loopback
+  networkExposure: private-address
 secretProviders:
   file:
     # Every secret:file reference resolves under this root. A secret file must
     # be owner-only text with no NUL byte, such as `openssl rand -hex 32`
     # (GitHub issue #976), and carry mode 0400 or 0600.
-    root: secrets
+    root: /run/secrets/registry-casework
 database:
-  runtimeUrlRef: secret:env/CASEWORK_DATABASE_URL
-  migrationUrlRef: secret:env/CASEWORK_MIGRATION_DATABASE_URL
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
 authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
@@ -30,8 +35,8 @@ authentication:
       claim: registry_actor_kind
       value: human
 audit:
-  path: state/audit.ndjson
-  secretRef: secret:file/casework-audit-key
+  path: /var/lib/registry-casework/audit.ndjson
+  hashKeyRef: secret:file/casework-audit-key
 sources:
   professional-register:
     baseUrl: https://registry.example.test

@@ -1,4 +1,4 @@
-//! Acceptance tests for the minimal `evidencectl new` authoring paths.
+//! Acceptance tests for the minimal `evidencectl init` authoring paths.
 
 #![cfg(unix)]
 
@@ -21,12 +21,7 @@ fn bare_new_names_both_authoring_inputs_and_writes_nothing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project)]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--openapi <OPENAPI>"));
-    assert!(stderr(&output).contains("--transport <TRANSPORT>"));
-    assert!(stderr(&output).contains("--starter <STARTER>"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 }
 
@@ -36,9 +31,7 @@ fn sqlite_extract_requires_the_explicit_local_profile_before_writing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project), "--transport", "sqlite-extract"]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 }
 
@@ -53,7 +46,8 @@ fn local_sqlite_extract_creates_a_runnable_synthetic_starter() {
     let printed = stdout(&output);
     assert!(printed.contains("editable SQLite-extract authoring project"));
     assert!(printed.contains("queries"));
-    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(printed.contains("evidencectl check"));
+    assert!(printed.contains("evidencectl test"));
     assert!(printed.contains("synthetic source, question, and fixture"));
     assert!(!printed.contains("source suggest"));
 }
@@ -70,7 +64,8 @@ fn local_starter_creates_offline_project_and_target_settings_example() {
     let printed = stdout(&output);
     assert!(printed.contains("editable starter authoring project"));
     assert!(printed.contains("Starter files were copied from"));
-    assert!(printed.contains("evidencectl fixtures run --project"));
+    assert!(printed.contains("evidencectl check"));
+    assert!(printed.contains("evidencectl test"));
     assert!(!printed.contains("source suggest"));
 }
 
@@ -85,7 +80,8 @@ fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
     let printed = stdout(&output);
     assert!(printed.contains(&format!("Next: follow {}/README.md", path(&project))));
     assert!(!printed.contains("to prove the copied starter"));
-    assert!(printed.contains("before `evidencectl fixtures run --project"));
+    assert!(printed.contains("before `evidencectl check"));
+    assert!(printed.contains("and `evidencectl test"));
 }
 
 #[test]
@@ -104,8 +100,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
         "local",
     ]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("cannot be used with"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 
     let starter_project = workspace.path().join("starter-project");
@@ -119,8 +114,7 @@ fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
         "--profile",
         "local",
     ]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("cannot be used with"));
+    assert_safe_usage_failure(&output);
     assert!(!starter_project.exists());
 }
 
@@ -131,9 +125,7 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
     let project = workspace.path().join("project");
     let output = evidencectl(&["new", path(&project), "--openapi", path(&spec)]);
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("required arguments"));
-    assert!(stderr(&output).contains("--profile <PROFILE>"));
+    assert_safe_usage_failure(&output);
     assert!(!project.exists());
 
     let wrong = workspace.path().join("wrong");
@@ -145,8 +137,7 @@ fn openapi_requires_the_explicit_local_profile_before_writing() {
         "--profile",
         "production",
     ]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("invalid value 'production'"));
+    assert_safe_usage_failure(&output);
     assert!(!wrong.exists());
 }
 
@@ -345,8 +336,7 @@ fn existing_paths_and_force_are_refused_without_changes() {
 
     let forced = workspace.path().join("forced");
     let output = openapi_new(&forced, path(&spec), &["--force"]);
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("unexpected argument '--force'"));
+    assert_safe_usage_failure(&output);
     assert!(!forced.exists());
     assert_no_staging_directories(workspace.path());
 }
@@ -403,7 +393,7 @@ fn the_starter_ships_a_readme_that_names_every_file_it_wrote() {
         assert!(readme.contains(named), "the README names {named}");
     }
     assert!(
-        readme.contains("evidencectl fixtures run --project ."),
+        readme.contains("evidencectl test ."),
         "the README names the next command: {readme}"
     );
 }
@@ -974,4 +964,13 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+fn assert_safe_usage_failure(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr(output),
+        "error[evidencectl.usage] command line $: The Evidence command line is incomplete or contains conflicting or unsupported arguments.\n  next: Run evidencectl --help or the selected command with --help, then retry using the documented arguments.\n"
+    );
 }

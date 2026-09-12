@@ -34,7 +34,7 @@ response sample only when the OpenAPI document omits a bound that a reviewer can
 Retain the OpenAPI document and create disposable local Evidence Gateway keys:
 
 ```sh
-evidencectl new institution-evidence \
+evidencectl init institution-evidence \
   --openapi <institution.openapi.yaml> \
   --profile local
 cd institution-evidence
@@ -231,7 +231,7 @@ without copying its transport or credential policy.
 Start the local Evidence Gateway and Registry Mint pair:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 `dev` combines the referenced Version 1 source and selector objects with every authored question,

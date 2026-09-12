@@ -6,7 +6,9 @@ use std::time::Duration;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::Algorithm;
 use registry_casework_core::{check_routing_policy, CaseworkProject};
-use registry_platform_config::{SecretError, SecretResolver, MAX_SECRET_BYTES};
+use registry_platform_config::{
+    SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
+};
 use registry_platform_oidc::{
     fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
 };
@@ -58,7 +60,9 @@ pub const POLICY_PACKAGE_API_VERSION: &str =
     "registry.registrystack.org/casework-policy-package/v1alpha1";
 pub const POLICY_PACKAGE_KIND: &str = "CaseworkPolicyPackage";
 pub const POLICY_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
-const POLICY_PACKAGE_PROJECT_FILE: &str = "casework.yaml";
+pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/casework-runtime/v1alpha1";
+pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
+pub const POLICY_FILE: &str = "casework.yaml";
 const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
 
@@ -100,9 +104,7 @@ impl PolicyPackageManifest {
             })
             .collect::<Result<Vec<_>, _>>()?;
         files.sort_by(|left, right| left.path.cmp(&right.path));
-        if !files
-            .iter()
-            .any(|file| file.path == POLICY_PACKAGE_PROJECT_FILE)
+        if !files.iter().any(|file| file.path == POLICY_FILE)
             || files.windows(2).any(|pair| pair[0].path == pair[1].path)
         {
             return Err(PolicyPackageError::Invalid);
@@ -130,7 +132,7 @@ impl PolicyPackageManifest {
             return Err(PolicyPackageError::Invalid);
         }
 
-        let mut expected = BTreeSet::from([POLICY_PACKAGE_PROJECT_FILE.to_owned()]);
+        let mut expected = BTreeSet::from([POLICY_FILE.to_owned()]);
         for source in &project.sources {
             if normalized_relative_path(&source.description).is_none()
                 || !expected.insert(source.description.clone())
@@ -173,8 +175,7 @@ pub fn verify_policy_package(
     project_path: &Path,
     project: &CaseworkProject,
 ) -> Result<Option<String>, PolicyPackageError> {
-    if project_path.file_name().and_then(|name| name.to_str()) != Some(POLICY_PACKAGE_PROJECT_FILE)
-    {
+    if project_path.file_name().and_then(|name| name.to_str()) != Some(POLICY_FILE) {
         return Err(PolicyPackageError::Invalid);
     }
     let root = project_path.parent().ok_or(PolicyPackageError::Invalid)?;
@@ -291,14 +292,14 @@ pub fn validate_breg_source_description(
     registry_casework_breg::validate_description_input(source, bytes)
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RuntimeConfig {
-    pub project: PathBuf,
-    pub listen: SocketAddr,
-    pub tls_termination: TlsTermination,
-    #[serde(default)]
-    pub network_exposure: ListenerNetworkExposure,
+    pub api_version: String,
+    pub kind: String,
+    pub package: RuntimePackageConfig,
+    pub listener: ListenerConfig,
     pub secret_providers: SecretProvidersConfig,
     pub database: DatabaseConfig,
     pub authentication: AuthenticationConfig,
@@ -307,10 +308,36 @@ pub struct RuntimeConfig {
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RuntimePackageConfig {
+    pub root: PathBuf,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ListenerConfig {
+    #[serde(default = "default_listener_bind")]
+    #[cfg_attr(feature = "schema", schemars(with = "String"))]
+    pub bind: SocketAddr,
+    pub tls_termination: TlsTermination,
+    #[serde(default)]
+    pub network_exposure: ListenerNetworkExposure,
+}
+
+fn default_listener_bind() -> SocketAddr {
+    "127.0.0.1:8100"
+        .parse()
+        .expect("valid Casework listener default")
+}
+
 /// Declares the trusted transport boundary for the runtime's plaintext HTTP listener.
 ///
 /// Production listeners require operator-controlled upstream TLS termination.
 /// Direct plaintext is limited to the explicit loopback-only development mode.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TlsTermination {
@@ -319,6 +346,7 @@ pub enum TlsTermination {
 }
 
 /// The operator-declared private network placement of the HTTP listener.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ListenerNetworkExposure {
@@ -327,24 +355,36 @@ pub enum ListenerNetworkExposure {
     ContainerPrivate,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SecretProvidersConfig {
-    pub file: FileSecretProviderConfig,
+    #[serde(default)]
+    pub file: Option<FileSecretProviderConfig>,
+    #[serde(default)]
+    pub environment: Option<EnvironmentSecretProviderConfig>,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentSecretProviderConfig {}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileSecretProviderConfig {
     pub root: PathBuf,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthenticationConfig {
     pub oidc: OidcConfig,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DatabaseConfig {
@@ -374,6 +414,7 @@ impl std::fmt::Debug for DatabaseConfig {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
@@ -383,14 +424,13 @@ pub struct OidcConfig {
     pub jwks_uri: Option<String>,
     #[serde(default)]
     pub jwks_source: OidcJwksSource,
-    #[serde(default = "default_principal_claim")]
-    pub principal_claim: String,
     #[serde(default = "default_scope_claim")]
     pub scope_claim: String,
     #[serde(default)]
     pub human_identity: HumanIdentityConfig,
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HumanIdentityConfig {
@@ -409,6 +449,7 @@ impl Default for HumanIdentityConfig {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum OidcJwksSource {
@@ -420,9 +461,6 @@ pub enum OidcJwksSource {
     },
 }
 
-fn default_principal_claim() -> String {
-    "sub".to_owned()
-}
 fn default_scope_claim() -> String {
     "registry_scopes".to_owned()
 }
@@ -433,42 +471,91 @@ fn default_human_identity_value() -> String {
     "human".to_owned()
 }
 
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuditConfig {
     pub path: PathBuf,
-    pub secret_ref: String,
+    pub hash_key_ref: String,
 }
 
 impl RuntimeConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<Self, RuntimeConfigError> {
+        if !path.as_ref().is_absolute() {
+            return Err(RuntimeConfigError::RelativeRuntimePath);
+        }
         let bytes = std::fs::read(path.as_ref()).map_err(RuntimeConfigError::Read)?;
-        let mut config: Self =
-            serde_norway::from_slice(&bytes).map_err(RuntimeConfigError::Parse)?;
-        let parent = path.as_ref().parent().unwrap_or_else(|| Path::new("."));
-        if config.project.is_relative() {
-            config.project = parent.join(&config.project);
+        let value: serde_norway::Value =
+            serde_norway::from_slice(&bytes).map_err(|source| RuntimeConfigError::Parse {
+                path: "/".to_owned(),
+                source,
+            })?;
+        if value
+            .get("authentication")
+            .and_then(|value| value.get("oidc"))
+            .and_then(|value| value.get("principalClaim"))
+            .is_some()
+        {
+            return Err(RuntimeConfigError::RemovedPrincipalClaim);
         }
-        if config.secret_providers.file.root.is_relative() {
-            config.secret_providers.file.root = parent.join(&config.secret_providers.file.root);
-        }
-        if config.audit.path.is_relative() {
-            config.audit.path = parent.join(&config.audit.path);
-        }
+        let deserializer = serde_norway::Deserializer::from_slice(&bytes);
+        let config: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            let path = error.path().to_string();
+            RuntimeConfigError::Parse {
+                path: if path.is_empty() {
+                    "/".to_owned()
+                } else {
+                    path
+                },
+                source: error.into_inner(),
+            }
+        })?;
         config.check()?;
         Ok(config)
     }
 
+    #[must_use]
+    pub fn policy_path(&self) -> PathBuf {
+        self.package.root.join(POLICY_FILE)
+    }
+
     pub fn check(&self) -> Result<(), RuntimeConfigError> {
-        let project = CaseworkProject::load(&self.project).map_err(RuntimeConfigError::Project)?;
-        let package_digest = verify_policy_package(&self.project, &project)
+        if self.api_version != RUNTIME_CONFIG_API_VERSION {
+            return Err(RuntimeConfigError::InvalidApiVersion);
+        }
+        if self.kind != RUNTIME_CONFIG_KIND {
+            return Err(RuntimeConfigError::InvalidKind);
+        }
+        if !self.package.root.is_absolute() {
+            return Err(RuntimeConfigError::RelativeOperatedPath("package.root"));
+        }
+        if self
+            .secret_providers
+            .file
+            .as_ref()
+            .is_some_and(|file| !file.root.is_absolute())
+        {
+            return Err(RuntimeConfigError::RelativeOperatedPath(
+                "secretProviders.file.root",
+            ));
+        }
+        if !self.audit.path.is_absolute() {
+            return Err(RuntimeConfigError::RelativeOperatedPath("audit.path"));
+        }
+        if self.secret_providers.file.is_none() && self.secret_providers.environment.is_none() {
+            return Err(RuntimeConfigError::InvalidSecretProviders);
+        }
+        self.validate_secret_references()?;
+        let policy_path = self.policy_path();
+        let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
+        let package_digest = verify_policy_package(&policy_path, &project)
             .map_err(RuntimeConfigError::PolicyPackage)?;
-        if self.tls_termination == TlsTermination::OperatorControlledUpstream
+        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
             && package_digest.is_none()
         {
             return Err(RuntimeConfigError::ProductionPolicyPackageRequired);
         }
-        validate_project_source_inputs(&self.project, &project)?;
+        validate_project_source_inputs(&policy_path, &project)?;
         let declared_sources = project
             .sources
             .iter()
@@ -480,12 +567,14 @@ impl RuntimeConfig {
             .map(String::as_str)
             .collect::<BTreeSet<_>>();
         if !valid_listener(
-            self.listen.ip(),
-            self.network_exposure,
-            self.tls_termination,
-        ) || self.authentication.oidc.issuer.is_empty()
+            self.listener.bind.ip(),
+            self.listener.network_exposure,
+            self.listener.tls_termination,
+        ) {
+            return Err(RuntimeConfigError::InvalidListener);
+        }
+        if self.authentication.oidc.issuer.is_empty()
             || self.authentication.oidc.audience.is_empty()
-            || self.authentication.oidc.principal_claim.is_empty()
             || self.authentication.oidc.scope_claim.is_empty()
             || self.authentication.oidc.human_identity.claim.is_empty()
             || self.authentication.oidc.human_identity.value.is_empty()
@@ -493,13 +582,17 @@ impl RuntimeConfig {
             || project.access_profiles.iter().any(|profile| {
                 profile.principal_claim == self.authentication.oidc.human_identity.claim
             })
-            || self.database.runtime_url_ref.is_empty()
-            || self.database.migration_url_ref.is_empty()
-            || self.audit.secret_ref.is_empty()
-            || self.sources.keys().any(String::is_empty)
-            || configured_sources != declared_sources
         {
-            return Err(RuntimeConfigError::Invalid);
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
+            return Err(RuntimeConfigError::InvalidDatabaseReference);
+        }
+        if self.audit.hash_key_ref.is_empty() {
+            return Err(RuntimeConfigError::InvalidAuditReference);
+        }
+        if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
+            return Err(RuntimeConfigError::InvalidSourceBindings);
         }
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
@@ -511,8 +604,59 @@ impl RuntimeConfig {
     /// Return the verified deployment policy identity, if this is a packaged
     /// local-development configuration. Production configurations always have one.
     pub fn policy_package_digest(&self) -> Result<Option<String>, RuntimeConfigError> {
-        let project = CaseworkProject::load(&self.project).map_err(RuntimeConfigError::Project)?;
-        verify_policy_package(&self.project, &project).map_err(RuntimeConfigError::PolicyPackage)
+        let policy_path = self.policy_path();
+        let project = CaseworkProject::load(&policy_path).map_err(RuntimeConfigError::Project)?;
+        verify_policy_package(&policy_path, &project).map_err(RuntimeConfigError::PolicyPackage)
+    }
+
+    fn validate_secret_references(&self) -> Result<(), RuntimeConfigError> {
+        let mut references = vec![
+            (
+                "database.runtimeUrlRef".to_owned(),
+                &self.database.runtime_url_ref,
+            ),
+            (
+                "database.migrationUrlRef".to_owned(),
+                &self.database.migration_url_ref,
+            ),
+            ("audit.hashKeyRef".to_owned(), &self.audit.hash_key_ref),
+        ];
+        if let Some(reference) = &self.database.trusted_root_certificate_ref {
+            references.push(("database.trustedRootCertificateRef".to_owned(), reference));
+        }
+        if let OidcJwksSource::Static { document_ref } = &self.authentication.oidc.jwks_source {
+            references.push((
+                "authentication.oidc.jwksSource.documentRef".to_owned(),
+                document_ref,
+            ));
+        }
+        for (source_id, binding) in &self.sources {
+            for (member, reference) in [
+                ("clientIdRef", &binding.client_id_ref),
+                ("clientAssertionKeyRef", &binding.client_assertion_key_ref),
+                ("webhookSecretRef", &binding.webhook_secret_ref),
+            ] {
+                references.push((format!("sources.{source_id}.{member}"), reference));
+            }
+            if let Some(reference) = &binding.trusted_root_certificates_ref {
+                references.push((
+                    format!("sources.{source_id}.trustedRootCertificatesRef"),
+                    reference,
+                ));
+            }
+        }
+        for (path, raw) in references {
+            let reference = SecretReference::parse(raw.clone())
+                .map_err(|_| RuntimeConfigError::InvalidSecretReference { path: path.clone() })?;
+            let enabled = match reference.provider() {
+                SecretProvider::File => self.secret_providers.file.is_some(),
+                SecretProvider::Environment => self.secret_providers.environment.is_some(),
+            };
+            if !enabled {
+                return Err(RuntimeConfigError::SecretProviderRequired { path });
+            }
+        }
+        Ok(())
     }
 
     pub async fn oidc_verifier(
@@ -699,16 +843,18 @@ sources:
         manifest
     }
 
-    fn operator_document(project: &Path, tls: &str) -> String {
-        serde_norway::to_string(&operator_value(project, tls)).unwrap()
+    fn operator_document(package: &Path, tls: &str) -> String {
+        serde_norway::to_string(&operator_value(package, tls)).unwrap()
     }
 
-    fn operator_value(project: &Path, tls: &str) -> serde_json::Value {
+    fn operator_value(package: &Path, tls: &str) -> serde_json::Value {
+        let root = package.parent().expect("package parent");
         serde_json::json!({
-            "project": project,
-            "listen": "127.0.0.1:8091",
-            "tlsTermination": tls,
-            "secretProviders": {"file": {"root": "secrets"}},
+            "apiVersion": RUNTIME_CONFIG_API_VERSION,
+            "kind": RUNTIME_CONFIG_KIND,
+            "package": {"root": package},
+            "listener": {"bind": "127.0.0.1:8100", "tlsTermination": tls},
+            "secretProviders": {"file": {"root": root.join("secrets")}, "environment": {}},
             "database": {
                 "runtimeUrlRef": "secret:env/RUNTIME",
                 "migrationUrlRef": "secret:env/MIGRATION"
@@ -717,7 +863,7 @@ sources:
                 "issuer": "https://identity.example.test",
                 "audience": "urn:example:casework"
             }},
-            "audit": {"path": "audit.ndjson", "secretRef": "secret:file/audit"},
+            "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "sources": {"professional": {
                 "baseUrl": "https://registry.example.test",
                 "readerProfile": "casework-reader",
@@ -766,10 +912,7 @@ sources:
         )
         .unwrap();
 
-        let mut document = operator_value(
-            &package.join("casework.yaml"),
-            "operator-controlled-upstream",
-        );
+        let mut document = operator_value(&package, "operator-controlled-upstream");
         document["authentication"]["oidc"]["jwksSource"] =
             serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
         let operator = root.path().join("operator.yaml");
@@ -872,10 +1015,7 @@ sources:
         let operator = root.path().join("operator.yaml");
         std::fs::write(
             &operator,
-            operator_document(
-                &package.join("casework.yaml"),
-                "operator-controlled-upstream",
-            ),
+            operator_document(&package, "operator-controlled-upstream"),
         )
         .unwrap();
         let config = RuntimeConfig::load(&operator).unwrap();
@@ -888,10 +1028,108 @@ sources:
         ));
         std::fs::write(
             &operator,
-            operator_document(&package.join("casework.yaml"), "development-loopback"),
+            operator_document(&package, "development-loopback"),
         )
         .unwrap();
         assert!(RuntimeConfig::load(&operator).is_ok());
+    }
+
+    #[test]
+    fn runtime_envelope_listener_and_operated_paths_are_strict() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let valid = operator_document(&package, "operator-controlled-upstream");
+        let defaulted_bind = valid.replace("  bind: 127.0.0.1:8100\n", "");
+        std::fs::write(&operator, &defaulted_bind).unwrap();
+        assert_eq!(
+            RuntimeConfig::load(&operator).unwrap().listener.bind.port(),
+            8100
+        );
+
+        assert!(matches!(
+            RuntimeConfig::load("runtime.yaml"),
+            Err(RuntimeConfigError::RelativeRuntimePath)
+        ));
+
+        std::fs::write(
+            &operator,
+            valid.replace(RUNTIME_CONFIG_API_VERSION, "registry.example/unsupported"),
+        )
+        .unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidApiVersion)
+        ));
+
+        std::fs::write(
+            &operator,
+            valid.replace("  tlsTermination: operator-controlled-upstream\n", ""),
+        )
+        .unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::Parse { .. })
+        ));
+    }
+
+    #[test]
+    fn removed_runtime_principal_claim_names_the_authored_replacement() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let document = operator_document(&package, "operator-controlled-upstream");
+        let document = document.replace(
+            "    audience: urn:example:casework\n",
+            "    audience: urn:example:casework\n    principalClaim: sub\n",
+        );
+        std::fs::write(&operator, document).unwrap();
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(&error, RuntimeConfigError::RemovedPrincipalClaim));
+        assert!(error
+            .to_string()
+            .contains("accessProfiles[].principalClaim"));
+    }
+
+    #[test]
+    fn environment_secret_references_require_the_explicit_provider() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let document = operator_document(&package, "operator-controlled-upstream")
+            .replace("  environment: {}\n", "");
+        std::fs::write(&operator, document).unwrap();
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::SecretProviderRequired { path }
+                if path == "database.runtimeUrlRef"
+        ));
+        assert_eq!(error.path(), "database.runtimeUrlRef");
+    }
+
+    #[test]
+    fn typed_parse_path_does_not_echo_the_rejected_value() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let runtime = root.path().join("runtime.yaml");
+        let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
+        let document = operator_document(&package, "operator-controlled-upstream").replace(
+            "  migrationUrlRef: secret:env/MIGRATION\n",
+            &format!("  migrationUrlRef: secret:env/MIGRATION\n  testOnlyPlaintext: {canary}\n"),
+        );
+        std::fs::write(&runtime, document).unwrap();
+        let error = RuntimeConfig::load(&runtime).unwrap_err();
+        assert_eq!(error.path(), "database.testOnlyPlaintext");
+        assert!(!error.to_string().contains(canary));
     }
 
     #[test]
@@ -925,10 +1163,7 @@ sources:
         let operator = root.path().join("operator.yaml");
         std::fs::write(
             &operator,
-            operator_document(
-                &package.join("casework.yaml"),
-                "operator-controlled-upstream",
-            ),
+            operator_document(&package, "operator-controlled-upstream"),
         )
         .unwrap();
         assert!(matches!(
@@ -988,8 +1223,28 @@ sources:
 pub enum RuntimeConfigError {
     #[error("the Casework runtime configuration could not be read")]
     Read(#[source] std::io::Error),
-    #[error("the Casework runtime configuration is not valid YAML")]
-    Parse(#[source] serde_norway::Error),
+    #[error("the Casework runtime configuration is not valid YAML at {path}")]
+    Parse {
+        path: String,
+        #[source]
+        source: serde_norway::Error,
+    },
+    #[error("unsupported Casework runtime apiVersion; expected registry.registrystack.org/casework-runtime/v1alpha1")]
+    InvalidApiVersion,
+    #[error("unsupported Casework runtime kind; expected CaseworkRuntimeConfig")]
+    InvalidKind,
+    #[error("the operated runtime path {0} must be absolute")]
+    RelativeOperatedPath(&'static str),
+    #[error("the selected Casework runtime configuration path must be absolute")]
+    RelativeRuntimePath,
+    #[error("secretProviders must explicitly enable file, environment, or both")]
+    InvalidSecretProviders,
+    #[error("{path} is not a valid secret reference")]
+    InvalidSecretReference { path: String },
+    #[error("{path} uses a secret provider that is not explicitly enabled")]
+    SecretProviderRequired { path: String },
+    #[error("authentication.oidc.principalClaim has been removed; configure accessProfiles[].principalClaim in casework.yaml")]
+    RemovedPrincipalClaim,
     #[error("the Casework project is invalid")]
     Project(#[source] registry_casework_core::ConfigLoadError),
     #[error("the Casework policy package is invalid")]
@@ -1000,10 +1255,47 @@ pub enum RuntimeConfigError {
     SourceDescription,
     #[error("the Casework runtime configuration is invalid")]
     Invalid,
+    #[error("listener is not valid for its declared TLS termination and network exposure")]
+    InvalidListener,
+    #[error("authentication.oidc is invalid or conflicts with accessProfiles[].principalClaim")]
+    InvalidOidc,
+    #[error(
+        "database.runtimeUrlRef and database.migrationUrlRef must be non-empty secret references"
+    )]
+    InvalidDatabaseReference,
+    #[error("audit.hashKeyRef must be a non-empty secret reference")]
+    InvalidAuditReference,
+    #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
+    InvalidSourceBindings,
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
     Oidc,
     #[error("the static OIDC signing keys could not be loaded: {0}")]
     OidcJwksSecret(String),
+}
+
+impl RuntimeConfigError {
+    #[must_use]
+    pub fn path(&self) -> &str {
+        match self {
+            Self::InvalidApiVersion => "apiVersion",
+            Self::InvalidKind => "kind",
+            Self::RelativeOperatedPath(path) => path,
+            Self::RelativeRuntimePath | Self::Read(_) => "/",
+            Self::Parse { path, .. } => path,
+            Self::InvalidSecretProviders => "secretProviders",
+            Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
+            Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
+            Self::InvalidOidc | Self::Oidc => "authentication.oidc",
+            Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",
+            Self::InvalidListener => "listener",
+            Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
+            Self::InvalidAuditReference => "audit.hashKeyRef",
+            Self::InvalidSourceBindings | Self::SourceDescription => "sources",
+            Self::Project(_) => "package.root/casework.yaml",
+            Self::PolicyPackage(_) | Self::ProductionPolicyPackageRequired => "package.root",
+            Self::Invalid => "/",
+        }
+    }
 }

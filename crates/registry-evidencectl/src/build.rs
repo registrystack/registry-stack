@@ -19,7 +19,7 @@ use clap::Args;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::{authoring, evidence_binary, source_import::ProjectLock};
+use crate::{authoring, evidence_binary, source_import::ProjectLock, OutputFormat};
 
 const MAX_TARGET_BYTES: u64 = 1024 * 1024;
 const MAX_EVIDENCE_CAPTURE_BYTES: u64 = 1024 * 1024;
@@ -71,23 +71,53 @@ pub(crate) struct TargetGovernance {
     authority_profiles: Value,
 }
 
+#[derive(Debug)]
+pub(crate) struct TargetDocumentDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) path: String,
+    pub(crate) message: &'static str,
+}
+
+impl std::fmt::Display for TargetDocumentDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message)
+    }
+}
+
+impl std::error::Error for TargetDocumentDiagnostic {}
+
 impl TargetGovernance {
     pub(crate) fn into_bundle(self) -> Result<Value> {
         if self.version != 1 {
-            bail!("deployment governance version must be 1");
+            return Err(TargetDocumentDiagnostic {
+                code: "evidence.target.governance-version",
+                path: "governance.yaml:/version".to_owned(),
+                message: "deployment governance version must be 1",
+            }
+            .into());
         }
         if !matches!(
             self.assurance_profile.as_str(),
             "local" | "production" | "evidence-grade"
         ) {
-            bail!("deployment governance assuranceProfile must be local, production, or evidence-grade");
+            return Err(TargetDocumentDiagnostic {
+                code: "evidence.target.assurance-profile",
+                path: "governance.yaml:/assuranceProfile".to_owned(),
+                message: "deployment governance assuranceProfile must be local, production, or evidence-grade",
+            }
+            .into());
         }
         if self
             .authority_profiles
             .as_object()
             .is_none_or(Map::is_empty)
         {
-            bail!("deployment governance requires at least one authority profile");
+            return Err(TargetDocumentDiagnostic {
+                code: "evidence.target.authority-profiles",
+                path: "governance.yaml:/authorityProfiles".to_owned(),
+                message: "deployment governance requires at least one authority profile",
+            }
+            .into());
         }
         let mut object = Map::from_iter([
             ("version".to_owned(), json!(self.version)),
@@ -117,12 +147,22 @@ impl TargetGovernance {
     }
 }
 
-pub fn run(args: BuildArgs) -> Result<ExitCode> {
+pub(crate) fn run_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
     let interruption = BuildInterruption::install()?;
-    run_inner(args, &interruption)
+    run_inner(args, &interruption, format, false)
 }
 
-fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCode> {
+pub(crate) fn run_package_with_format(args: BuildArgs, format: OutputFormat) -> Result<ExitCode> {
+    let interruption = BuildInterruption::install()?;
+    run_inner(args, &interruption, format, true)
+}
+
+fn run_inner(
+    args: BuildArgs,
+    interruption: &BuildInterruption,
+    format: OutputFormat,
+    require_deployable_assurance: bool,
+) -> Result<ExitCode> {
     interruption.check()?;
     reject_existing_output(&args.output)?;
     let _project_lock = ProjectLock::acquire(&args.project)
@@ -138,6 +178,21 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
         bail!("candidate output must remain outside the editable project");
     }
     let target = read_target_documents(&args.target)?;
+    if require_deployable_assurance
+        && target
+            .governed_bundle
+            .get("assuranceProfile")
+            .and_then(Value::as_str)
+            == Some("local")
+    {
+        return Err(TargetDocumentDiagnostic {
+            code: "evidence.package.production-profile-required",
+            path: "governance.yaml:/assuranceProfile".to_owned(),
+            message:
+                "evidencectl package requires a production or evidence-grade deployment target",
+        }
+        .into());
+    }
     let evidence_bin = crate::evidence_binary::resolve_matching(None)?;
 
     interruption.check()?;
@@ -167,14 +222,30 @@ fn run_inner(args: BuildArgs, interruption: &BuildInterruption) -> Result<ExitCo
     }
     publish(staging, &args.output)?;
 
+    if format == OutputFormat::Json {
+        println!(
+            "{}",
+            serde_json::to_string(&json!({
+                "operation": "package",
+                "status": "packaged",
+                "project": args.project,
+                "target": args.target,
+                "output": args.output,
+                "bundleRevision": revision,
+                "requiredSecrets": secret_references,
+                "proofBoundary": "offline deployment candidate compilation and fixture validation"
+            }))?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     println!("Bundle revision: {revision}");
     println!("Candidate: {}", args.output.display());
     for reference in secret_references {
         println!("Provision {SECRET_PREFIX}{reference}");
     }
     println!(
-        "Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --project {}` and the target-host Evidence check.",
-        args.output.display()
+        "Target runtime paths and deployment secret material remain unverified until `evidencectl doctor --runtime-config {}/runtime.yaml`.",
+        args.output.display(),
     );
     Ok(ExitCode::SUCCESS)
 }
@@ -300,13 +371,13 @@ impl BuildInterruption {
     }
 }
 
-struct TargetDocuments {
-    root: PathBuf,
-    runtime: Vec<u8>,
-    governed_bundle: Value,
+pub(crate) struct TargetDocuments {
+    pub(crate) root: PathBuf,
+    pub(crate) runtime: Vec<u8>,
+    pub(crate) governed_bundle: Value,
 }
 
-fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
+pub(crate) fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
     let root = plain_directory(target, "deployment target")?;
     let governance_bytes = read_plain_file(
         &root.join("governance.yaml"),
@@ -318,8 +389,15 @@ fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
         MAX_TARGET_BYTES,
         "deployment runtime",
     )?;
-    let governance: TargetGovernance = serde_norway::from_slice(&governance_bytes)
-        .context("deployment governance is not the closed Version 1 target shape")?;
+    let deserializer = serde_norway::Deserializer::from_slice(&governance_bytes);
+    let governance: TargetGovernance =
+        serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            TargetDocumentDiagnostic {
+                code: "evidence.target.governance-shape",
+                path: target_member_path("governance.yaml", &error.path().to_string()),
+                message: "deployment governance does not match the closed Version 1 target shape",
+            }
+        })?;
     Ok(TargetDocuments {
         root,
         runtime,
@@ -327,13 +405,21 @@ fn read_target_documents(target: &Path) -> Result<TargetDocuments> {
     })
 }
 
-struct TargetCompilation {
-    bundle_path: PathBuf,
-    fixture_paths: Vec<String>,
-    bundle: Value,
+fn target_member_path(artifact: &str, member: &str) -> String {
+    if member.is_empty() {
+        artifact.to_owned()
+    } else {
+        format!("{artifact}:/{member}")
+    }
 }
 
-fn compile_with_target(
+pub(crate) struct TargetCompilation {
+    pub(crate) bundle_path: PathBuf,
+    pub(crate) fixture_paths: Vec<String>,
+    pub(crate) bundle: Value,
+}
+
+pub(crate) fn compile_with_target(
     project: &Path,
     target: &TargetDocuments,
     staging_root: &Path,
@@ -418,7 +504,7 @@ fn run_bundle_check_report(
     if !output.status.success() {
         return runtime_failure(
             "Evidence rejected the generated deployment bundle",
-            &format!("evidencectl fixtures run --project {}", project.display()),
+            &format!("evidencectl test {}", project.display()),
             bounded_diagnostic(&output.stderr).as_deref(),
         );
     }
@@ -427,16 +513,29 @@ fn run_bundle_check_report(
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BundleCheckReport {
-    bundle_revision: String,
-    requirements: Vec<BundleCheckRequirement>,
+pub(crate) struct BundleCheckReport {
+    pub(crate) bundle_revision: String,
+    pub(crate) requirements: Vec<BundleCheckRequirement>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct BundleCheckRequirement {
-    id: String,
-    configuration_revision: String,
+pub(crate) struct BundleCheckRequirement {
+    pub(crate) id: String,
+    pub(crate) configuration_revision: String,
+}
+
+/// Ask the owning runtime to validate only a generated governed bundle.
+///
+/// This seam deliberately cannot execute fixtures or load a runtime document.
+/// It is used by the offline authoring check after the existing compiler has
+/// assembled an unpublished bundle.
+pub(crate) fn check_compiled_bundle(
+    evidence_bin: &Path,
+    bundle: &Path,
+    project: &Path,
+) -> Result<BundleCheckReport> {
+    run_bundle_check_report(evidence_bin, bundle, project, &BuildInterruption::passive())
 }
 
 fn parse_bundle_check_report(stdout: &[u8]) -> Result<BundleCheckReport> {
@@ -495,10 +594,7 @@ fn run_bundle_fixture(
     }
     runtime_failure(
         "Evidence rejected a deployment fixture",
-        &format!(
-            "evidencectl fixtures run --project {} --fixture {fixture}",
-            project.display()
-        ),
+        &format!("evidencectl test {} --fixture {fixture}", project.display()),
         None,
     )
 }
@@ -706,7 +802,7 @@ fn bundle_files(root: &Path) -> Result<Vec<PathBuf>> {
 
 fn reject_existing_output(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(_) => bail!("output already exists; evidencectl build never overwrites a candidate"),
+        Ok(_) => bail!("output already exists; evidencectl package never overwrites a candidate"),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error).context("inspecting the candidate output path"),
     }

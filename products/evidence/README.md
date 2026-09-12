@@ -94,19 +94,19 @@ response verification. It adds no Evidence semantics of its own. Its source
 remains covered by the same source-product and domain-neutrality checks as the
 runtime.
 
-`evidencectl new <dir> --openapi <file-or-url> --profile local` retains the
+`evidencectl init <dir> --openapi <file-or-url> --profile local` retains the
 OpenAPI document exactly as `source.openapi.yaml` and creates empty
 `questions/`, `derivations/`, and `fixtures/` directories. It always creates
 owner-only disposable local P-256 Evidence signing material plus distinct audit
 and subject-binding masters. The command does not select an API operation,
 invent a question, fixture, policy, production target, Mint configuration, or
-deployable bundle. `evidencectl dev` additionally creates session-scoped P-256
+deployable bundle. `evidencectl dev start` additionally creates session-scoped P-256
 Mint, caller, and holder keys so the local happy path needs no key ceremony.
 
-`evidencectl new <dir> --transport sqlite-extract --profile local` needs no
+`evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,
-question, derivation, schemas, and 13-case fixture. The first check is
-`evidencectl fixtures run --project <dir> --explain`, which compiles a private
+question, derivation, schemas, and 13-case fixture. First run
+`evidencectl check <dir>`, then `evidencectl test <dir> --explain`, which compiles a private
 bundle and delegates bundle validation and fixture evaluation to `evidence`.
 The starter creates no real extract, runtime, production target, or deployable
 bundle.
@@ -147,8 +147,19 @@ completed candidate to one target host. Targets are independent complete
 inputs, not overlays. Secret values and absolute secret paths do not belong in
 authored governance input.
 
-`evidencectl build --project <editable-project> --target <environment-target>
---output <new-candidate-directory>` is create-only. It reads regular files
+`evidencectl check <editable-project>` validates authoring offline and reports
+incomplete work as field-addressed findings. `--deny-findings` refuses any
+finding. Add `--target <environment-target>` to validate that explicit target's
+governance, runtime structure, public keys, source connections, and governed
+bundle. Adding `--production` requires the target itself to declare
+`production` or `evidence-grade` assurance. The check does not resolve secrets,
+contact dependencies, or run fixtures. `evidencectl explain <editable-project>`
+applies the same authoring validation and reports its status, findings, and
+revision with the authored inventory. Add `--target <environment-target>` to
+include that target's governance.
+
+`evidencectl package <editable-project> --target <environment-target> --output <new-candidate-directory>`
+is create-only. It reads regular files
 without following symlinks, compiles one closed bundle, and delegates its
 internal bundle-only check and every referenced fixture to the real `evidence`
 binary. No temporary signing key or other validation secret is generated. The
@@ -164,14 +175,22 @@ workload-local proxy, plus audit, subject-binding, and source secrets, then
 runs one grouped handoff:
 
 ```sh
-evidencectl doctor --project '<candidate>'
-evidencectl fixtures run --project '<candidate>'
+evidencectl doctor --runtime-config '<candidate>/runtime.yaml'
+evidencectl test '<candidate>'
 evidence --runtime '<candidate>/runtime.yaml' serve
 ```
 
+Doctor delegates the runtime-owned live startup dependency preflight without
+opening the public listener or sending an Evidence request. It can briefly hold
+the audit destination's operational lock while checking it. Fixture testing is
+offline and does not establish source reachability. Evidencectl uses human
+output by default; add the global `--format json` for machine-readable reports.
+Its common exit classes are `0` success, `1` refusal, `2` usage, and `3`
+operational failure.
+
 An existing OIDC issuer and Registry Mint are equal issuer choices from
 Evidence's perspective. Mint remains separately authored and checked with
-`mint check`. When selected, `evidencectl doctor --mint-config <mint.yaml>`
+`mint check`. When selected, `evidencectl artifact inspect <candidate> --mint-config <mint.yaml>`
 performs only a read-only mechanical comparison of issuer, JWKS URI, audience,
 algorithm, token type, and configured claim names. It does not register a
 client, decide authority, copy Mint files, or mint a token.

@@ -499,15 +499,19 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
 /// The operator configuration the supervised `casework` children read.
 ///
 /// It binds the authored `casework.yaml` the reader edits, not a copy, so
-/// `caseworkctl doctor <project> --operator <this file>` reports on the same
+/// `caseworkctl doctor --runtime-config <this file>` reports on the same
 /// policy the reader's `caseworkctl check` reads.
 pub(super) fn operator(state: &State) -> Value {
     let root = state.root();
     json!({
-        "project": state.project.join("casework.yaml"),
-        "listen": format!("127.0.0.1:{}", state.casework_port),
-        "tlsTermination": "development-loopback",
-        "networkExposure": "private-address",
+        "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
+        "kind": registry_casework::RUNTIME_CONFIG_KIND,
+        "package": {"root": state.project},
+        "listener": {
+            "bind": format!("127.0.0.1:{}", state.casework_port),
+            "tlsTermination": "development-loopback",
+            "networkExposure": "private-address"
+        },
         "secretProviders": {"file": {"root": root.join("secrets")}},
         "database": {
             "runtimeUrlRef": "secret:file/runtime-database-url",
@@ -526,8 +530,9 @@ pub(super) fn operator(state: &State) -> Value {
         }},
         "audit": {
             "path": root.join("audit/casework.ndjson"),
-            "secretRef": "secret:file/casework-audit-key"
-        }
+            "hashKeyRef": "secret:file/casework-audit-key"
+        },
+        "sources": {}
     })
 }
 

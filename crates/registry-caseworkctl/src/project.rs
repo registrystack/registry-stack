@@ -12,6 +12,7 @@ use registry_casework_core::{
 use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Value};
 use std::fs;
+use std::os::unix::fs::DirBuilderExt as _;
 use std::path::{Path, PathBuf};
 
 const CASEWORK_YAML: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
@@ -47,50 +48,44 @@ queues:
     label: Licence corrections
 "#;
 
-const OPERATOR_YAML: &str = r#"project: casework.yaml
-listen: 127.0.0.1:8091
-tlsTermination: development-loopback
-networkExposure: private-address
-secretProviders:
-  file:
-    # Every secret:file reference resolves under this root. A secret file must
-    # be owner-only text with no NUL byte, such as `openssl rand -hex 32`
-    # (GitHub issue #976), and carry mode 0400 or 0600.
-    root: secrets
-database:
-  runtimeUrlRef: secret:env/CASEWORK_DATABASE_URL
-  migrationUrlRef: secret:env/CASEWORK_MIGRATION_DATABASE_URL
-authentication:
-  oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:casework
-    scopeClaim: registry_scopes
-    # Signing keys come from issuer discovery by default. Declare the static
-    # alternative instead when the runtime cannot reach the issuer's discovery
-    # document, when the deployment is air-gapped, or when a test issuer's keys
-    # are pinned by hand. It does no rotation of its own: rolling a key means
-    # replacing the referenced document and restarting Casework.
-    # jwksSource:
-    #   kind: static
-    #   documentRef: secret:file/jwks.json
-    # The trusted issuer must add this claim only to interactive human sessions.
-    # Client-credentials and other service tokens must omit it or use another value.
-    humanIdentity:
-      claim: registry_actor_kind
-      value: human
-audit:
-  path: state/audit.ndjson
-  secretRef: secret:file/casework-audit-key
-sources:
-  professional-register:
-    baseUrl: https://registry.example.test
-    readerProfile: casework-reader
-    tokenEndpoint: https://identity.example.test/realms/registry/token
-    clientIdRef: secret:file/breg-reader-client-id
-    clientAssertionKeyRef: secret:file/breg-reader-key
-    webhookSecretRef: secret:file/breg-casework-webhook
-    eventSource: urn:registrystack:registry:professional-licences:instance:professional-licences-starter
-"#;
+const RUNTIME_SCHEMA: &str =
+    include_str!("../../../products/casework/generated/runtime/runtime.schema.json");
+
+fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
+    let package_root = if project.is_absolute() {
+        project.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(project)
+    };
+    let mut document = json!({
+        "apiVersion": "registry.registrystack.org/casework-runtime/v1alpha1",
+        "kind": "CaseworkRuntimeConfig",
+        "package": {"root": &package_root},
+        "listener": {"bind": "127.0.0.1:8100", "tlsTermination": "development-loopback", "networkExposure": "private-address"},
+        "secretProviders": {"file": {"root": package_root.join("secrets")}},
+        "database": {"runtimeUrlRef": "secret:file/runtime-database-url", "migrationUrlRef": "secret:file/migration-database-url"},
+        "authentication": {"oidc": {
+            "issuer": "https://identity.example.test/realms/registry",
+            "audience": "urn:example:casework",
+            "scopeClaim": "registry_scopes",
+            "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
+        }},
+        "audit": {"path": package_root.join("state/audit.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
+        "sources": {}
+    });
+    if include_source {
+        document["sources"]["professional-register"] = json!({
+            "baseUrl": "https://registry.example.test",
+            "readerProfile": "casework-reader",
+            "tokenEndpoint": "https://identity.example.test/realms/registry/token",
+            "clientIdRef": "secret:file/breg-reader-client-id",
+            "clientAssertionKeyRef": "secret:file/breg-reader-key",
+            "webhookSecretRef": "secret:file/breg-casework-webhook",
+            "eventSource": "urn:registrystack:registry:professional-licences:instance:professional-licences-starter"
+        });
+    }
+    serde_norway::to_string(&document).context("rendering runtime.example.yaml")
+}
 
 #[cfg(test)]
 const BREG_SOURCE_DESCRIPTION: &str = r#"{
@@ -278,11 +273,13 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "professional-review" => (CASEWORK_YAML, "professional-review.yaml", FIXTURE, PROFESSIONAL_REVIEW_DEV_CLIENTS,
             "Run caseworkctl source add with the authored BReg project and --source-id professional-register."),
         "standalone-decision" => (STANDALONE_YAML, "standalone-decision.yaml", STANDALONE_FIXTURE, STANDALONE_DEV_CLIENTS,
-            "Run caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."),
+            "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."),
         _ => bail!("unknown template {template:?}; available templates: professional-review, standalone-decision"),
     };
-    if project.exists() {
-        bail!("destination already exists; init never overwrites a project");
+    match fs::symlink_metadata(project) {
+        Ok(_) => bail!("destination already exists; init never overwrites a project"),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("checking the project destination"),
     }
     let parent = project
         .parent()
@@ -294,16 +291,30 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         .context("creating project staging directory")?;
     fs::create_dir(staging.path().join("fixtures"))?;
     fs::create_dir(staging.path().join("sources"))?;
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(staging.path().join(".casework"))?;
+    fs::create_dir(staging.path().join(".casework/schemas"))?;
+    fs::create_dir(staging.path().join(".vscode"))?;
     fs::write(staging.path().join("casework.yaml"), project_yaml)?;
-    let operator_yaml = if template == "standalone-decision" {
-        OPERATOR_YAML
-            .split("\nsources:")
-            .next()
-            .unwrap_or(OPERATOR_YAML)
-    } else {
-        OPERATOR_YAML
-    };
-    fs::write(staging.path().join("operator.example.yaml"), operator_yaml)?;
+    fs::write(
+        staging.path().join("runtime.example.yaml"),
+        runtime_example(project, template == "professional-review")?,
+    )?;
+    fs::write(
+        staging.path().join(".casework/schemas/runtime.schema.json"),
+        RUNTIME_SCHEMA,
+    )?;
+    let mut editor_settings = serde_json::to_vec_pretty(&json!({
+        "yaml.schemas": {
+            "./.casework/schemas/runtime.schema.json": ["runtime.example.yaml", "runtime.yaml"]
+        }
+    }))?;
+    editor_settings.push(b'\n');
+    fs::write(
+        staging.path().join(".vscode/settings.json"),
+        editor_settings,
+    )?;
     fs::write(staging.path().join("fixtures").join(fixture_name), fixture)?;
     fs::write(staging.path().join("dev-clients.yaml"), dev_clients)?;
     let staging_path = staging.keep();
@@ -314,17 +325,50 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "command": "init",
         "template": template,
         "project": project,
-        "created": ["casework.yaml", "operator.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/"],
+        "created": ["casework.yaml", "runtime.example.yaml", "dev-clients.yaml", format!("fixtures/{fixture_name}"), "sources/", ".casework/schemas/runtime.schema.json", ".vscode/settings.json"],
         "next": [next]
     }))
 }
 
-pub(super) fn check(project: &Path) -> Result<Value> {
+#[derive(Debug)]
+pub(super) struct DeniedFindings(pub Vec<Value>);
+
+impl std::fmt::Display for DeniedFindings {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "the Casework authoring findings were denied")
+    }
+}
+
+impl std::error::Error for DeniedFindings {}
+
+fn missing_source_findings(project: &Path, policy: &CaseworkProject) -> Vec<Value> {
+    policy
+        .sources
+        .iter()
+        .enumerate()
+        .filter(|(_, source)| !project.join(&source.description).is_file())
+        .map(|(index, source)| json!({
+            "severity": "finding",
+            "code": "casework.source-description.missing",
+            "artifact": "casework_project",
+            "path": format!("casework.yaml:/sources/{index}/description"),
+            "message": format!("source {} has no imported source description", source.id),
+            "suggestedAction": format!("Run caseworkctl source add BREG_PROJECT --project {} --source-id {} --apply.", project.display(), source.id),
+        }))
+        .collect()
+}
+
+pub(super) fn check(project: &Path, production: bool, deny_findings: bool) -> Result<Value> {
     let policy = load_and_check_policy(project)?;
+    let findings = missing_source_findings(project, &policy);
+    if (production || deny_findings) && !findings.is_empty() {
+        return Err(DeniedFindings(findings).into());
+    }
     if policy.sources.is_empty() {
         return Ok(json!({
             "ok": true,
             "command": "check",
+            "status": "complete",
             "project": project,
             "effective": {
                 "projectId": policy.casework.id,
@@ -334,15 +378,13 @@ pub(super) fn check(project: &Path) -> Result<Value> {
                 "inbox": policy.inbox,
                 "sourceConnections": 0
             },
+            "profile": if production { "production" } else { "authoring" },
+            "findings": findings,
             "networkAccess": false,
             "databaseAccess": false
         }));
     }
-    let source_description = if policy
-        .sources
-        .iter()
-        .all(|source| project.join(&source.description).is_file())
-    {
+    let source_description = if findings.is_empty() {
         check_source_descriptions(project)?;
         crate::policy::check(project, &policy)?;
         "checked"
@@ -352,10 +394,18 @@ pub(super) fn check(project: &Path) -> Result<Value> {
     let source = &policy.sources[0];
     let request = &source.requests[0];
     let inbox = serde_json::to_value(&policy.inbox)?;
+    let status = if findings.is_empty() {
+        "complete"
+    } else {
+        "incomplete"
+    };
     Ok(json!({
         "ok": true,
         "command": "check",
+        "status": status,
         "project": project,
+        "profile": if production { "production" } else { "authoring" },
+        "findings": findings,
         "effective": {
             "projectId": policy.casework.id,
             "sourceId": source.id,
@@ -376,7 +426,7 @@ pub(super) fn check(project: &Path) -> Result<Value> {
 }
 
 pub(super) fn test(project: &Path) -> Result<Value> {
-    let checked = check(project)?;
+    let checked = check(project, false, false)?;
     let policy = load_and_check_policy(project)?;
     let effective = &checked["effective"];
     let fixture_dir = project.join("fixtures");
@@ -411,7 +461,11 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         "ok": true,
         "command": "test",
         "project": project,
+        "authoringStatus": checked["status"],
+        "findings": checked["findings"],
         "fixtures": reports,
+        "proofBoundary": "offline_synthetic",
+        "productionClosure": false,
         "networkAccess": false,
         "databaseAccess": false
     }))
@@ -515,7 +569,7 @@ pub(super) fn package(project: &Path, output: &Path) -> Result<Value> {
         "output": output,
         "policyDigest": manifest.policy_digest,
         "files": manifest.files,
-        "operatorConfigurationIncluded": false,
+        "runtimeConfigurationIncluded": false,
         "secretsIncluded": false,
         "networkAccess": false,
         "databaseAccess": false,
@@ -638,8 +692,8 @@ fn secret_references(config: &RuntimeConfig) -> Vec<(String, &str)> {
         ));
     }
     references.push((
-        "audit.secretRef".to_owned(),
-        config.audit.secret_ref.as_str(),
+        "audit.hashKeyRef".to_owned(),
+        config.audit.hash_key_ref.as_str(),
     ));
     for (id, binding) in &config.sources {
         for (setting, reference) in [
@@ -695,7 +749,11 @@ fn secret_file_refusal(
 /// reference served by another provider is reported as outside this check
 /// rather than silently omitted.
 fn secret_file_checks(config: &RuntimeConfig, resolver: &SecretResolver) -> Result<Vec<Value>> {
-    let root = &config.secret_providers.file.root;
+    let file_root = config
+        .secret_providers
+        .file
+        .as_ref()
+        .map(|provider| provider.root.as_path());
     let mut checks = Vec::new();
     let mut refused = Vec::new();
     let references = secret_references(config)
@@ -732,24 +790,31 @@ fn secret_file_checks(config: &RuntimeConfig, resolver: &SecretResolver) -> Resu
         bail!(
             "the operator configuration names secret files this runtime cannot read: {}. Correct them under {}",
             refused.join("; "),
-            root.display()
+            file_root
+                .map(|root| root.display().to_string())
+                .unwrap_or_else(|| "the disabled file secret provider".to_owned())
         );
     }
     Ok(checks)
 }
 
-pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
-    let (project, operator, config) = load_runtime(project, operator)?;
-    check_source_descriptions(&project)?;
+pub(super) fn doctor(runtime_config: &Path) -> Result<Value> {
+    let config =
+        RuntimeConfig::load(runtime_config).context("loading Casework runtime configuration")?;
+    let runtime_config =
+        fs::canonicalize(runtime_config).context("resolving Casework runtime configuration")?;
+    let package_root = fs::canonicalize(&config.package.root)
+        .context("resolving the configured Casework package root")?;
+    check_source_descriptions(&package_root)?;
     let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
     let secret_files = secret_file_checks(&config, &resolver)?;
     // Resolve the audit key as a readiness check without retaining or reporting
     // its bytes. Database references are resolved inside PostgresStore.
     resolver
-        .resolve(&config.audit.secret_ref)
+        .resolve(&config.audit.hash_key_ref)
         .context("the audit secret is unavailable")?;
     let runtime = async_runtime()?;
-    let policy = load_and_check_policy(&project)?;
+    let policy = load_and_check_policy(&package_root)?;
     if config.sources.len() != policy.sources.len() {
         bail!("operator source bindings do not exactly match the authored Casework sources");
     }
@@ -760,7 +825,7 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
             .get(&source.id)
             .with_context(|| format!("operator source binding {} is missing", source.id))?;
         let adapter = binding
-            .build_adapter(source, &project, &resolver)
+            .build_adapter(source, &package_root, &resolver)
             .with_context(|| format!("source binding {} is invalid", source.id))?;
         runtime
             .block_on(adapter.verify_reader_readiness())
@@ -790,8 +855,8 @@ pub(super) fn doctor(project: &Path, operator: Option<&Path>) -> Result<Value> {
     Ok(json!({
         "ok": true,
         "command": "doctor",
-        "project": project,
-        "operator": operator,
+        "runtimeConfig": runtime_config,
+        "packageRoot": package_root,
         "checks": {
             "configuration": "ready",
             "secretFiles": "ready",
@@ -817,9 +882,10 @@ fn doctor_source_check(source_id: &str) -> Value {
     })
 }
 
-pub(super) fn db_migrate(project: &Path, operator: Option<&Path>) -> Result<Value> {
-    let (project, operator, config) = load_runtime(project, operator)?;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+pub(super) fn db_migrate(project: &Path, runtime_config: Option<&Path>) -> Result<Value> {
+    let selected = load_runtime(project, runtime_config)?;
+    let config = &selected.config;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     async_runtime()?
@@ -828,22 +894,23 @@ pub(super) fn db_migrate(project: &Path, operator: Option<&Path>) -> Result<Valu
     Ok(json!({
         "ok": true,
         "command": "db migrate",
-        "project": project,
-        "operator": operator,
+        "project": selected.workspace,
+        "runtimeConfig": selected.runtime_config,
         "status": "migrated"
     }))
 }
 
 pub(super) fn retention_erase(
     project: &Path,
-    operator: Option<&Path>,
+    runtime_config: Option<&Path>,
     source_id: String,
     request_kind: String,
     request_id: String,
     apply: bool,
 ) -> Result<Value> {
-    let (project, operator, config) = load_runtime(project, operator)?;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let selected = load_runtime(project, runtime_config)?;
+    let config = &selected.config;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     let selector = SourceRetentionSelector {
@@ -858,31 +925,36 @@ pub(super) fn retention_erase(
         runtime.block_on(store.preview_source_retention(&selector))
     }
     .context("processing Casework source retention")?;
-    Ok(source_retention_output(&project, &operator, report))
+    Ok(source_retention_output(
+        &selected.workspace,
+        &selected.runtime_config,
+        report,
+    ))
 }
 
 fn source_retention_output(
     project: &Path,
-    operator: &Path,
+    runtime_config: &Path,
     report: SourceRetentionReport,
 ) -> Value {
     json!({
         "ok": true,
         "command": "retention erase",
         "project": project,
-        "operator": operator,
+        "runtimeConfig": runtime_config,
         "report": report,
     })
 }
 
 pub(super) fn attempt_settle(
     project: &Path,
-    operator: Option<&Path>,
+    runtime_config: Option<&Path>,
     settlement: AttemptSettlement,
     apply: bool,
 ) -> Result<Value> {
-    let (project, operator, config) = load_runtime(project, operator)?;
-    let resolver = secret_resolver(&config).context("configuring Casework secret providers")?;
+    let selected = load_runtime(project, runtime_config)?;
+    let config = &selected.config;
+    let resolver = secret_resolver(config).context("configuring Casework secret providers")?;
     let store = PostgresStore::connect_migration(&config.database, &resolver)
         .context("the Casework migration database configuration is invalid")?;
     let runtime = async_runtime()?;
@@ -892,48 +964,55 @@ pub(super) fn attempt_settle(
         runtime.block_on(store.preview_attempt_settlement(&settlement))
     }
     .context("settling the Casework source attempt")?;
-    Ok(attempt_settlement_output(&project, &operator, report))
+    Ok(attempt_settlement_output(
+        &selected.workspace,
+        &selected.runtime_config,
+        report,
+    ))
 }
 
 fn attempt_settlement_output(
     project: &Path,
-    operator: &Path,
+    runtime_config: &Path,
     report: AttemptSettlementReport,
 ) -> Value {
     json!({
         "ok": true,
         "command": "attempt settle",
         "project": project,
-        "operator": operator,
+        "runtimeConfig": runtime_config,
         "report": report,
     })
 }
 
-pub(super) fn operator_path(project: &Path, requested: Option<&Path>) -> PathBuf {
+fn runtime_config_path(project: &Path, requested: Option<&Path>) -> PathBuf {
     requested
         .map(Path::to_path_buf)
-        .unwrap_or_else(|| project.join("operator.yaml"))
+        .unwrap_or_else(|| project.join("runtime.yaml"))
 }
 
-fn load_runtime(
-    project: &Path,
-    requested: Option<&Path>,
-) -> Result<(PathBuf, PathBuf, RuntimeConfig)> {
-    let project = fs::canonicalize(project).context("resolving Casework project")?;
-    load_and_check_policy(&project)?;
-    let operator = fs::canonicalize(operator_path(&project, requested))
-        .context("resolving Casework operator configuration")?;
-    let config =
-        RuntimeConfig::load(&operator).context("loading Casework operator configuration")?;
-    if fs::canonicalize(&config.project).context("resolving operator project binding")?
-        != project
-            .join("casework.yaml")
-            .canonicalize()
-            .context("resolving casework.yaml")?
-    {
-        bail!("operator configuration is bound to a different Casework project");
-    }
-    Ok((project, operator, config))
+struct RuntimeSelection {
+    workspace: PathBuf,
+    runtime_config: PathBuf,
+    config: RuntimeConfig,
+}
+
+fn load_runtime(project: &Path, requested: Option<&Path>) -> Result<RuntimeSelection> {
+    let workspace =
+        fs::canonicalize(project).context("resolving Casework development workspace")?;
+    let runtime_config = fs::canonicalize(runtime_config_path(&workspace, requested))
+        .context("resolving Casework runtime configuration")?;
+    let mut config =
+        RuntimeConfig::load(&runtime_config).context("loading Casework runtime configuration")?;
+    let package_root = fs::canonicalize(&config.package.root)
+        .context("resolving the configured Casework package root")?;
+    load_and_check_policy(&package_root)?;
+    config.package.root = package_root;
+    Ok(RuntimeSelection {
+        workspace,
+        runtime_config,
+        config,
+    })
 }
 
 fn check_source_descriptions(project: &Path) -> Result<()> {
@@ -984,7 +1063,7 @@ mod tests {
     fn source_retention_output_is_count_only() {
         let output = source_retention_output(
             Path::new("/casework"),
-            Path::new("/casework/operator.yaml"),
+            Path::new("/casework/runtime.yaml"),
             SourceRetentionReport {
                 selector: SourceRetentionSelector {
                     source_id: "registry".into(),
@@ -1021,7 +1100,7 @@ mod tests {
         let item_id: uuid::Uuid = "16fd2706-8baf-433b-82eb-8c7fada847da".parse().unwrap();
         let output = attempt_settlement_output(
             Path::new("/casework"),
-            Path::new("/casework/operator.yaml"),
+            Path::new("/casework/runtime.yaml"),
             AttemptSettlementReport {
                 attempt_id,
                 item_id,
@@ -1038,7 +1117,7 @@ mod tests {
 
         assert_eq!(output["ok"], true);
         assert_eq!(output["command"], "attempt settle");
-        assert_eq!(output["operator"], "/casework/operator.yaml");
+        assert_eq!(output["runtimeConfig"], "/casework/runtime.yaml");
         assert_eq!(
             output["report"],
             json!({
@@ -1194,17 +1273,15 @@ mod tests {
         let audit = secrets.join("casework-audit-key");
         fs::write(&audit, "0".repeat(64)).unwrap();
         fs::set_permissions(&audit, fs::Permissions::from_mode(0o600)).unwrap();
-        let operator = project.join("operator.yaml");
-        fs::write(
-            &operator,
-            OPERATOR_YAML
-                .split("\nsources:")
-                .next()
-                .unwrap()
-                .replace("listen: 127.0.0.1:8091", "listen: 127.0.0.1:8092"),
-        )
-        .unwrap();
-        let config = RuntimeConfig::load(&operator).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
         let resolver = secret_resolver(&config).unwrap();
 
         let checks = secret_file_checks(&config, &resolver).unwrap();
@@ -1217,7 +1294,7 @@ mod tests {
             [
                 "database.runtimeUrlRef",
                 "database.migrationUrlRef",
-                "audit.secretRef"
+                "audit.hashKeyRef"
             ]
         );
         // The example binds its database through the environment provider.
@@ -1230,7 +1307,7 @@ mod tests {
 
         fs::set_permissions(&audit, fs::Permissions::from_mode(0o644)).unwrap();
         let refusal = format!("{:#}", secret_file_checks(&config, &resolver).unwrap_err());
-        assert!(refusal.contains("audit.secretRef"), "{refusal}");
+        assert!(refusal.contains("audit.hashKeyRef"), "{refusal}");
         assert!(refusal.contains("0400 or 0600"), "{refusal}");
     }
 
@@ -1247,22 +1324,13 @@ mod tests {
         fs::write(&migration, "postgresql://migration.example.test/casework").unwrap();
         fs::set_permissions(&migration, fs::Permissions::from_mode(0o600)).unwrap();
         std::os::unix::fs::symlink(&actual_secrets, project.join("secrets")).unwrap();
-        let operator = project.join("operator.yaml");
-        let document = OPERATOR_YAML
-            .split("\nsources:")
-            .next()
-            .unwrap()
-            .replace("listen: 127.0.0.1:8091", "listen: 127.0.0.1:8092")
-            .replace(
-                "secret:env/CASEWORK_MIGRATION_DATABASE_URL",
-                "secret:file/migration-database-url",
-            )
-            .replace(
-                "secret:file/casework-audit-key",
-                "secret:env/CASEWORK_AUDIT_KEY",
-            );
-        fs::write(&operator, document).unwrap();
-        let config = RuntimeConfig::load(&operator).unwrap();
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["audit"]["hashKeyRef"] = json!("secret:env/CASEWORK_AUDIT_KEY");
+        fs::write(&runtime_config, serde_norway::to_string(&document).unwrap()).unwrap();
+        let config = RuntimeConfig::load(&runtime_config).unwrap();
         let resolver = secret_resolver(&config).unwrap();
         let migration = SecretReference::parse(&config.database.migration_url_ref).unwrap();
 
@@ -1270,7 +1338,7 @@ mod tests {
             resolver.resolve_reference(&migration).unwrap_err(),
             SecretError::Unavailable
         );
-        let refusal = format!("{:#}", doctor(&project, Some(&operator)).unwrap_err());
+        let refusal = format!("{:#}", doctor(&runtime_config).unwrap_err());
         assert!(refusal.contains("database.migrationUrlRef"), "{refusal}");
         assert!(
             refusal.contains("missing or unreadable under the configured file secret root"),
@@ -1290,12 +1358,14 @@ mod tests {
         let audit = secrets.join("casework-audit-key");
         fs::write(&audit, "0".repeat(64)).unwrap();
         fs::set_permissions(&audit, fs::Permissions::from_mode(0o600)).unwrap();
-        let operator = project.join("operator.yaml");
-        let valid = OPERATOR_YAML
-            .split("\nsources:")
-            .next()
-            .unwrap()
-            .replace("listen: 127.0.0.1:8091", "listen: 127.0.0.1:8092");
+        let runtime_config = project.join("runtime.example.yaml");
+        let mut document: Value =
+            serde_norway::from_str(&runtime_example(&project, false).unwrap()).unwrap();
+        document["secretProviders"]["environment"] = json!({});
+        document["database"]["runtimeUrlRef"] = json!("secret:env/CASEWORK_DATABASE_URL");
+        document["database"]["migrationUrlRef"] =
+            json!("secret:env/CASEWORK_MIGRATION_DATABASE_URL");
+        let valid = serde_norway::to_string(&document).unwrap();
 
         for (setting, authored, malformed) in [
             (
@@ -1309,38 +1379,76 @@ mod tests {
                 "secret:file/../token",
             ),
         ] {
-            fs::write(&operator, valid.replace(authored, malformed)).unwrap();
+            fs::write(&runtime_config, valid.replace(authored, malformed)).unwrap();
 
-            let refusal = format!("{:#}", doctor(&project, Some(&operator)).unwrap_err());
-            assert!(refusal.contains(setting), "{refusal}");
+            let error = doctor(&runtime_config).unwrap_err();
+            let runtime_error = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<registry_casework::RuntimeConfigError>());
             assert!(
-                refusal.contains("secret:env/NAME or secret:file/name"),
+                matches!(
+                    runtime_error,
+                    Some(registry_casework::RuntimeConfigError::InvalidSecretReference { path })
+                        if path == setting
+                ),
+                "{error:#}"
+            );
+            let refusal = format!("{error:#}");
+            assert!(
+                refusal.contains(&format!("{setting} is not a valid secret reference")),
                 "{refusal}"
             );
-            assert!(refusal.contains("secret reference is invalid"), "{refusal}");
+            assert!(!refusal.contains(malformed), "{refusal}");
         }
     }
 
     #[test]
     fn standalone_starter_checks_real_display_schema_without_a_source() {
+        use std::os::unix::fs::PermissionsExt as _;
+
         let root = tempfile::tempdir().unwrap();
         let project = root.path().join("standalone");
         init(&project, "standalone-decision").unwrap();
-        let checked = check(&project).unwrap();
+        assert_eq!(
+            fs::metadata(project.join(".casework"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "dev state must be created under an owner-only parent"
+        );
+        let checked = check(&project, false, false).unwrap();
         assert_eq!(
             load_and_check_policy(&project).unwrap().hosted_kinds,
             vec![registry_casework_core::standalone_decision_starter_kind()]
         );
         assert_eq!(checked["effective"]["mode"], "standalone");
         assert_eq!(checked["effective"]["sourceConnections"], 0);
-        test(&project).unwrap();
+        assert_eq!(checked["status"], "complete");
+        let tested = test(&project).unwrap();
+        assert_eq!(tested["authoringStatus"], "complete");
+        assert_eq!(tested["findings"], json!([]));
+        assert_eq!(tested["proofBoundary"], "offline_synthetic");
+        assert_eq!(tested["productionClosure"], false);
         let fixture = project.join("fixtures/standalone-decision.yaml");
         let mut value = load_yaml(&fixture, "fixture").unwrap();
         value["hosted"]["display"]["undeclared"] = json!("synthetic");
         fs::write(&fixture, serde_norway::to_string(&value).unwrap()).unwrap();
         assert!(test(&project).is_err());
-        let operator = RuntimeConfig::load(project.join("operator.example.yaml")).unwrap();
-        assert!(operator.sources.is_empty());
+        let runtime = RuntimeConfig::load(project.join("runtime.example.yaml")).unwrap();
+        assert!(runtime.sources.is_empty());
+        assert_eq!(
+            fs::read_to_string(project.join(".casework/schemas/runtime.schema.json")).unwrap(),
+            RUNTIME_SCHEMA
+        );
+        let settings: Value =
+            serde_json::from_slice(&fs::read(project.join(".vscode/settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(
+            settings["yaml.schemas"]["./.casework/schemas/runtime.schema.json"],
+            json!(["runtime.example.yaml", "runtime.yaml"])
+        );
     }
 
     #[test]
@@ -1356,11 +1464,11 @@ mod tests {
             .as_str()
             .unwrap()
             .starts_with("sha256:"));
-        assert_eq!(report["operatorConfigurationIncluded"], false);
+        assert_eq!(report["runtimeConfigurationIncluded"], false);
         assert_eq!(report["secretsIncluded"], false);
         assert!(output.join("casework.yaml").is_file());
         assert!(output.join(POLICY_PACKAGE_MANIFEST_FILE).is_file());
-        assert!(!output.join("operator.example.yaml").exists());
+        assert!(!output.join("runtime.example.yaml").exists());
         assert!(!output.join("fixtures").exists());
         assert!(package(&project, &output).is_err());
 
@@ -1402,13 +1510,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_operator_config_loads_through_runtime_contract() {
-        assert_eq!(
-            OPERATOR_YAML,
-            include_str!(
-                "../../../products/casework/examples/professional-review/operator.example.yaml"
-            )
-        );
+    fn generated_runtime_config_loads_through_runtime_contract() {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("casework.yaml"), CASEWORK_YAML).unwrap();
         fs::create_dir(directory.path().join("sources")).unwrap();
@@ -1417,10 +1519,10 @@ mod tests {
             BREG_SOURCE_DESCRIPTION,
         )
         .unwrap();
-        let operator = directory.path().join("operator.yaml");
-        fs::write(&operator, OPERATOR_YAML).unwrap();
-        let config = RuntimeConfig::load(operator).unwrap();
-        assert_eq!(config.listen, "127.0.0.1:8091".parse().unwrap());
+        let runtime = directory.path().join("runtime.yaml");
+        fs::write(&runtime, runtime_example(directory.path(), true).unwrap()).unwrap();
+        let config = RuntimeConfig::load(runtime).unwrap();
+        assert_eq!(config.listener.bind, "127.0.0.1:8100".parse().unwrap());
         assert!(config.sources.contains_key("professional-register"));
     }
 }

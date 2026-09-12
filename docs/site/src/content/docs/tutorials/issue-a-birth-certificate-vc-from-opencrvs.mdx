@@ -399,7 +399,7 @@ disclosure. A derivation cannot add undeclared certificate fields.
 Compile and start the updated local project:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 Prepare the request and retain `sd-jwt-vc` as the expected response format before the source is
@@ -409,7 +409,7 @@ called:
 evidencectl request prepare birth-certificate \
   --purpose civil-registration-extract \
   --subject child:national_id=3617402568 \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name opencrvs-birth-certificate
 ```
 

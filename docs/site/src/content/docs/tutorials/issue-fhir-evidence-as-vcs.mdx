@@ -482,7 +482,7 @@ paths:
 Create an editable local project from that contract:
 
 ```sh
-evidencectl new fhir-record-evidence \
+evidencectl init fhir-record-evidence \
   --openapi fhir-smart-r4.openapi.yaml \
   --profile local
 cd fhir-record-evidence
@@ -618,7 +618,7 @@ accredited.
 Compile the two questions and start Evidence Gateway and Registry Mint:
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text
@@ -640,7 +640,7 @@ Prepare a request bound to the patient and coverage-record roles:
 evidencectl request prepare fhir-coverage-status \
   --purpose coverage-record-verification \
   --subjects-file ../fhir-coverage-subjects.json \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name fhir-coverage-vc
 ```
 
@@ -704,7 +704,7 @@ Prepare, request, and verify the second credential:
 evidencectl request prepare fhir-healthcare-establishment \
   --purpose healthcare-establishment-verification \
   --subjects-file ../fhir-organization-subjects.json \
-  --format sd-jwt-vc \
+  --response-format sd-jwt-vc \
   --name fhir-healthcare-establishment-vc
 
 curl --silent --show-error --fail-with-body \

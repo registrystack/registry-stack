@@ -61,7 +61,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch},
         "activation": "not_performed",
         "next": if args.apply {
-            json!(["Review the generated BReg runtime binding, provision its secret reference, and let the launcher activate each product through its normal path.", "Run caseworkctl doctor after authenticated directory setup."])
+            json!(["Review the generated BReg runtime binding, provision its secret reference, and let the launcher activate each product through its normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
         } else {
             json!(["Review these exact local changes, then repeat source add with --apply."])
         }
@@ -489,7 +489,7 @@ fn source_description(
 }
 
 fn runtime_binding(source_id: &str) -> String {
-    format!("# Candidate BReg operator binding. Review and merge into the launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8091\n    path: /events/sources/{source_id}\n    networkProfile: loopbackDevelopmentHttp\n    dnsFamily: ipv4Only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\n")
+    format!("# Candidate BReg operator binding. Review and merge into the launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8100\n    path: /events/sources/{source_id}\n    networkProfile: loopbackDevelopmentHttp\n    dnsFamily: ipv4Only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\n")
 }
 
 fn verify_candidate(binary: &Path, registry: &Path, proposed: &str) -> Result<Value> {

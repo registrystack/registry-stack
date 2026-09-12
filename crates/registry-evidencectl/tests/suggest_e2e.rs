@@ -234,12 +234,7 @@ fn a_project_always_uses_its_retained_openapi() {
         "--select".to_owned(),
         "/total".to_owned(),
     ]);
-    assert!(!output.status.success());
-    assert!(
-        stderr_of(&output).contains("cannot be used with"),
-        "unexpected argument conflict: {}",
-        stderr_of(&output)
-    );
+    assert_safe_usage_failure(&output);
     assert!(bundle_entries(&project).is_empty());
 }
 
@@ -247,14 +242,7 @@ fn a_project_always_uses_its_retained_openapi() {
 fn source_suggest_requires_exactly_one_source() {
     let output = evidencectl(&["source".to_owned(), "suggest".to_owned()]);
 
-    assert!(!output.status.success());
-    let stderr = stderr_of(&output);
-    assert!(
-        stderr.contains("required arguments were not provided")
-            && stderr.contains("--openapi <OPENAPI>")
-            && stderr.contains("--project <PROJECT>"),
-        "unexpected missing source error: {stderr}"
-    );
+    assert_safe_usage_failure(&output);
 }
 
 #[test]
@@ -519,4 +507,13 @@ fn stdout_of(output: &Output) -> String {
 
 fn stderr_of(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("utf8 stderr")
+}
+
+fn assert_safe_usage_failure(output: &Output) {
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        stderr_of(output),
+        "error[evidencectl.usage] command line $: The Evidence command line is incomplete or contains conflicting or unsupported arguments.\n  next: Run evidencectl --help or the selected command with --help, then retry using the documented arguments.\n"
+    );
 }

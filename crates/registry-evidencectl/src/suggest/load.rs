@@ -36,7 +36,7 @@ pub fn open(source: &SpecSource) -> Result<Spec> {
 
 /// Read and validate a document once while retaining its exact UTF-8 text.
 ///
-/// `evidencectl new` stores this text for the later question-authoring
+/// `evidencectl init` stores this text for the later question-authoring
 /// step. Returning it from the same read that produced `Spec` prevents a
 /// file change or a second network response from making the retained
 /// document differ from the one that was validated.

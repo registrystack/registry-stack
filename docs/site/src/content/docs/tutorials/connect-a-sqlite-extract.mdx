@@ -26,7 +26,7 @@ statement, extraction, derivation, output, and privacy path before binding a rea
 Create an editable project without an OpenAPI document:
 
 ```sh
-evidencectl new registry-status \
+evidencectl init registry-status \
   --transport sqlite-extract \
   --profile local
 ```
@@ -34,7 +34,7 @@ evidencectl new registry-status \
 Run its synthetic fixture through the real Evidence Gateway evaluator:
 
 ```sh
-evidencectl fixtures run --project registry-status --explain
+evidencectl test registry-status --explain
 ```
 
 The starter passes 13 cases. They cover true and false answers, no match, ambiguity, the row
@@ -63,7 +63,7 @@ registry-status/
   fixtures/record-status.yaml
 ```
 
-`README.md` names each of these files and the command that comes next, and `evidencectl new` prints
+`README.md` names each of these files and the command that comes next, and `evidencectl init` prints
 its path with the rest of the project.
 
 Start with `sources/record-status.yaml`. Its `extractProfile` is the logical name an operator will
@@ -140,13 +140,12 @@ project](../build-and-deploy-evidence-project/). Then build the editable project
 against the exact candidate and mounted extract:
 
 ```sh
-evidencectl build \
-  --project registry-status \
+evidencectl package registry-status \
   --target registry-status/deployment-targets/staging \
   --output candidate-staging
 
-evidencectl doctor --project candidate-staging
-evidencectl fixtures run --project candidate-staging
+evidencectl doctor --runtime-config "$(pwd)/candidate-staging/runtime.yaml"
+evidencectl test candidate-staging
 evidence --runtime candidate-staging/runtime.yaml check
 ```
 

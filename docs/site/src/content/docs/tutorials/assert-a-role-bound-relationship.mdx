@@ -111,7 +111,7 @@ defines what "registered parent" means and who can maintain that relationship.
 In another terminal, create an editable project from the registry's OpenAPI description:
 
 ```sh
-evidencectl new parent-relationship \
+evidencectl init parent-relationship \
   --openapi http://127.0.0.1:8002/openapi.json \
   --profile local
 cd parent-relationship
@@ -169,7 +169,7 @@ and both subject bindings before signing.
 ## Start the project
 
 ```sh
-evidencectl dev --detach
+evidencectl dev start .
 ```
 
 ```text
@@ -251,11 +251,11 @@ Return to the registry terminal and press `Ctrl+C`.
 
 This tutorial needs three loopback ports: `8002` for `registry.py`, and `8080` and `8081` for
 Evidence Gateway and Registry Mint. If another tutorial's services are still running,
-`evidencectl dev --detach` cannot bind. Stop them with `evidencectl dev stop` in that project, or
+`evidencectl dev start .` cannot bind. Stop them with `evidencectl dev stop` in that project, or
 start this one on two unused ports with `--evidence-port` and `--mint-port`.
 
 Port `8002` appears twice inside `registry.py`, in the OpenAPI `servers` URL and in the listener,
-and again in the `--openapi` argument. Change all three before running `evidencectl new`, because
+and again in the `--openapi` argument. Change all three before running `evidencectl init`, because
 the project retains the server URL it was created from.
 
 ## Next

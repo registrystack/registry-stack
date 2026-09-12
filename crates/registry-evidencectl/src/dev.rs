@@ -40,7 +40,7 @@ use crate::{
         compile_local_project_with_target_inputs, CompiledAccessPolicy, CompiledConceptForm,
         CompiledProject, CompiledQuestion, LocalServicePorts,
     },
-    keygen,
+    keygen, OutputFormat,
 };
 
 const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v5";
@@ -51,12 +51,45 @@ const LOCAL_CALLER_EVIDENCE_AUDIENCE: &str = "urn:registrystack:evidence:local:c
 const LOCAL_REQUESTER_TAG: &str = "local-caller";
 const MINT_AUDIT_KEY_FILENAME: &str = "mint-audit-hmac-key";
 const FAILED_START_LOGS: &str = "failed-start";
+const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
 const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 45;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
+
+#[derive(Debug)]
+pub(crate) struct PortConflict {
+    pub(crate) port: u16,
+    pub(crate) service: &'static str,
+    pub(crate) flag: &'static str,
+}
+
+impl std::fmt::Display for PortConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "local port {} is already in use, so the local {} cannot listen on it; free 127.0.0.1:{}, or start this session with {} <port>",
+            self.port, self.service, self.port, self.flag
+        )
+    }
+}
+
+impl std::error::Error for PortConflict {}
+
+#[derive(Debug)]
+pub(crate) struct DevStartFailure {
+    pub(crate) logs: PathBuf,
+}
+
+impl std::fmt::Display for DevStartFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("the local Evidence services failed before reaching readiness")
+    }
+}
+
+impl std::error::Error for DevStartFailure {}
 
 #[derive(Debug, Args)]
 #[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
@@ -65,43 +98,46 @@ pub struct DevArgs {
     action: Option<DevAction>,
 
     /// Return after Registry Mint and Evidence Gateway are ready on loopback.
-    #[arg(long, required = true)]
+    #[arg(long)]
     detach: bool,
 
     /// Loopback port for the local Evidence Gateway service.
-    #[arg(long, default_value_t = 8080)]
-    evidence_port: u16,
+    #[arg(long, global = true)]
+    evidence_port: Option<u16>,
 
     /// Loopback port for the local Mint service.
-    #[arg(long, default_value_t = 8081)]
-    mint_port: u16,
+    #[arg(long, global = true)]
+    mint_port: Option<u16>,
 
     /// Project root. Defaults to the current directory.
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
+    #[arg(long, hide = true)]
+    project: Option<PathBuf>,
 
     /// Reuse a local target's source connections and outbound TLS in the generated
     /// local caller rehearsal. Target service authentication is not replayed.
-    #[arg(long)]
+    #[arg(long, global = true)]
     target: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, global = true)]
     evidence_bin: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, global = true)]
     mint_bin: Option<PathBuf>,
 
     #[arg(
         long,
         default_value_t = DEFAULT_READY_TIMEOUT_SECONDS,
         value_parser = clap::value_parser!(u64).range(1..=120),
-        hide = true
+        hide = true,
+        global = true
     )]
     ready_timeout_seconds: u64,
 }
 
 #[derive(Debug, Subcommand)]
 enum DevAction {
+    /// Start or restart the retained local Registry Mint and Evidence pair.
+    Start(StartArgs),
     /// Stop the active local Registry Mint and Evidence Gateway pair.
     Stop(StopArgs),
     /// Remove one completed stopped local generation.
@@ -110,13 +146,23 @@ enum DevAction {
 
 #[derive(Debug, Args)]
 struct StopArgs {
-    #[arg(long, default_value = ".", hide = true)]
-    project: PathBuf,
+    /// Project root. Defaults to the current directory.
+    project: Option<PathBuf>,
+    /// Compatibility spelling for the project root.
+    #[arg(long = "project", hide = true, conflicts_with = "project")]
+    legacy_project: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
 struct CleanArgs {
     #[arg(long, default_value = ".", hide = true)]
+    project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct StartArgs {
+    /// Project root. Defaults to the current directory.
+    #[arg(default_value = ".")]
     project: PathBuf,
 }
 
@@ -335,35 +381,90 @@ impl Drop for OwnedChildren {
     }
 }
 
-pub fn run(args: DevArgs) -> Result<ExitCode> {
+pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<ExitCode> {
     match args.action {
-        Some(DevAction::Stop(stop)) => {
-            if args.detach {
-                bail!("`dev stop` does not accept `--detach`");
+        Some(DevAction::Start(start)) => {
+            if args.detach || args.project.is_some() {
+                bail!("`dev start` does not accept the compatibility flags --detach or --project");
             }
-            stop_dev(&stop.project)
-        }
-        Some(DevAction::Clean(clean)) => {
-            if args.detach {
-                bail!("`dev clean` does not accept `--detach`");
-            }
-            clean_dev(&clean.project)
-        }
-        None => {
-            if !args.detach {
-                bail!("the local development lifecycle requires `evidencectl dev --detach`");
-            }
-            let ports = LocalServicePorts::new(args.evidence_port, args.mint_port)?;
+            let ports = selected_ports(&start.project, args.evidence_port, args.mint_port)?;
             start_detached(
-                &args.project,
+                &start.project,
                 args.evidence_bin.as_deref(),
                 args.mint_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
+                format,
+            )
+        }
+        Some(DevAction::Stop(stop)) => {
+            if args.detach {
+                bail!("`dev stop` does not accept `--detach`");
+            }
+            let project = stop
+                .project
+                .as_deref()
+                .or(stop.legacy_project.as_deref())
+                .unwrap_or_else(|| Path::new("."));
+            stop_dev(project, format)
+        }
+        Some(DevAction::Clean(clean)) => {
+            if args.detach {
+                bail!("`dev clean` does not accept `--detach`");
+            }
+            clean_dev(&clean.project, format)
+        }
+        None => {
+            if !args.detach {
+                bail!("the local development lifecycle requires `evidencectl dev --detach`");
+            }
+            let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
+            let ports = selected_ports(project, args.evidence_port, args.mint_port)?;
+            start_detached(
+                project,
+                args.evidence_bin.as_deref(),
+                args.mint_bin.as_deref(),
+                args.ready_timeout_seconds,
+                ports,
+                args.target.as_deref(),
+                format,
             )
         }
     }
+}
+
+fn selected_ports(
+    project: &Path,
+    evidence_port: Option<u16>,
+    mint_port: Option<u16>,
+) -> Result<LocalServicePorts> {
+    let retained = if evidence_port.is_none() || mint_port.is_none() {
+        canonical_project(project)
+            .ok()
+            .and_then(|project| {
+                ["dev", RETAINED_STOPPED_SESSION]
+                    .into_iter()
+                    .find_map(|root| {
+                        read_state(&project.join(".evidence").join(root).join("state.json")).ok()
+                    })
+            })
+            .filter(|state| state.status == DevStatus::Stopped)
+            .and_then(|state| {
+                Some((
+                    state.evidence_origin.rsplit(':').next()?.parse().ok()?,
+                    state.mint_origin.rsplit(':').next()?.parse().ok()?,
+                ))
+            })
+    } else {
+        None
+    };
+    LocalServicePorts::new(
+        evidence_port
+            .or(retained.map(|ports| ports.0))
+            .unwrap_or(8080),
+        mint_port.or(retained.map(|ports| ports.1)).unwrap_or(8081),
+    )
 }
 
 pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
@@ -915,48 +1016,61 @@ fn start_detached(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    format: OutputFormat,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = ensure_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    let retained_root = generated_root.join(RETAINED_STOPPED_SESSION);
 
-    match fs::symlink_metadata(&dev_root) {
-        Ok(metadata) => {
-            validate_private_directory_metadata(&dev_root, &metadata)?;
-            remove_completed_dev_root(&project, &dev_root)?;
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).context("failed to inspect local development state"),
-    }
+    recover_retained_stopped_session(&project, &dev_root, &retained_root)?;
 
+    preflight_retained_stopped_session(&project, &dev_root, &retained_root)?;
+
+    // A refused restart must leave the stopped session intact so its selected
+    // ports remain available to the next attempt. The services bind again
+    // after this probe, so this is an actionable preflight rather than a lock.
     probe_local_ports(ports)?;
-    create_private_directory(&dev_root)?;
-    let result = prepare_and_start(
-        &project,
-        &dev_root,
-        evidence_override,
-        mint_override,
-        ready_timeout_seconds,
-        ports,
-        target,
-    );
+
+    let retained = retain_completed_dev_root(&project, &dev_root, &retained_root)?;
+
+    let result = create_private_directory(&dev_root).and_then(|()| {
+        injected_parent_exit("after-dev-root");
+        prepare_and_start(
+            &project,
+            &dev_root,
+            evidence_override,
+            mint_override,
+            ready_timeout_seconds,
+            ports,
+            target,
+            format,
+        )
+    });
     if let Err(error) = result {
         let kept = preserve_failed_start_logs(&dev_root);
-        if let Err(cleanup) = cleanup_new_dev_root(&dev_root) {
+        if let Err(cleanup) = cleanup_new_dev_root_if_present(&dev_root) {
             return Err(error.context(format!(
                 "failed to roll back the incomplete local session: {cleanup:#}"
             )));
+        }
+        if retained {
+            restore_retained_stopped_session(&project, &dev_root, &retained_root)
+                .context("failed to restore the stopped local session after rollback")?;
         }
         // The rollback is the remedy for the project, not for the reader, so
         // the failure carries the path of the logs it just moved out of the
         // way. Rebuilding the message keeps that sentence last: added as
         // context it would print before the failure it explains.
         return Err(match kept {
-            Ok(Some(kept)) => anyhow!("{error:#}; startup logs kept at {}", kept.display()),
+            Ok(Some(kept)) => DevStartFailure { logs: kept }.into(),
             Ok(None) => error,
             Err(problem) => anyhow!("{error:#}; the startup logs could not be kept: {problem:#}"),
         });
+    }
+    if retained {
+        remove_retained_stopped_session(&retained_root)?;
     }
     result
 }
@@ -973,9 +1087,17 @@ fn probe_local_ports(ports: LocalServicePorts) -> Result<()> {
         (ports.mint, "Registry Mint", "--mint-port"),
     ] {
         if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
-            bail!(
-                "local port {port} is already in use, so the local {service} cannot listen on it ({error}); free 127.0.0.1:{port}, or start this session with {flag} <port>"
-            );
+            if error.kind() == std::io::ErrorKind::AddrInUse {
+                return Err(PortConflict {
+                    port,
+                    service,
+                    flag,
+                }
+                .into());
+            }
+            return Err(error).with_context(|| {
+                format!("checking whether the local {service} can listen on 127.0.0.1:{port}")
+            });
         }
     }
     Ok(())
@@ -1009,7 +1131,140 @@ fn preserve_failed_start_logs(dev_root: &Path) -> Result<Option<PathBuf>> {
     Ok(Some(kept))
 }
 
-fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
+fn retain_completed_dev_root(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<bool> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Ok(metadata) => validate_private_directory_metadata(dev_root, &metadata)?,
+        Err(error) => return Err(error).context("failed to inspect local development state"),
+    }
+    validate_completed_dev_root(project, dev_root)?;
+    match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("a retained stopped session already exists from an interrupted restart"),
+        Err(error) => return Err(error.into()),
+    }
+    validate_removable_tree(dev_root)?;
+    fs::rename(dev_root, retained_root).context("failed to retain the stopped local session")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    Ok(true)
+}
+
+/// Prove that a stopped session can be retained and removed before a restart
+/// crosses either the listener or process boundary.
+fn preflight_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => validate_private_directory_metadata(dev_root, &metadata)?,
+        Err(error) => return Err(error).context("failed to inspect local development state"),
+    }
+    validate_completed_dev_root(project, dev_root)?;
+    match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(_) => bail!("a retained stopped session already exists from an interrupted restart"),
+        Err(error) => return Err(error.into()),
+    }
+    validate_removable_tree(dev_root)
+}
+
+fn recover_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    let retained = match fs::symlink_metadata(retained_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Ok(metadata) => metadata,
+        Err(error) => return Err(error.into()),
+    };
+    validate_private_directory_metadata(retained_root, &retained)?;
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Ok(metadata) => {
+            validate_private_directory_metadata(dev_root, &metadata)?;
+            match fs::symlink_metadata(dev_root.join("state.json")) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    preserve_failed_start_logs(dev_root)?;
+                    cleanup_new_dev_root(dev_root)?;
+                    restore_retained_stopped_session(project, dev_root, retained_root)?;
+                    return Ok(());
+                }
+                Ok(_) => {}
+                Err(error) => return Err(error.into()),
+            }
+            if load_ready_state(project).is_ok()
+                || validate_completed_dev_root(project, dev_root).is_ok()
+            {
+                remove_retained_stopped_session(retained_root)?;
+                return Ok(());
+            }
+            bail!(
+                "an interrupted local restart left incomplete replacement state and a retained stopped session"
+            );
+        }
+        Err(error) => return Err(error.into()),
+    }
+    fs::rename(retained_root, dev_root)
+        .context("failed to recover the stopped session from an interrupted restart")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    validate_completed_dev_root(project, dev_root)
+}
+
+fn restore_retained_stopped_session(
+    project: &Path,
+    dev_root: &Path,
+    retained_root: &Path,
+) -> Result<()> {
+    validate_private_directory(retained_root)?;
+    fs::rename(retained_root, dev_root).context("failed to restore the stopped local session")?;
+    sync_directory(
+        dev_root
+            .parent()
+            .ok_or_else(|| anyhow!("local development state has no parent directory"))?,
+    )?;
+    validate_completed_dev_root(project, dev_root)
+}
+
+fn remove_retained_stopped_session(retained_root: &Path) -> Result<()> {
+    validate_private_directory(retained_root)?;
+    make_tree_removable(retained_root)?;
+    fs::remove_dir_all(retained_root).context("failed to remove the replaced stopped session")?;
+    sync_directory(
+        retained_root
+            .parent()
+            .ok_or_else(|| anyhow!("retained stopped session has no parent directory"))?,
+    )
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    File::open(path)?.sync_all()?;
+    Ok(())
+}
+
+fn cleanup_new_dev_root_if_present(dev_root: &Path) -> Result<()> {
+    match fs::symlink_metadata(dev_root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(_) => cleanup_new_dev_root(dev_root),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn validate_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
     let state = read_state(&dev_root.join("state.json"))?;
     if state.status != DevStatus::Stopped || state.caller.is_some() || state.failure.is_some() {
         bail!("local development state already exists and is not a completed stopped session");
@@ -1021,21 +1276,41 @@ fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
         Ok(_) => bail!("stopped local state still has a control path"),
         Err(error) => return Err(error.into()),
     }
+    Ok(())
+}
+
+fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
+    validate_completed_dev_root(project, dev_root)?;
     make_tree_removable(dev_root)?;
     fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
 
-fn clean_dev(project: &Path) -> Result<ExitCode> {
+fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = existing_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    recover_retained_stopped_session(
+        &project,
+        &dev_root,
+        &generated_root.join(RETAINED_STOPPED_SESSION),
+    )?;
     validate_private_directory(&dev_root)?;
     remove_completed_dev_root(&project, &dev_root)?;
-    println!("Removed stopped local Evidence state");
+    match format {
+        OutputFormat::Human => println!("Removed stopped local Evidence state"),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-clean","status":"removed","project":project})
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the one caller keeps authored paths, tool overrides, and lifecycle controls explicit"
+)]
 fn prepare_and_start(
     project: &Path,
     dev_root: &Path,
@@ -1044,6 +1319,7 @@ fn prepare_and_start(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    format: OutputFormat,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
         "evidence",
@@ -1068,7 +1344,9 @@ fn prepare_and_start(
                     connections,
                     outbound_tls,
                 )?;
-                println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                if format == OutputFormat::Human {
+                    println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and Mint use generated local governance.");
+                }
                 compiled
             }
             None => compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?,
@@ -1083,7 +1361,7 @@ fn prepare_and_start(
     let clients = generated.join("clients");
     let mint_audit = generated.join("audit");
     let logs = dev_root.join("logs");
-    for directory in [&generated, &keys, &clients, &mint_audit, &logs] {
+    for directory in [&generated, &keys, &clients, &mint_audit] {
         create_private_directory(directory)?;
     }
 
@@ -1148,8 +1426,14 @@ fn prepare_and_start(
     };
     write_new_state(&dev_root.join("state.json"), &state)?;
 
+    // Logs exist only once startup is about to cross the process boundary.
+    // Earlier authoring refusals therefore remain domain failures and cannot
+    // be mistaken for a failed service start merely because an empty log
+    // directory was staged.
+    create_private_directory(&logs)?;
     let supervisor_log = create_private_file(&logs.join("supervisor.log"))?;
     let supervisor_error = supervisor_log.try_clone()?;
+    injected_parent_exit("before-supervisor");
     let executable = supervisor_executable()?;
     let mut supervisor = match Command::new(executable)
         .arg("__dev-supervisor")
@@ -1180,8 +1464,23 @@ fn prepare_and_start(
         publish_supervisor_failure(dev_root, FailureKind::Supervisor)?;
         return Err(error);
     }
-    println!("Evidence ready at {evidence_origin}");
-    println!("Mint ready at {mint_origin}");
+    match format {
+        OutputFormat::Human => {
+            println!("Evidence ready at {evidence_origin}");
+            println!("Mint ready at {mint_origin}");
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            json!({
+                "operation": "dev-start",
+                "status": "ready",
+                "project": project,
+                "evidenceOrigin": evidence_origin,
+                "mintOrigin": mint_origin,
+                "proofBoundary": "both retained local services reached readiness"
+            })
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1236,11 +1535,16 @@ fn publish_thumbprint_named_public_jwk(staged: &Path) -> Result<PathBuf> {
     Ok(published)
 }
 
-fn stop_dev(project: &Path) -> Result<ExitCode> {
+fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let generated_root = or_inactive_session(existing_private_generated_root(&project))?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
+    recover_retained_stopped_session(
+        &project,
+        &dev_root,
+        &generated_root.join(RETAINED_STOPPED_SESSION),
+    )?;
     or_inactive_session(validate_private_directory(&dev_root))?;
     let state = or_inactive_session(read_state(&dev_root.join("state.json")))?;
     if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
@@ -1264,7 +1568,13 @@ fn stop_dev(project: &Path) -> Result<ExitCode> {
     if stopped.status != DevStatus::Stopped || stopped.caller.is_some() {
         bail!("the local supervisor did not publish the closed stopped state");
     }
-    println!("Local Evidence stopped");
+    match format {
+        OutputFormat::Human => println!("Local Evidence stopped"),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({"operation":"dev-stop","status":"stopped","project":project})
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1299,6 +1609,14 @@ fn injected_supervisor_failure(stage: &str) -> Result<()> {
     }
     let _ = stage;
     Ok(())
+}
+
+fn injected_parent_exit(stage: &str) {
+    #[cfg(debug_assertions)]
+    if std::env::var("EVIDENCECTL_TEST_PARENT_EXIT_STAGE").as_deref() == Ok(stage) {
+        std::process::exit(86);
+    }
+    let _ = stage;
 }
 
 fn publish_test_supervisor_pid() -> Result<()> {
@@ -2146,6 +2464,11 @@ fn cleanup_new_dev_root(dev_root: &Path) -> Result<()> {
 }
 
 fn make_tree_removable(root: &Path) -> Result<()> {
+    validate_removable_tree(root)?;
+    make_validated_tree_removable(root)
+}
+
+fn validate_removable_tree(root: &Path) -> Result<()> {
     for entry in fs::read_dir(root)? {
         let path = entry?.path();
         let metadata = fs::symlink_metadata(&path)?;
@@ -2154,7 +2477,24 @@ fn make_tree_removable(root: &Path) -> Result<()> {
             bail!("incomplete local state contains a symlink");
         }
         if metadata.is_dir() {
-            make_tree_removable(&path)?;
+            validate_removable_tree(&path)?;
+        } else if !metadata.is_file() {
+            bail!("incomplete local state contains an unexpected entry");
+        }
+    }
+    Ok(())
+}
+
+fn make_validated_tree_removable(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root)? {
+        let path = entry?.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        require_owner(&metadata, "incomplete local state")?;
+        if metadata.file_type().is_symlink() {
+            bail!("incomplete local state contains a symlink");
+        }
+        if metadata.is_dir() {
+            make_validated_tree_removable(&path)?;
             fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_DIR_MODE))?;
         } else if metadata.is_file() {
             fs::set_permissions(&path, fs::Permissions::from_mode(PRIVATE_FILE_MODE))?;
@@ -2371,6 +2711,29 @@ mod tests {
     }
 
     #[test]
+    fn removable_tree_never_follows_a_symlink_outside_its_root() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path().join("retained");
+        create_private_directory(&root).expect("retained root");
+        let outside = temporary.path().join("outside");
+        drop(create_private_file(&outside).expect("outside file"));
+        fs::set_permissions(&outside, fs::Permissions::from_mode(0o400))
+            .expect("seal outside file");
+        symlink(&outside, root.join("planted-link")).expect("planted symlink");
+
+        assert!(make_tree_removable(&root).is_err());
+        assert_eq!(
+            fs::metadata(&outside)
+                .expect("outside metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o400,
+            "a rejected tree must not chmod a symlink target"
+        );
+    }
+
+    #[test]
     fn ready_and_stopped_handoffs_validate_the_closed_lifecycle_state() {
         let temporary = tempfile::tempdir().expect("tempdir");
         let project = temporary.path().join("project");
@@ -2457,7 +2820,7 @@ requirements:
         assert!(ready.caller.is_some());
         assert!(ready.access_policies.is_empty());
         assert!(
-            clean_dev(&project).is_err(),
+            clean_dev(&project, OutputFormat::Human).is_err(),
             "active state is never removed"
         );
         assert!(dev.is_dir(), "refused cleanup preserves active state");
@@ -2552,7 +2915,7 @@ requirements:
         assert_eq!(stopped.runtime_path, runtime);
         assert_eq!(stopped.questions[0].concepts[0].alias, "is_adult");
 
-        clean_dev(&project).expect("clean stopped session");
+        clean_dev(&project, OutputFormat::Human).expect("clean stopped session");
         assert!(!dev.exists());
     }
 
@@ -2717,8 +3080,8 @@ requirements:
     #[test]
     fn stop_dev_reports_a_friendly_refusal_when_no_generated_root_exists() {
         let project = tempfile::tempdir().expect("tempdir");
-        let error =
-            stop_dev(project.path()).expect_err("stop must refuse a project with no dev session");
+        let error = stop_dev(project.path(), OutputFormat::Human)
+            .expect_err("stop must refuse a project with no dev session");
         let diagnostic = format!("{error:#}");
         assert_eq!(
             diagnostic,
@@ -2741,8 +3104,8 @@ requirements:
         fs::set_permissions(&dev_root, fs::Permissions::from_mode(PRIVATE_DIR_MODE))
             .expect("mode dev root");
 
-        let error =
-            stop_dev(project.path()).expect_err("stop must refuse a project with no dev state");
+        let error = stop_dev(project.path(), OutputFormat::Human)
+            .expect_err("stop must refuse a project with no dev state");
         let diagnostic = format!("{error:#}");
         assert_eq!(
             diagnostic,
@@ -2766,7 +3129,7 @@ requirements:
 
         // Only a missing generated root, dev directory, or state file is an
         // inactive session. Every other fault keeps its own diagnostic.
-        let error = stop_dev(project.path())
+        let error = stop_dev(project.path(), OutputFormat::Human)
             .expect_err("stop must refuse a dev directory that is not private");
         let diagnostic = format!("{error:#}");
         assert_ne!(

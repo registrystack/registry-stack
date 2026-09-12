@@ -120,9 +120,14 @@ the authoring keys in the context of a whole project. Start with
 complete authoring and deployment path.
 
 A key path that this page lists is not a deployment that runs. `evidence check` is the authoritative
-runtime acceptance gate. `evidencectl doctor` is an advisory report over runtime, bundle, secret,
-audit, acquisition, and optional Mint compatibility posture. `evidencectl fixtures run` invokes the
-real Evidence checks before evaluating fixtures.
+runtime acceptance gate. `evidencectl artifact inspect <candidate>` reports artifact custody, and
+can add a mechanical Mint compatibility comparison. `evidencectl doctor --runtime-config
+<absolute-file>` performs the live startup dependency preflight without opening the public
+listener or sending an Evidence request. `evidencectl test` invokes the real Evidence checks
+before evaluating fixtures offline.
+
+{/* Evidence: crates/registry-evidencectl/src/runtime.rs, DoctorArgs and run();
+    crates/registry-evidencectl/src/doctor.rs; crates/registry-evidencectl/src/fixtures.rs. */}
 
 ## Next
 

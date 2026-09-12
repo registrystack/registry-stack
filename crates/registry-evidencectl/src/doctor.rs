@@ -41,7 +41,7 @@ use std::{
     process::ExitCode,
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use serde_norway::Value as YamlValue;
@@ -71,7 +71,7 @@ pub struct DoctorArgs {
     /// Evidence project directory; defaults to the current directory.
     ///
     /// This command needs a deployment project: one holding runtime.yaml
-    /// beside bundle/. `evidencectl build` compiles an editable project into
+    /// beside bundle/. `evidencectl package` compiles an editable project into
     /// one.
     #[arg(long, default_value = ".")]
     pub project: PathBuf,
@@ -85,6 +85,23 @@ pub struct DoctorArgs {
     #[arg(long)]
     pub json: bool,
 }
+
+#[derive(Debug)]
+pub(crate) struct DoctorDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) artifact: String,
+    pub(crate) path: String,
+    pub(crate) message: String,
+    pub(crate) suggested_action: String,
+}
+
+impl std::fmt::Display for DoctorDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DoctorDiagnostic {}
 
 /// One artifact this walk refuses, and why.
 #[derive(Debug, Serialize)]
@@ -126,7 +143,7 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
     let project = args.project.as_path();
     let runtime_path = project.join("runtime.yaml");
     if !runtime_path.is_file() {
-        bail!(missing_runtime_message(project, &runtime_path));
+        return Err(missing_runtime_diagnostic(project, &runtime_path).into());
     }
     let runtime = read_yaml(&runtime_path)?;
     let bundle_directory = resolve_bundle_directory(&runtime, &runtime_path, project)?;
@@ -190,11 +207,11 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
 fn missing_runtime_message(project: &Path, runtime_path: &Path) -> String {
     let project = project.display();
     let build = format!(
-        "`evidencectl build --project {project} --target <deployment-target> --output <candidate>`"
+        "`evidencectl package {project} --target <deployment-target> --output <candidate>`"
     );
     if project_is_editable(runtime_path) {
         format!(
-            "runtime configuration not found at {}; doctor walks a deployment project and {project} is an editable project. Compile a candidate with {build}, or check the editable project as it stands with `evidencectl fixtures run --project {project}`",
+            "runtime configuration not found at {}; artifact inspection walks a deployment project and {project} is an editable project. Compile a candidate with {build}, or check the editable project as it stands with `evidencectl check {project}` and `evidencectl test {project}`",
             runtime_path.display()
         )
     } else {
@@ -205,8 +222,20 @@ fn missing_runtime_message(project: &Path, runtime_path: &Path) -> String {
     }
 }
 
+fn missing_runtime_diagnostic(project: &Path, runtime_path: &Path) -> DoctorDiagnostic {
+    DoctorDiagnostic {
+        code: "evidence.doctor.project-shape",
+        artifact: project.display().to_string(),
+        path: "runtime.yaml".to_owned(),
+        message: missing_runtime_message(project, runtime_path),
+        suggested_action:
+            "Select a deployment project, or use evidencectl package, check, and test to prepare and inspect an editable project."
+                .to_owned(),
+    }
+}
+
 /// Whether the directory beside the missing runtime file is an editable
-/// project. The marker file is what `evidencectl new` writes and what every
+/// project. The marker file is what `evidencectl init` writes and what every
 /// authoring command reads, so its presence is the same answer they give.
 fn project_is_editable(runtime_path: &Path) -> bool {
     runtime_path.parent().is_some_and(|project| {
@@ -1105,7 +1134,7 @@ fn resolve_against(config_path: &Path, project: &Path, path: &Path) -> PathBuf {
 }
 
 /// Resolve the bundle directory a project's `runtime.yaml` names, on the same
-/// terms `evidencectl fixtures run` does.
+/// terms `evidencectl test` does.
 fn resolve_bundle_directory(
     runtime: &YamlValue,
     runtime_path: &Path,

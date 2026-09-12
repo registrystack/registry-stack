@@ -1,6 +1,6 @@
 ---
 title: Deploy Registry Casework
-description: Install the Registry Casework runtime, write its operator file, verify the reviewed policy package, migrate PostgreSQL, serve behind your TLS proxy, and establish directory authority.
+description: Install Registry Casework, write its runtime configuration, verify the reviewed policy package, migrate PostgreSQL, serve behind your TLS proxy, and establish directory authority.
 status: current
 owner: registry-docs
 source_repos:
@@ -35,7 +35,7 @@ the package directory and ends at a serving deployment.
 - **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP on a private
   or container-private address and reads no forwarded header, so TLS termination, HSTS, and client
   addresses stay with your proxy.
-- **Secrets the process can read.** Every credential in the operator file is a reference:
+- **Secrets the process can read.** Every credential in the runtime file is a reference:
   `secret:file/<name>` names an owner-only file under one file provider root, and
   `secret:env/<NAME>` names an environment variable.
 - **Durable storage for the audit file.** The runtime appends a keyed hash chain to one JSONL file
@@ -51,7 +51,7 @@ the package directory and ends at a serving deployment.
 ### What it does not need
 
 A hosted deployment that declares no source needs no Base Registry Engine (BReg): the work items
-its callers create live in Casework's own database, and the source bindings in the operator file
+its callers create live in Casework's own database, and the source bindings in the runtime file
 exist only for the sources a package declares. Work, claims, drafts, attempts, accountability
 records, and the idempotency ledger all live in PostgreSQL, so no message broker and no cache take
 part in a request. Browser traffic reaches your own application host, which calls Casework server
@@ -83,11 +83,11 @@ and the release also publishes `casework-install.sh` as a movable alias of the p
 
 The container image is `ghcr.io/registrystack/casework:v0.30.0`, built on a distroless nonroot base
 for `linux/amd64`. Its entrypoint is `/usr/local/bin/casework`, its default arguments are
-`--config /etc/registry-casework/operator.yaml serve`, and it exposes port 8091. It carries the
+`--runtime-config /etc/registry-casework/runtime.yaml serve`, and it exposes port 8100. It carries the
 runtime binary and its license and nothing else: no shell, no healthcheck command, and no
 `caseworkctl`, so migration and `doctor` run from a separate operator host. One directory is
 writable, `/var/lib/registry-casework/audit`, owned by UID and GID 65532 with mode `0700`, for the
-audit chain; mount the operator file, the policy package, and the secret root read-only. The
+audit chain; mount the runtime file, the policy package, and the secret root read-only. The
 release manifest published beside the binaries records the promoted digest of the image; pin that
 digest rather than the movable tag.
 
@@ -95,24 +95,28 @@ digest rather than the movable tag.
     release/scripts/release_candidate.py, CASEWORK_RUNTIME_IMAGE_NAMES and
     CASEWORK_RELEASE_MINIMUM_VERSION; release/scripts/build-release-image.sh. */}
 
-## Write the operator file
+## Write the runtime file
 
-The operator file binds one policy package to one database, one issuer, one listener, and one
+The runtime file binds one policy package to one database, one issuer, one listener, and one
 binding per source the package declares. It is a deployment artifact: keep it outside the authoring
 project, and put no credential in it.
 
 ```yaml
-# The casework.yaml inside the installed policy package, not the authoring project.
-project: /etc/registry-casework/package/casework.yaml
-# A private or loopback address. The proxy in front of it terminates TLS.
-listen: 10.42.0.7:8091
-# operator-controlled-upstream for production; development-loopback only for a loopback listener.
-tlsTermination: operator-controlled-upstream
-# private-address accepts loopback and private addresses; container-private also accepts a wildcard bind.
-networkExposure: private-address
+apiVersion: registry.registrystack.org/casework-runtime/v1alpha1
+kind: CaseworkRuntimeConfig
+package:
+  # The selected package always contains the policy at casework.yaml.
+  root: /etc/registry-casework/package
+listener:
+  # The proxy in front of this private listener terminates TLS.
+  bind: 10.42.0.7:8100
+  # operator-controlled-upstream for production; development-loopback only for loopback.
+  tlsTermination: operator-controlled-upstream
+  # container-private also accepts a wildcard bind on a private container network.
+  networkExposure: private-address
 secretProviders:
   file:
-    # Owner-only files, one per reference. An absolute path avoids resolution against this file.
+    # Owner-only files, one per reference.
     root: /etc/registry-casework/secrets
 database:
   runtimeUrlRef: secret:file/casework-runtime-database-url
@@ -123,8 +127,6 @@ authentication:
   oidc:
     issuer: https://identity.example.org/realms/registry
     audience: urn:example:casework
-    # Non-empty; each access profile in the package names the claim its own callers carry.
-    principalClaim: sub
     scopeClaim: registry_scopes
     humanIdentity:
       claim: registry_actor_kind
@@ -133,7 +135,7 @@ authentication:
       kind: discovery
 audit:
   path: /var/lib/registry-casework/audit/casework.ndjson
-  secretRef: secret:file/casework-audit-key
+  hashKeyRef: secret:file/casework-audit-key
 sources:
   # One entry per source the package declares, keyed by its exact source id.
   professional-register:
@@ -148,18 +150,16 @@ sources:
 
 | Section | What it binds |
 | --- | --- |
-| `project` | The `casework.yaml` the runtime serves, with its manifest and exact source descriptions beside it. |
-| `listen`, `tlsTermination`, `networkExposure` | The listener address and the transport boundary the deployment declares for it. |
-| `secretProviders` | The root directory of the file secret provider. The environment provider is always available for `secret:env/<NAME>`. |
+| `package` | The absolute root of the package containing `casework.yaml`, its manifest, and exact source descriptions. |
+| `listener` | The listener address and the transport boundary the deployment declares for it. |
+| `secretProviders` | The explicitly enabled file and environment secret providers. |
 | `database` | Secret references for the runtime and migration connection URLs, and an optional trusted root certificate for the PostgreSQL connection. |
 | `authentication` | The OpenID Connect issuer, audience, claim names, human-identity assertion, and the source of the issuer's keys. |
 | `audit` | The path of the external JSONL chain and the reference to the key that chains it. |
 | `sources` | One BReg binding per source the package declares: base URL, reader profile, token endpoint, and references to the client identifier, client assertion key, and webhook secret. The set of keys must equal the set of declared source ids exactly, and a package with no source needs no block. |
 
-Relative `project`, secret root, and audit paths resolve against the directory holding the operator
-file, so pass an absolute path to `--config` or keep every path in the file absolute. A relative
-`--config` leaves the secret root relative, and the resolver, which requires an absolute root,
-refuses the configuration before anything else runs.
+The package root, file secret root, and audit path must be absolute. An environment reference is
+valid only when `secretProviders.environment: {}` explicitly enables that provider.
 
 The listener boundary is checked, not advisory. With `operator-controlled-upstream` and
 `private-address`, the address must be loopback or private (IPv4 private range or IPv6 unique
@@ -172,6 +172,7 @@ response it returns.
 `scopeClaim` defaults to `registry_scopes` and carries every required scope for the selected
 profile. `humanIdentity` defaults to the claim `registry_actor_kind` with the value `human`, must
 differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
+Each access profile names its own `principalClaim`; there is no runtime-wide principal claim.
 The runtime accepts RS256 and ES256 signatures and the token types `at+jwt` and `JWT`.
 
 With the discovery source, the runtime reads the issuer's discovery document at startup and
@@ -248,7 +249,7 @@ from the audit storage, and keep both for as long as the records must stay prova
 
 ## Verify the package before it opens the listener
 
-The runtime verifies the package every time it loads the operator file, before it opens the
+The runtime verifies the package every time it loads the runtime file, before it opens the
 database, contacts the issuer, or binds the listener. It reads `casework.package.json` beside
 `casework.yaml`, recomputes the policy digest over the sorted file list, checks every file's
 SHA-256 digest and byte count, and refuses a package directory holding any file the manifest does
@@ -269,11 +270,11 @@ casework: the Casework secret-provider configuration is invalid; secretProviders
 
 The first line reports a production configuration with no manifest. The second reports a manifest
 whose digests, byte counts, or file set do not match the directory. The third and fourth report the
-operator file itself: unparseable YAML, and a configuration the checks refuse, which covers an
+runtime file itself: unparseable YAML, and a configuration the checks refuse, which covers an
 invalid listener boundary, an empty issuer or claim name, a human-identity claim equal to the scope
 claim, an access profile using the human-identity claim as its principal claim, and a `sources` map
 that does not match the declared source ids exactly. The fifth reports a secret provider root the
-resolver cannot use, most often a relative root left by a relative `--config`.
+resolver cannot use.
 
 {/* Evidence: crates/registry-casework/src/config.rs, verify_policy_package(),
     PolicyPackageManifest, RuntimeConfig::check(), and RuntimeConfigError;
@@ -285,10 +286,10 @@ resolver cannot use, most often a relative root left by a relative `--config`.
 Apply the migrations with the migration credential, from the operator host:
 
 ```sh
-casework --config /etc/registry-casework/operator.yaml migrate
+casework --runtime-config /etc/registry-casework/runtime.yaml migrate
 ```
 
-`migrate` loads the same operator file, resolves `migrationUrlRef`, takes a PostgreSQL advisory
+`migrate` loads the same runtime file, resolves `migrationUrlRef`, takes a PostgreSQL advisory
 lock, and applies every unapplied migration in order under its ledger, so a second `migrate` on the
 same database waits rather than racing it. Run it before the first `serve` and before rolling out a
 release that adds migrations.
@@ -302,7 +303,7 @@ holds.
 Then run the service:
 
 ```sh
-casework --config /etc/registry-casework/operator.yaml serve
+casework --runtime-config /etc/registry-casework/runtime.yaml serve
 ```
 
 Run `serve` under your service manager and let it restart the process. `serve` refuses to start on
@@ -385,8 +386,7 @@ no source review or application authority.
 `caseworkctl doctor` opens every live dependency the runtime opens, without binding a listener:
 
 ```sh
-caseworkctl doctor /etc/registry-casework/package \
-  --operator /etc/registry-casework/operator.yaml
+caseworkctl --format json doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
@@ -395,9 +395,7 @@ one that refuses and names it. Its secret preflight resolves the audit reference
 anything, and a reference that cannot resolve is reported by name with the rule it broke. Directory
 readiness requires a team serving every queue the package declares, and a gap is reported as an
 instruction to complete the queue assignments as an Administrator. A run that reaches the end
-prints a JSON report naming each check and each source it contacted. The project argument is the
-directory holding the `casework.yaml` the operator file points at, and `doctor` refuses an operator
-file bound to a different project.
+prints a JSON report naming each check and each source it contacted.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
     and check_source_descriptions();
@@ -406,7 +404,7 @@ file bound to a different project.
 ## Change the active package
 
 The runtime verifies and loads the package once, at startup. Install the reviewed successor into a
-new directory beside the current one, point `project` at the new directory's `casework.yaml`, and
+new directory beside the current one, point `package.root` at the new directory, and
 restart or roll out the process. Keep the previous package directory until the new one serves, so a
 rollback is a configuration change rather than a rebuild.
 
@@ -433,9 +431,9 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 
 | Symptom | Next move |
 | --- | --- |
-| `operator-controlled production requires a verified Casework policy package`, or `the Casework policy package is invalid` | The first names a production configuration with no manifest, the second a package directory whose files disagree with the manifest. Point `project` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
+| `operator-controlled production requires a verified Casework policy package`, or `the Casework policy package is invalid` | The first names a production configuration with no manifest, the second a package directory whose files disagree with the manifest. Point `package.root` at the installed package, and reinstall it from the reviewed artifact rather than editing it. |
 | `the Casework runtime configuration is invalid` | Check the listener against `tlsTermination` and `networkExposure`, the non-empty issuer and claim names, the human-identity claim against `scopeClaim` and the package's profiles, and `sources` against the declared source ids. |
-| `the Casework secret-provider configuration is invalid` | The file provider root is relative or unusable. Pass an absolute path to `--config`, or write an absolute `root`. |
+| `the Casework secret-provider configuration is invalid` | The file provider root is relative or unusable. Write an absolute `root`. |
 | A secret reference is refused | The named file must be a regular file owned by the running user, mode `0400` or `0600`, one link, no symbolic link, non-empty, and free of NUL bytes. |
 | Startup refuses the database or `doctor` stops at it | Check the resolved URL's user and database name, TLS on the server, and the trusted root reference when the server uses a private authority. |
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |

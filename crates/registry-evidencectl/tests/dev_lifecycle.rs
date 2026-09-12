@@ -324,7 +324,198 @@ fn configurable_ports_drive_every_generated_url_and_listener() {
     assert_success(&fixture.dev_stop(), "stop configured ports");
     wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
     wait_unavailable(&format!("127.0.0.1:{mint_port}"));
-    assert_success(&fixture.dev_clean(), "clean configured ports");
+
+    let held = TcpListener::bind(("127.0.0.1", evidence_port)).expect("hold Evidence port");
+    let refused = fixture.dev_restart(&evidence, &mint);
+    assert_eq!(refused.status.code(), Some(3));
+    assert!(String::from_utf8_lossy(&refused.stderr).contains(&evidence_port.to_string()));
+    let retained: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(retained["status"], "stopped");
+    assert_eq!(
+        retained["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        retained["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
+    drop(held);
+
+    let interrupted = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_PARENT_EXIT_STAGE",
+        OsStr::new("after-dev-root"),
+    );
+    assert_eq!(interrupted.status.code(), Some(86));
+    let retained_root = fixture.root.join(".evidence/dev-stopped-before-restart");
+    assert!(dev.is_dir());
+    assert!(retained_root.is_dir());
+    let interrupted_logs = dev.join("logs");
+    fs::create_dir(&interrupted_logs).expect("interrupted preparation logs");
+    fs::set_permissions(&interrupted_logs, fs::Permissions::from_mode(0o700))
+        .expect("interrupted preparation log mode");
+    let interrupted_log = interrupted_logs.join("supervisor.log");
+    fs::write(&interrupted_log, "parent interrupted during preparation\n")
+        .expect("interrupted preparation diagnostic");
+    fs::set_permissions(&interrupted_log, fs::Permissions::from_mode(0o600))
+        .expect("interrupted preparation diagnostic mode");
+
+    let inactive = fixture.dev_stop();
+    assert!(
+        !inactive.status.success(),
+        "the restored session is stopped"
+    );
+    assert!(!retained_root.exists());
+    assert_eq!(
+        fs::read_to_string(fixture.root.join(".evidence/failed-start/supervisor.log"))
+            .expect("preserved interrupted preparation diagnostic"),
+        "parent interrupted during preparation\n"
+    );
+    let recovered: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(recovered["status"], "stopped");
+    assert_eq!(
+        recovered["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        recovered["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
+
+    let failed = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_SUPERVISOR_FAIL_STAGE",
+        OsStr::new("before-socket"),
+    );
+    assert_eq!(failed.status.code(), Some(3));
+    let failed_logs = fixture.root.join(".evidence/failed-start/supervisor.log");
+    assert!(
+        failed_logs.is_file(),
+        "failed restart keeps its diagnostics"
+    );
+    let retained: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).unwrap()).unwrap();
+    assert_eq!(retained["status"], "stopped");
+    assert_eq!(
+        retained["evidenceOrigin"],
+        format!("http://127.0.0.1:{evidence_port}")
+    );
+    assert_eq!(
+        retained["mintOrigin"],
+        format!("http://127.0.0.1:{mint_port}")
+    );
+    let restarted = fixture.dev_restart(&evidence, &mint);
+    assert_success(&restarted, "canonical restart on retained configured ports");
+    assert_eq!(
+        String::from_utf8_lossy(&restarted.stdout),
+        format!(
+            "Evidence ready at http://127.0.0.1:{evidence_port}\nMint ready at http://127.0.0.1:{mint_port}\n"
+        )
+    );
+    assert!(ready(
+        &format!("http://127.0.0.1:{evidence_port}/ready"),
+        json!({"status":"ready"})
+    ));
+    assert!(jwks_ready_at(mint_port));
+    assert_success(&fixture.dev_stop(), "stop restarted configured ports");
+
+    let starting = fixture.dev_start_with_env(
+        &evidence,
+        &mint,
+        "EVIDENCECTL_TEST_PARENT_EXIT_STAGE",
+        OsStr::new("before-supervisor"),
+    );
+    assert_eq!(starting.status.code(), Some(86));
+    assert!(
+        !fixture.dev_clean().status.success(),
+        "potentially live Starting replacement remains fail closed"
+    );
+    assert!(dev.is_dir());
+    assert!(retained_root.is_dir());
+    fs::remove_file(dev.join("state.json")).expect("remove inert injected Starting state");
+    assert_success(
+        &fixture.dev_clean(),
+        "clean demonstrably inactive interrupted replacement",
+    );
+}
+
+#[test]
+#[ignore = "exact gate: starts real local Mint and Evidence services"]
+fn retained_special_file_refuses_restart_before_any_child_starts() {
+    const CANARY: &str = "retained-cleanup-canary";
+    let evidence = required_binary("EVIDENCE_BIN");
+    let mint = required_binary("MINT_BIN");
+    let fixture = Project::new();
+    fixture.generate_evidence_keys();
+    let (evidence_port, mint_port) = unused_port_pair();
+
+    assert_success(
+        &fixture.dev_start_on_ports(&evidence, &mint, evidence_port, mint_port),
+        "initial local start",
+    );
+    assert_success(&fixture.dev_stop(), "initial local stop");
+    wait_unavailable(&format!("127.0.0.1:{evidence_port}"));
+    wait_unavailable(&format!("127.0.0.1:{mint_port}"));
+
+    let dev = fixture.root.join(".evidence/dev");
+    fs::set_permissions(&dev, fs::Permissions::from_mode(0o700)).expect("writable stopped root");
+    let planted = dev.join(CANARY);
+    assert!(
+        Command::new("mkfifo")
+            .arg(&planted)
+            .status()
+            .expect("run mkfifo")
+            .success(),
+        "mkfifo left no special file"
+    );
+    let pid_directory = fixture.root.join("restart-service-pids");
+    fs::create_dir(&pid_directory).expect("PID directory");
+    fs::set_permissions(&pid_directory, fs::Permissions::from_mode(0o700))
+        .expect("PID directory mode");
+
+    let refused = fixture
+        .dev_start_command(&evidence, &mint)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--mint-port", &mint_port.to_string()])
+        .env("EVIDENCECTL_TEST_SERVICE_PID_DIRECTORY", &pid_directory)
+        .output()
+        .expect("restart with retained special file");
+
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(refused.stdout.is_empty(), "no ready state may be published");
+    let diagnostic = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        diagnostic.contains("error[evidence.dev.failed]"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains(CANARY), "{diagnostic}");
+    assert!(
+        !diagnostic.contains(&planted.to_string_lossy().into_owned()),
+        "{diagnostic}"
+    );
+    assert!(sorted_names(&pid_directory).is_empty());
+    assert!(TcpListener::bind(("127.0.0.1", evidence_port)).is_ok());
+    assert!(TcpListener::bind(("127.0.0.1", mint_port)).is_ok());
+    assert!(!fixture
+        .root
+        .join(".evidence/dev-stopped-before-restart")
+        .exists());
+    let state: Value =
+        serde_json::from_slice(&fs::read(dev.join("state.json")).expect("stopped state"))
+            .expect("stopped state JSON");
+    assert_eq!(state["status"], "stopped");
+
+    fs::remove_file(&planted).expect("remove planted FIFO");
+    let restarted = fixture.dev_start_on_ports(&evidence, &mint, evidence_port, mint_port);
+    assert_success(&restarted, "ordinary retained-state restart");
+    assert_success(
+        &fixture.dev_stop(),
+        "ordinary stop after retained-state restart",
+    );
 }
 
 #[test]
@@ -1039,6 +1230,20 @@ impl Project {
             .arg(&self.root)
             .output()
             .expect("dev stop")
+    }
+
+    fn dev_restart(&self, evidence: &Path, mint: &Path) -> Output {
+        evidencectl()
+            .args(["dev", "start"])
+            .arg(&self.root)
+            .arg("--evidence-bin")
+            .arg(evidence)
+            .arg("--mint-bin")
+            .arg(mint)
+            .arg("--ready-timeout-seconds")
+            .arg("20")
+            .output()
+            .expect("canonical dev restart")
     }
 
     fn dev_clean(&self) -> Output {
