@@ -99,6 +99,25 @@ pub(crate) fn write_owner_only(path: &Path, bytes: &[u8]) -> Result<(), ToolingE
     Ok(())
 }
 
+fn prepare_private_root(root: &Path) -> Result<(), ToolingError> {
+    fs::create_dir_all(root).map_err(|_| ToolingError::Filesystem {
+        reason: "the state directory could not be created",
+    })?;
+    let metadata = fs::symlink_metadata(root).map_err(|_| ToolingError::Filesystem {
+        reason: "the state directory could not be inspected",
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Err(ToolingError::Filesystem {
+            reason: "the state directory must be an ordinary directory",
+        });
+    }
+    fs::set_permissions(root, fs::Permissions::from_mode(0o700)).map_err(|_| {
+        ToolingError::Filesystem {
+            reason: "the state directory could not be made owner-only",
+        }
+    })
+}
+
 /// Serialize one upstream document as YAML, with the `---` document start the
 /// upstream loader's multi-document files carry.
 fn yaml_document(value: &Value) -> Result<String, ToolingError> {
@@ -163,6 +182,10 @@ fn serde_yaml_parse(text: &str) -> Result<Value, ToolingError> {
 /// one-document directory for the bootstrap one-shot.
 pub fn render(description: &IssuerDescription) -> Result<RenderedResources, ToolingError> {
     description.validate()?;
+    // Establish the caller-declared ownership boundary before creating any
+    // descendants. `write_owner_only` then stops its permission walk here and
+    // never attempts to change a shared ancestor such as `/tmp`.
+    prepare_private_root(&description.state_root)?;
     let root = description.state_root.join(RESOURCES_DIR);
     let bootstrap_root = description.state_root.join(BOOTSTRAP_DIR);
 
@@ -526,6 +549,46 @@ mod tests {
         );
         assert_eq!(role["assignments"][0]["type"], json!("agent"));
     }
+
+    #[test]
+    fn rendering_keeps_permissions_inside_the_declared_state_root() {
+        let parent = std::env::temp_dir().join(format!(
+            "registry-thunderid-tooling-parent-{}",
+            crate::container::random_urlsafe(16).unwrap()
+        ));
+        fs::create_dir(&parent).unwrap();
+        fs::set_permissions(&parent, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut description = crate::testing::synthetic_description();
+        description.state_root = parent.join("state");
+        fs::create_dir_all(description.state_root.join("secrets")).unwrap();
+        fs::write(
+            description
+                .state_root
+                .join("secrets/compatibility-client-secret"),
+            "fixture-secret-not-a-real-credential",
+        )
+        .unwrap();
+
+        render(&description).expect("the description renders");
+        assert_eq!(
+            fs::metadata(&parent).unwrap().permissions().mode() & 0o777,
+            0o755,
+            "rendering must not chmod an ancestor outside the state root"
+        );
+        assert_eq!(
+            fs::metadata(&description.state_root)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700,
+            "the declared state root must be owner-only"
+        );
+
+        fs::remove_dir_all(parent).unwrap();
+    }
+
     #[test]
     fn exchange_uses_native_user_config_and_unconditional_verified_issuer_mapping() {
         use crate::description::{ExchangeIssuer, TokenExchangeClient, GRANT_ATTRIBUTES};
