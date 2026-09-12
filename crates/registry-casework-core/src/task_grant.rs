@@ -28,6 +28,7 @@ pub struct TaskTemplate {
     pub agent: IssuerPrincipal,
     pub client: String,
     pub resource: String,
+    pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
     /// Exact token identity keys mapped to governed source logical fields.
@@ -132,6 +133,13 @@ impl TaskTemplate {
             || !bounded(&self.agent.subject, 512)
             || !bounded(&self.client, 512)
             || !bounded(&self.resource, 512)
+            || !unique(&self.scopes, 32)
+            || self.scopes.iter().any(|scope| {
+                scope.len() > 128
+                    || !scope
+                        .bytes()
+                        .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
+            })
             || !bounded(&self.purpose, 128)
             || self.purpose.bytes().any(|byte| {
                 !(byte.is_ascii_lowercase()
@@ -257,6 +265,46 @@ fn unique(values: &[String], maximum: usize) -> bool {
 mod tests {
     use super::*;
     #[test]
+    fn governed_scopes_require_explicit_bounded_oauth_names() {
+        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
+            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
+            "casework": {"id":"tasks", "version":"1"},
+            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
+            "queues":[{"id":"review", "label":"Review"}],
+            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
+        })).unwrap();
+        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
+            "id":"summary", "version":"1", "label":"Prepare summary",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates":["claimed"],
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"agent-client", "resource":"urn:test:breg", "scopes":["records:get", "records:draft"],
+            "purpose":"prepare-summary", "bounds":{"type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]},
+            "subjects":{"subject_reference":"subject-reference"}, "lifetimeSeconds":900
+        })).unwrap();
+        assert!(template.check(&project).is_ok());
+        for scopes in [
+            vec![],
+            vec![String::new()],
+            vec!["*".into()],
+            vec!["records:*".into()],
+            vec!["records:get".into(), "records:get".into()],
+            vec!["two scopes".into()],
+            vec!["quote\"".into()],
+            vec!["back\\slash".into()],
+            vec!["non-ascii-é".into()],
+            vec!["a".repeat(129)],
+            (0..33).map(|n| format!("scope:{n}")).collect(),
+        ] {
+            template.scopes = scopes;
+            assert!(
+                template.check(&project).is_err(),
+                "invalid governed OAuth scopes accepted"
+            );
+        }
+    }
+
+    #[test]
     fn proposal_identity_ignores_only_mutable_source_revision() {
         let binding = SourceBinding {
             source_revision: "before".into(),
@@ -296,6 +344,7 @@ pub struct TaskTemplatePreview {
     pub agent: IssuerPrincipal,
     pub client: String,
     pub resource: String,
+    pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
     pub subjects: BTreeMap<String, Value>,
@@ -320,6 +369,7 @@ pub struct TaskGrantView {
     pub agent: IssuerPrincipal,
     pub client: String,
     pub resource: String,
+    pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
     pub expires_at: u64,
