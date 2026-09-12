@@ -67,29 +67,10 @@ Keep this terminal in the same directory for the rest of the tutorial; every pat
 
 ```sh
 mkdir -p tutorial-work
-caseworkctl --format json init tutorial-work/casework --template standalone-decision
+caseworkctl init tutorial-work/casework --template standalone-decision
 ```
 
-```json
-{
-  "command": "init",
-  "created": [
-    "casework.yaml",
-    "runtime.example.yaml",
-    "dev-clients.yaml",
-    "fixtures/standalone-decision.yaml",
-    "sources/",
-    ".casework/schemas/runtime.schema.json",
-    ".vscode/settings.json"
-  ],
-  "next": [
-    "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
-  ],
-  "ok": true,
-  "project": "tutorial-work/casework",
-  "template": "standalone-decision"
-}
-```
+`init` lists the files it created and what to run next.
 
 ### What init wrote
 
@@ -135,33 +116,34 @@ control.
 Nothing here is configured for anyone else's data.
 :::
 
-Start the project and keep its report:
+Start the project:
 
 ```sh
-caseworkctl --format json dev tutorial-work/casework | tee tutorial-work/dev-report.json
+caseworkctl dev tutorial-work/casework
 ```
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
-The command returns once Casework answers, with `"status": "ready"` in its report.
+The command returns once Casework answers, with `status: ready` in its report.
 `dev` started PostgreSQL in a container, registered the four clients from `dev-clients.yaml` with
 Mint under a fresh key each, wrote an operator file, migrated the database, started `casework`, and
 seeded the [directory](../../reference/glossary/#directory) from the same clients file, which the
-report confirms as `"directory": {"revision": 1, "teams": 1}`.
+report confirms under `directory`.
 
 The report also names the Casework address, the Mint token endpoint, the audience, the runtime
 journal, and the credential file paths for each client.
 The services keep running after the command returns, so this one terminal is enough.
 
-Take the two addresses and the credential directory from the report:
+Use the two addresses printed in the report. These assignments use the default ports or the
+`CASEWORKCTL_DEV_CASEWORK_PORT` and `CASEWORKCTL_DEV_MINT_PORT` overrides; replace the URLs if the
+report differs:
 
 ```sh
-casework_url=$(python3 -c 'import json; print(json.load(open("tutorial-work/dev-report.json"))["caseworkUrl"])')
-token_endpoint=$(python3 -c 'import json; print(json.load(open("tutorial-work/dev-report.json"))["tokenEndpoint"])')
+casework_url="http://127.0.0.1:${CASEWORKCTL_DEV_CASEWORK_PORT:-8092}"
+token_endpoint="http://127.0.0.1:${CASEWORKCTL_DEV_MINT_PORT:-8093}/token"
 credentials=tutorial-work/casework/.casework/dev/credentials
 ```
 
-Reading the addresses from the report rather than typing them keeps the rest of the tutorial correct
-on a machine where the default ports were taken and `dev` used others.
+Keep this terminal open so the values remain available to the later commands.
 
 {/* Evidence: crates/registry-caseworkctl/src/dev/mod.rs, start() and report();
     crates/registry-caseworkctl/src/dev/config.rs;
