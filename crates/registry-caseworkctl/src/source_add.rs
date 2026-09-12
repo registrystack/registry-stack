@@ -499,7 +499,7 @@ fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value)
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
-            "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
+            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
         }),
     )
 }
@@ -601,7 +601,7 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
             leading_spaces(line) == 0 && line.trim_start().starts_with("accessProfiles:")
         })
         .context("narrow YAML patch could not locate accessProfiles")?;
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     let line = lines[start];
     let logical = line.trim_end_matches(['\r', '\n']);
     let value = logical
@@ -1369,11 +1369,11 @@ mod tests {
             "request_lifecycle"
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["operations"],
+            root["accessProfiles"][0]["permissions"][0]["operations"],
             json!(["get", "list"])
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["readableRequestFields"],
+            root["accessProfiles"][0]["permissions"][0]["readableRequestFields"],
             json!(["review_state"])
         );
         apply_breg_candidate(&mut root, "request", &[]).unwrap();
@@ -1410,7 +1410,7 @@ mod tests {
         assert!(rendered.contains("# keep authored context"));
         assert!(rendered.contains("accessProfiles: # keep the profile context"));
         assert_eq!(
-            expected["accessProfiles"][0]["grants"][0]["readableFields"],
+            expected["accessProfiles"][0]["permissions"][0]["readableFields"],
             json!(["record", "region"])
         );
         assert_eq!(
@@ -1426,13 +1426,13 @@ mod tests {
 
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
-        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","grants":[]}]});
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
         assert!(apply_breg_candidate(&mut root, "request", &[]).is_err());
     }
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
-        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    grants: []\n";
+        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: []\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &[]).unwrap();
         let patched =
@@ -1841,7 +1841,7 @@ mod tests {
             "accessProfiles": [{
                 "id":"reviewer",
                 "principalClaim":"registry_principal",
-                "grants":[{
+                "permissions":[{
                     "entity":"request",
                     "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
                 }]
