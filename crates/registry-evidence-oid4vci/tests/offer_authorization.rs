@@ -12,10 +12,7 @@
 //! [`registry_evidence_oid4vci::authorizer`] exists to keep.
 
 use std::{
-    collections::BTreeMap,
-    net::TcpListener,
-    os::unix::fs::PermissionsExt as _,
-    path::{Path, PathBuf},
+    collections::BTreeMap, net::TcpListener, os::unix::fs::PermissionsExt as _, path::PathBuf,
     sync::Arc,
 };
 
@@ -40,22 +37,6 @@ const FIXTURE_ISSUER: &str = "https://issuer.example.org";
 const OFFER_AUDIENCE: &str = "https://delivery.example.org";
 const CLIENT_ID: &str = "offer-caller";
 const PRINCIPAL: &str = "urn:example:offer-caller";
-
-/// Deterministic Ed25519 material for the client registration.
-fn client_key_pair(seed: u8) -> (PrivateJwk, Value) {
-    let seed_bytes = [seed; 32];
-    let signing = ed25519_dalek::SigningKey::from_bytes(&seed_bytes);
-    let x = URL_SAFE_NO_PAD.encode(signing.verifying_key().to_bytes());
-    let d = URL_SAFE_NO_PAD.encode(seed_bytes);
-    let kid = format!("client-key-{seed}");
-    let public = json!({"kty": "OKP", "crv": "Ed25519", "kid": kid, "alg": "EdDSA", "x": x});
-    let private = PrivateJwk::parse(
-        &json!({"kty": "OKP", "crv": "Ed25519", "kid": kid, "alg": "EdDSA", "x": x, "d": d})
-            .to_string(),
-    )
-    .expect("the private JWK parses");
-    (private, public)
-}
 
 /// Deterministic P-256 material for the token signing key, so the access token
 /// this test verifies is ES256 signed exactly as a deployment's would be.
@@ -92,7 +73,11 @@ fn resource_server(config: &OfferAuthorizationConfig, key_set: &Value) -> MintRe
     .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
 }
 
-fn offer_config(issuer: &str, audience: &str, algorithm: AccessTokenAlgorithm) -> OfferAuthorizationConfig {
+fn offer_config(
+    issuer: &str,
+    audience: &str,
+    algorithm: AccessTokenAlgorithm,
+) -> OfferAuthorizationConfig {
     OfferAuthorizationConfig {
         issuer: issuer.to_owned(),
         jwks_uri: format!("{issuer}/oauth2/jwks"),
@@ -226,13 +211,20 @@ async fn an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported()
 #[tokio::test]
 async fn a_token_issued_for_another_resource_server_is_refused() {
     let (token, key_set) = signed_offer_fixture(json!({}));
-    // The same real token, presented to a deployment that answers to a
+    // The same correctly signed token, presented to a deployment that answers to a
     // different audience. An adopter's token for another resource server is
     // not an offer authorization here.
     assert_eq!(
-        resource_server(&offer_config(FIXTURE_ISSUER, "https://elsewhere.example.org", AccessTokenAlgorithm::ES256), &key_set)
-            .authorize(&token)
-            .await,
+        resource_server(
+            &offer_config(
+                FIXTURE_ISSUER,
+                "https://elsewhere.example.org",
+                AccessTokenAlgorithm::ES256
+            ),
+            &key_set
+        )
+        .authorize(&token)
+        .await,
         Err(AuthorizationError::Refused)
     );
 }
@@ -290,7 +282,7 @@ fn installed_or_env(variable: &str, binary: &str) -> PathBuf {
         .unwrap_or_else(|| panic!("set {variable} for the exact stock-issuer gate"))
 }
 
-/// Replacement acceptance for the former in-process Mint fixture. This gate
+/// Replacement acceptance for the former in-process supporting-issuer fixture. This gate
 /// uses the installed pinned issuer, its native private-key-JWT registration,
 /// its real token endpoint, and the exact public RS256 keys it served.
 #[test]
@@ -337,8 +329,8 @@ fn stock_issuer_service_token_authorizes_the_offer_boundary() {
         image: &pin.image,
     };
     drop(reservation);
-    let keys = local::start(&session, &docker, &mut || false)
-        .expect("the pinned stock issuer starts");
+    let keys =
+        local::start(&session, &docker, &mut || false).expect("the pinned stock issuer starts");
     let _owned = OwnedStockSession {
         label,
         id,

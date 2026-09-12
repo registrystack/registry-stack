@@ -469,9 +469,11 @@ entries:
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_offer_without_authorization_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_unauthorized_offer_refusal_describes_nothing_this_deployment_offers}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_authorizes_an_offer}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_for_another_resource_server_is_refused}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_this_issuer_did_not_sign_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: stock_issuer_service_token_authorizes_the_offer_boundary}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: task_bound_and_partial_grants_cannot_create_deferred_wallet_offers}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: a_token_issued_for_another_resource_server_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: a_token_this_issuer_did_not_sign_is_refused}
   - id: sec-oid4vci-code-single-use
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_pre_authorized_code_is_redeemable_once}
