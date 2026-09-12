@@ -288,7 +288,24 @@ class BaseRegistryClient extends native.BaseRegistryClient {
   }
 }
 
+class PrivateKeyJwt {
+  #native;
+  constructor(config) {
+    try { this.#native = new native.PrivateKeyJwt(cloneJson(config, { nodes: 0, stringBytes: 0, active: new WeakSet() }, 0, 'configuration')); }
+    catch (error) { throw normalize(error, 'configuration'); }
+  }
+  async exchange(subjectToken) {
+    try { return await this.#native.exchange(subjectToken); }
+    catch (error) { throw normalize(error, 'token'); }
+  }
+  async bearerToken() {
+    try { return await this.#native.bearerToken(); }
+    catch (error) { throw normalize(error, 'token'); }
+  }
+}
+
 module.exports = {
+  PrivateKeyJwt,
   BaseRegistryClient,
   BaseRegistryClientError,
   BRegMetadata: native.BRegMetadata,

@@ -11,8 +11,8 @@ from registry_casework_client import CaseworkClient, CaseworkClientError
 
 ITEM = "00000000-0000-4000-8000-000000000001"
 GRANT = "00000000-0000-4000-8000-000000000002"
-PREVIEW = {"id": "verify-status", "version": "1", "label": "Verify status", "agent": {"issuer": "https://issuer.example", "subject": "agent-one"}, "client": "agent-client", "resource": "urn:evidence", "purpose": "verify-status", "bounds": {"type": "evidence", "requirement": "status"}, "subjects": {"person_reference": "synthetic-reference"}, "lifetimeSeconds": 900}
-VIEW = {"id": GRANT, "templateId": PREVIEW["id"], "templateVersion": "1", **{k: PREVIEW[k] for k in ("agent", "client", "resource", "purpose", "bounds")}, "expiresAt": 2000000900, "invalidated": False}
+PREVIEW = {"id": "verify-status", "version": "1", "label": "Verify status", "agent": {"issuer": "https://issuer.example", "subject": "agent-one"}, "client": "agent-client", "resource": "urn:evidence", "scopes": ["evidence:invoke"], "purpose": "verify-status", "bounds": {"type": "evidence", "requirement": "status"}, "subjects": {"person_reference": "synthetic-reference"}, "lifetimeSeconds": 900}
+VIEW = {"id": GRANT, "templateId": PREVIEW["id"], "templateVersion": "1", **{k: PREVIEW[k] for k in ("agent", "client", "resource", "scopes", "purpose", "bounds")}, "expiresAt": 2000000900, "invalidated": False}
 
 class TaskGrantTests(unittest.TestCase):
     def test_bounded_human_approval_and_token_only_machine_requests(self):

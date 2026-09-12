@@ -42,6 +42,7 @@ class TaskTemplatePreview(TypedDict):
     agent: IssuerPrincipal
     client: str
     resource: str
+    scopes: list[str]
     purpose: str
     bounds: TaskGrantBounds
     subjects: dict[str, str | int | bool]
@@ -56,6 +57,7 @@ class TaskGrantView(TypedDict):
     agent: IssuerPrincipal
     client: str
     resource: str
+    scopes: list[str]
     purpose: str
     bounds: TaskGrantBounds
     expiresAt: int

@@ -25,13 +25,13 @@ export type TaskGrantBounds = { type: 'evidence'; requirement: string } | { type
 export interface TaskPermission { collection: string; operations: ReadonlyArray<string> }
 export interface TaskApprovalRequest { templateId: string; templateVersion: string }
 export interface TaskTemplatePreview {
-  id: string; version: string; label: string; agent: IssuerPrincipal; client: string; resource: string; purpose: string
+  id: string; version: string; label: string; agent: IssuerPrincipal; client: string; resource: string; scopes: ReadonlyArray<string>; purpose: string
   bounds: TaskGrantBounds; subjects: { readonly [key: string]: Exclude<JsonScalar, null> }; lifetimeSeconds: SafeInteger
 }
 export interface TaskTemplatePreviews { itemRevision: SafeInteger; templates: ReadonlyArray<TaskTemplatePreview> }
 /** Grant metadata deliberately excludes stored subject values. */
 export interface TaskGrantView {
-  id: string; templateId: string; templateVersion: string; agent: IssuerPrincipal; client: string; resource: string; purpose: string
+  id: string; templateId: string; templateVersion: string; agent: IssuerPrincipal; client: string; resource: string; scopes: ReadonlyArray<string>; purpose: string
   bounds: TaskGrantBounds; expiresAt: SafeInteger; invalidated: boolean
 }
 export interface TaskGrantList { grants: ReadonlyArray<TaskGrantView> }
