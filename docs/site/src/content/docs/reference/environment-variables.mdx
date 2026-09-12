@@ -98,16 +98,16 @@ and the bundle it binds.
 
 ### Evidence Gateway toolset installer
 
-The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, `mint`, and
+The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, and
 `evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before replacement begins. If a
-replacement fails, it attempts to restore the previous four-binary set. Checksum verification does
+replacement fails, it attempts to restore the previous three-binary set. Checksum verification does
 not authenticate `SHA256SUMS`; follow the tag-frozen [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md) procedure when authenticity
 matters. The installer reads these variables; the installed binaries do not.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
 | `EVIDENCECTL_VERSION` | Registry Stack tag whose Evidence Gateway toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
-| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the four binaries. | Defaults to `~/.local/bin`. |
+| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the three binaries. | Defaults to `~/.local/bin`. |
 | `EVIDENCECTL_ASSET_DIR` | Directory of already-downloaded release assets to use instead of downloading. | Optional. |
 
 ## Evidence OID4VCI supporting service
@@ -150,10 +150,9 @@ The install script reads these variables. They are read by the script, not by th
 | `BREG_INSTALL_DIR` | Directory the script installs into. | Defaults to `~/.local/bin`. |
 | `BREG_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md). | Optional. |
 
-The script verifies the downloaded `breg`, `bregctl`, and `mint` binaries against the release
-`SHA256SUMS` before anything reaches the install directory. It installs the three together or
-preserves the previous set. The `mint` it installs is the same release asset the Evidence Gateway
-toolset installer ships. It does not verify release authenticity.
+The script verifies the downloaded `breg` and `bregctl` binaries against the release
+`SHA256SUMS` before anything reaches the install directory. It installs both together or
+preserves the previous set. It does not verify release authenticity.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
 
@@ -165,7 +164,7 @@ secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ow
 `crates/registry-evidence/src/cli.rs`, logging in `main.rs`, and file-secret resolution in
 `registry-platform-config`. Evidencectl binary selection is in
 `crates/registry-evidencectl/src/evidence_binary.rs`; its installer is
-`crates/registry-evidencectl/install.sh`. OID4VCI and Mint CLI ownership is in each crate's `cli.rs`,
+`crates/registry-evidencectl/install.sh`. OID4VCI CLI ownership is in `crates/registry-evidence-oid4vci/src/cli.rs`,
 with logging and dispatch in `main.rs`. Base Registry Engine logging is in
 `crates/registry-breg/src/main.rs` and `startup.rs`, runtime-file expansion and the secret grammar in
 `runtime_config.rs` over `registry-platform-config`, and its installer is
