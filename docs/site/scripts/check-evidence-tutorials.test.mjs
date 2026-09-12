@@ -234,6 +234,10 @@ test('the caller-access replay expects the privacy-safe refusal audit line', asy
     /\n\tcontrol-who-can-request-evidence\)[\s\S]*?\n\t\t;;/u,
   )?.[0];
   assert.ok(branch, 'the caller-access replay spec must exist');
+  assert.match(
+    branch,
+    /"run:Revoke an application\|1"\s+"run:Revoke an application\|2"\s+"run-fails:Revoke an application\|3"/u,
+  );
   assert.match(branch, /"ACCESS REFUSED requester="/u);
   assert.match(branch, /"reason=not_authorized"/u);
   assert.doesNotMatch(branch, /ACCESS AUTHORIZED age-bracket/u);

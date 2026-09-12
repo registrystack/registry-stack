@@ -317,16 +317,16 @@ load_spec() {
 			"run:Use the application assigned the policy"
 			"run:Try a question the application was not granted"
 			"run:Revoke an application|1"
-			"run-fails:Revoke an application|2"
-			"run:Revoke an application|3"
+			"run:Revoke an application|2"
+			"run-fails:Revoke an application|3"
 			"run:Clean up"
 		)
 		# This tutorial teaches refusal, so the refusals are what must hold.
 		# The unauthorized request's curl carries no --fail-with-body, so it
 		# exits zero on a 403 and a boundary that started answering 200 would
-		# leave the journey green. The revocation step requires a non-zero
-		# exit; the message is what proves it was refused because the
-		# client was revoked rather than for some unrelated reason.
+		# leave the journey green. The post-revocation preparation requires a
+		# non-zero exit; the message proves the client was revoked rather than
+		# refused for some unrelated reason.
 		SPEC_ASSERTS=(
 			"VERIFIED"
 			"HTTP 403"
