@@ -731,3 +731,4 @@ module.exports.BRegRecoveredLifecycle = nativeBinding.BRegRecoveredLifecycle
 module.exports.RecoveredLifecycle = nativeBinding.RecoveredLifecycle
 module.exports.BRegTombstoneBinding = nativeBinding.BRegTombstoneBinding
 module.exports.TombstoneBinding = nativeBinding.TombstoneBinding
+module.exports.verifyWebhookDelivery = nativeBinding.verifyWebhookDelivery

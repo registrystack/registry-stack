@@ -14,8 +14,10 @@ workspace = true
 
 [dependencies]
 async-trait.workspace = true
+base64.workspace = true
 jsonschema.workspace = true
 registry-platform-canonical-json.workspace = true
+registry-platform-crypto.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
 registry-record.workspace = true

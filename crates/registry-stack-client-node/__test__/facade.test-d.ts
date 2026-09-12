@@ -12,6 +12,13 @@ const relayClient = new relay.RelayClient({ baseUrl: 'https://relay.example.inva
 const caseworkClient = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' })
 
 bregClient.listRecords('people', { top: 25 })
+breg.verifyWebhookDelivery({
+  method: 'POST',
+  path: '/hooks/registry',
+  headers: { 'X-Registry-Signature': 'v1=opaque' },
+  body: Buffer.from('{}'),
+  key: Buffer.alloc(32),
+}).deliveryTime.toUpperCase()
 relayClient.listRecords('people', { pageSize: 25 })
 void discoveryClient
 void caseworkClient.description('header.payload.signature', 'staff')

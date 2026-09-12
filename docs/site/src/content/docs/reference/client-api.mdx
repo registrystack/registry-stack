@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-13"
 doc_type: reference
 locale: en
 standards_referenced:
@@ -772,6 +772,98 @@ Write and lifecycle authority stays opaque. `BRegCreateBinding`, `BRegPatchBindi
 `BRegLifecycleAuthority` are selected from `BRegMetadata`, passed back to the client, and expose
 nothing. A promoted `BRegLifecycleAction` exposes read-only `operation`, `stage`, `href`, `body`, and
 `review`, and only the client can execute it.
+
+### Verify a webhook delivery
+
+The Node `breg.verifyWebhookDelivery()` helper authenticates one exact Base Registry Engine Version
+1 webhook request with the shared Rust verifier. Pass the received method, request target, headers,
+body bytes, and key without normalizing their values. Header names are matched case-insensitively.
+The result carries the authenticated CloudEvents attributes, delivery metadata, and body. It does
+not decide whether the delivery is fresh, expected by this receiver, or already applied.
+
+This plain Node receiver core checks those boundaries in order. `eventStore.applyOnce()` is an
+application-owned durable transaction that claims the event identity and commits the effect once;
+`applyRegistryEvent()` validates and applies the receiver's expected payload contract.
+
+```js
+const { breg } = require('@registrystack/client');
+
+const MAX_BODY_BYTES = 1_048_576;
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
+const EXPECTED_SOURCE = 'urn:registrystack:registry:example:instance:primary';
+const EXPECTED_TYPE = 'case-created-v1';
+const EXPECTED_DATASCHEMA =
+  'urn:registrystack:registry:example:event:case-created-v1:schema:sha256:aaa';
+
+function exactHeaders(rawHeaders) {
+  const headers = Object.create(null);
+  const names = new Set();
+  for (let index = 0; index < rawHeaders.length; index += 2) {
+    const name = rawHeaders[index];
+    const normalized = name.toLowerCase();
+    if (names.has(normalized)) throw new Error('duplicate webhook header');
+    names.add(normalized);
+    headers[name] = rawHeaders[index + 1];
+  }
+  return headers;
+}
+
+async function exactBody(request) {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of request) {
+    const bytes = Buffer.from(chunk);
+    length += bytes.length;
+    if (length > MAX_BODY_BYTES) throw new Error('webhook body is too large');
+    chunks.push(bytes);
+  }
+  return Buffer.concat(chunks, length);
+}
+
+async function receiveWebhook(request, response, key, eventStore) {
+  const body = await exactBody(request);
+  const delivery = breg.verifyWebhookDelivery({
+    method: request.method,
+    path: request.url,
+    headers: exactHeaders(request.rawHeaders),
+    body,
+    key,
+  });
+
+  const skew = Math.abs(Date.now() - Date.parse(delivery.deliveryTime));
+  if (!Number.isFinite(skew) || skew > MAX_CLOCK_SKEW_MS) {
+    throw new Error('webhook delivery is outside the accepted clock skew');
+  }
+  if (delivery.source !== EXPECTED_SOURCE
+      || delivery.type !== EXPECTED_TYPE
+      || delivery.dataschema !== EXPECTED_DATASCHEMA) {
+    throw new Error('unexpected webhook contract');
+  }
+
+  const eventIdentity = JSON.stringify([delivery.source, delivery.id]);
+  await eventStore.applyOnce(eventIdentity, async () => {
+    await applyRegistryEvent(JSON.parse(delivery.body.toString('utf8')));
+  });
+  response.writeHead(204).end();
+}
+```
+
+Keep the key in server-side secret storage and never log the input or a failed delivery. Body and
+key buffers with shared backing stores are refused; accepted buffers are copied before entering the
+native verifier so another worker cannot change the bytes being authenticated. The helper
+throws `BaseRegistryClientError` with kind `webhook_verification` and code `missing_header`,
+`malformed_signature`, `signature_mismatch`, or `unsupported_version`. Generation and attempt are
+authenticated decimal strings, which avoids rounding a signed 64-bit generation at the JavaScript
+number boundary. A delivery outside the receiver's skew bound can still have a valid signature, so
+reject it before the deduplication transaction and effect. `idempotencyKey` identifies one delivery
+generation and is stable across automatic retries. An operator replay creates a new generation and
+key, so an effect that must happen only once is deduplicated on authenticated event identity,
+`source` plus `id`, or on an application business key.
+
+{/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery();
+    crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery();
+    crates/registry-breg-client-node/client.js, verifyWebhookDelivery();
+    crates/registry-platform-crypto/src/breg_webhook.rs, verify_v1(). */}
 
 ### BReg read operations
 

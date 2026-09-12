@@ -7,6 +7,41 @@ export type JsonObject = { readonly [key: string]: JsonValue }
 /** An integer that satisfies `Number.isSafeInteger` and the option's documented bounds. */
 export type SafeInteger = number
 
+export type WebhookVerificationRefusalCode =
+  | 'missing_header'
+  | 'malformed_signature'
+  | 'signature_mismatch'
+  | 'unsupported_version'
+
+export interface WebhookDeliveryInput {
+  method: string
+  path: string
+  headers: Readonly<Record<string, string>>
+  /** Exact bytes in a non-shared backing store. */
+  body: Buffer
+  /** Secret bytes in a non-shared backing store. */
+  key: Buffer
+}
+
+export interface VerifiedWebhookDelivery {
+  readonly id: string
+  readonly source: string
+  readonly type: string
+  readonly time: string
+  readonly dataschema: string
+  readonly generation: string
+  readonly attempt: string
+  readonly deliveryTime: string
+  readonly idempotencyKey: string
+  readonly body: Buffer
+}
+
+/**
+ * Authenticate one exact Base Registry Engine Version 1 webhook delivery.
+ * Apply delivery-time skew and idempotency policy before acting on the body.
+ */
+export declare function verifyWebhookDelivery(input: WebhookDeliveryInput): VerifiedWebhookDelivery
+
 export interface PrivateJwk {
   readonly kty: string
   readonly kid: string

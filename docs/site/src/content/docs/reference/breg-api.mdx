@@ -684,6 +684,10 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 `X-Registry-Signature` is an HMAC-SHA-256 over the request, keyed with the exact bytes resolved
 by `hmacSha256KeyRef`, at least 32 bytes, neither trimmed nor hex-decoded.
 This is a Base Registry Engine format, not a CloudEvents signing standard.
+Node receivers can use the registry client's
+[webhook delivery verifier](../client-api/#verify-a-webhook-delivery) instead of constructing this
+signing input themselves. The receiver still owns clock-skew, expected-event, and deduplication
+policy.
 
 The signing input starts with the ASCII bytes `breg-webhook-signature-v1`. Each later
 value is prefixed with its byte length as an unsigned 64-bit big-endian integer, in this order:

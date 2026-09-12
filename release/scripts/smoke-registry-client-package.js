@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const { breg, casework, discovery, evidence, relay } = require('@registrystack/client');
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
+assert.strictEqual(typeof breg.verifyWebhookDelivery, 'function');
 assert.strictEqual(typeof discovery.DiscoveryClient, 'function');
 assert.strictEqual(typeof evidence.EvidenceClient, 'function');
 assert.strictEqual(typeof relay.RelayClient, 'function');

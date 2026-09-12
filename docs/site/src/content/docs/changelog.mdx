@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-09-11"
+last_reviewed: "2026-09-13"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -17,6 +17,17 @@ Per-product release notes live in each product repository; the entries below lin
 relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
+
+- `@registrystack/client` exposes `breg.verifyWebhookDelivery()` for Node
+  receivers. The helper delegates the Version 1 signature contract to the
+  shared Rust verifier and returns the authenticated CloudEvents attributes,
+  delivery metadata, and exact body. Receivers still bound clock skew, validate
+  the expected event contract, and deduplicate before applying an effect. See
+  [verify a webhook delivery](../reference/client-api/#verify-a-webhook-delivery).
+
+{/* Evidence: crates/registry-breg-client/src/webhook.rs, verify_webhook_delivery();
+    crates/registry-breg-client-node/src/lib.rs, verify_webhook_delivery();
+    crates/registry-platform-crypto/src/breg_webhook.rs, verify_v1(). */}
 
 ## v0.30.0 beta-42
 

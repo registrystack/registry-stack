@@ -281,3 +281,29 @@ export interface RawOutcome {
   traceId: string
   etag?: string
 }
+
+/** Authenticated BReg webhook metadata and exact body. */
+export interface VerifiedWebhookDelivery {
+  id: string
+  source: string
+  type: string
+  time: string
+  dataschema: string
+  generation: string
+  attempt: string
+  deliveryTime: string
+  idempotencyKey: string
+  body: Buffer
+}
+
+/** Verify a BReg Version 1 webhook signature without applying receiver policy. */
+export declare function verifyWebhookDelivery(input: WebhookDeliveryInput): VerifiedWebhookDelivery
+
+/** Exact BReg webhook request supplied by a receiver. */
+export interface WebhookDeliveryInput {
+  method: string
+  path: string
+  headers: Record<string, string>
+  body: Buffer
+  key: Buffer
+}
