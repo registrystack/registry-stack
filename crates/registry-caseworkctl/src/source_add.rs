@@ -32,6 +32,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
     let registry = canonical_dir(&args.registry, "BReg project")?;
     let project = canonical_dir(&args.project, "Casework project")?;
+    let description_path = configured_source_description_path(&project, &args.source_id)?;
     check_version(&args.bregctl_bin)?;
     let checked = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check", &checked)?;
@@ -61,9 +62,6 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         plan_breg_dev_clients(&registry, &project, &authored, candidate_request.0)?;
     let description =
         source_description(&args.source_id, candidate_request, &candidate_explanation)?;
-    let description_path = project
-        .join("sources")
-        .join(format!("{}.json", args.source_id));
     let binding_path = project
         .join("sources")
         .join(format!("{}.breg-runtime.yaml", args.source_id));
@@ -133,6 +131,53 @@ fn validate_id(id: &str) -> Result<()> {
         bail!("source id must be a lowercase local identifier of at most 64 characters");
     }
     Ok(())
+}
+
+/// Resolve a source import from the authored Casework declaration. The project
+/// directory is already canonical, so rejecting non-normal and symlinked path
+/// components keeps creation inside that directory even before the file exists.
+fn configured_source_description_path(project: &Path, source_id: &str) -> Result<PathBuf> {
+    let policy = crate::project::load_and_check_policy(project)?;
+    let description = &policy
+        .sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .with_context(|| format!("Casework project does not declare source {source_id}"))?
+        .description;
+    let relative = Path::new(description);
+    if description.is_empty()
+        || relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        bail!("source description path must be a normalized path inside the project");
+    }
+
+    let mut candidate = project.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(std::path::Component::Normal(component)) = components.next() {
+        candidate.push(component);
+        match fs::symlink_metadata(&candidate) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("source description path must not contain symlinks")
+            }
+            Ok(metadata) if components.peek().is_some() && !metadata.is_dir() => {
+                bail!("source description parent must be a directory")
+            }
+            Ok(metadata) if components.peek().is_none() && !metadata.is_file() => {
+                bail!("source description path must be a regular file when it exists")
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("checking source description path {}", candidate.display())
+                })
+            }
+        }
+    }
+    Ok(candidate)
 }
 
 fn canonical_dir(path: &Path, label: &str) -> Result<PathBuf> {
@@ -508,8 +553,38 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let start = lines
         .iter()
-        .position(|line| line.trim() == "accessProfiles:")
+        .position(|line| {
+            leading_spaces(line) == 0 && line.trim_start().starts_with("accessProfiles:")
+        })
         .context("narrow YAML patch could not locate accessProfiles")?;
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let line = lines[start];
+    let logical = line.trim_end_matches(['\r', '\n']);
+    let value = logical
+        .strip_prefix("accessProfiles:")
+        .expect("the selected line has the accessProfiles key")
+        .trim_start();
+    if let Some(suffix) = value.strip_prefix("[]") {
+        let trailing = suffix.trim_start();
+        if trailing.is_empty() || trailing.starts_with('#') {
+            let newline = if line.ends_with("\r\n") { "\r\n" } else { "\n" };
+            let comment = if trailing.is_empty() {
+                String::new()
+            } else {
+                format!(" {trailing}")
+            };
+            let header = format!("accessProfiles:{comment}{newline}");
+            let mut output = String::with_capacity(text.len() + block.len());
+            output.extend(lines[..start].iter().copied());
+            output.push_str(&header);
+            output.push_str(&block);
+            output.extend(lines[start + 1..].iter().copied());
+            return Ok(output);
+        }
+    }
+    if !value.is_empty() && !value.starts_with('#') {
+        bail!("narrow YAML patch supports block accessProfiles or an empty flow sequence");
+    }
     let end = (start + 1..lines.len())
         .find(|index| {
             leading_spaces(lines[*index]) == 0
@@ -517,7 +592,6 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
                 && !lines[*index].trim_start().starts_with('#')
         })
         .unwrap_or(lines.len());
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     Ok(insert_at_line(&lines, end, &block))
 }
 
@@ -1093,6 +1167,53 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn set_source_description(project: &Path, description: &str) {
+        let policy_path = project.join("casework.yaml");
+        let mut policy: Value = serde_norway::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        policy["sources"][0]["description"] = json!(description);
+        fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn source_import_uses_the_declared_description_path() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        set_source_description(&project, "imports/professional.json");
+
+        assert_eq!(
+            configured_source_description_path(&project, "professional-register").unwrap(),
+            project.join("imports/professional.json")
+        );
+    }
+
+    #[test]
+    fn source_import_refuses_paths_outside_the_project() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        set_source_description(&project, "../professional.json");
+
+        let error = configured_source_description_path(&project, "professional-register")
+            .expect_err("a source import cannot leave its project");
+        assert!(format!("{error:#}").contains("normalized path inside the project"));
+    }
+
+    #[test]
+    fn source_import_refuses_symlinked_path_components() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let outside = root.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("imports")).unwrap();
+        set_source_description(&project, "imports/professional.json");
+
+        let error = configured_source_description_path(&project, "professional-register")
+            .expect_err("a source import cannot traverse a symlink");
+        assert!(format!("{error:#}").contains("must not contain symlinks"));
+    }
+
     #[test]
     fn source_import_preserves_multistage_approval_and_independence_requirements() {
         let project = tempfile::tempdir().unwrap();
@@ -1152,9 +1273,7 @@ mod tests {
         let metadata = json!({"fields":[{"field":"region","apiName":"region"}, {"field":"private-note","apiName":"privateNote"}]});
         write_policy(json!(["region"]));
         let projection = source_projection(project.path(), "professional", &metadata).unwrap();
-        let input = "# keep authored context\nentities:\n  - id: request\n    route: requests\naccessProfiles: []\n";
-        // The narrow YAML writer expects block-style accessProfiles, as documented.
-        let input = input.replace("accessProfiles: []", "accessProfiles:");
+        let input = "# keep authored context\nentities:\n  - id: request\n    route: requests\naccessProfiles: [] # keep the profile context\n";
         let mut expected =
             json!({"entities":[{"id":"request","route":"requests"}],"accessProfiles":[]});
         apply_breg_candidate(&mut expected, "request", &projection).unwrap();
@@ -1166,6 +1285,7 @@ mod tests {
         )
         .unwrap();
         assert!(rendered.contains("# keep authored context"));
+        assert!(rendered.contains("accessProfiles: # keep the profile context"));
         assert_eq!(
             expected["accessProfiles"][0]["grants"][0]["readableFields"],
             json!(["record", "region"])

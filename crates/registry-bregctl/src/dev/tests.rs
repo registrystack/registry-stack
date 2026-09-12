@@ -155,8 +155,8 @@ fn clients_require_explicit_unique_profile_bindings_and_closed_fields() {
 }
 
 /// A client may bind no access profile. Such a client still needs its own
-/// unique ID and explicit scopes; it registers with Mint and appears in
-/// `allowedClients`, but no journey or seed can resolve it.
+/// unique ID and explicit scopes; it registers with Mint but is excluded from
+/// BReg's `allowedClients`, and no journey or seed can resolve it.
 #[test]
 fn clients_accept_an_explicitly_unbound_profile_free_client() {
     let clients = config::clients(
@@ -186,7 +186,7 @@ seed: []
 }
 
 #[test]
-fn an_unbound_client_registers_with_mint_and_appears_in_allowed_clients() {
+fn an_unbound_client_registers_with_mint_but_cannot_authenticate_to_breg() {
     let (_temp, state, mut clients, files) = fixture();
     clients.clients.push(config::Client {
         id: "guest".into(),
@@ -208,8 +208,16 @@ fn an_unbound_client_registers_with_mint_and_appears_in_allowed_clients() {
         .as_array()
         .expect("allowedClients is an array");
     assert!(
-        allowed.iter().any(|id| id == "guest"),
-        "the unbound client is listed in allowedClients: {allowed:?}"
+        !allowed.iter().any(|id| id == "guest"),
+        "the unbound client must be absent from allowedClients: {allowed:?}"
+    );
+    assert!(
+        clients
+            .clients
+            .iter()
+            .filter(|client| !client.access_profiles.is_empty())
+            .all(|client| allowed.iter().any(|id| id == &client.id)),
+        "each profile-bound client remains in allowedClients: {allowed:?}"
     );
 }
 

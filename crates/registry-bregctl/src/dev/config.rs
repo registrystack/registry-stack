@@ -29,9 +29,9 @@ pub(super) struct Clients {
 pub(super) struct Client {
     pub id: String,
     /// The access profiles this client is the one local binding for. Empty
-    /// means the client registers with Mint and appears in `allowedClients`
-    /// but binds no access profile: no journey step resolves to it and no
-    /// seed may reference it.
+    /// means the client registers with Mint but is excluded from BReg's
+    /// `allowedClients`: no journey step resolves to it, no seed may reference
+    /// it, and it cannot authenticate to BReg.
     pub access_profiles: Vec<String>,
     pub scopes: Vec<String>,
     pub claims: BTreeMap<String, Value>,
@@ -331,7 +331,7 @@ pub(super) fn runtime(
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
-            "authentication":{"oidc":{"issuer":state.mint_origin(),"audience":state.audience(),"allowedAlgorithm":"ES256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().map(|c|&c.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/mint-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuer":state.mint_origin(),"audience":state.audience(),"allowedAlgorithm":"ES256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().filter(|client| !client.access_profiles.is_empty()).map(|client|&client.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/mint-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )

@@ -131,7 +131,8 @@ binding with scopes and claims matching the authored journey.
 
 Set `accessProfiles: []` for a machine client that carries only scopes or
 claims for another product, such as Casework. The empty list gives that client
-no BReg access-profile binding.
+no BReg access-profile binding. It is registered with the local Mint but omitted
+from the BReg runtime's `allowedClients`, so it cannot call BReg.
 
 ```yaml
 version: 1

@@ -2000,7 +2000,7 @@
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "f1efb6ae35023261bc2a40919aebbfd3bd98bae9b675fd7f8f39727f86415cea",
+        "sha256": "f46bcf76ffc82242a921f753402f4f4ae3a190140ee09a85a040abea296e39af",
         "mediaType": "application/schema+json"
       }
     },
