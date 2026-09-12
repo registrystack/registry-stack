@@ -705,7 +705,7 @@ async fn execute(
             bail!("scenario client/profile is not explicitly declared in dev clients");
         }
         if !native.contains_key(&step.client) {
-            super::token(state, &step.client)?;
+            super::token_async(state, &step.client).await?;
             let token = private::read(
                 &state
                     .root()

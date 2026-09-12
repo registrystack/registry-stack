@@ -36,6 +36,10 @@ pub(super) struct Client {
     /// claims for another product cannot call BReg accidentally.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_breg_access: bool,
+    /// Explicitly permits this local teaching client to carry the human actor
+    /// marker. This does not admit the client to BReg's allowedClients.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub allow_human_fixture: bool,
     pub scopes: Vec<String>,
     pub claims: BTreeMap<String, Value>,
     /// Exact schema-test steps that use this claim variant. Runtime requests
@@ -99,6 +103,13 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             || client.scopes.is_empty()
         {
             bail!("local clients need unique bounded IDs and explicit scopes");
+        }
+        let carries_human_marker = client
+            .claims
+            .get("registry_actor_kind")
+            .is_some_and(|kind| kind == "human");
+        if client.allow_human_fixture != carries_human_marker {
+            bail!("allowHumanFixture must be true exactly when registry_actor_kind is human");
         }
         for profile in &client.access_profiles {
             if !identifier(profile) || !client_profiles.insert(profile) {
@@ -350,7 +361,7 @@ pub(super) fn issuer_description(
                 public_jwks: serde_json::to_string(&json!({"keys":[public]}))?,
                 claims,
                 scopes: client.scopes.clone(),
-                allow_human_fixture: false,
+                allow_human_fixture: client.allow_human_fixture,
             })
         })
         .collect::<Result<Vec<_>>>()?;

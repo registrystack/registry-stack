@@ -835,6 +835,9 @@ fn human_dev_client(
     if allow_breg_access {
         result["allowBregAccess"] = json!(true);
     }
+    if result["claims"]["registry_actor_kind"] == "human" {
+        result["allowHumanFixture"] = json!(true);
+    }
     Ok(result)
 }
 
@@ -1061,6 +1064,12 @@ fn render_dev_client_yaml_block(client: &Value) -> Result<String> {
             .as_bool()
             .context("planned BReg dev client allowBregAccess must be a boolean")?;
         block.push_str(&format!("    allowBregAccess: {allow_breg_access}\n"));
+    }
+    if let Some(allow_human_fixture) = client.get("allowHumanFixture") {
+        let allow_human_fixture = allow_human_fixture
+            .as_bool()
+            .context("planned BReg dev client allowHumanFixture must be a boolean")?;
+        block.push_str(&format!("    allowHumanFixture: {allow_human_fixture}\n"));
     }
     if claims.is_empty() {
         block.push_str("    claims: {}\n");

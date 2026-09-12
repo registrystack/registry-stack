@@ -342,6 +342,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         id: args.client.clone(),
         access_profiles: vec![args.access_profile.clone()],
         allow_breg_access: false,
+        allow_human_fixture: false,
         scopes: vec![scope],
         claims,
         test_bindings: Vec::new(),

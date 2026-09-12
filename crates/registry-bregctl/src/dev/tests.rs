@@ -218,6 +218,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         id: "guest".into(),
         access_profiles: vec![],
         allow_breg_access: false,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
         test_bindings: Vec::new(),
@@ -228,8 +229,20 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         id: "casework-reviewer".into(),
         access_profiles: vec![],
         allow_breg_access: true,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:review".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    });
+    clients.clients.push(config::Client {
+        id: "casework-administrator".into(),
+        access_profiles: vec![],
+        allow_breg_access: false,
+        allow_human_fixture: true,
+        scopes: vec!["casework:admin".into()],
+        claims: BTreeMap::from([("registry_actor_kind".into(), json!("human"))]),
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
@@ -245,6 +258,10 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         .machine_clients
         .iter()
         .any(|client| client.client_id == "casework-reviewer"));
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "casework-administrator"));
     let runtime: Value = serde_norway::from_slice(
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
@@ -261,6 +278,10 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         "the explicitly admitted integration client must be allowed: {allowed:?}"
     );
     assert!(
+        !allowed.iter().any(|id| id == "casework-administrator"),
+        "a teaching-human flag must not confer BREG access: {allowed:?}"
+    );
+    assert!(
         clients
             .clients
             .iter()
@@ -268,6 +289,38 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
             .all(|client| allowed.iter().any(|id| id == &client.id)),
         "each profile-bound client remains in allowedClients: {allowed:?}"
     );
+}
+
+#[test]
+fn human_teaching_clients_require_the_exact_explicit_fixture_flag() {
+    let without_flag = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    scopes: [casework:admin]
+    claims: {registry_actor_kind: human}
+"#;
+    assert!(config::clients(without_flag).is_err());
+
+    let without_marker = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    allowHumanFixture: true
+    scopes: [casework:admin]
+    claims: {}
+"#;
+    assert!(config::clients(without_marker).is_err());
+
+    let exact = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    allowHumanFixture: true
+    scopes: [casework:admin]
+    claims: {registry_actor_kind: human}
+"#;
+    assert!(config::clients(exact).is_ok());
 }
 
 /// A client with no bound access profile never interferes with rehearsal
@@ -282,6 +335,7 @@ fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client(
         id: "guest".into(),
         access_profiles: vec![],
         allow_breg_access: false,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
         test_bindings: Vec::new(),

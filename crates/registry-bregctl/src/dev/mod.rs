@@ -2195,6 +2195,14 @@ fn tokens(state: &State, clients: &Clients) -> Result<()> {
 /// assertion key never leaves the session's private credentials tree, and the
 /// credential is stored owner-only for the seeding and rehearsal steps.
 fn token(state: &State, id: &str) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build the dev token runtime")?;
+    runtime.block_on(token_async(state, id))
+}
+
+async fn token_async(state: &State, id: &str) -> Result<()> {
     use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 
     let root = state.root();
@@ -2228,11 +2236,9 @@ fn token(state: &State, id: &str) -> Result<()> {
             .with_scopes(scopes),
     )
     .map_err(|error| anyhow::anyhow!("the dev token provider is unusable: {error}"))?;
-    let value = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("cannot build the dev token runtime")?
-        .block_on(provider.bearer_token())
+    let value = provider
+        .bearer_token()
+        .await
         .map_err(|error| anyhow::anyhow!("the dev issuer declined to issue a token: {error}"))?;
     let header = value.authorization_header_value();
     let text = header
