@@ -424,7 +424,7 @@ fn project_bytes(environment: &str, instance_id: &str, source_revision: &str) ->
   "accessProfiles": [{{
     "id": "reader",
     "principalClaim": "principal",
-    "grants": [{{
+    "permissions": [{{
       "rowBoundaries": [], "entity": "case",
       "operations": ["get", "list"],
       "readableFields": ["code"]

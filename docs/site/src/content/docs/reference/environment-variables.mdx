@@ -5,7 +5,6 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-evidence
-  - registry-mint
   - registry-relay
   - registry-stack
 last_reviewed: "2026-08-11"
@@ -18,11 +17,11 @@ This page lists Registry Stack's supported fixed environment-variable interfaces
 adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
 of host temporary-directory configuration.
 
-The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
+The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway reads no secret from the environment under either kind of name, as its section records.
 
 ## Configuration expansion
 
-Relay, Evidence Gateway, and Registry Mint expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`), and Registry Mint in `MintConfig::load` (`crates/registry-mint/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
+Relay and Evidence Gateway expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), and Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
 
 ## Relay
 
@@ -99,16 +98,16 @@ and the bundle it binds.
 
 ### Evidence Gateway toolset installer
 
-The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, `mint`, and
+The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, and
 `evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before replacement begins. If a
-replacement fails, it attempts to restore the previous four-binary set. Checksum verification does
+replacement fails, it attempts to restore the previous three-binary set. Checksum verification does
 not authenticate `SHA256SUMS`; follow the tag-frozen [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md) procedure when authenticity
 matters. The installer reads these variables; the installed binaries do not.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
 | `EVIDENCECTL_VERSION` | Registry Stack tag whose Evidence Gateway toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
-| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the four binaries. | Defaults to `~/.local/bin`. |
+| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the three binaries. | Defaults to `~/.local/bin`. |
 | `EVIDENCECTL_ASSET_DIR` | Directory of already-downloaded release assets to use instead of downloading. | Optional. |
 
 ## Evidence OID4VCI supporting service
@@ -151,29 +150,11 @@ The install script reads these variables. They are read by the script, not by th
 | `BREG_INSTALL_DIR` | Directory the script installs into. | Defaults to `~/.local/bin`. |
 | `BREG_ASSET_DIR` | Directory of already-downloaded release assets to read instead of downloading. Use it after verifying a release with [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.26.1/release/VERIFY.md). | Optional. |
 
-The script verifies the downloaded `breg`, `bregctl`, and `mint` binaries against the release
-`SHA256SUMS` before anything reaches the install directory. It installs the three together or
-preserves the previous set. The `mint` it installs is the same release asset the Evidence Gateway
-toolset installer ships. It does not verify release authenticity.
+The script verifies the downloaded `breg` and `bregctl` binaries against the release
+`SHA256SUMS` before anything reaches the install directory. It installs both together or
+preserves the previous set. It does not verify release authenticity.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
-
-## Registry Mint
-
-The `mint` binary reads these variables.
-
-| Name | Purpose | Default or required |
-| --- | --- | --- |
-| `MINT_CONFIG` | YAML config path for `mint check`, `mint serve`, and `mint verify-audit`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
-| `MINT_HEALTHCHECK_URL` | Exact numeric loopback or private-address HTTP URL for `mint healthcheck`. The path must be `/ready`; credentials, query, and fragment are refused. | Defaults to `http://127.0.0.1:8081/ready`. |
-| `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
-
-Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
-in its configuration: `signing.activePublicJwkFile`, `signing.publishedPublicJwkFiles`,
-`signing.revokedKeyIds`, `signer`, and `clients.directory`. None is an environment variable. The
-`mint token` subcommand is a caller tool rather than an operator one: it reads no server configuration
-at all, and takes the caller's private JWK and any delegation subject as file paths rather than as
-values. See the [Registry Mint reference](../mint/) for the full configuration surface.
 
 ## Source
 
@@ -183,7 +164,7 @@ secret grammar in `contract.rs`, and resolution in `startup.rs`. Evidence CLI ow
 `crates/registry-evidence/src/cli.rs`, logging in `main.rs`, and file-secret resolution in
 `registry-platform-config`. Evidencectl binary selection is in
 `crates/registry-evidencectl/src/evidence_binary.rs`; its installer is
-`crates/registry-evidencectl/install.sh`. OID4VCI and Mint CLI ownership is in each crate's `cli.rs`,
+`crates/registry-evidencectl/install.sh`. OID4VCI CLI ownership is in `crates/registry-evidence-oid4vci/src/cli.rs`,
 with logging and dispatch in `main.rs`. Base Registry Engine logging is in
 `crates/registry-breg/src/main.rs` and `startup.rs`, runtime-file expansion and the secret grammar in
 `runtime_config.rs` over `registry-platform-config`, and its installer is

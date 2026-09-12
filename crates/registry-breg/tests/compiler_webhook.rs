@@ -126,7 +126,7 @@ fn change_request_event_project() -> Value {
             "id":"submitter",
             "default":true,
             "principalClaim":"registry_principal",
-            "grants":[{
+            "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
                 "readableFields":["placement","proposed-site","reason"],
@@ -136,7 +136,7 @@ fn change_request_event_project() -> Value {
         },{
             "id":"reviewer",
             "principalClaim":"registry_principal",
-            "grants":[{
+            "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["placement","proposed-site","reason"],
@@ -149,7 +149,7 @@ fn change_request_event_project() -> Value {
         },{
             "id":"applier",
             "principalClaim":"registry_principal",
-            "grants":[{
+            "permissions":[{
                 "entity":"placement-correction-request",
                 "operations":["get","list","apply_request"],
                 "readableFields":["placement","proposed-site","reason"],

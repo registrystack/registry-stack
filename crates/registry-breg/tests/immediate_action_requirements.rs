@@ -91,11 +91,11 @@ fn action_requirements_keep_mandatory_scope_and_public_processing_boundaries() {
         .remove("principalClaim");
     let report = format!("{:?}", compile(source).unwrap_err());
     assert!(
-        report.contains("action.grant.anonymous_forbidden"),
+        report.contains("action.permission.anonymous_forbidden"),
         "{report}"
     );
     let mut source = support::project();
-    source["accessProfiles"][0]["grants"][0]["targets"] =
+    source["accessProfiles"][0]["permissions"][0]["targets"] =
         json!([{"entity": "child", "rowBoundaries": []}]);
     assert!(
         compile(source).is_err(),

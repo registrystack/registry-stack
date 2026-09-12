@@ -35,8 +35,11 @@ pub use registry_casework_core::{
     PageStatus, QueueRecord, RecoverAttemptRequest, ReleaseRequest, RequesterHostedItem,
     RoutingActivity, RoutingCondition, RoutingPredicate, RoutingRule, SaveDraftRequest,
     SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic,
-    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, TeamRecord,
-    WorkItem, WorkItemPage, WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
+    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, TaskApprovalRequest,
+    TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation, TaskGrantStatus,
+    TaskGrantStatusDetails, TaskGrantView, TaskPermission, TaskTemplatePreview,
+    TaskTemplatePreviews, TeamRecord, WorkItem, WorkItemPage, WorkItemRouting, WorkingDaysAfter,
+    WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
 /// The identifier type every item, attempt, and event argument carries, so a

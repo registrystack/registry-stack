@@ -94,14 +94,14 @@ stage() {
 build_core() {
   "${cargo_bin}" build --release --locked \
     -p registry-relayctl -p registry-evidence -p registry-evidencectl \
-    -p registry-mint -p registry-evidence-oid4vci \
+    -p registry-evidence-oid4vci \
     --target "${target}"
 
   stage relayctl "relayctl-${tag}-${asset}"
   test "$("${temporary}/platform/relayctl-${tag}-${asset}" --version)" = \
     "relayctl ${version}"
   local binary
-  for binary in evidence evidencectl mint evidence-oid4vci; do
+  for binary in evidence evidencectl evidence-oid4vci; do
     stage "${binary}" "${binary}-${tag}-${asset}"
   done
 }
@@ -171,7 +171,6 @@ if [[ "${group}" == core || "${group}" == all ]]; then
     "relayctl-${tag}-${asset}"
     "evidence-${tag}-${asset}"
     "evidencectl-${tag}-${asset}"
-    "mint-${tag}-${asset}"
     "evidence-oid4vci-${tag}-${asset}"
   )
 fi

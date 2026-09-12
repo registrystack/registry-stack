@@ -47,6 +47,15 @@ pub struct PostgresRecordMutationService {
 
 impl PostgresRecordMutationService {
     #[must_use]
+    pub fn with_task_status(
+        mut self,
+        checker: Arc<dyn crate::task_grant::TaskGrantStatusChecker>,
+    ) -> Self {
+        self.coordinator = self.coordinator.with_task_status(checker);
+        self
+    }
+
+    #[must_use]
     pub fn with_attachment_storage(
         mut self,
         storage: crate::attachment_storage::AttachmentStorage,
@@ -668,6 +677,10 @@ fn strict_claim_context(
         row_boundaries,
     )
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
+    .and_then(|claims| match context.task_grant() {
+        Some(grant) => claims.with_task_grant(grant.clone()),
+        None => Ok(claims),
+    })
     .map_err(|_| MutationError::InvalidRequest)
 }
 

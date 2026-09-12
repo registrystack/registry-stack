@@ -100,7 +100,7 @@ endpoints:
       hyphen inside pre-authorized that OpenID4VCI gives it, which is what tells
       a wallet holding no client registration that it may redeem a code anyway.
   - path: POST /offers
-    authorization: Mint-issued bearer token, verified as a resource server through the shared OIDC primitive
+    authorization: issuer-issued bearer token, verified as a resource server through the shared OIDC primitive
     rule: >-
       Adopter-facing, never wallet-facing. It accepts a credential
       configuration identifier, the subject selector values that identify who

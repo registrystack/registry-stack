@@ -127,7 +127,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:person:register]
     requiredPurposes: [person-registration]
-    grants:
+    permissions:
       - action: register-person
         operations: [invoke]
         targets: [{entity: person, rowBoundaries: []}]
@@ -141,7 +141,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:person:read]
     requiredPurposes: [person-registration-audit]
-    grants:
+    permissions:
       - {entity: person, operations: [get], readableFields: [identifier, display-name], rowBoundaries: []}
       - {entity: registration, operations: [get], readableFields: [registration-code, person, register], rowBoundaries: []}
       - {entity: register, operations: [get], readableFields: [register-code, active, last-person], rowBoundaries: []}
@@ -149,6 +149,6 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:person:manage]
     requiredPurposes: [person-maintenance]
-    grants:
+    permissions:
       - {entity: person, operations: [create, get, patch], readableFields: [identifier, display-name], writableFields: [identifier, display-name], rowBoundaries: []}
       - {entity: register, operations: [create, get, patch], readableFields: [register-code, active, last-person], writableFields: [register-code, active, last-person], rowBoundaries: []}

@@ -195,6 +195,7 @@ pub struct ClaimContext {
     row_boundaries: Vec<RowBoundaryContext>,
     canonical_row_boundaries: String,
     submitter_targets: BTreeMap<String, ClaimContext>,
+    task_grant: Option<crate::task_grant::TaskGrantBinding>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -220,6 +221,23 @@ impl SpatialBboxContext {
 }
 
 impl ClaimContext {
+    pub(crate) fn with_task_grant(
+        mut self,
+        grant: crate::task_grant::TaskGrantBinding,
+    ) -> Result<Self> {
+        if self.principal.as_deref() != Some(grant.principal())
+            || self.purpose.as_deref() != Some(grant.purpose())
+        {
+            return Err(invalid_context());
+        }
+        self.task_grant = Some(grant);
+        Ok(self)
+    }
+
+    pub fn task_grant(&self) -> Option<&crate::task_grant::TaskGrantBinding> {
+        self.task_grant.as_ref()
+    }
+
     pub fn for_compiled(
         registry: &CompiledRegistry,
         entity_id: &str,
@@ -292,6 +310,7 @@ impl ClaimContext {
             row_boundaries,
             canonical_row_boundaries,
             submitter_targets: BTreeMap::new(),
+            task_grant: None,
         })
     }
 
@@ -323,6 +342,7 @@ impl ClaimContext {
             row_boundaries,
             canonical_row_boundaries,
             submitter_targets: BTreeMap::new(),
+            task_grant: None,
         })
     }
 
@@ -722,7 +742,7 @@ impl ChangeRequestPresenceContext {
             .as_ref()
             .ok_or_else(invalid_context)?;
         let compiled_grant = plan
-            .presence_grants
+            .presence_permissions
             .iter()
             .find(|grant| {
                 grant.profile_id == target_claims.access_profile()
@@ -1062,7 +1082,7 @@ impl ChangeRequestTargetContext {
         let expected = match review_stage {
             Some(stage) => {
                 let grant = plan
-                    .review_grants
+                    .review_permissions
                     .iter()
                     .find(|grant| {
                         grant.profile_id == claims.access_profile()
@@ -1077,7 +1097,7 @@ impl ChangeRequestTargetContext {
             }
             None => {
                 &plan
-                    .apply_grants
+                    .apply_permissions
                     .iter()
                     .find(|grant| {
                         grant.profile_id == claims.access_profile()
@@ -1209,7 +1229,7 @@ impl ChangeRequestTargetContext {
                     return Err(invalid_context());
                 }
                 let grant = plan
-                    .review_grants
+                    .review_permissions
                     .iter()
                     .find(|grant| {
                         grant.profile_id == request_claims.access_profile()
@@ -1235,7 +1255,7 @@ impl ChangeRequestTargetContext {
                     return Err(invalid_context());
                 }
                 let grant = plan
-                    .apply_grants
+                    .apply_permissions
                     .iter()
                     .find(|grant| {
                         grant.profile_id == request_claims.access_profile()
@@ -1453,7 +1473,7 @@ impl ImmediateActionTargetContext {
         }
         validate_action_effect_binding(&effects, &binding)?;
         let grant = action
-            .grants
+            .permissions
             .iter()
             .find(|grant| {
                 grant.profile_id == action_claims.access_profile()
@@ -1719,7 +1739,7 @@ impl ImmediateActionLinkContext {
             return Err(invalid_context());
         }
         let grant = action
-            .grants
+            .permissions
             .iter()
             .find(|grant| {
                 grant.profile_id == action_claims.access_profile()
@@ -2546,7 +2566,7 @@ mod tests {
 
     use crate::compiler::{compile_project, CompileProfile};
     use crate::contract::{
-        parse_project_json, AccessGrantSource, Classification, EntitySource, FieldSource,
+        parse_project_json, AccessPermissionSource, Classification, EntitySource, FieldSource,
         FieldTypeSource, MutationMode, Operation, ProjectAccessProfileSource, RegistryProject,
         RowBoundarySource,
     };
@@ -2743,7 +2763,7 @@ mod tests {
             vec![equals("jurisdiction", "zone-a")],
             binding.clone(),
         )
-        .expect("grouped action target context derives from compiled action grant");
+        .expect("grouped action target context derives from compiled action permission");
         assert!(context
             .canonical_context()
             .contains("\"effectIds\":[\"household-code-update\",\"household-note-update\"]"));
@@ -3150,7 +3170,7 @@ mod tests {
               ],
               "accessProfiles":[{
                 "id":"typed","default":true,"principalClaim":"registry_principal",
-                "grants":[
+                "permissions":[
                   {
                     "entity":"parent-entry","operations":["get"],"readableFields":["name"],
                     "rowBoundaries": []
@@ -3251,10 +3271,13 @@ mod tests {
                     id: "operator".to_owned(),
                     default: true,
                     anonymous: false,
+                    actor_kind: None,
+                    requester_clients: BTreeSet::new(),
+                    task_grant: None,
                     principal_claim: Some("registry_principal".to_owned()),
                     required_scopes: BTreeSet::new(),
                     required_purposes: BTreeSet::from(["operations".to_owned()]),
-                    grants: vec![AccessGrantSource {
+                    permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
@@ -3300,10 +3323,13 @@ mod tests {
                     id: "viewer".to_owned(),
                     default: false,
                     anonymous: false,
+                    actor_kind: None,
+                    requester_clients: BTreeSet::new(),
+                    task_grant: None,
                     principal_claim: Some("registry_principal".to_owned()),
                     required_scopes: BTreeSet::new(),
                     required_purposes: BTreeSet::new(),
-                    grants: vec![AccessGrantSource {
+                    permissions: vec![AccessPermissionSource {
                         membership_boundaries: Vec::new(),
                         entity: "entry".to_owned(),
                         action: None,
@@ -3377,7 +3403,7 @@ mod tests {
                 "default":true,
                 "principalClaim":"registry_principal",
                 "requiredPurposes":["contact-registration"],
-                "grants":[{
+                "permissions":[{
                   "action":"rename-household-local",
                   "operations":["invoke"],
                   "targets":[{"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}],
@@ -3434,7 +3460,7 @@ mod tests {
               "accessProfiles":[
                 {
                   "id":"steward","default":true,"principalClaim":"registry_principal",
-                  "grants":[{
+                  "permissions":[{
                     "entity":"asset-placement",
                     "operations":["get","list"],
                     "readableFields":["tenant","site"],
@@ -3444,7 +3470,7 @@ mod tests {
                 },
                 {
                   "id":"submitter","default":true,"principalClaim":"registry_principal",
-                  "grants":[{
+                  "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["create","get","list","patch","submit_request","revise_request"],
                     "readableFields":["placement","proposed-site","reason"],
@@ -3454,7 +3480,7 @@ mod tests {
                 },
                 {
                   "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
-                  "grants":[{
+                  "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","list","approve_request","reject_request","request_revision"],
                     "readableFields":["placement","proposed-site","reason"],
@@ -3471,7 +3497,7 @@ mod tests {
                 },
                 {
                   "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-                  "grants":[{
+                  "permissions":[{
                     "entity":"placement-correction-request",
                     "operations":["get","apply_request"],
                     "readableFields":["placement","proposed-site","reason"],

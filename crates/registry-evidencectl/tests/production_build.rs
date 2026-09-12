@@ -1264,8 +1264,6 @@ authentication:
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
-  grantIdClaim: evidence_grant_id
-  grantAuthorityClaim: evidence_authority
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit: {format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}

@@ -192,7 +192,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     &format!("this profile grants {} and names no writable field, so every write naming a field is refused and a required field can never be supplied. List the fields this profile may write, or remove the write operations", write_operations.join(", "))));
             }
             // A row boundary compiles to an INSERT `WITH CHECK` pinning its field to
-            // the caller's claim, so a grant that creates must keep the field
+            // the caller's claim, so a permission that creates must keep the field
             // writable. The record id is never a writable field, so a boundary on it
             // is outside that advice.
             let creates = profile.operations.contains(&Operation::Create);
@@ -230,7 +230,7 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                     .filter(|field| !profile.writable_fields.contains(**field))
                 {
                     findings.push(Diagnostic::finding("access.profile.row_boundary_not_writable", format!("{path}.writableFields"),
-                        &format!("create is granted, but row boundary field `{field}` is not writable: a create cannot name it, the row policy pins it to the caller's claim on insert, and every create is refused. Add `{field}` to writableFields, or remove create from this grant")));
+                        &format!("create is permitted, but row boundary field `{field}` is not writable: a create cannot name it, the row policy pins it to the caller's claim on insert, and every create is refused. Add `{field}` to writableFields, or remove create from this permission")));
                 }
             }
             if profile.revision_access && profile.operations.contains(&Operation::Revisions) {
@@ -260,23 +260,23 @@ pub(crate) fn access_findings(entities: &BTreeMap<String, EntitySource>) -> Vec<
                         "this field is more sensitive than its entity's classification; verify the profile's scope and purpose before disclosing it"));
                 }
             }
-            for grant in &profile.read_paths {
-                findings.push(Diagnostic::finding("access.profile.related_disclosure", format!("{path}.readPaths[path={}]", grant.path),
-                    "this grant discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through entity accessRequirements"));
+            for permission in &profile.read_paths {
+                findings.push(Diagnostic::finding("access.profile.related_disclosure", format!("{path}.readPaths[path={}]", permission.path),
+                    "this permission discloses related records using the root profile, not target direct-access profiles; review its fields and the target/through entity accessRequirements"));
             }
         }
     }
     findings
 }
 
-/// Findings on target grants after their types and referenced entities have compiled.
+/// Findings on target permissions after their types and referenced entities have compiled.
 pub(crate) fn compiled_access_findings(
     entities: &BTreeMap<String, CompiledEntity>,
     actions: &CompiledActionInventory,
 ) -> Vec<Diagnostic> {
     let mut findings = Vec::new();
     for reach in row_reach(entities, actions) {
-        // Ordinary grants retain their existing finding codes above.
+        // Ordinary permissions retain their existing finding codes above.
         if reach.surface == "entity" {
             continue;
         }
@@ -286,14 +286,14 @@ pub(crate) fn compiled_access_findings(
                 .is_some_and(|entity| entity.classification != Classification::Public)
         {
             findings.push(Diagnostic::finding("access.target.unrestricted_rows", &reach.source_path,
-                "this target grant has no claim-bound row restriction, within its configured operation and field limits. Review this registry-wide target authority"));
+                "this target permission has no claim-bound row restriction, within its configured operation and field limits. Review this registry-wide target authority"));
         }
     }
     for action in &actions.actions {
-        for grant in &action.grants {
+        for grant in &action.permissions {
             if !grant.anonymous && grant.required_scopes.is_empty() {
                 findings.push(Diagnostic::finding("access.action.no_required_scope",
-                    format!("actions[id={}].grants[profile={}].requiredScopes", action.id, grant.profile_id),
+                    format!("actions[id={}].permissions[profile={}].requiredScopes", action.id, grant.profile_id),
                     "no scope restricts who may select this action profile; any authenticated principal satisfying its purpose and target claims qualifies. Add a required scope unless this is intended"));
             }
         }
@@ -328,7 +328,7 @@ pub struct EntityAccessExplanation {
     pub profiles: Vec<AccessProfileSource>,
 }
 
-/// Configuration locations identify compiled grants, not original file line numbers.
+/// Configuration locations identify compiled permissions, not original file line numbers.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RowReachExplanation {
@@ -446,13 +446,13 @@ fn row_reach(
         }
     }
     for action in &actions.actions {
-        for grant in &action.grants {
+        for grant in &action.permissions {
             for target in &grant.targets {
                 add(
                     &target.entity_id,
                     &grant.profile_id,
                     format!(
-                        "actions[id={}].grants[profile={}].targets[entity={}].rowBoundaries",
+                        "actions[id={}].permissions[profile={}].targets[entity={}].rowBoundaries",
                         action.id, grant.profile_id, target.entity_id
                     ),
                     "action_target",
@@ -482,11 +482,16 @@ pub fn explain_access(registry: &CompiledRegistry) -> AccessExplanation {
         missing_claims: "missing required direct claims cannot satisfy their row boundary or verified-claim lookup; types and scalar/set shape are listed in claimContract",
         evaluation: "configuration inspection only; credentials and record access are not evaluated",
         routes: registry.access().clone(),
-        entities: registry.entities().values().map(|entity| EntityAccessExplanation {
-            entity: entity.id.clone(), classification: entity.classification,
-            requirements: entity.access_requirements.clone(),
-            profiles: entity.access_profiles.values().cloned().collect(),
-        }).collect(),
+        entities: registry
+            .entities()
+            .values()
+            .map(|entity| EntityAccessExplanation {
+                entity: entity.id.clone(),
+                classification: entity.classification,
+                requirements: entity.access_requirements.clone(),
+                profiles: entity.access_profiles.values().cloned().collect(),
+            })
+            .collect(),
         actions: registry.actions().clone(),
         row_reach: row_reach(registry.entities(), registry.actions()),
         claim_contract,

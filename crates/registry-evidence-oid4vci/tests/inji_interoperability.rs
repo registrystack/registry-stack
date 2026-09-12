@@ -318,7 +318,7 @@ listener:
   port: 8090
 evidence:
   baseUrl: https://evidence.example.org
-mint:
+tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyFile: unused-in-wired-test.jwk
@@ -676,7 +676,7 @@ metricsListener:
   port: 18441
 evidence:
   baseUrl: {SUPPORT_ORIGIN}
-mint:
+tokenClient:
   tokenEndpoint: {SUPPORT_ORIGIN}/token
   clientId: evidence-oid4vci-tutorial
   privateKeyFile: delivery-client.jwk.json
@@ -713,6 +713,39 @@ fn offer_access_token(issuer: &FixtureIssuer) -> String {
             "iat": now,
             "exp": now + 300,
             "jti": "synthetic-tutorial-offer-authorization",
+        }),
+    )
+}
+
+fn task_bound_offer_access_token(issuer: &FixtureIssuer) -> String {
+    let now = Utc::now().timestamp();
+    signed_jwt(
+        &issuer.signing_key,
+        json!({
+            "alg": "ES256",
+            "typ": "at+jwt",
+            "kid": issuer.signing_public["kid"],
+        }),
+        json!({
+            "iss": SUPPORT_ORIGIN,
+            "sub": "tutorial-operator",
+            "client_id": "tutorial-operator",
+            "aud": ADOPTER_ORIGIN,
+            "iat": now,
+            "exp": now + 300,
+            "jti": "synthetic-task-bound-offer-authorization",
+            "registry_actor_kind": "agent",
+            "registry_grant_id": "synthetic-task-grant",
+            "registry_grant_authority": "synthetic-casework-authority",
+            "registry_grant_source_issuer": "https://casework.example.org",
+            "registry_grant_client": "tutorial-operator",
+            "registry_grant_resource": ADOPTER_ORIGIN,
+            "registry_purpose": PURPOSE,
+            "registry_grant_exp": now + 300,
+            "registry_grant_bounds": {
+                "type": "evidence",
+                "requirement": CONFIGURATION_ID,
+            },
         }),
     )
 }
@@ -928,6 +961,31 @@ async fn copied_config_checks_starts_and_completes_the_real_binary_journey() {
         .json()
         .await
         .expect("authorization metadata is JSON");
+
+    let task_bound = client
+        .post(format!("{ADOPTER_ORIGIN}{OFFERS_PATH}"))
+        .bearer_auth(task_bound_offer_access_token(&issuer))
+        .json(&json!({
+            "credentialConfigurationId": configuration_id,
+            "subjects": [{
+                "role": "primary",
+                "selectorValues": {"identifier": "synthetic-tutorial-subject"},
+            }],
+        }))
+        .send()
+        .await
+        .expect("task-bound offer refusal responds");
+    assert_eq!(task_bound.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let refusal: Value = task_bound
+        .json()
+        .await
+        .expect("task-bound offer refusal is JSON");
+    assert_eq!(refusal["error"], "invalid_token");
+    assert_eq!(
+        refusal["error_description"],
+        "the presented credential was refused"
+    );
+    println!("TASK GRANT REFUSED: deferred wallet state was not created");
 
     let offer: Value = client
         .post(format!("{ADOPTER_ORIGIN}{OFFERS_PATH}"))

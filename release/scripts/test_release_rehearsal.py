@@ -52,7 +52,8 @@ class ReleaseRehearsalTest(unittest.TestCase):
             index for index, step in enumerate(steps)
             if step.get("name") == "Setup Node"
         ))
-        env = {**os.environ, "REHEARSAL_VERSION": "0.30.0"}
+        # Exercise the current post-Mint inventory, not published v0.30.0.
+        env = {**os.environ, "REHEARSAL_VERSION": "0.30.1"}
         for advisory, code in (("false", 1), ("true", 0), ("invalid", 2)):
             with self.subTest(advisory=advisory):
                 result = subprocess.run(

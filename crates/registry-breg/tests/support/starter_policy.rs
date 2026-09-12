@@ -8,8 +8,10 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::Router;
+use registry_breg::contract::{ActorKindSource, ProjectAccessProfileSource, RegistryProject};
 use registry_breg::fixtures::ValidatedFixtureJourneys;
 use serde_json::{json, Value};
+use std::collections::BTreeSet;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -128,6 +130,7 @@ async fn professional_licence_starter_policy_journeys_and_http_refusals() {
 
 async fn run_starter(starter: &Starter) {
     let project = parse_project_yaml(starter.project).expect("authored starter parses");
+    let requester_clients = requester_clients(&project);
     let registry = compile_project(&project, &[], CompileProfile::Production)
         .expect("authored starter compiles without policy substitutions");
     let fingerprint = measure_compiled_schema_fingerprint(&registry).await;
@@ -136,7 +139,7 @@ async fn run_starter(starter: &Starter) {
         let suite = validate_fixture_journeys(bytes, &registry).expect("starter suite preflights");
         let package = starter_package(starter.project, bytes, &fingerprint);
         let database = TestDatabase::create(8).await;
-        let config_path = starter_runtime_config(&package, &database, &idp);
+        let config_path = starter_runtime_config(&package, &database, &idp, &requester_clients);
         let config = load_runtime_config(&config_path).expect("starter runtime config loads");
         let prepared_database = prepare_schema_test_database_with_connection_configs_for_test(
             &config,
@@ -151,7 +154,7 @@ async fn run_starter(starter: &Starter) {
             &config,
             &package.prepared,
             &suite,
-            authored_credentials(bytes, &suite, &idp),
+            authored_credentials(bytes, &suite, &idp, &requester_clients),
         )
         .await
         .unwrap_or_else(|error| {
@@ -175,6 +178,8 @@ async fn run_starter(starter: &Starter) {
             let http = StarterHttp {
                 app: server.app(),
                 idp: &idp,
+                profiles: &project.access_profiles,
+                requester_clients: requester_clients.clone(),
             };
             assert_http_policy(starter, &http).await;
             drop(server);
@@ -253,6 +258,7 @@ fn starter_runtime_config(
     package: &PackageFixture,
     database: &TestDatabase,
     idp: &MockIdp,
+    requester_clients: &BTreeSet<String>,
 ) -> std::path::PathBuf {
     // Reuse this target's static-JWKS, bounded-pool, private-secret setup. Only
     // replace deployment identity with the actual authored local package.
@@ -264,6 +270,21 @@ fn starter_runtime_config(
     config["identity"]["instanceId"] = json!(manifest.instance_id);
     config["identity"]["databaseId"] = json!(manifest.database_id);
     config["package"]["compilerSourceRevision"] = json!(manifest.compiler.source_revision);
+    if !requester_clients.is_empty() {
+        config["authentication"]["oidc"]["allowedClients"] = json!(requester_clients);
+    }
+    config["authentication"]["authorityClaims"]["contextual"] = json!({
+        "actorKind": "registry_actor_kind",
+        "purpose": "registry_purpose",
+        "grantId": "registry_grant_id",
+        "grantAuthority": "registry_grant_authority",
+        "grantSourceIssuer": "registry_grant_source_issuer",
+        "grantClient": "registry_grant_client",
+        "grantResource": "registry_grant_resource",
+        "grantExp": "registry_grant_exp",
+        "grantBounds": "registry_grant_bounds",
+        "approver": "registry_approver"
+    });
     write_private(&path, serde_norway::to_string(&config).unwrap().as_bytes());
     path
 }
@@ -272,6 +293,7 @@ fn authored_credentials(
     bytes: &[u8],
     suite: &ValidatedFixtureJourneys,
     idp: &MockIdp,
+    requester_clients: &BTreeSet<String>,
 ) -> SchemaTestCredentialBindings {
     let source: Value = serde_norway::from_slice(bytes).expect("authored journeys parse");
     let mut bindings = Vec::new();
@@ -285,12 +307,22 @@ fn authored_credentials(
                 .map(|value| value.as_str().unwrap())
                 .collect::<Vec<_>>()
                 .join(" ");
-            let token = idp.mint_token(json!({
+            let mut token_claims = json!({
                 "aud": AUDIENCE,
                 "registry_principal": claims["principal"],
                 "registry_purpose": claims["purpose"],
                 "scope": scopes,
-            }));
+            });
+            if let Some(client) = claims["requesterClient"]
+                .as_str()
+                .or_else(|| requester_clients.first().map(String::as_str))
+            {
+                token_claims["client_id"] = json!(client);
+            }
+            if !claims["actorKind"].is_null() {
+                token_claims["registry_actor_kind"] = claims["actorKind"].clone();
+            }
+            let token = idp.mint_token(token_claims);
             bindings.push(SchemaTestCredentialBinding::bearer(
                 journey["id"].as_str().unwrap(),
                 step["id"].as_str().unwrap(),
@@ -310,6 +342,8 @@ struct Actor<'a> {
 struct StarterHttp<'a> {
     app: Router,
     idp: &'a MockIdp,
+    profiles: &'a [ProjectAccessProfileSource],
+    requester_clients: BTreeSet<String>,
 }
 
 impl StarterHttp<'_> {
@@ -322,7 +356,27 @@ impl StarterHttp<'_> {
         body: Option<Value>,
         extra_headers: &[(&str, &str)],
     ) -> (StatusCode, Value, HeaderMap) {
-        let token = self.idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": actor.principal, "registry_purpose": "starter-learning", "scope": actor.scope}));
+        let mut token_claims = json!({"aud": AUDIENCE, "registry_principal": actor.principal, "registry_purpose": "starter-learning", "scope": actor.scope});
+        let authored_profile = self
+            .profiles
+            .iter()
+            .find(|candidate| candidate.id == profile)
+            .expect("HTTP fixture profile is authored");
+        if let Some(client) = authored_profile
+            .requester_clients
+            .first()
+            .or_else(|| self.requester_clients.first())
+        {
+            token_claims["client_id"] = json!(client);
+        }
+        if let Some(actor_kind) = authored_profile.actor_kind {
+            token_claims["registry_actor_kind"] = json!(match actor_kind {
+                ActorKindSource::Human => "human",
+                ActorKindSource::Agent => "agent",
+                ActorKindSource::Service => "service",
+            });
+        }
+        let token = self.idp.mint_token(token_claims);
         let separator = if path.contains('?') { '&' } else { '?' };
         let mut request = Request::builder()
             .method(method)
@@ -408,6 +462,14 @@ impl StarterHttp<'_> {
             .unwrap()
             .to_owned()
     }
+}
+
+fn requester_clients(project: &RegistryProject) -> BTreeSet<String> {
+    project
+        .access_profiles
+        .iter()
+        .flat_map(|profile| profile.requester_clients.iter().cloned())
+        .collect()
 }
 
 async fn selected_action(

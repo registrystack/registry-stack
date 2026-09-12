@@ -289,6 +289,7 @@ fn token(idp: &MockIdp, scope: &str, asserted_kind: Option<Value>) -> String {
 
 fn project() -> CaseworkProject {
     CaseworkProject {
+        task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
         kind: CASEWORK_KIND.to_owned(),
         casework: CaseworkIdentity {

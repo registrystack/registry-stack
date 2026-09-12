@@ -147,22 +147,20 @@ synthetic deployment subject, retain the signed response, verify it against an
 independently prepared `production` policy and trusted keys, and run
 `evidence verify-audit` over the resulting audit chain.
 
-An existing HTTPS OIDC issuer and Registry Mint are equal authentication
-choices for Evidence. Mint is a separate process and separately authored
-configuration. When used, the operator runs `mint check --config <mint.yaml>`
-and the read-only paired check
-`evidencectl artifact inspect <candidate> --mint-config <mint.yaml>`. The
-paired check compares only issuer, JWKS URI, audiences, signing algorithm,
-token type, and configured principal, requester-tag, evidence-audience,
-grant-id, grant-authority, and optional actor claim names. It does not decide
-authority, register a client, copy Mint material, or issue a token.
+Configure an HTTPS OIDC issuer independently of Evidence. Its client registration
+must bind the approved resource and scopes; the Evidence runtime pins issuer,
+JWKS URI, audiences, allowed algorithms, token types, and claim mappings.
+Inspect the candidate with `evidencectl artifact inspect <candidate>` and verify
+an actual issuer-to-resource request at handoff. Inspection does not register a
+client, decide authority, or issue a token. Maintained local tooling uses pinned
+stock ThunderID.
 
 Docker Compose remains a documented deployment adapter, never build output.
 It mounts the approved candidate bundle unchanged and read-only, supplies a
 separate container runtime file and owner-readable secret mounts, gives only
 the audit path persistent writable storage, binds Evidence privately, and
-keeps public TLS and routing operator-controlled. A Compose deployment with
-Mint retains its public HTTPS issuer and JWKS URI: internal plain-HTTP service
+keeps public TLS and routing operator-controlled. The OIDC issuer retains its
+public HTTPS issuer identity and JWKS URI: internal plain-HTTP service
 names do not replace either value. Container images and their provenance are
 operator responsibilities; Version 1 proves this journey with released bare
 binaries, not generated containers or orchestrator manifests.
@@ -178,15 +176,12 @@ shared/
   evidence-project/
 environments/
   local/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
+    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
   staging/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
+    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
     transit/{proxy-configs/,policies/}
   production/
-    evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
+    evidence/{evidence.yaml,governance.yaml,source-keys/,secrets/}
     transit/{proxy-configs/,policies/}
 ```
 
@@ -500,8 +495,8 @@ Emergency rotation has no overlap guarantee. First disable provider signing
 authority for the compromised version. Then remove its public JWK, add its
 thumbprint to `revokedKeyIds`, activate a replacement or leave the service
 unavailable, and restart every issuer and verifier that consumes the key set.
-If the compromised key issued Mint access tokens, add that Mint identifier to
-Evidence authentication `revokedKeyIds` in the same incident rollout. This
+If the compromised key issued access tokens, add its key identifier to Evidence
+authentication `revokedKeyIds` in the same incident rollout. This
 shortens availability when necessary and is intentionally stronger than the
 ordinary validity window.
 
@@ -1162,9 +1157,9 @@ the deployment's responsibility, not Evidence's; Evidence resolves its own
 configured destination and never inspects mounts. Failures name which side
 failed and no path.
 
-For `assuranceProfile: local`, supervised Mint may use the exact canonical
+For `assuranceProfile: local`, a supervised issuer may use the exact canonical
 issuer origin `http://127.0.0.1:<non-zero-port>` only when `jwksUri` is the
-same origin plus `/.well-known/jwks.json`. Production and evidence-grade, and
+same origin plus `/.well-known/jwks.json` or `/oauth2/jwks`. Production and evidence-grade, and
 every other authentication location, remain HTTPS-only.
 
 `disclosureGuard.families` is a trusted bundle-review attestation, not a

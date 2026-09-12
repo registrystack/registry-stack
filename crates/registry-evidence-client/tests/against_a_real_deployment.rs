@@ -17,20 +17,24 @@
 //! Nothing in the fixture names a source product.
 //!
 //! Most cases are their own token issuer: the suite publishes a key set and signs
-//! the credentials it presents. The credential-acquisition cases instead run a
-//! real authorization server on its own loopback origin and let the client's
-//! provider authenticate to it with a signed client assertion, so acquisition,
-//! caching, and refusal are proven against a server that enforces the grant
-//! rather than against a stub of this crate's making.
+//! the credentials it presents. Fast credential-acquisition cases use a strict
+//! OAuth protocol fixture to isolate acquisition, caching, and refusal. An
+//! ignored exact gate repeats the complete request against the installed pinned
+//! stock issuer.
 
 use std::{
+    collections::{BTreeMap, HashMap},
     error::Error,
     fs,
+    io::{Read, Write},
     net::TcpListener,
     os::unix::fs::PermissionsExt as _,
     path::{Path, PathBuf},
-    sync::Arc,
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -38,28 +42,34 @@ use chrono::Utc;
 use p256::{ecdsa::SigningKey, elliptic_curve::rand_core::OsRng};
 use registry_evidence::{runtime::EvidenceRuntime, server};
 use registry_evidence_client::{
-    AssuranceProfile, AudienceScopedRequest, ConceptForm, DefinitionCardinality, DefinitionKind,
-    EvidenceClient, EvidenceClientConfig, EvidenceClientError, EvidenceDefinitionsDocument,
-    EvidenceRequestSpec, EvidenceResponseFormat, OAuthErrorCode, PrivateKeyJwt,
-    PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue, SelectorValueOrigin,
-    StaticToken, SubjectContinuity, SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
-    TransportKind, VerificationError, VerifiedAudienceScopedEvidence,
+    AssuranceProfile, AudienceScopedRequest, BearerToken, ConceptForm, DefinitionCardinality,
+    DefinitionKind, EvidenceClient, EvidenceClientConfig, EvidenceClientError,
+    EvidenceDefinitionsDocument, EvidenceRequestSpec, EvidenceResponseFormat, OAuthErrorCode,
+    PrivateKeyJwt, PrivateKeyJwtConfig, PublicValue, SelectorField, SelectorValue,
+    SelectorValueOrigin, StaticToken, SubjectContinuity, SubjectExpectations, SubjectRequest,
+    TokenError, TokenProvider, TransportKind, VerificationError, VerifiedAudienceScopedEvidence,
     EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
-use registry_mint::{
-    config::MintConfig,
-    server::{self as mint_server, MintService},
+use registry_platform_crypto::{sign, verify, PrivateJwk, PublicJwk};
+use registry_thunderid_tooling::{
+    container::Session,
+    description::{
+        Action, ExchangeIssuer, MachineClient, Resource, ResourceServer, Role, SessionIdentity,
+        TokenExchangeClient,
+    },
+    local::{self, TypedLocalClient},
+    render,
+    version::ThunderIdPin,
 };
-use registry_platform_crypto::{sign, PrivateJwk, PublicJwk};
 use serde_json::{json, Value};
 use url::Url;
 use wiremock::{
     matchers::{method, path},
-    Mock, MockServer, ResponseTemplate,
+    Mock, MockServer, Request as WiremockRequest, ResponseTemplate,
 };
 
 /// Vocabulary the tracked acceptance fixture publishes.
-const TOKEN_AUDIENCE: &str = "evidence-fixture";
+const TOKEN_AUDIENCE: &str = "urn:registry:evidence:fixture";
 const CONFIGURED_TAG: &str = "fixture-agency";
 const REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
 const FIXTURE_SIGNING_KEY_ID: &str = "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo";
@@ -74,8 +84,17 @@ const SOURCE_BEARER: &str = "source-bearer-canary";
 /// signs its assertions with, and the key the authorization server signs the
 /// credentials it issues with.
 const CLIENT_ID: &str = "client-suite-relying-party";
+const TASK_CLIENT_ID: &str = "evidence-task-agent";
 const CLIENT_KEY_ID: &str = "client-suite-client-key";
 const ES256_CLIENT_KEY_ID: &str = "client-suite-client-key-es256";
+const TASK_CLIENT_KEY_ID: &str = "evidence-task-agent-key";
+const TASK_CLIENT_AGENT_ID: &str = "0197aaaa-0000-7000-8000-0000000000a1";
+const TASK_CLIENT_ROLE_ID: &str = "0197aaaa-0000-7000-8000-0000000000c1";
+const TASK_AUTHORITY_RESOURCE_ID: &str = "0197aaaa-0000-7000-8000-0000000000b1";
+const TASK_AUTHORITY_ISSUER_ID: &str = "0197aaaa-0000-7000-8000-0000000000d1";
+const TASK_AUTHORITY_PROFILE: &str = "statutory-caseworker-v1";
+const TASK_BOOTSTRAP_RESOURCE: &str = "urn:registry:evidence:fixture:task-authority";
+const TASK_BOOTSTRAP_SCOPE: &str = "grants:assert";
 
 /// The shortest access token lifetime the authorization server accepts. The
 /// refresh margin case needs a margin wider than a whole credential's life.
@@ -520,9 +539,9 @@ async fn a_response_beyond_the_configured_bound_is_refused() {
 }
 
 /// The whole chain, with no credential this suite signed: the provider proves who
-/// it is to a real authorization server with a signed assertion, the server issues
-/// an access token, and the deployment accepts that token for an exchange whose
-/// response verifies.
+/// it is to a protocol-faithful authorization endpoint with a signed assertion,
+/// the endpoint issues an access token, and the deployment accepts that token
+/// for an exchange whose response verifies.
 #[tokio::test]
 async fn an_acquired_credential_completes_a_verified_exchange() {
     let issuer = start_token_issuer().await;
@@ -849,15 +868,15 @@ async fn a_credential_inside_the_refresh_margin_is_replaced() {
     assert_eq!(format!("{second:?}"), "BearerToken { .. }");
 }
 
-/// An ES256 client key authenticates against a real token endpoint and carries a
+/// An ES256 client key authenticates against the test token endpoint and carries a
 /// request all the way to a verified assertion.
 ///
 /// This is the key an adopter actually holds: `evidencectl access client add
 /// --generate-local-key` writes a P-256/ES256 JWK, and the published tutorial
 /// feeds that file straight into this provider. The client therefore has to sign
-/// with what the key states rather than one fixed algorithm, and the proof that
-/// it does is a real server accepting the assertion, not a header assertion in a
-/// unit test.
+/// with what the key states rather than one fixed algorithm. The pinned stock
+/// issuer acceptance below repeats that algorithm negotiation with the installed
+/// server.
 #[tokio::test]
 async fn an_es256_client_key_authenticates_and_carries_a_request() {
     let issuer = start_token_issuer().await;
@@ -890,10 +909,9 @@ async fn an_es256_client_key_authenticates_and_carries_a_request() {
 }
 
 /// A client whose key the authorization server never registered acquires
-/// nothing, and the failure is the registered OAuth code. This is proven
-/// against the issuer's own audit chain, which records zero credentials
-/// issued; it does not observe the Evidence deployment's own request count,
-/// only that `discover` returns the token failure before it would reach one.
+/// nothing, and the failure is the registered OAuth code. The fixture's release
+/// counter remains zero; it does not observe the Evidence deployment's own
+/// request count, only that `discover` returns the token failure first.
 #[tokio::test]
 async fn an_unregistered_client_key_is_refused_without_detail() {
     let issuer = start_token_issuer().await;
@@ -1109,6 +1127,7 @@ struct Deployment {
     base_url: Url,
     runtime: Arc<EvidenceRuntime>,
     bundle_root: PathBuf,
+    audit_path: PathBuf,
     runtime_path: PathBuf,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     server: tokio::task::JoinHandle<std::io::Result<()>>,
@@ -1174,6 +1193,7 @@ impl Deployment {
             "sub": PRINCIPAL,
             "iat": now - 1,
             "exp": now + 60,
+            "registry_actor_kind": "service",
             "evidence_tags": requester_tags,
             "evidence_audience": RELYING_AUDIENCE,
         });
@@ -1215,7 +1235,7 @@ async fn start(source_answer: Value) -> Deployment {
 /// signs the credentials it presents. With one, the deployment fetches keys from
 /// that origin and only credentials that server issued are accepted.
 async fn start_trusting(source_answer: Value, external_issuer: Option<&str>) -> Deployment {
-    start_trusting_with_request_burst(source_answer, external_issuer, 10).await
+    start_trusting_with_request_burst_and_jwks(source_answer, external_issuer, None, 10).await
 }
 
 /// Start a deployment with an explicit request burst ceiling.
@@ -1228,6 +1248,50 @@ async fn start_trusting_with_request_burst(
     source_answer: Value,
     external_issuer: Option<&str>,
     request_burst: u32,
+) -> Deployment {
+    start_trusting_with_request_burst_and_jwks(source_answer, external_issuer, None, request_burst)
+        .await
+}
+
+async fn start_trusting_with_request_burst_and_jwks(
+    source_answer: Value,
+    external_issuer: Option<&str>,
+    external_jwks_uri: Option<&str>,
+    request_burst: u32,
+) -> Deployment {
+    start_trusting_with_request_burst_jwks_and_task_authority(
+        source_answer,
+        external_issuer,
+        external_jwks_uri,
+        request_burst,
+        None,
+    )
+    .await
+}
+
+async fn start_task_grant_deployment(
+    source_answer: Value,
+    issuer: &StockTokenIssuer,
+    authority: &SyntheticAssertionAuthority,
+    request_burst: u32,
+) -> Deployment {
+    let jwks_uri = issuer.jwks_uri();
+    start_trusting_with_request_burst_jwks_and_task_authority(
+        source_answer,
+        Some(&issuer.origin),
+        Some(&jwks_uri),
+        request_burst,
+        Some(authority.issuer()),
+    )
+    .await
+}
+
+async fn start_trusting_with_request_burst_jwks_and_task_authority(
+    source_answer: Value,
+    external_issuer: Option<&str>,
+    external_jwks_uri: Option<&str>,
+    request_burst: u32,
+    task_authority: Option<&str>,
 ) -> Deployment {
     let source = start_mock_server().await;
     let auth_key = generate_key(AUTH_KEY_ID);
@@ -1248,6 +1312,9 @@ async fn start_trusting_with_request_burst(
             source.uri()
         }
     };
+    let issuer_jwks_uri = external_jwks_uri
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("{issuer}/.well-known/jwks.json"));
 
     // Matched on method and path only. The request the adapter builds is the
     // runtime's own contract, proven by the runtime's suite; re-pinning it here
@@ -1281,9 +1348,13 @@ async fn start_trusting_with_request_burst(
         &bundle_root,
         &source.uri(),
         &issuer,
+        &issuer_jwks_uri,
         &format!("http://127.0.0.1:{port}"),
         signing_key_id,
     );
+    if let Some(task_authority) = task_authority {
+        rewrite_for_task_grant_profile(&bundle_root, task_authority);
+    }
     rewrite_request_burst(&bundle_root, request_burst);
     fs::remove_file(
         bundle_root
@@ -1343,6 +1414,7 @@ async fn start_trusting_with_request_burst(
         base_url: Url::parse(&format!("http://127.0.0.1:{port}")).expect("the base URL parses"),
         runtime,
         bundle_root,
+        audit_path,
         runtime_path,
         shutdown: Some(shutdown_tx),
         server,
@@ -1417,27 +1489,16 @@ async fn await_readiness(
 // The token issuer harness
 // ---------------------------------------------------------------------------
 
-/// One real authorization server, issuing access tokens on loopback for the life
-/// of one test.
-///
-/// It is the reference issuer for this stack, driven here as an ordinary OAuth 2.0
-/// token endpoint: the provider under test carries nothing specific to it, and any
-/// server accepting the `client_credentials` grant with the `private_key_jwt`
-/// authentication method would serve.
+/// A small protocol fixture for fast client cache and refusal cases. Exact
+/// compatibility with the maintained issuer is covered by the ignored stock
+/// issuer acceptance below.
 struct TokenIssuer {
     origin: String,
     token_endpoint: Url,
-    /// The key the registered client signs its assertions with.
     client_key: PrivateJwk,
-    /// A second key registered to the same client, signing with ES256.
     es256_client_key: PrivateJwk,
-    /// The issuer's own audit chain, which is where a released credential is
-    /// recorded and therefore how this suite counts what it issued.
-    audit_path: PathBuf,
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-    server: tokio::task::JoinHandle<std::io::Result<()>>,
-    /// Held so the deployment on disk outlives the service that reads it.
-    _directory: tempfile::TempDir,
+    issued: Arc<AtomicUsize>,
+    _server: MockServer,
 }
 
 impl TokenIssuer {
@@ -1462,181 +1523,988 @@ impl TokenIssuer {
         client_key: PrivateJwk,
         refresh_margin_seconds: Option<i64>,
     ) -> Arc<PrivateKeyJwt> {
-        // The assertion audience is left to its default, which is the token
-        // endpoint URL. This server requires exactly that, so the default is what
-        // is under test.
         let mut config =
-            PrivateKeyJwtConfig::new(self.token_endpoint.clone(), CLIENT_ID, client_key);
+            PrivateKeyJwtConfig::new(self.token_endpoint.clone(), CLIENT_ID, client_key)
+                .with_resource(TOKEN_AUDIENCE)
+                .with_scopes(["evidence:invoke".to_owned()]);
         if let Some(seconds) = refresh_margin_seconds {
             config = config.with_refresh_margin_seconds(seconds);
         }
         Arc::new(PrivateKeyJwt::new(config).expect("the provider configuration is usable"))
     }
 
-    /// How many credentials this server has released.
-    ///
-    /// The audit chain is written before a credential leaves the endpoint, so a
-    /// count taken after an exchange has settled includes every release that
-    /// exchange caused.
     fn issued_credential_count(&self) -> usize {
-        let chain =
-            fs::read_to_string(&self.audit_path).expect("the issuer audit chain is readable");
-        chain
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                serde_json::from_str::<Value>(line).expect("every audit line is one JSON envelope")
-            })
-            .filter(|envelope| envelope["record"]["decision"] == json!("issued"))
-            .count()
+        self.issued.load(Ordering::SeqCst)
     }
 }
 
-impl Drop for TokenIssuer {
-    fn drop(&mut self) {
-        // The temporary deployment the abandoned task reads is removed with this
-        // struct, and the process ends with the test binary.
-        stop_service(&mut self.shutdown, &self.server);
+#[derive(Clone)]
+struct ClientCredentialsResponder {
+    origin: String,
+    token_endpoint: String,
+    client_keys: BTreeMap<String, PublicJwk>,
+    signing_key: PrivateJwk,
+    issued: Arc<AtomicUsize>,
+}
+
+impl ClientCredentialsResponder {
+    fn invalid_client() -> ResponseTemplate {
+        ResponseTemplate::new(401).set_body_json(json!({"error":"invalid_client"}))
+    }
+
+    fn assertion_is_valid(&self, request: &WiremockRequest) -> bool {
+        let form = url::form_urlencoded::parse(&request.body)
+            .into_owned()
+            .collect::<HashMap<_, _>>();
+        if form.get("grant_type").map(String::as_str) != Some("client_credentials")
+            || form.get("client_assertion_type").map(String::as_str)
+                != Some("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+            || !matches!(
+                form.get("resource").map(String::as_str),
+                None | Some(TOKEN_AUDIENCE)
+            )
+            || !matches!(
+                form.get("scope").map(String::as_str),
+                None | Some("evidence:invoke")
+            )
+        {
+            return false;
+        }
+        let Some(assertion) = form.get("client_assertion") else {
+            return false;
+        };
+        let mut parts = assertion.split('.');
+        let (Some(header_segment), Some(payload_segment), Some(signature), None) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            return false;
+        };
+        let Ok(header): Result<Value, _> = URL_SAFE_NO_PAD
+            .decode(header_segment)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or(())
+        else {
+            return false;
+        };
+        let Some(key) = header["kid"]
+            .as_str()
+            .and_then(|kid| self.client_keys.get(kid))
+        else {
+            return false;
+        };
+        let Ok(signature) = URL_SAFE_NO_PAD.decode(signature) else {
+            return false;
+        };
+        if verify(
+            format!("{header_segment}.{payload_segment}").as_bytes(),
+            &signature,
+            key,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let Ok(claims): Result<Value, _> = URL_SAFE_NO_PAD
+            .decode(payload_segment)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .ok_or(())
+        else {
+            return false;
+        };
+        let now = Utc::now().timestamp();
+        claims["iss"] == CLIENT_ID
+            && claims["sub"] == CLIENT_ID
+            && claims["aud"] == self.token_endpoint
+            && claims["iat"].as_i64().is_some_and(|iat| iat <= now)
+            && claims["exp"]
+                .as_i64()
+                .is_some_and(|exp| now < exp && exp <= now + 300)
+            && claims["jti"]
+                .as_str()
+                .is_some_and(|jti| !jti.is_empty() && jti.len() <= 256)
+    }
+
+    fn access_token(&self) -> String {
+        let now = Utc::now().timestamp();
+        let header = json!({
+            "alg":"ES256",
+            "kid":self.signing_key.kid,
+            "typ":"at+jwt",
+        });
+        let claims = json!({
+            "iss":self.origin,
+            "sub":PRINCIPAL,
+            "client_id":CLIENT_ID,
+            "aud":TOKEN_AUDIENCE,
+            "iat":now,
+            "exp":now + ISSUED_TOKEN_LIFETIME_SECONDS,
+            "registry_actor_kind":"service",
+            "evidence_tags":[CONFIGURED_TAG],
+            "evidence_audience":RELYING_AUDIENCE,
+            "scope":"evidence:invoke",
+        });
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&header).expect("header serializes")),
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialize")),
+        );
+        let signature =
+            sign(input.as_bytes(), &self.signing_key).expect("the fixture issuer signs");
+        format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 }
 
-/// Author, load, and serve one authorization server with a single registered
-/// client whose identity matches what the Evidence fixture entitles.
+impl wiremock::Respond for ClientCredentialsResponder {
+    fn respond(&self, request: &WiremockRequest) -> ResponseTemplate {
+        if !self.assertion_is_valid(request) {
+            return Self::invalid_client();
+        }
+        self.issued.fetch_add(1, Ordering::SeqCst);
+        ResponseTemplate::new(200).set_body_json(json!({
+            "access_token":self.access_token(),
+            "token_type":"Bearer",
+            "expires_in":ISSUED_TOKEN_LIFETIME_SECONDS,
+        }))
+    }
+}
+
 async fn start_token_issuer() -> TokenIssuer {
-    // Hold the allocation while the matching deployment is authored, and release
-    // it only immediately before the service binds it. The issuer identity is
-    // part of that deployment, so the port has to be known first.
-    let (reservation, port) = reserve_loopback_port().await;
-    let origin = format!("http://127.0.0.1:{port}");
-    let token_endpoint = Url::parse(&format!("{origin}/token")).expect("the token endpoint parses");
-
-    let directory = tempfile::tempdir().expect("temporary issuer root");
-    let root = directory.path();
-    let secret_root = root.join("secrets");
-    fs::create_dir(&secret_root).expect("create the issuer secret root");
-    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700))
-        .expect("the issuer secret root is owner-only");
-    fs::create_dir(root.join("clients")).expect("create the client registry");
-    fs::create_dir(root.join("public-keys")).expect("create the issuer public-key directory");
-    let (issuer_signing_key, issuer_public_key) = service_key();
-    let issuer_key_id = issuer_public_key
-        .kid
-        .as_deref()
-        .expect("the Mint service key has a thumbprint");
-    write_secret(&secret_root, "signing.jwk", &issuer_signing_key);
-    fs::write(
-        root.join(format!("public-keys/{issuer_key_id}.jwk.json")),
-        serde_json::to_vec(&issuer_public_key).expect("the issuer public key serializes"),
-    )
-    .expect("write the issuer public key");
-    write_secret(
-        &secret_root,
-        "audit-hash-key",
-        "issuer-audit-secret-canary-32-bytes-minimum",
-    );
-
-    // The registered client carries the principal, the relying-party audience, and
-    // the requester tag. None of them is anything the client can ask for: the
-    // deployment reads them from the credential this server issues.
+    let server = start_mock_server().await;
+    let origin = server.uri();
+    let token_endpoint = Url::parse(&format!("{origin}/token")).expect("token endpoint parses");
     let client_key = generate_key(CLIENT_KEY_ID);
-    let public_key =
-        serde_json::to_string(&client_key.public()).expect("the public key serializes");
-    // A second registered key for the same client, signing with ES256 rather than
-    // EdDSA. This is the shape `evidencectl access client add
-    // --generate-local-key` writes, so registering it here is what proves an
-    // adopter's own key against a real token endpoint. The assertion's `kid`
-    // selects between the two.
     let es256_client_key = generate_es256_key(ES256_CLIENT_KEY_ID);
-    let es256_public_key =
-        serde_json::to_string(&es256_client_key.public()).expect("the public key serializes");
-    fs::write(
-        root.join(format!("clients/{CLIENT_ID}.yaml")),
-        format!(
-            "clientId: {CLIENT_ID}\nprincipal: {PRINCIPAL}\nevidenceAudience: {RELYING_AUDIENCE}\nrequesterTags: [{CONFIGURED_TAG}]\nkeys: [{public_key}, {es256_public_key}]\n"
-        ),
-    )
-    .expect("write the client registration");
-
-    let config_path = root.join("mint.yaml");
-    fs::write(
-        &config_path,
-        format!(
-            r#"version: 1
-validationMode: supervised-local-development
-issuer: {origin}
-listener: {{address: 127.0.0.1, port: {port}}}
-signing:
-  algorithm: ES256
-  activePublicJwkFile: public-keys/{issuer_key_id}.jwk.json
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-signer:
-  kind: local-jwk
-  privateKeyRef: secret:file/signing.jwk
-secretProviders:
-  file:
-    root: {secret_root}
-audit:
-  path: audit/decisions.jsonl
-  maximumFileBytes: 1073741824
-  hashKeyRef: secret:file/audit-hash-key
-  hashKeyVersion: 1
-accessTokens:
-  audiences: [{TOKEN_AUDIENCE}]
-  lifetimeSeconds: {ISSUED_TOKEN_LIFETIME_SECONDS}
-  claims:
-    principal: sub
-    requesterTags: evidence_tags
-    evidenceAudience: evidence_audience
-    grantId: evidence_grant_id
-    grantAuthority: evidence_authority
-clientAssertion:
-  audience: {token_endpoint}
-  maximumLifetimeSeconds: 300
-  algorithms: [EdDSA, ES256]
-clients:
-  directory: clients
-"#,
-            secret_root = secret_root.display(),
-        ),
-    )
-    .expect("write the issuer configuration");
-
-    let config = MintConfig::load(&config_path).expect("the staged issuer configuration is valid");
-    let audit_path = config.audit.path.clone();
-    let service = Arc::new(
-        MintService::load(config)
-            .await
-            .expect("the staged issuer loads"),
-    );
-    let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-    let port_handoff = LOOPBACK_PORT_HANDOFF.lock().await;
-    drop(reservation);
-    let server = tokio::spawn(async move {
-        mint_server::serve(service, async {
-            let _ = shutdown_rx.await;
+    let (issuer_signing_key, issuer_public_key) = service_key();
+    let signing_key = PrivateJwk::parse(&issuer_signing_key).expect("issuer key parses");
+    let issued = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("GET"))
+        .and(path("/.well-known/jwks.json"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"keys":[issuer_public_key]})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/.well-known/oauth-authorization-server"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "issuer":origin,
+            "token_endpoint":token_endpoint.as_str(),
+            "grant_types_supported":["client_credentials"],
+            "token_endpoint_auth_methods_supported":["private_key_jwt"],
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/token"))
+        .respond_with(ClientCredentialsResponder {
+            origin: origin.clone(),
+            token_endpoint: token_endpoint.to_string(),
+            client_keys: BTreeMap::from([
+                (CLIENT_KEY_ID.to_owned(), client_key.public()),
+                (ES256_CLIENT_KEY_ID.to_owned(), es256_client_key.public()),
+            ]),
+            signing_key,
+            issued: Arc::clone(&issued),
         })
-        .await
-    });
-
-    let mut issuer = TokenIssuer {
+        .mount(&server)
+        .await;
+    TokenIssuer {
         origin,
         token_endpoint,
         client_key,
         es256_client_key,
-        audit_path,
-        shutdown: Some(shutdown_tx),
-        server,
-        _directory: directory,
+        issued,
+        _server: server,
+    }
+}
+
+/// A controlled assertion signer used only by the ignored stock-container gate.
+///
+/// The HTTP surface publishes generated public keys to the container. Grant
+/// approval and revocation stay explicit test state: this fixture is not a
+/// production authority implementation and is never presented as Casework.
+struct SyntheticAssertionAuthority {
+    issuer: String,
+    signing_key: PrivateJwk,
+    active: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SyntheticAssertionAuthority {
+    fn start() -> Self {
+        let listener =
+            TcpListener::bind(("0.0.0.0", 0)).expect("the synthetic authority JWKS listener binds");
+        let port = listener
+            .local_addr()
+            .expect("the synthetic authority address is available")
+            .port();
+        listener
+            .set_nonblocking(true)
+            .expect("the synthetic authority listener is nonblocking");
+        let issuer = format!("http://host.docker.internal:{port}/authority");
+        let signing_key = generate_es256_key("synthetic-evidence-authority-key");
+        let public_jwks = json!({"keys":[signing_key.public()]}).to_string();
+        let active = Arc::new(AtomicBool::new(true));
+        let stop = Arc::new(AtomicBool::new(false));
+        let running = Arc::clone(&stop);
+        let thread = std::thread::spawn(move || {
+            while !running.load(Ordering::Relaxed) {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let mut request = [0u8; 4096];
+                    let length = stream.read(&mut request).unwrap_or(0);
+                    if String::from_utf8_lossy(&request[..length])
+                        .starts_with("GET /authority/jwks ")
+                    {
+                        let _ = write!(
+                            stream,
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            public_jwks.len(),
+                            public_jwks
+                        );
+                    } else {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
+                } else {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        });
+        Self {
+            issuer,
+            signing_key,
+            active,
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn issuer(&self) -> &str {
+        &self.issuer
+    }
+
+    fn revoke(&self) {
+        self.active.store(false, Ordering::SeqCst);
+    }
+
+    fn assertion(
+        &self,
+        token_issuer: &str,
+        grant_id: &str,
+        subject: &str,
+        identity: Value,
+        grant_expires_at: u64,
+    ) -> Option<String> {
+        if !self.active.load(Ordering::SeqCst) {
+            return None;
+        }
+        let now = unix_seconds();
+        let claims = json!({
+            "iss": self.issuer,
+            "aud": token_issuer,
+            "sub": subject,
+            "iat": now,
+            "exp": (now + 60).min(grant_expires_at),
+            "jti": grant_id,
+            "scope": "evidence:invoke",
+            "registry_actor_kind": "agent",
+            "registry_grant_id": grant_id,
+            "registry_grant_authority": TASK_AUTHORITY_PROFILE,
+            "registry_grant_client": TASK_CLIENT_ID,
+            "registry_grant_resource": TOKEN_AUDIENCE,
+            "registry_purpose": "fixture-eligibility",
+            "registry_grant_exp": grant_expires_at,
+            "registry_grant_bounds": {"type":"evidence", "requirement":REQUIREMENT},
+            "identity": identity,
+            "evidence_tags": [CONFIGURED_TAG],
+            "evidence_audience": RELYING_AUDIENCE,
+        });
+        let header = json!({
+            "alg": "ES256",
+            "kid": "synthetic-evidence-authority-key",
+            "typ": "JWT"
+        });
+        let input = format!(
+            "{}.{}",
+            URL_SAFE_NO_PAD.encode(header.to_string()),
+            URL_SAFE_NO_PAD.encode(claims.to_string()),
+        );
+        let signature = sign(input.as_bytes(), &self.signing_key)
+            .expect("the synthetic authority signs its assertion");
+        Some(format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature)))
+    }
+}
+
+impl Drop for SyntheticAssertionAuthority {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("the test clock is after the Unix epoch")
+        .as_secs()
+}
+
+struct StockTokenIssuer {
+    origin: String,
+    token_endpoint: Url,
+    client_key: PrivateJwk,
+    task_client_key: Option<PrivateJwk>,
+    label: String,
+    id: String,
+    port: u16,
+    state_root: PathBuf,
+    image: String,
+    docker: PathBuf,
+    _directory: tempfile::TempDir,
+}
+
+impl StockTokenIssuer {
+    fn provider(&self) -> Arc<PrivateKeyJwt> {
+        Arc::new(
+            PrivateKeyJwt::new(
+                PrivateKeyJwtConfig::new(
+                    self.token_endpoint.clone(),
+                    CLIENT_ID,
+                    self.client_key.clone(),
+                )
+                .with_audience(self.origin.clone())
+                .with_resource(TOKEN_AUDIENCE)
+                .with_scopes(["evidence:invoke".to_owned()]),
+            )
+            .expect("the stock issuer provider is valid"),
+        )
+    }
+
+    fn jwks_uri(&self) -> String {
+        format!("{}/oauth2/jwks", self.origin)
+    }
+
+    fn task_provider(&self) -> Arc<PrivateKeyJwt> {
+        Arc::new(
+            PrivateKeyJwt::new(
+                PrivateKeyJwtConfig::new(
+                    self.token_endpoint.clone(),
+                    TASK_CLIENT_ID,
+                    self.task_client_key
+                        .clone()
+                        .expect("the task issuer carries its registered client key"),
+                )
+                .with_audience(self.origin.clone())
+                .with_resource(TOKEN_AUDIENCE)
+                .with_scopes(["evidence:invoke".to_owned()]),
+            )
+            .expect("the stock task exchange provider is valid"),
+        )
+    }
+
+    fn task_bootstrap_provider(&self) -> Arc<PrivateKeyJwt> {
+        Arc::new(
+            PrivateKeyJwt::new(
+                PrivateKeyJwtConfig::new(
+                    self.token_endpoint.clone(),
+                    TASK_CLIENT_ID,
+                    self.task_client_key
+                        .clone()
+                        .expect("the task issuer carries its registered client key"),
+                )
+                .with_audience(self.origin.clone())
+                .with_resource(TASK_BOOTSTRAP_RESOURCE)
+                .with_scopes([TASK_BOOTSTRAP_SCOPE.to_owned()]),
+            )
+            .expect("the stock task bootstrap provider is valid"),
+        )
+    }
+}
+
+impl Drop for StockTokenIssuer {
+    fn drop(&mut self) {
+        let session = Session {
+            label: &self.label,
+            id: &self.id,
+            port: self.port,
+            state_root: &self.state_root,
+            image: &self.image,
+        };
+        let _ = local::stop(&session, &self.docker);
+    }
+}
+
+fn installed_or_env(variable: &str, binary: &str) -> PathBuf {
+    if let Some(path) = std::env::var_os(variable) {
+        return PathBuf::from(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|directory| directory.join(binary))
+        .find(|candidate| candidate.is_file())
+        .unwrap_or_else(|| panic!("set {variable} for the exact stock-issuer gate"))
+}
+
+fn start_stock_token_issuer() -> StockTokenIssuer {
+    start_stock_token_issuer_with_authority(None)
+}
+
+fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> StockTokenIssuer {
+    let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve stock issuer port");
+    let port = reservation
+        .local_addr()
+        .expect("stock issuer address")
+        .port();
+    let origin = format!("http://127.0.0.1:{port}");
+    let token_endpoint =
+        Url::parse(&format!("{origin}/oauth2/token")).expect("stock issuer token endpoint parses");
+    let directory = tempfile::tempdir().expect("private stock issuer state");
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700))
+        .expect("stock issuer state is owner-only");
+    let state_root = directory.path().join("issuer");
+    let label = format!("evidence-client-{port}");
+    let id = format!("evidence-client-session-{port}");
+    let client_key = generate_es256_key(ES256_CLIENT_KEY_ID);
+    let public_jwks = json!({"keys":[client_key.public()]}).to_string();
+    let mut description = local::typed_local_description(
+        SessionIdentity {
+            label: label.clone(),
+            id: id.clone(),
+        },
+        port,
+        state_root.clone(),
+        TOKEN_AUDIENCE.to_owned(),
+        vec![TypedLocalClient {
+            client_id: CLIENT_ID.to_owned(),
+            public_jwks,
+            claims: BTreeMap::from([
+                ("registry_actor_kind".to_owned(), json!("service")),
+                ("evidence_tags".to_owned(), json!([CONFIGURED_TAG])),
+                ("evidence_audience".to_owned(), json!(RELYING_AUDIENCE)),
+            ]),
+            scopes: vec!["evidence:invoke".to_owned()],
+            allow_human_fixture: false,
+        }],
+    )
+    .expect("the stock issuer description is valid");
+    let task_client_key = authority_issuer.map(|authority_issuer| {
+        let key = generate_es256_key(TASK_CLIENT_KEY_ID);
+        description.resource_servers.push(ResourceServer {
+            id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),
+            name: "Synthetic task authority".to_owned(),
+            identifier: TASK_BOOTSTRAP_RESOURCE.to_owned(),
+            description: "Test-only assertion acquisition boundary".to_owned(),
+            resources: vec![Resource {
+                name: "grants".to_owned(),
+                handle: "grants".to_owned(),
+                parent: None,
+                description: "Test-only grant assertion access".to_owned(),
+                actions: vec![Action {
+                    name: "assert".to_owned(),
+                    handle: "assert".to_owned(),
+                    description: "Request one approved assertion".to_owned(),
+                }],
+            }],
+        });
+        description.roles.push(Role {
+            id: TASK_CLIENT_ROLE_ID.to_owned(),
+            name: "Synthetic task bootstrap".to_owned(),
+            description: "Assertion acquisition only".to_owned(),
+            permissions: vec![(
+                TASK_AUTHORITY_RESOURCE_ID.to_owned(),
+                vec![TASK_BOOTSTRAP_SCOPE.to_owned()],
+            )],
+            assigned_agents: vec![TASK_CLIENT_AGENT_ID.to_owned()],
+        });
+        description.machine_clients.push(MachineClient {
+            agent_id: TASK_CLIENT_AGENT_ID.to_owned(),
+            name: "Synthetic Evidence task agent".to_owned(),
+            description: "Test-only institutional task client".to_owned(),
+            client_id: TASK_CLIENT_ID.to_owned(),
+            public_jwks: json!({"keys":[key.public()]}).to_string(),
+            // These declare the native attribute names and types. On token
+            // exchange ThunderID filters the signed assertion through the
+            // userConfig allowlist; it does not substitute these static values.
+            attributes: BTreeMap::from([
+                ("evidence_tags".to_owned(), json!([CONFIGURED_TAG])),
+                ("evidence_audience".to_owned(), json!(RELYING_AUDIENCE)),
+            ]),
+            token_attributes: vec!["evidence_tags".to_owned(), "evidence_audience".to_owned()],
+            access_token_lifetime_seconds: 300,
+            token_exchange: Some(TokenExchangeClient {
+                assertion_resource_server_id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),
+                assertion_scope: TASK_BOOTSTRAP_SCOPE.to_owned(),
+            }),
+        });
+        description.exchange_issuers.push(ExchangeIssuer {
+            id: TASK_AUTHORITY_ISSUER_ID.to_owned(),
+            name: "Synthetic assertion authority".to_owned(),
+            issuer: authority_issuer.to_owned(),
+            jwks_endpoint: format!("{authority_issuer}/jwks"),
+        });
+        key
+    });
+    description
+        .validate()
+        .expect("the stock issuer task exchange description is valid");
+    render::render(&description).expect("the stock issuer resources render");
+    let pin = ThunderIdPin::load().expect("the maintained stock issuer pin loads");
+    let docker = installed_or_env("DOCKER_BIN", "docker");
+    let session = Session {
+        label: &label,
+        id: &id,
+        port,
+        state_root: &state_root,
+        image: &pin.image,
     };
-    await_readiness(
-        "the token issuer",
-        Url::parse(&format!("{}/ready", issuer.origin)).expect("the readiness URL parses"),
-        &mut issuer.server,
+    drop(reservation);
+    local::start(&session, &docker, &mut || false).expect("the pinned stock issuer starts");
+    StockTokenIssuer {
+        origin,
+        token_endpoint,
+        client_key,
+        task_client_key,
+        label,
+        id,
+        port,
+        state_root,
+        image: pin.image,
+        docker,
+        _directory: directory,
+    }
+}
+
+/// Replacement acceptance for the former Registry Mint dependency. The
+/// private-key-JWT client obtains a token from pinned ThunderID 1.0.1, then
+/// carries an Evidence request through the real runtime and verifier.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "exact gate: starts the pinned stock issuer and real Evidence runtime"]
+async fn stock_issuer_token_carries_a_verified_evidence_request() {
+    let issuer = tokio::task::spawn_blocking(start_stock_token_issuer)
+        .await
+        .expect("the stock issuer startup task completes");
+    let jwks_uri = issuer.jwks_uri();
+    let deployment = start_trusting_with_request_burst_and_jwks(
+        resolved_source_answer(),
+        Some(&issuer.origin),
+        Some(&jwks_uri),
+        10,
     )
     .await;
-    drop(port_handoff);
-    issuer
+    let client = deployment.client_using(issuer.provider());
+    let definitions = client
+        .discover()
+        .await
+        .expect("the stock-issued token discovers Evidence definitions");
+    let prepared = client
+        .prepare(spec(
+            &definitions,
+            "stock-issuer",
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the stock-issuer request prepares");
+    let accepted = client
+        .request_and_verify(&prepared)
+        .await
+        .expect("the stock-issued token carries a verified request");
+    assert_eq!(accepted.evidence().supports_requirement, REQUIREMENT);
+}
+
+/// The phase-one task matrix at the resource boundary. A generated test
+/// authority signs assertions, pinned stock ThunderID 1.0.1 exchanges them,
+/// and the real Evidence HTTP service enforces their immutable context.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "exact gate: starts the pinned stock issuer and real Evidence runtime"]
+async fn stock_issuer_task_grants_are_subject_bound_at_the_evidence_boundary() {
+    let authority = SyntheticAssertionAuthority::start();
+    let authority_issuer = authority.issuer().to_owned();
+    let issuer = tokio::task::spawn_blocking(move || {
+        start_stock_token_issuer_with_authority(Some(&authority_issuer))
+    })
+    .await
+    .expect("the stock task issuer startup task completes");
+    let deployment =
+        start_task_grant_deployment(resolved_source_answer(), &issuer, &authority, 40).await;
+    let exchange = issuer.task_provider();
+    let expires_at = unix_seconds() + 120;
+
+    let first_assertion = authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000001",
+            "institutional-agent",
+            grant_identity("Amina", "Diallo", "2000-01-01"),
+            expires_at,
+        )
+        .expect("the first task remains approved");
+    let second_assertion = authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000002",
+            "institutional-agent",
+            grant_identity("Adaeze", "Okafor", "1990-07-11"),
+            expires_at,
+        )
+        .expect("the second task remains approved");
+    let (first_token, second_token) = tokio::join!(
+        exchange.exchange(&first_assertion),
+        exchange.exchange(&second_assertion),
+    );
+    let first_token = bearer_text(&first_token.expect("the first grant exchanges"));
+    let second_token = bearer_text(&second_token.expect("the second grant exchanges"));
+    assert_stock_task_context(&first_token, authority.issuer(), expires_at);
+    assert_stock_task_context(&second_token, authority.issuer(), expires_at);
+    let first_client = deployment.client(&first_token);
+    let second_client = deployment.client(&second_token);
+    let definitions = first_client
+        .discover()
+        .await
+        .expect("the task grant discovers its bounded definition");
+    let first_request = first_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the first grant request prepares");
+    let second_request = second_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the second grant request prepares");
+    let (first, second) = tokio::join!(
+        first_client.request_and_verify(&first_request),
+        second_client.request_and_verify(&second_request),
+    );
+    let first = first.expect("the first subject grant answers");
+    let second = second.expect("the second subject grant answers");
+    assert_ne!(
+        first.evidence().subjects[0].binding,
+        second.evidence().subjects[0].binding,
+        "concurrent task grants for different people keep different subject bindings"
+    );
+    let distinct_subject_pseudonyms = released_grant_pseudonyms(&deployment.audit_path);
+    assert_eq!(distinct_subject_pseudonyms.len(), 2);
+
+    let same_identity = grant_identity("Amina", "Diallo", "2000-01-01");
+    let equivalent_a = authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000003",
+            "institutional-agent",
+            same_identity.clone(),
+            expires_at,
+        )
+        .expect("the first equivalent task remains approved");
+    let equivalent_b = authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000004",
+            "institutional-agent",
+            same_identity,
+            expires_at,
+        )
+        .expect("the second equivalent task remains approved");
+    let (equivalent_a, equivalent_b) = tokio::join!(
+        exchange.exchange(&equivalent_a),
+        exchange.exchange(&equivalent_b),
+    );
+    let equivalent_a = bearer_text(&equivalent_a.expect("the first equivalent grant exchanges"));
+    let equivalent_b = bearer_text(&equivalent_b.expect("the second equivalent grant exchanges"));
+    let equivalent_a_client = deployment.client(&equivalent_a);
+    let equivalent_b_client = deployment.client(&equivalent_b);
+    let equivalent_a_request = equivalent_a_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the first equivalent request prepares");
+    let equivalent_b_request = equivalent_b_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the second equivalent request prepares");
+    let (equivalent_a_answer, equivalent_b_answer) = tokio::join!(
+        equivalent_a_client.request_and_verify(&equivalent_a_request),
+        equivalent_b_client.request_and_verify(&equivalent_b_request),
+    );
+    assert_eq!(
+        equivalent_a_answer
+            .expect("the first equivalent grant answers")
+            .evidence()
+            .subjects[0]
+            .binding,
+        equivalent_b_answer
+            .expect("the second equivalent grant answers")
+            .evidence()
+            .subjects[0]
+            .binding,
+        "identical bounds may answer the same subject"
+    );
+    let all_grant_pseudonyms = released_grant_pseudonyms(&deployment.audit_path);
+    assert_eq!(all_grant_pseudonyms.len(), 4);
+    assert!(distinct_subject_pseudonyms.is_subset(&all_grant_pseudonyms));
+
+    let ordinary_token = bearer_text(
+        &issuer
+            .provider()
+            .bearer_token()
+            .await
+            .expect("the ordinary registered service obtains its token"),
+    );
+    let ordinary_client = deployment.client(&ordinary_token);
+    let ordinary_request = ordinary_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the task-shaped request prepares independently of its credential");
+    assert_denied(
+        ordinary_client.request_and_verify(&ordinary_request).await,
+        403,
+        "evidence.denied",
+    );
+
+    let mut retargeted = serde_json::from_slice::<Value>(
+        &deployment
+            .client(&first_token)
+            .prepare(grant_spec(
+                &definitions,
+                SubjectExpectations::AcceptFirstUse,
+            ))
+            .expect("the retarget baseline prepares")
+            .request_json()
+            .expect("the retarget baseline serializes"),
+    )
+    .expect("the request body parses");
+    retargeted["subjects"][0]["selector"]["values"] = json!({
+        "given_name":"Retargeted",
+        "family_name":"Subject",
+        "birth_date":"1980-01-01"
+    });
+    let retarget_response = reqwest::Client::new()
+        .post(
+            deployment
+                .base_url
+                .join("v1/evidence")
+                .expect("the Evidence endpoint resolves"),
+        )
+        .header("authorization", format!("Bearer {first_token}"))
+        .header("accept", "application/jose+json")
+        .header("content-type", "application/json")
+        .json(&retargeted)
+        .send()
+        .await
+        .expect("the body-retarget request reaches Evidence");
+    assert_eq!(retarget_response.status(), 400);
+    let retarget_problem: Value = retarget_response
+        .json()
+        .await
+        .expect("the body-retarget refusal is JSON");
+    assert_eq!(retarget_problem["code"], "request.selector_invalid");
+
+    let short_deadline = unix_seconds() + 4;
+    let short_assertion = authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000005",
+            "institutional-agent",
+            grant_identity("Binta", "Diallo", "1985-03-04"),
+            short_deadline,
+        )
+        .expect("the short task remains approved before revocation");
+    let short_token = bearer_text(
+        &exchange
+            .exchange(&short_assertion)
+            .await
+            .expect("the short grant exchanges"),
+    );
+    let reexchanged = bearer_text(
+        &exchange
+            .exchange(&short_token)
+            .await
+            .expect("the task token re-exchanges before its deadline"),
+    );
+    assert_eq!(
+        jwt_payload(&reexchanged)["registry_grant_exp"],
+        short_deadline,
+        "re-exchange preserves the authority's immutable deadline"
+    );
+    authority.revoke();
+    assert!(authority
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000006",
+            "institutional-agent",
+            grant_identity("New", "Subject", "1991-02-03"),
+            unix_seconds() + 60,
+        )
+        .is_none());
+    let window_client = deployment.client(&reexchanged);
+    let window_request = window_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the retained-window request prepares");
+    window_client
+        .request_and_verify(&window_request)
+        .await
+        .expect("an already issued token remains readable inside its bounded window");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    let after_deadline = bearer_text(
+        &exchange
+            .exchange(&reexchanged)
+            .await
+            .expect("the stock issuer may re-exchange a still-live JWT after its grant deadline"),
+    );
+    assert_eq!(
+        jwt_payload(&after_deadline)["registry_grant_exp"],
+        short_deadline,
+        "an exchange after the grant deadline still cannot extend authority"
+    );
+    let expired_client = deployment.client(&after_deadline);
+    let expired_request = expired_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the expired-window request prepares");
+    assert_denied(
+        expired_client.request_and_verify(&expired_request).await,
+        403,
+        "evidence.denied",
+    );
+
+    let bootstrap = issuer.task_bootstrap_provider();
+    let bootstrap_token = bearer_text(
+        &bootstrap
+            .bearer_token()
+            .await
+            .expect("the exchange-only client obtains its bootstrap token"),
+    );
+    assert!(
+        jwt_payload(&bootstrap_token)
+            .get("registry_grant_id")
+            .is_none(),
+        "bootstrap acquisition cannot manufacture a task grant"
+    );
+}
+
+fn bearer_text(token: &BearerToken) -> String {
+    token
+        .authorization_header_value()
+        .to_str()
+        .expect("a bearer credential is visible ASCII")
+        .strip_prefix("Bearer ")
+        .expect("the shared wrapper emits the Bearer scheme")
+        .to_owned()
+}
+
+fn jwt_payload(token: &str) -> Value {
+    let payload = token
+        .split('.')
+        .nth(1)
+        .expect("the stock issuer returns a compact JWT");
+    serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(payload)
+            .expect("the stock token payload is base64url"),
+    )
+    .expect("the stock token payload is JSON")
+}
+
+fn assert_stock_task_context(token: &str, authority_issuer: &str, grant_expires_at: u64) {
+    let claims = jwt_payload(token);
+    assert!(
+        claims["aud"] == TOKEN_AUDIENCE,
+        "the exchanged token has the Evidence audience"
+    );
+    assert!(
+        claims["client_id"] == TASK_CLIENT_ID,
+        "the exchanged token retains the verified client"
+    );
+    assert!(
+        claims["registry_actor_kind"] == "agent",
+        "the exchanged token retains the agent kind"
+    );
+    assert!(
+        claims["registry_grant_client"] == TASK_CLIENT_ID,
+        "the exchanged token retains the original grant client"
+    );
+    assert!(
+        claims["registry_grant_resource"] == TOKEN_AUDIENCE,
+        "the exchanged token retains the original grant resource"
+    );
+    assert!(
+        claims["registry_grant_source_issuer"] == authority_issuer,
+        "the exchanged token uses verified issuer provenance"
+    );
+    assert!(
+        claims["registry_grant_exp"] == grant_expires_at,
+        "the exchanged token retains the grant deadline"
+    );
+    assert!(
+        claims["evidence_tags"] == json!([CONFIGURED_TAG]),
+        "the exchanged token retains requester tags"
+    );
+    assert!(
+        claims["evidence_audience"] == RELYING_AUDIENCE,
+        "the exchanged token retains the relying-party audience"
+    );
+}
+
+fn grant_identity(given_name: &str, family_name: &str, birth_date: &str) -> Value {
+    json!({
+        "given_name": given_name,
+        "family_name": family_name,
+        "birth_date": birth_date,
+    })
+}
+
+fn grant_spec(
+    definitions: &EvidenceDefinitionsDocument,
+    subject_expectations: SubjectExpectations,
+) -> EvidenceRequestSpec {
+    let mut spec = spec(definitions, "unused-grant-selector", subject_expectations);
+    for subject in &mut spec.subjects {
+        subject.selector_values = None;
+    }
+    spec
+}
+
+fn assert_denied<T>(
+    result: Result<T, EvidenceClientError>,
+    expected_status: u16,
+    expected_code: &str,
+) {
+    let (status, code) = match result {
+        Err(EvidenceClientError::Denied { status, code, .. }) => (status, code),
+        Err(other) => panic!("the refusal maps onto the denied failure, got {other}"),
+        Ok(_) => panic!("the bounded task request is refused"),
+    };
+    assert_eq!(status, expected_status);
+    assert_eq!(code, expected_code);
+}
+
+fn released_grant_pseudonyms(path: &Path) -> std::collections::BTreeSet<String> {
+    fs::read_to_string(path)
+        .expect("the durable task audit is readable")
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|event| event["record"]["phase"] == "disclosure-release")
+        .filter_map(|event| {
+            event
+                .pointer("/record/authority/grantPseudonym")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .collect()
 }
 
 fn fixture_root() -> PathBuf {
@@ -1654,6 +2522,7 @@ fn rewrite_for_local_profile(
     bundle_root: &Path,
     source_origin: &str,
     issuer_origin: &str,
+    issuer_jwks_uri: &str,
     public_origin: &str,
     signing_key_id: &str,
 ) {
@@ -1686,14 +2555,20 @@ fn rewrite_for_local_profile(
     );
     replace_exact(
         &mut document,
+        "audiences: [evidence-fixture]",
+        &format!("audiences: [{TOKEN_AUDIENCE}]"),
+        1,
+    );
+    replace_exact(
+        &mut document,
         "jwksUri: https://identity.invalid/.well-known/jwks.json",
-        &format!("jwksUri: {issuer_origin}/.well-known/jwks.json"),
+        &format!("jwksUri: {issuer_jwks_uri}"),
         1,
     );
     replace_exact(
         &mut document,
         "algorithms: [ES256]",
-        "algorithms: [EdDSA, ES256]",
+        "algorithms: [EdDSA, ES256, RS256]",
         1,
     );
     replace_exact(
@@ -1709,6 +2584,39 @@ fn rewrite_for_local_profile(
         1,
     );
     fs::write(&configuration_path, document).expect("the local configuration is written");
+    regenerate_discovery_description(bundle_root);
+}
+
+/// Turn the copied one-subject acceptance definition into the task-bound form.
+/// The tracked source, scripts, requirement, signing and disclosure policy stay
+/// byte-for-byte the same; only authentication and selector authority change.
+fn rewrite_for_task_grant_profile(bundle_root: &Path, authority_issuer: &str) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut document =
+        fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
+    replace_exact(
+        &mut document,
+        "  principalClaim: sub\n  requesterTagsClaim: evidence_tags",
+        &format!(
+            "  principalClaim: sub\n  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n  requesterTagsClaim: evidence_tags"
+        ),
+        1,
+    );
+    replace_exact(
+        &mut document,
+        "  statutory-caseworker-v1:\n    kind: statutory",
+        &format!(
+            "  statutory-caseworker-v1:\n    requesterClients: [{TASK_CLIENT_ID}]\n    grantSourceIssuer: {authority_issuer}\n    kind: statutory"
+        ),
+        1,
+    );
+    replace_exact(
+        &mut document,
+        "        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]",
+        "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}",
+        1,
+    );
+    fs::write(&configuration_path, document).expect("the task-grant configuration is written");
     regenerate_discovery_description(bundle_root);
 }
 

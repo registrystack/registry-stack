@@ -17,7 +17,7 @@ standards_referenced:
 import OpenApiSourcesTable from '../../../../components/OpenApiSourcesTable.astro';
 
 Use this section to find each maintained HTTP surface. Evidence Gateway and its OID4VCI wallet
-delivery front end have fixed generated contracts. Registry Mint has a hand-authored reference.
+delivery front end have fixed generated contracts.
 Relay generates its description from each adopter's Registry contract.
 
 {/* Do not duplicate endpoint reference content in narrative pages. */}
@@ -58,12 +58,6 @@ The card shows how the rendered Evidence Gateway artifact is selected and links 
 operations. It is generated from `src/data/openapi-sources.yaml`.
 
 <OpenApiSourcesTable />
-
-## Registry Mint: hand-authored supporting-service API
-
-Registry Mint has a fixed HTTP surface but no generated OpenAPI artifact. Its configuration, token
-request and response, OAuth errors, discovery documents, key set, health, and readiness routes are
-documented in the [Registry Mint reference](../mint/).
 
 ## Relay: one document per deployment
 

@@ -103,7 +103,13 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         keys,
         config.authentication.oidc.human_identity.clone(),
     ));
-    let service = CaseworkService::new(store.clone(), project.clone(), adapters)?;
+    let task_authority = config
+        .task_authority
+        .as_ref()
+        .map(|authority| crate::task_grants::TaskAuthority::load(authority, &secrets))
+        .transpose()?;
+    let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
+        .with_task_authority(task_authority);
 
     let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
@@ -129,6 +135,11 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             .as_ref(),
     );
 
+    // A bad signing key or audit configuration must not retire the live
+    // instance's task templates before this instance can serve requests.
+    store
+        .activate_task_templates(&project.task_templates)
+        .await?;
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
     let worker_service = service.clone();
@@ -197,6 +208,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         store,
         chain: audit_chain,
         sink: audit_sink,
+        identifiers: audit_profile.key_hasher(),
     };
     let audit_health = service.audit_publisher_health();
     workers.push(supervise("audit publication", worker_stopped, async move {
@@ -334,6 +346,7 @@ struct RuntimeAuditPublisher {
     store: PostgresStore,
     chain: Arc<ChainState>,
     sink: Arc<JsonlFileSink>,
+    identifiers: registry_platform_audit::AuditKeyHasher,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -385,6 +398,7 @@ impl AuditPublicationBackend for RuntimeAuditPublisher {
     }
 
     async fn append(&self, record: Value) -> Result<(), ()> {
+        let record = published_audit_record(record, &self.identifiers)?;
         self.chain
             .append(self.sink.as_ref(), record)
             .await
@@ -430,6 +444,54 @@ async fn publish_audit_pass(
         state.unconfirmed = None;
     }
     Ok(())
+}
+
+/// The database outbox is protected accountability data. The external journal
+/// carries only event metadata and keyed references, never source selectors,
+/// free-text reasons, receipts, or issuer/subject identities.
+fn published_audit_record(
+    record: Value,
+    identifiers: &registry_platform_audit::AuditKeyHasher,
+) -> Result<Value, ()> {
+    let raw = record.as_object().ok_or(())?;
+    let mut published = serde_json::Map::new();
+    for field in [
+        "event",
+        "eventId",
+        "profileId",
+        "itemRevision",
+        "directoryRevision",
+        "actorRef",
+        "accountabilityEventId",
+    ] {
+        if let Some(value) = raw.get(field) {
+            published.insert(field.to_owned(), value.clone());
+        }
+    }
+    for (field, output) in [
+        ("itemId", "itemPseudonym"),
+        ("grantId", "grantPseudonym"),
+        ("teamId", "teamPseudonym"),
+        ("queueId", "queuePseudonym"),
+    ] {
+        if let Some(value) = raw.get(field) {
+            let value = value.as_str().ok_or(())?;
+            let hash = identifiers
+                .audit_reference_hash("casework-reference-v1", field, value)
+                .map_err(|_| ())?;
+            published.insert(output.to_owned(), Value::String(hash));
+        }
+    }
+    if let Some(actor) = raw.get("actor").filter(|value| !value.is_null()) {
+        let issuer = actor.get("issuer").and_then(Value::as_str).ok_or(())?;
+        let subject = actor.get("subject").and_then(Value::as_str).ok_or(())?;
+        let canonical = serde_json::to_string(&(issuer, subject)).map_err(|_| ())?;
+        let hash = identifiers
+            .audit_reference_hash("casework-principal-v1", "", &canonical)
+            .map_err(|_| ())?;
+        published.insert("principalPseudonym".to_owned(), Value::String(hash));
+    }
+    Ok(Value::Object(published))
 }
 
 fn audit_record_with_event_id(event_id: Uuid, mut record: Value) -> Result<Value, ()> {
@@ -478,6 +540,35 @@ mod tests {
     use crate::service::AuditPublisherHealth;
 
     #[cfg(unix)]
+    #[test]
+    fn audit_publication_separates_protected_identity_and_source_data() {
+        let hasher = registry_platform_audit::AuditKeyHasher::unkeyed_dev_only();
+        let raw = serde_json::json!({"event":"casework.task_approved", "eventId":"event", "actor":{"issuer":"https://issuer.test","subject":"raw-human"}, "itemId":"raw-item", "grantId":"raw-grant", "detail":{"person_reference":"raw-person"}, "reason":"private reason", "sourceReceipt":{"body":"private body"}, "profileId":"staff"});
+        let published = published_audit_record(raw.clone(), &hasher).unwrap();
+        let serialized = published.to_string();
+        for secret in [
+            "raw-human",
+            "https://issuer.test",
+            "raw-item",
+            "raw-grant",
+            "raw-person",
+            "private reason",
+            "private body",
+        ] {
+            assert!(!serialized.contains(secret));
+        }
+        assert_eq!(published["eventId"], "event");
+        assert_eq!(published["profileId"], "staff");
+        assert!(published["principalPseudonym"].as_str().is_some());
+        assert_ne!(published["itemPseudonym"], published["grantPseudonym"]);
+        assert_eq!(published, published_audit_record(raw, &hasher).unwrap());
+        assert!(published_audit_record(
+            serde_json::json!({"actor":{"subject":"missing-issuer"}}),
+            &hasher
+        )
+        .is_err());
+    }
+
     #[test]
     fn a_refused_audit_secret_names_its_reference_and_the_rule_it_broke() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -837,6 +928,9 @@ mod tests {
             base_url: "https://registry.example.test".into(),
             reader_profile: "casework-reader".into(),
             token_endpoint: "https://identity.example.test/token".into(),
+            client_assertion_audience: Some("https://identity.example.test".into()),
+            resource: Some("urn:example:registry".into()),
+            scopes: Some(vec!["casework:source-reader".into()]),
             client_id_ref: "secret:file/client-id".into(),
             client_assertion_key_ref: "secret:file/client-key".into(),
             webhook_secret_ref: "secret:file/webhook".into(),

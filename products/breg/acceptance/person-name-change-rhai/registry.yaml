@@ -82,14 +82,14 @@ accessProfiles:
     default: true
     principalClaim: registry_principal
     requiredPurposes: [person-maintenance]
-    grants:
+    permissions:
       - {entity: person, operations: [create, get, list], readableFields: [person-code, display-name], writableFields: [person-code, display-name], rowBoundaries: []}
   - id: name-change-submitter
     default: true
     principalClaim: registry_principal
     requiredScopes: ["registry:person-name:submit"]
     requiredPurposes: [person-name-change]
-    grants:
+    permissions:
       - entity: person-name-change-request
         rowBoundaries: []
         operations: [create, get, submit_request, apply_request]
@@ -101,7 +101,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: ["registry:person-name:apply-assisted"]
     requiredPurposes: [person-name-apply]
-    grants:
+    permissions:
       - entity: person-name-change-request
         rowBoundaries: []
         operations: [get, list, apply_request]

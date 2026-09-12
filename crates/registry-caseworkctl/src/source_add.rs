@@ -25,14 +25,8 @@ const READER_CLIENT_ID: &str = "casework-reader";
 const READER_PRINCIPAL_CLAIM: &str = "registry_principal";
 const READER_SCOPE: &str = "casework:source-reader";
 const READER_PURPOSE: &str = "casework-sync";
-/// The Mint claim a local BReg client's access token carries its purpose under.
+/// The issuer claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
-
-/// A source-backed Casework session borrows BReg's local Mint, so a synthesized
-/// subject must match the principal BReg registers for that client.
-fn borrowed_breg_principal(client_id: &str) -> String {
-    format!("urn:breg:dev:{client_id}")
-}
 
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
@@ -90,7 +84,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch, "devClients": dev_clients_plan.patch},
         "activation": "not_performed",
         "next": if args.apply {
-            json!(["Review the generated BReg runtime binding, provision its secret reference, and let the launcher activate each product through its normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
+            json!(["Review the generated BReg webhook binding and provision its secret reference. Configure the Casework source reader with the actual issuer tokenEndpoint, clientAssertionAudience, resource and scopes before activating through each product's normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
         } else {
             json!(["Review these exact local changes, then repeat source add with --apply."])
         }
@@ -296,6 +290,7 @@ fn require_ok(operation: &str, report: &Value) -> Result<()> {
 /// The scopes and purpose a Casework staff or supervisor dev client inherits
 /// from the selected BReg request's review and apply access profiles.
 struct ReviewerAuthority {
+    profiles: BTreeSet<String>,
     scopes: BTreeSet<String>,
     purpose: Option<String>,
 }
@@ -499,7 +494,7 @@ fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value)
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
-            "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
+            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
         }),
     )
 }
@@ -601,7 +596,7 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
             leading_spaces(line) == 0 && line.trim_start().starts_with("accessProfiles:")
         })
         .context("narrow YAML patch could not locate accessProfiles")?;
-    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    permissions:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     let line = lines[start];
     let logical = line.trim_end_matches(['\r', '\n']);
     let value = logical
@@ -667,15 +662,19 @@ fn reader_dev_client() -> Value {
 /// The scopes and purpose every Casework staff or supervisor dev client must
 /// carry to act as a reviewer on the selected BReg request: the union of
 /// `requiredScopes` from every distinct access profile named in its
-/// `reviewGrants`/`applyGrants`, and the one `registry_purpose` those
+/// `reviewPermissions`/`applyPermissions`, and the one `registry_purpose` those
 /// restricted profiles must accept in common. Profiles with no
 /// `requiredPurposes` restriction do not require the claim.
-fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAuthority> {
-    let profile_ids: BTreeSet<&str> = request["reviewGrants"]
+fn reviewer_authority(
+    authored: &Value,
+    request: &Value,
+    reviewer_clients: &BTreeSet<String>,
+) -> Result<ReviewerAuthority> {
+    let profile_ids: BTreeSet<&str> = request["reviewPermissions"]
         .as_array()
         .into_iter()
         .flatten()
-        .chain(request["applyGrants"].as_array().into_iter().flatten())
+        .chain(request["applyPermissions"].as_array().into_iter().flatten())
         .filter_map(|grant| grant["profile"].as_str())
         .collect();
     if profile_ids.is_empty() {
@@ -686,13 +685,29 @@ fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAutho
         .context("BReg registry.yaml has no accessProfiles")?;
     let mut scopes = BTreeSet::new();
     let mut allowed_purposes: Option<BTreeSet<String>> = None;
-    for id in profile_ids {
+    for id in &profile_ids {
         let profile = profiles
             .iter()
-            .find(|candidate| candidate["id"] == id)
+            .find(|candidate| candidate["id"] == *id)
             .with_context(|| format!("BReg access profile {id} named by the selected request is absent from registry.yaml"))?;
         if profile["principalClaim"] != Value::String(READER_PRINCIPAL_CLAIM.to_owned()) {
             bail!("BReg access profile {id} does not authenticate its principal through {READER_PRINCIPAL_CLAIM}");
+        }
+        if profile["actorKind"] != "human" {
+            bail!("BReg access profile {id} must declare actorKind human for Casework reviewers");
+        }
+        let requesters = profile["requesterClients"]
+            .as_array()
+            .with_context(|| format!("BReg access profile {id} must declare requesterClients"))?
+            .iter()
+            .map(|client| {
+                client.as_str().map(str::to_owned).with_context(|| {
+                    format!("BReg access profile {id} requesterClients must be strings")
+                })
+            })
+            .collect::<Result<BTreeSet<_>>>()?;
+        if &requesters != reviewer_clients {
+            bail!("BReg access profile {id} requesterClients must exactly match the Casework staff and supervisor clients");
         }
         if has_nonempty_row_boundaries(profile) {
             bail!(
@@ -743,7 +758,11 @@ fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAutho
             })
         })
         .transpose()?;
-    Ok(ReviewerAuthority { scopes, purpose })
+    Ok(ReviewerAuthority {
+        profiles: profile_ids.into_iter().map(str::to_owned).collect(),
+        scopes,
+        purpose,
+    })
 }
 
 fn has_nonempty_row_boundaries(value: &Value) -> bool {
@@ -796,7 +815,7 @@ fn human_dev_client(
             "a Casework staff or supervisor dev client has no reviewer authority to bind",
         )?;
         let principal = if casework_principal_claim == "sub" {
-            borrowed_breg_principal(id)
+            bail!("Casework dev client {id} uses principalClaim sub, whose stock-issuer subject is session-qualified; author an explicit stable principal claim for the shared BREG issuer bridge")
         } else {
             claims
                 .get(casework_principal_claim)
@@ -832,14 +851,24 @@ fn human_dev_client(
             "Casework dev client {id} exceeds BReg local client scope or claim bounds after reviewer authority is added"
         );
     }
+    let access_profiles = if role == "supervisor" {
+        authority
+            .map(|authority| authority.profiles.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut result = json!({
         "id": id,
-        "accessProfiles": Vec::<String>::new(),
+        "accessProfiles": access_profiles,
         "scopes": scopes.into_iter().collect::<Vec<_>>(),
         "claims": claims,
     });
     if allow_breg_access {
         result["allowBregAccess"] = json!(true);
+    }
+    if result["claims"]["registry_actor_kind"] == "human" {
+        result["allowHumanFixture"] = json!(true);
     }
     Ok(result)
 }
@@ -884,6 +913,7 @@ fn plan_breg_dev_clients(
 
     let mut eligible = Vec::new();
     let mut needs_authority = false;
+    let mut reviewer_clients = BTreeSet::new();
     for client in casework_clients {
         let profile_id = client["accessProfile"]
             .as_str()
@@ -898,11 +928,19 @@ fn plan_breg_dev_clients(
         let principal_claim = profile["principalClaim"]
             .as_str()
             .context("a Casework access profile's principalClaim must be a string")?;
-        needs_authority |= matches!(role, "staff" | "supervisor");
+        if matches!(role, "staff" | "supervisor") {
+            needs_authority = true;
+            reviewer_clients.insert(
+                client["id"]
+                    .as_str()
+                    .context("a Casework dev client's id must be a string")?
+                    .to_owned(),
+            );
+        }
         eligible.push((client, role.to_owned(), principal_claim.to_owned()));
     }
     let authority = if needs_authority {
-        Some(reviewer_authority(authored, request)?)
+        Some(reviewer_authority(authored, request, &reviewer_clients)?)
     } else {
         None
     };
@@ -1067,6 +1105,12 @@ fn render_dev_client_yaml_block(client: &Value) -> Result<String> {
             .as_bool()
             .context("planned BReg dev client allowBregAccess must be a boolean")?;
         block.push_str(&format!("    allowBregAccess: {allow_breg_access}\n"));
+    }
+    if let Some(allow_human_fixture) = client.get("allowHumanFixture") {
+        let allow_human_fixture = allow_human_fixture
+            .as_bool()
+            .context("planned BReg dev client allowHumanFixture must be a boolean")?;
+        block.push_str(&format!("    allowHumanFixture: {allow_human_fixture}\n"));
     }
     if claims.is_empty() {
         block.push_str("    claims: {}\n");
@@ -1369,11 +1413,11 @@ mod tests {
             "request_lifecycle"
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["operations"],
+            root["accessProfiles"][0]["permissions"][0]["operations"],
             json!(["get", "list"])
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["readableRequestFields"],
+            root["accessProfiles"][0]["permissions"][0]["readableRequestFields"],
             json!(["review_state"])
         );
         apply_breg_candidate(&mut root, "request", &[]).unwrap();
@@ -1410,7 +1454,7 @@ mod tests {
         assert!(rendered.contains("# keep authored context"));
         assert!(rendered.contains("accessProfiles: # keep the profile context"));
         assert_eq!(
-            expected["accessProfiles"][0]["grants"][0]["readableFields"],
+            expected["accessProfiles"][0]["permissions"][0]["readableFields"],
             json!(["record", "region"])
         );
         assert_eq!(
@@ -1426,13 +1470,13 @@ mod tests {
 
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
-        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","grants":[]}]});
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
         assert!(apply_breg_candidate(&mut root, "request", &[]).is_err());
     }
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
-        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    grants: []\n";
+        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: []\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &[]).unwrap();
         let patched =
@@ -1451,15 +1495,23 @@ mod tests {
             "accessProfiles": [{
                 "id": "reviewer",
                 "principalClaim": "registry_principal",
+                "actorKind": "human",
+                "requesterClients": ["staff", "supervisor"],
                 "requiredScopes": ["starter:reviewer"],
                 "requiredPurposes": ["starter-learning"]
             }]
         });
         let request = json!({
-            "reviewGrants": [{"profile": "reviewer"}],
-            "applyGrants": [{"profile": "reviewer"}]
+            "reviewPermissions": [{"profile": "reviewer"}],
+            "applyPermissions": [{"profile": "reviewer"}]
         });
         (authored, request)
+    }
+
+    fn reviewer_clients() -> BTreeSet<String> {
+        ["staff".to_owned(), "supervisor".to_owned()]
+            .into_iter()
+            .collect()
     }
 
     #[test]
@@ -1512,6 +1564,14 @@ mod tests {
         for role in ["supervisor", "staff"] {
             let client = clients.iter().find(|c| c["id"] == role).unwrap();
             assert_eq!(client["allowBregAccess"], true);
+            assert_eq!(
+                client["accessProfiles"],
+                if role == "supervisor" {
+                    json!(["reviewer"])
+                } else {
+                    json!([])
+                }
+            );
             assert_eq!(
                 client["scopes"],
                 json!([format!("casework:{role}"), "starter:reviewer"])
@@ -1797,8 +1857,8 @@ mod tests {
                 {"id":"reviewer","principalClaim":"sub","requiredScopes":["starter:reviewer"],"requiredPurposes":["starter-learning"]}
             ]
         });
-        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
-        assert!(reviewer_authority(&mismatched_principal, &request).is_err());
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
+        assert!(reviewer_authority(&mismatched_principal, &request, &reviewer_clients()).is_err());
 
         let disagreeing_purpose = json!({
             "accessProfiles": [
@@ -1806,22 +1866,34 @@ mod tests {
                 {"id":"approver","principalClaim":"registry_principal","requiredScopes":["starter:approver"],"requiredPurposes":["starter-approval"]}
             ]
         });
-        let request =
-            json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[{"profile":"approver"}]});
-        assert!(reviewer_authority(&disagreeing_purpose, &request).is_err());
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[{"profile":"approver"}]});
+        assert!(reviewer_authority(&disagreeing_purpose, &request, &reviewer_clients()).is_err());
+    }
+
+    #[test]
+    fn reviewer_authority_requires_exact_human_casework_clients() {
+        let (mut authored, request) = reviewer_fixture();
+        authored["accessProfiles"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("actorKind");
+        assert!(reviewer_authority(&authored, &request, &reviewer_clients()).is_err());
+
+        let (mut authored, request) = reviewer_fixture();
+        authored["accessProfiles"][0]["requesterClients"] = json!(["supervisor"]);
+        assert!(reviewer_authority(&authored, &request, &reviewer_clients()).is_err());
     }
 
     #[test]
     fn reviewer_authority_accepts_unrestricted_purpose_profiles() {
         let unrestricted = json!({
             "accessProfiles": [
-                {"id":"reviewer","principalClaim":"registry_principal"},
-                {"id":"approver","principalClaim":"registry_principal","requiredScopes":[],"requiredPurposes":[]}
+                {"id":"reviewer","principalClaim":"registry_principal","actorKind":"human","requesterClients":["staff","supervisor"]},
+                {"id":"approver","principalClaim":"registry_principal","actorKind":"human","requesterClients":["staff","supervisor"],"requiredScopes":[],"requiredPurposes":[]}
             ]
         });
-        let request =
-            json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[{"profile":"approver"}]});
-        let authority = reviewer_authority(&unrestricted, &request).unwrap();
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[{"profile":"approver"}]});
+        let authority = reviewer_authority(&unrestricted, &request, &reviewer_clients()).unwrap();
         assert!(authority.scopes.is_empty());
         assert_eq!(authority.purpose, None);
 
@@ -1841,15 +1913,17 @@ mod tests {
             "accessProfiles": [{
                 "id":"reviewer",
                 "principalClaim":"registry_principal",
-                "grants":[{
+                "actorKind":"human",
+                "requesterClients":["staff","supervisor"],
+                "permissions":[{
                     "entity":"request",
                     "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
                 }]
             }]
         });
-        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
 
-        let error = reviewer_authority(&authored, &request)
+        let error = reviewer_authority(&authored, &request, &reviewer_clients())
             .err()
             .expect("row-boundary authority must be refused");
         let message = format!("{error:#}");
@@ -1861,6 +1935,7 @@ mod tests {
     #[test]
     fn human_dev_client_bails_when_existing_purpose_claim_conflicts() {
         let authority = ReviewerAuthority {
+            profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: Some("starter-learning".to_owned()),
         };
@@ -1889,6 +1964,7 @@ mod tests {
     #[test]
     fn human_dev_client_maps_the_configured_casework_principal_for_breg_review() {
         let authority = ReviewerAuthority {
+            profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
         };
@@ -1916,8 +1992,9 @@ mod tests {
     }
 
     #[test]
-    fn human_dev_client_derives_the_mint_subject_for_breg_review() {
+    fn human_dev_client_refuses_a_session_qualified_subject_for_breg_review() {
         let authority = ReviewerAuthority {
+            profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
         };
@@ -1927,31 +2004,16 @@ mod tests {
             "claims":{"registry_actor_kind":"human"}
         });
 
-        let merged = human_dev_client(&client, "staff", "sub", Some(&authority)).unwrap();
-        assert_eq!(
-            merged["claims"][READER_PRINCIPAL_CLAIM],
-            borrowed_breg_principal("staff")
-        );
-        assert!(merged["claims"].get("sub").is_none());
-
-        let already_aligned = json!({
-            "id":"staff",
-            "scopes":["casework:staff"],
-            "claims":{
-                "registry_actor_kind":"human",
-                "registry_principal":borrowed_breg_principal("staff")
-            }
-        });
-        let merged = human_dev_client(&already_aligned, "staff", "sub", Some(&authority)).unwrap();
-        assert_eq!(
-            merged["claims"][READER_PRINCIPAL_CLAIM],
-            borrowed_breg_principal("staff")
-        );
+        let refusal = human_dev_client(&client, "staff", "sub", Some(&authority))
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("session-qualified"), "{refusal}");
     }
 
     #[test]
     fn human_dev_client_refuses_authority_over_breg_scope_or_claim_bounds() {
         let authority = ReviewerAuthority {
+            profiles: BTreeSet::from(["reviewer".to_owned()]),
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
         };
@@ -1987,6 +2049,7 @@ mod tests {
             "supervisor",
             "employee_id",
             Some(&ReviewerAuthority {
+                profiles: BTreeSet::from(["reviewer".to_owned()]),
                 scopes: BTreeSet::new(),
                 purpose: None,
             }),

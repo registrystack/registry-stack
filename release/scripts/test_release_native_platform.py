@@ -20,7 +20,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.27.0"
+VERSION = "0.30.0"
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -39,8 +39,6 @@ CORE_ARGS = [
     "registry-evidence",
     "-p",
     "registry-evidencectl",
-    "-p",
-    "registry-mint",
     "-p",
     "registry-evidence-oid4vci",
     "--target",
@@ -130,7 +128,6 @@ binaries = {
     "registry-relayctl": "relayctl",
     "registry-evidence": "evidence",
     "registry-evidencectl": "evidencectl",
-    "registry-mint": "mint",
     "registry-evidence-oid4vci": "evidence-oid4vci",
     "registry-breg": "breg",
     "registry-bregctl": "bregctl",
@@ -208,15 +205,16 @@ fi
             calls = [json.loads(line) for line in log.read_text().splitlines()]
         return result, output, calls
 
-    def test_all_mode_preserves_the_three_exact_ordered_cargo_invocations(self) -> None:
+    def test_all_mode_preserves_the_exact_ordered_cargo_invocations(self) -> None:
         result, output, calls = self.build("all")
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual([CORE_ARGS, BREG_ARGS, BREGCTL_ARGS], calls)
+        self.assertEqual([CORE_ARGS, BREG_ARGS, BREGCTL_ARGS, CASEWORK_RUNTIME_ARGS, CASEWORKCTL_ARGS], calls)
         self.assertEqual(
             [
                 *MODULE.rosters(VERSION)["core"],
                 *MODULE.rosters(VERSION)["breg"],
                 *MODULE.rosters(VERSION)["bregctl"],
+                *MODULE.rosters(VERSION)["casework"],
             ],
             [line.split("  ", 1)[1] for line in (output / "SHA256SUMS").read_text().splitlines()],
         )
@@ -303,6 +301,16 @@ fi
         self.assertEqual("", (breg / "SHA256SUMS").read_text())
         self.assertEqual("", (bregctl / "SHA256SUMS").read_text())
         self.assertEqual("", (casework / "SHA256SUMS").read_text())
+        # Historical recovery still requires the Mint bytes built by the old
+        # release source. Current builders omit them; supply immutable fixture
+        # bytes here so this tests the historical merger rather than rebuilding Mint.
+        legacy_mint = core / "platform" / f"mint-v{version}-macos-arm64"
+        legacy_mint.write_bytes(b"historical Mint fixture\n")
+        legacy_mint.chmod(0o755)
+        (core / "SHA256SUMS").write_text("".join(
+            f"{digest(core / 'platform' / name)}  {name}\n"
+            for name in MODULE.rosters(version)["core"]
+        ))
         # Artifact upload/download does not retain empty directories.
         (breg / "platform").rmdir()
         (bregctl / "platform").rmdir()

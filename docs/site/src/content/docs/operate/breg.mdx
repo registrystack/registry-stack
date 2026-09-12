@@ -87,9 +87,7 @@ bregctl 0.26.1
 The installer accepts the platforms in
 [platform support](../../explanation/known-limitations/#platform-support), and refuses any other
 platform rather than guessing. It verifies every downloaded binary against the release `SHA256SUMS`
-before anything reaches the install directory, and installs `breg`, `bregctl`, and `mint` together
-or not at all. Registry Mint comes along because a local registry uses it when no identity provider
-is at hand; a production deployment with its own OpenID Connect issuer can ignore it. It does not verify
+before anything reaches the install directory, and installs `breg` and `bregctl` together or not at all. It does not verify
 release authenticity. The signed checksum chain that does, and the checks behind it, are recorded in
 [OpenSSF and release trust](../../security/openssf-evidence/). Replace `| bash` with `| less` to read
 the installer before you run it on a host you operate. For a higher-assurance installation, follow
@@ -174,12 +172,9 @@ GRANT USAGE ON SCHEMA registry_spatial_ext
   TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
 ```
 
-The launcher behind [Create and query your first registry](../../tutorials/first-breg/) writes
-exactly these statements for its local container, so a quickstart run's generated `database/`
-directory is a working reference.
+The maintained runtime validates these ownership boundaries when it prepares spatial storage.
 
-{/* Evidence: products/breg/quickstart/support/quickstart.py, _initialize_sql();
-    crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects() and
+{/* Evidence: crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects() and
     prepare_schema_test_database_with_connections();
     crates/registry-breg/src/postgres/roles.rs. */}
 
@@ -400,8 +395,8 @@ Use the same principal claim in an ownership row boundary when the record's owne
 Use separate assignment claims for district, tenant, or team membership.
 Configure the issuer to derive these claims from trusted assignments rather than caller-supplied values.
 
-Deployments without an identity provider can run [Registry Mint](../../configure/mint/) as the issuer for registered machine clients.
-Mint's client-credentials flow represents a service, not an individual signing in.
+Configure a compatible OAuth issuer for registered machine clients. A client-credentials flow
+represents a service, not an individual signing in.
 Human login, account lifecycle, and multifactor authentication belong to your identity provider and application.
 When replacing an issuer, verify the same permitted and refused requests with real tokens before changing the serving configuration.
 Compare issuer, resource audience, token headers, permission source, principal identity, purpose, and assignment claim shapes.
@@ -409,7 +404,6 @@ Compare issuer, resource audience, token headers, permission source, principal i
 {/* Evidence: crates/registry-breg/src/auth.rs;
     crates/registry-breg/tests/http_auth.rs;
     crates/registry-breg/src/runtime_config.rs;
-    crates/registry-mint/src/lib.rs;
     crates/registry-platform-oidc/src/lib.rs. */}
 
 ### Rotate signing keys and handle issuer outages
@@ -766,5 +760,5 @@ behind an upstream rate limit.
 - [Evidence deployment targets](https://github.com/registrystack/registry-stack/tree/v0.26.1/products/evidence/reference/deployment-targets)
   and the
   [Evidence Compose adapter](https://github.com/registrystack/registry-stack/blob/v0.26.1/docker/compose/docker-compose.yaml)
-  cover Evidence and Registry Mint deployment shapes, not Base Registry Engine; read them when this
-  deployment also runs Evidence or Mint alongside the registry.
+  cover Evidence deployment shapes, not Base Registry Engine; read them when this deployment also
+  runs Evidence alongside the registry.

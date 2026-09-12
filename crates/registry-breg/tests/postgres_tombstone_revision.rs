@@ -567,7 +567,7 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
           "accessProfiles":[{{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{{
+            "permissions":[{{
               "entity":"widget","operations":[{operations}],
               "readableFields":["jurisdiction","label","quantity"],
               "writableFields":["jurisdiction","label","quantity"],

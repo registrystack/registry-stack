@@ -182,7 +182,8 @@ def main():
     bundle.chmod(0o555)
     now = int(time.time())
     claims = {"iss": issuer, "aud": "farmer-evidence-trial", "sub": "registered-breg-procedure", "iat": now - 1, "exp": now + 299,
-              "evidence_tags": ["breg-farmer-procedure"], "evidence_audience": "urn:example:landholding"}
+              "registry_actor_kind": "service", "evidence_tags": ["breg-farmer-procedure"],
+              "evidence_audience": "urn:example:landholding"}
     token = sign_token(issuer_pem, issuer_public, claims)
     token_path = output / "token"
     token_path.write_text(token)

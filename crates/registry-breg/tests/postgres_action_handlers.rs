@@ -136,7 +136,7 @@ async fn setup_with_handler_source(
         .iter_mut()
         .find(|profile| profile.id == "person-administrator")
         .unwrap()
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.entity == "person")
         .unwrap()
@@ -175,7 +175,7 @@ async fn setup_with_handler_source(
         .iter_mut()
         .find(|profile| profile.id == "person-registrar")
         .unwrap()
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.action.as_deref() == Some("register-person-with-registration"))
         .unwrap()

@@ -837,6 +837,21 @@ impl MutationCoordinator {
         {
             return Err(MutationError::PreconditionFailed);
         }
+        if let Some(grant) = claims.task_grant() {
+            self.check_task_authority(grant).await?;
+        }
+        if matches!(input.action, RequestActionBody::Approve { .. }) {
+            if let Some(grant) = crate::request_store::load_task_authority(
+                transaction.transaction(),
+                &entity.id,
+                record_uuid,
+                i64::from(workflow.current_version().get()),
+            )
+            .await?
+            {
+                self.check_task_authority(&grant).await?;
+            }
+        }
         let previous_revision = i64::try_from(workflow.workflow_revision().get())
             .map_err(|_| MutationError::Unavailable)?;
         let mut save_previous_revision = previous_revision;
@@ -1015,6 +1030,18 @@ impl MutationCoordinator {
                 &next,
             )
             .await?;
+            if matches!(input.action, RequestActionBody::Submit) {
+                if let Some(grant) = claims.task_grant() {
+                    crate::request_store::save_task_authority(
+                        transaction.transaction(),
+                        &entity.id,
+                        record_uuid,
+                        i64::from(next.current_version().get()),
+                        grant,
+                    )
+                    .await?;
+                }
+            }
             save_previous_revision = i64::try_from(next.workflow_revision().get())
                 .map_err(|_| MutationError::Unavailable)?;
             if let Some(targets) = prepared_targets.as_deref() {
@@ -1101,6 +1128,18 @@ impl MutationCoordinator {
             &next,
         )
         .await?;
+        if matches!(input.action, RequestActionBody::Submit) {
+            if let Some(grant) = claims.task_grant() {
+                crate::request_store::save_task_authority(
+                    transaction.transaction(),
+                    &entity.id,
+                    record_uuid,
+                    i64::from(next.current_version().get()),
+                    grant,
+                )
+                .await?;
+            }
+        }
         crate::request_store::link_request_revision(
             transaction.transaction(),
             &entity.id,
@@ -1380,6 +1419,17 @@ impl MutationCoordinator {
             || proposal.effect_digest().as_str() != effect_digest
         {
             return Err(MutationError::PreconditionFailed);
+        }
+        if let Some(grant) = crate::request_store::load_task_authority(
+            transaction.transaction(),
+            &entity.id,
+            Uuid::parse_str(workflow.request().record_id().as_str())
+                .map_err(|_| MutationError::InvalidRequest)?,
+            i64::from(proposal_version),
+        )
+        .await?
+        {
+            self.check_task_authority(&grant).await?;
         }
         let loaded_targets;
         let targets = if let Some(targets) = targets_override {

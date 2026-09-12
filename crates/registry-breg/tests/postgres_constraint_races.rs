@@ -503,7 +503,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"principal","requiredPurposes":["operations"],
-            "grants":[{
+            "permissions":[{
               "entity":"parent","operations":["create","get"],"readableFields":["name"],"writableFields":["name"],
               "rowBoundaries": []
             },{

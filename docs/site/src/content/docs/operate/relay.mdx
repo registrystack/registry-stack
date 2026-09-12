@@ -33,9 +33,8 @@ administrative trust boundary.
 
 Prepare a dedicated Unix service identity, a private listener behind Transport Layer Security
 (TLS) termination, a sealed package, the matching snapshot or live read-only source, an audit
-location, independent audit-integrity and cursor-encryption keys, and a token issuer for protected
-access profiles. [Configure Registry Mint](../../configure/mint/) when the deployment has no other
-identity provider to serve as that issuer.
+location, independent audit-integrity and cursor-encryption keys, and a compatible OAuth issuer for
+protected access profiles.
 Do not place the package, source, secret, or audit path in a shared writable directory.
 For snapshot mode, make the SQLite file immutable outside Relay, preferably with a read-only mount.
 Relay verifies its captured digest before and after every statement, but a process cannot exclude a

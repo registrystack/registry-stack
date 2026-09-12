@@ -29,7 +29,7 @@ export const options = {
   noConnectionReuse: false,
 };
 
-const workload = new Workload(__ENV.BREG_URL, __ENV.TOKEN_URL, __ENV.CLIENT_ID, __ENV.CLIENT_SECRET);
+const workload = new Workload(__ENV.BREG_URL);
 
 export default function () {
   workload.step(workload.token(), READ_MIX);

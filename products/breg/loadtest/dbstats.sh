@@ -7,9 +7,9 @@ action="${1:-snapshot}"
 interval="${2:-1}"
 
 case "$action" in
-  reset|snapshot|sample|analyze) ;;
+  snapshot|sample|analyze) ;;
   *)
-    printf '%s\n' 'usage: products/breg/loadtest/dbstats.sh reset|snapshot|sample [interval-seconds]|analyze' >&2
+    printf '%s\n' 'usage: products/breg/loadtest/dbstats.sh snapshot|sample [interval-seconds]|analyze' >&2
     exit 2
     ;;
 esac
@@ -26,20 +26,24 @@ fi
 read -r container database < <(python3 - "$run_dir/env.json" <<'PY'
 import json
 import sys
+from pathlib import Path
 
 environment = json.load(open(sys.argv[1], encoding="utf-8"))
-print(environment["database"]["container"], environment["database"]["database"])
+root=Path(sys.argv[1]).resolve().parent
+if (root/'.launcher-owned').read_text().strip()!='registry-stack-breg-loadtest-v2': raise SystemExit(2)
+project=(root/'project').resolve()
+if Path(environment['project']).resolve()!=project: raise SystemExit(2)
+state=json.load(open(project/'.breg/dev/state.json', encoding='utf-8'))
+container=environment["database"]["container"]
+if container!=state.get('containerId') or len(container)!=64 or any(c not in '0123456789abcdefABCDEF' for c in container): raise SystemExit(2)
+if environment["database"]["database"]!='breg_dev': raise SystemExit(2)
+print(container, 'breg_dev')
 PY
 )
 
 psql_exec() {
   docker exec -i "$container" psql -v ON_ERROR_STOP=1 -q -U postgres -d "$database" "$@"
 }
-
-if [[ "$action" == reset ]]; then
-  psql_exec -Atc 'SELECT pg_stat_statements_reset() IS NOT NULL;' >/dev/null
-  exit 0
-fi
 
 if [[ "$action" == analyze ]]; then
   psql_exec -c 'ANALYZE;' >/dev/null
@@ -48,23 +52,7 @@ fi
 
 if [[ "$action" == snapshot ]]; then
   psql_exec -At <<'SQL'
-WITH top_statements AS (
-  SELECT queryid::text AS "queryId",
-         CASE
-           WHEN strpos(lower(query), 'registry_audit_head') > 0 THEN 'audit-head'
-           WHEN strpos(lower(query), 'registry_audit') > 0 THEN 'audit'
-           WHEN strpos(lower(query), 'breg_e_') > 0 THEN 'record'
-           ELSE 'other'
-         END AS category,
-         calls,
-         round(total_exec_time::numeric, 3) AS "totalMs",
-         round(mean_exec_time::numeric, 3) AS "meanMs",
-         rows
-  FROM pg_stat_statements
-  WHERE dbid = (SELECT oid FROM pg_database WHERE datname = current_database())
-  ORDER BY total_exec_time DESC
-  LIMIT 20
-), table_sizes AS (
+WITH table_sizes AS (
   SELECT relname AS name,
          pg_total_relation_size(relid) AS "totalBytes",
          n_live_tup AS "liveRows",
@@ -82,7 +70,6 @@ WITH top_statements AS (
 )
 SELECT json_build_object(
   'timestamp', clock_timestamp(),
-  'topStatements', COALESCE((SELECT json_agg(top_statements) FROM top_statements), '[]'::json),
   'currentWaits', COALESCE((SELECT json_agg(current_waits) FROM current_waits), '[]'::json),
   'tableSizes', COALESCE((SELECT json_agg(table_sizes) FROM table_sizes), '[]'::json),
   'auditRows', (SELECT count(*) FROM registry_internal.registry_audit)

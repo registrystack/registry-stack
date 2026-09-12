@@ -61,6 +61,17 @@ invalidate displayed bindings or durable attempts. When a readback pass lasts
 longer than the interval, Casework skips missed ticks instead of replaying them
 back-to-back against the source.
 
+For a BREG source, `tokenEndpoint` selects the reader's OAuth endpoint.
+`clientAssertionAudience` explicitly overrides the JWT client assertion audience;
+when omitted, it remains the token endpoint. `resource` is the exact RFC 8707
+resource indicator and `scopes` is the reader's nonempty bounded OAuth scope
+list. Omission preserves an existing issuer's default behavior. Stock ThunderID
+1.0.1 deployments must configure all three: its issuer URL as the assertion
+audience, the exact BREG resource, and the registered reader scopes. Use the
+actual deployment or `bregctl dev export-client` values, not a guessed resource
+based on the project directory name. Changing these fields changes the source
+binding generation and invalidates stale source-bound authority.
+
 See the complete maintained
 [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml) and
 the generated editor schema at

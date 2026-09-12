@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use registry_breg::contract::{
-    AccessGrantSource, AccessProfileSource, AccessRequirementsSource, ActionTargetGrantSource,
-    ApplyTargetGrantSource, RequestPresenceGrantSource, ReviewStageTargetGrantSource,
+    AccessPermissionSource, AccessProfileSource, AccessRequirementsSource,
+    ActionTargetPermissionSource, ApplyTargetPermissionSource, RequestPresencePermissionSource,
+    ReviewStageTargetPermissionSource,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -21,20 +22,20 @@ fn requires_explicit_rows<T: DeserializeOwned>(mut value: Value) {
 
 #[test]
 fn every_row_bearing_grant_requires_an_explicit_declaration() {
-    requires_explicit_rows::<AccessGrantSource>(json!({
+    requires_explicit_rows::<AccessPermissionSource>(json!({
         "entity":"record", "operations":["get"]
     }));
-    requires_explicit_rows::<ActionTargetGrantSource>(json!({"entity":"record"}));
-    requires_explicit_rows::<ApplyTargetGrantSource>(json!({"entity":"record"}));
-    requires_explicit_rows::<ReviewStageTargetGrantSource>(json!({
+    requires_explicit_rows::<ActionTargetPermissionSource>(json!({"entity":"record"}));
+    requires_explicit_rows::<ApplyTargetPermissionSource>(json!({"entity":"record"}));
+    requires_explicit_rows::<ReviewStageTargetPermissionSource>(json!({
         "entity":"record", "readableFields":["label"]
     }));
-    requires_explicit_rows::<RequestPresenceGrantSource>(json!({"requestType":"correction"}));
+    requires_explicit_rows::<RequestPresencePermissionSource>(json!({"requestType":"correction"}));
 }
 
 #[test]
 fn invocation_and_mandatory_requirements_do_not_invent_row_grants() {
-    let action: AccessGrantSource = serde_json::from_value(json!({
+    let action: AccessPermissionSource = serde_json::from_value(json!({
         "action":"register", "operations":["invoke"],
         "targets":[{"entity":"record", "rowBoundaries":[]}]
     }))
@@ -58,9 +59,9 @@ fn membership_preserves_explicit_row_declarations_and_round_trips() {
     let mut grant = json!({
         "entity":"record", "operations":["get"], "membershipBoundaries": boundaries
     });
-    requires_explicit_rows::<AccessGrantSource>(grant.clone());
+    requires_explicit_rows::<AccessPermissionSource>(grant.clone());
     grant["rowBoundaries"] = json!([]);
-    let parsed: AccessGrantSource = serde_json::from_value(grant).unwrap();
+    let parsed: AccessPermissionSource = serde_json::from_value(grant).unwrap();
     assert_eq!(parsed.membership_boundaries.len(), 1);
     assert_eq!(
         serde_json::to_value(parsed).unwrap()["membershipBoundaries"],

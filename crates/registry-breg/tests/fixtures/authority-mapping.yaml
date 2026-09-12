@@ -35,7 +35,7 @@ accessProfiles:
   - id: operator
     default: true
     principalClaim: registry_principal
-    grants:
+    permissions:
       - entity: asset
         operations: [get, lookup]
         readableFields: [label]
@@ -50,7 +50,7 @@ accessProfiles:
   - id: reviewer
     default: true
     principalClaim: registry_principal
-    grants:
+    permissions:
       - entity: correction
         operations: [get, submit_request, approve_request, reject_request, request_revision, apply_request]
         readableFields: [asset, label]

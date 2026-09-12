@@ -22,7 +22,7 @@ fn project() -> Value {
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","grants":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
     })
 }
 

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-19"
+last_reviewed: "2026-09-13"
 doc_type: tutorial
 persona:
   - consumer or verifier
@@ -43,7 +43,7 @@ program itself retained.
 %%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
     participant A as Your application
-    participant M as Registry Mint
+    participant M as Local issuer
     participant E as Evidence
 
     A->>M: Signed client assertion
@@ -166,7 +166,7 @@ Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipp
 ```
 
 Back in the first terminal, compile the question and the access policy into a fresh generation, and
-start Evidence and Registry Mint:
+start Evidence and the pinned local issuer:
 
 ```sh
 evidencectl dev start .
@@ -174,7 +174,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 `evidencectl dev` reports ready without reaching the source, so a stopped source mock surfaces only
@@ -214,11 +214,14 @@ client = EvidenceClient(
     revoked_key_ids=[],
     token={
         "private_key_jwt": {
-            "token_endpoint": "http://127.0.0.1:8081/token",
+            "token_endpoint": "http://127.0.0.1:8081/oauth2/token",
             "client_id": "age-check-app",
             "client_key": json.loads(
                 Path(".evidence/clients/age-check-app/private.jwk").read_text()
             ),
+            "audience": "http://127.0.0.1:8081",
+            "resource": "urn:registrystack:evidence:local:gateway",
+            "scopes": ["evidence:invoke"],
         },
     },
 )
@@ -486,11 +489,14 @@ def build_client():
         revoked_key_ids=[],
         token={
             "private_key_jwt": {
-                "token_endpoint": "http://127.0.0.1:8081/token",
+                "token_endpoint": "http://127.0.0.1:8081/oauth2/token",
                 "client_id": "age-check-app",
                 "client_key": json.loads(
                     Path(".evidence/clients/age-check-app/private.jwk").read_text()
                 ),
+                "audience": "http://127.0.0.1:8081",
+                "resource": "urn:registrystack:evidence:local:gateway",
+                "scopes": ["evidence:invoke"],
             },
         },
     )
@@ -703,7 +709,7 @@ Return to the source-mock terminal and press `Ctrl+C` to stop it.
   response at the recorded decision time
 - [Control who can request Evidence](../control-who-can-request-evidence/), for policies and
   revocation
-- [Request an access token from your own code](../../configure/request-an-access-token/), for the
+- [Configure Evidence Gateway](../../configure/evidence/), for the
   token exchange without the client library
 - [Read the Registry Stack client API reference](../../reference/client-api/#evidence-gateway), for
   every client operation, token configuration, and error kind

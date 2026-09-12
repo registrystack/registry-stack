@@ -420,7 +420,7 @@ fn registry(plan: &Plan) -> String {
         &format!("requiredScopes: [{}]", scalar(&operate_scope(plan))),
     );
     yaml.line(2, "requiredPurposes: [registry-operations]");
-    yaml.line(2, "grants:");
+    yaml.line(2, "permissions:");
     for entity in &plan.entities {
         let all: Vec<&str> = entity.all_fields().map(|field| field.id.as_str()).collect();
         let filterable: Vec<&str> = entity
@@ -452,7 +452,7 @@ fn registry(plan: &Plan) -> String {
             &format!("requiredScopes: [{}]", scalar(&read_scope(plan))),
         );
         yaml.line(2, "requiredPurposes: [registry-reporting]");
-        yaml.line(2, "grants:");
+        yaml.line(2, "permissions:");
         for entity in readers {
             let readable: Vec<&str> = entity
                 .all_fields()
@@ -604,8 +604,8 @@ fn dev_clients(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
     yaml.comment(
         0,
-        "Local callers for `bregctl dev`. Registry Mint, the local token issuer that `dev` \
-         starts beside the registry, registers each client below and issues it short-lived \
+        "Local callers for `bregctl dev`. The stock local identity provider that `dev` \
+         starts beside the registry registers each client below and issues it short-lived \
          tokens carrying these claims. One client binds each access profile that \
          tests/journeys.yaml uses, with the claims those journeys expect, so a first start \
          runs the journeys and serves the package without another file. `dev` generates a \
@@ -1933,7 +1933,7 @@ mod tests {
         let profiles = registry["accessProfiles"].as_array().expect("profiles");
         assert_eq!(profiles[0]["id"], OPERATOR_PROFILE);
         assert_eq!(profiles[1]["id"], READER_PROFILE);
-        let reader_person = &profiles[1]["grants"][0];
+        let reader_person = &profiles[1]["permissions"][0];
         assert_eq!(reader_person["entity"], "person");
         let readable = reader_person["readableFields"]
             .as_array()

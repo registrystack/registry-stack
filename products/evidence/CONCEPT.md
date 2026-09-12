@@ -722,9 +722,9 @@ tracing headers. For OAuth, token acquisition is credential bootstrap rather
 than an evidence-data source call, and a source authenticates either with a
 client secret or with a private-key JWT assertion, the asymmetric form health
 profiles require. Rust owns the fixed token endpoint, grant, client
-authentication form, credential placement, audience, token lifetime handling,
-bounds, and redaction. Rhai sees neither the credential flow, the signing key,
-nor the resulting token.
+authentication form, credential placement, audience, optional RFC 8707 resource
+indicator, token lifetime handling, bounds, and redaction. Rhai sees neither
+the credential flow, the signing key, nor the resulting token.
 
 The explicit local assurance profile may additionally use `kind: none` for a
 source at one canonical numeric-loopback HTTP origin with an explicit non-zero
@@ -2347,8 +2347,8 @@ mandatory default and includes:
 - a target-host handoff in which operators independently provision secrets,
   run `doctor`, fixture evaluation, startup, retained-response verification,
   and audit-chain verification;
-- Registry Mint as an optional separately authored issuer, with only a
-  read-only mechanical Evidence/Mint compatibility check;
+- independently configured OIDC authentication with an explicit issuer,
+  resource, scope and claim contract;
 - a documented Docker Compose adapter that mounts the candidate bundle
   unchanged without generating Compose, container, or cloud deployment output;
 - deterministic source-contract mocks for flat REST, DHIS2 Tracker-style REST,
@@ -2479,7 +2479,7 @@ The complete Version 1 sequence is:
   contract, dependency, and workspace gates.
 - Satisfy the frozen runtime Definition of Done rows on one revision.
 
-### Phase 7: production build and optional Mint handoff
+### Phase 7: production build and issuer handoff
 
 - Keep the editable local project and `.evidence/dev` state outside production
   inputs while compiling one explicit target into a closed candidate.
@@ -2488,8 +2488,8 @@ The complete Version 1 sequence is:
 - Use the real Evidence binary for candidate validation and fixture execution,
   then perform target-host startup, verification, and audit proof with
   independently provisioned secrets.
-- Support either external HTTPS OIDC or separately authored Mint. The optional
-  paired check remains mechanical and read-only.
+- Support independently configured HTTPS OIDC and verify the actual
+  issuer-to-resource contract at handoff. Local tooling uses stock ThunderID.
 - Document the bare-binary journey and Compose adapter without generating
   deployment artifacts.
 

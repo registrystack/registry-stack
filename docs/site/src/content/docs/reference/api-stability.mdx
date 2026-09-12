@@ -64,15 +64,9 @@ No shipping binary currently exposes a covered metric family. Relay serves no me
 selected-metrics mechanism defined in this page has nothing under it until a maintained product
 publishes a family through it.
 
-Registry Mint and `evidence-oid4vci` service surfaces are deliberately absent from the table. Both
-are supporting services rather than patterns of their own, and their configuration fields, route
-shapes, and CLI flags may still change without a major release. Registry Mint's released image name
-and digest-verification interface remain covered release artifacts. The current implementation
-enforces the `client_credentials` grant with registered authentication, `private_key_jwt` (RFC 7523)
-by default or an explicitly selected standard client-secret method, the collapse of every client
-authentication failure to `invalid_client`, and authority written from the client registry rather
-than from the caller's request. These are current properties, not compatibility promises. The
-[Registry Mint reference](../mint/) defines the surfaces.
+`evidence-oid4vci` is absent from the table because it is a supporting service rather than a
+pattern of its own. Its configuration fields, route shapes, and CLI flags may still change without
+a major release.
 
 ## What counts as a breaking change
 
@@ -123,19 +117,14 @@ Every release documents a forward state path from its immediate predecessor.
 An upgrade that skips releases follows each sequential hop unless the target release explicitly
 certifies a direct path.
 
-The reverse is not promised. Relay, Evidence Gateway, and Registry Mint all parse config with
+The reverse is not promised. Relay and Evidence Gateway parse config with
 `deny_unknown_fields`, so a config file that uses keys introduced in a newer release fails to load
 on an older binary. Pin your config to the release you deploy.
 
 None of the three products has migrated state or a migration command. Relay owns no database: it
 reads the adopter's SQLite source through a read-only boundary and writes the keyed append-only
 audit stream named by `audit.sink` in its runtime file. Evidence Gateway persists the append-only
-audit log named by `auditStorage` in its runtime file. Registry Mint persists its client registry
-and the keyed append-only chain named by `audit.path`, while its client-assertion replay cache
-remains in memory. A newer binary must be checked against these retained audit formats before
-deployment.
-
-Relay's sealed package is an input to verify rather than state to migrate. `relay` reads the
+audit log named by `auditStorage` in its runtime file. Relay's sealed package is an input to verify rather than state to migrate. `relay` reads the
 package format version out of `relay-package.json` and refuses to activate a package whose version
 string is not the one that binary was built against, so a package-format change is a recompile of
 the authoring project rather than a conversion of an installed package.
@@ -185,16 +174,6 @@ contract. Its remaining routes are
 operational or discovery routes and are unversioned by convention: `/health`, `/ready`,
 `/openapi.json`, `/.well-known/evidence/jwks.json`, and `/.well-known/jwt-vc-issuer`. Evidence Gateway
 serves `/metrics` on a separate listener when one is configured, never on the request listener.
-
-Registry Mint's routes are unversioned by protocol convention rather than by promise: the fixed,
-non-configurable `POST /token`, the key set at the configured `signing.jwksPath` (default
-`/.well-known/jwks.json`), `/.well-known/oauth-authorization-server`,
-`/.well-known/openid-configuration`, `/health`, and `/ready`.
-Discovery routes under `/.well-known/` follow RFC 8615 and their own upstream protocol
-conventions, so they carry no version prefix in any product.
-
-The `evidence-oid4vci` supporting service has eight public routes. They are unversioned by OID4VCI
-protocol convention and remain outside the compatibility promise this page describes.
 
 ## Enforcement
 

@@ -518,10 +518,10 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
             {
+                "casework",
                 "developer-tools",
                 "discovery",
                 "evidence",
-                "mint",
                 "relay-v2",
                 "stack-client",
             },
@@ -854,10 +854,10 @@ class CiChangesTest(unittest.TestCase):
                 "evidence_tutorial"
             ]
         )
-        # The gate runs `mint` too, so a Mint change that breaks the served
+        # The gate runs the stock issuer, so an issuer-tooling change that breaks the served
         # tutorial has to reach the job that replays it.
         self.assertTrue(
-            classify(self.workspace, ("crates/registry-mint/src/lib.rs",))[
+            classify(self.workspace, ("crates/registry-thunderid-tooling/src/lib.rs",))[
                 "evidence_tutorial"
             ]
         )
@@ -957,7 +957,7 @@ class CiChangesTest(unittest.TestCase):
         for path in (
             "products/breg/quickstart/run.sh",
             "products/breg/quickstart/support/quickstart.py",
-            "crates/registry-mint/demo/support/key_material.py",
+            "crates/registry-thunderid-tooling/src/local.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["breg_tutorial"])
@@ -974,7 +974,7 @@ class CiChangesTest(unittest.TestCase):
         # The launcher mints the operator token the tutorial's first
         # authenticated call carries.
         self.assertTrue(
-            classify(self.workspace, ("crates/registry-mint/src/lib.rs",))[
+            classify(self.workspace, ("crates/registry-thunderid-tooling/src/lib.rs",))[
                 "breg_tutorial"
             ]
         )
@@ -993,7 +993,7 @@ class CiChangesTest(unittest.TestCase):
         # it replays neither composition page. The offline composition proof
         # owns the Evidence toolset and those pages' commands. A change to
         # registry-evidence itself still reaches the replay, because Registry
-        # Mint links it and the launcher issues the reader's operator token.
+        # Issuer tooling links it and the launcher issues the reader's operator token.
         for path in (
             "crates/registry-evidencectl/src/source_cli.rs",
             "docs/site/src/content/docs/tutorials/evidence-from-breg.mdx",
@@ -1041,15 +1041,13 @@ class CiChangesTest(unittest.TestCase):
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
-        # The replay builds and runs these five: the runtime the reader calls,
-        # the tool that starts and seeds the local session, Registry Mint,
-        # which issues every token the reader's calls carry, and the Base
-        # Registry Engine runtime and tool the two-product page runs beside
-        # Casework.
+        # The replay builds and runs these three: the runtime the reader calls,
+        # the tool that starts and seeds the local session, and stock issuer tooling,
+        # which issues every token the reader's calls carry.
         for path in (
             "crates/registry-casework/src/http.rs",
             "crates/registry-caseworkctl/src/dev/mod.rs",
-            "crates/registry-mint/src/lib.rs",
+            "crates/registry-thunderid-tooling/src/lib.rs",
             "crates/registry-breg/src/lib.rs",
             "crates/registry-bregctl/src/dev/mod.rs",
         ):
@@ -1165,17 +1163,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["docs_archives"])
 
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
-        # A path inside the runtime crate seeds that crate alone. registry-mint
-        # dev-depends on registry-evidence so its compatibility test proves
-        # Evidence accepts a minted token. The Discovery client also drives a
-        # real Evidence router. Changing Evidence must therefore run both test
-        # consumers.
+        # A runtime change reaches the real Evidence router consumers, including
+        # the Casework institutional exchange acceptance through its dev dependency.
         outputs = classify(self.workspace, ("crates/registry-evidence/src/source.rs",))
         self.assertTrue(outputs["evidence_contracts"])
         self.assertIn("registry-evidence", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"developer-tools", "discovery", "evidence", "mint"},
+            {"casework", "developer-tools", "discovery", "evidence"},
         )
 
         # A products/evidence path belongs to no crate directory, so it seeds
@@ -1198,9 +1193,9 @@ class CiChangesTest(unittest.TestCase):
                     {entry["name"] for entry in outputs["rust_matrix"]["include"]},
                     {
                         "breg",
+                        "casework",
                         "discovery",
                         "evidence",
-                        "mint",
                         "relay-v2",
                         "developer-tools",
                         "stack-client",
@@ -1367,19 +1362,19 @@ class CiChangesTest(unittest.TestCase):
         self.assertTrue(RELAY_CLIENT_PACKAGES & set(outputs["rust_packages"]))
         self.assertLessEqual(STACK_CLIENT_PACKAGES, set(outputs["rust_packages"]))
 
-    def test_mint_change_runs_the_direct_relay_pairing_without_relay_fanout(self) -> None:
-        outputs = classify(
-            self.workspace,
-            ("crates/registry-mint/src/clients.rs",),
-        )
-        self.assertIn("registry-mint", outputs["rust_packages"])
-        # Relay V2 owns the real Mint-to-Relay router journey through a dev
-        # dependency. That test suite must run for a Mint token-profile change,
-        # but the test-only edge must not select Relay's normal dependents.
+    def test_casework_authority_changes_replay_the_stock_breg_composition(self) -> None:
+        for path in ("crates/registry-casework/src/task_grants.rs", "crates/registry-casework/src/auth.rs", "crates/registry-casework-core/src/task_grant.rs"):
+            with self.subTest(path=path):
+                self.assertTrue(classify(self.workspace, (path,))["breg_contracts"])
+
+    def test_issuer_tooling_change_runs_the_replacement_journeys(self) -> None:
+        outputs = classify(self.workspace, ("crates/registry-thunderid-tooling/src/local.rs",))
+        self.assertIn("registry-thunderid-tooling", outputs["rust_packages"])
         self.assertIn("registry-relay-v2", outputs["rust_packages"])
-        self.assertNotIn("registry-relayctl", outputs["rust_packages"])
         self.assertTrue(outputs["relay_v2_contracts"])
         self.assertTrue(outputs["evidence_tutorial"])
+        self.assertTrue(outputs["breg_tutorial"])
+        self.assertTrue(outputs["casework_tutorial"])
 
     def test_oid4vci_change_runs_rust_contracts_and_its_registered_tutorial(self) -> None:
         outputs = classify(
@@ -1981,16 +1976,13 @@ on:
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
-    def test_docs_job_prepares_generator_inputs_before_script_tests(self) -> None:
+    def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         docs_job = workflow.split("\n  docs:\n", 1)[1].split("\n  docs-required:\n", 1)[0]
-        rust = "run: rustup toolchain install 1.95.0 --profile minimal"
         fetch = "run: node scripts/fetch-openapi.mjs"
         test_scripts = "run: npm test"
 
-        self.assertIn(rust, docs_job)
         self.assertIn(fetch, docs_job)
-        self.assertLess(docs_job.index(rust), docs_job.index(test_scripts))
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
     def test_every_referenced_changes_output_is_declared_and_emitted(self) -> None:

@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -14,7 +15,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
 use registry_platform_oidc::{
-    is_access_token_typ_pair, Audience, JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
+    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimError, ClaimNames,
+    JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -49,6 +51,8 @@ const REGISTERED_CLAIMS: &[&str] = &[
 pub struct AuthorityClaimConfig {
     principal_claim: String,
     purpose_claim: Option<String>,
+    contextual_claims: ClaimNames,
+    trusted_actors: BTreeMap<String, String>,
 }
 
 impl AuthorityClaimConfig {
@@ -57,7 +61,20 @@ impl AuthorityClaimConfig {
         Self {
             principal_claim: principal_claim.into(),
             purpose_claim,
+            contextual_claims: ClaimNames::default(),
+            trusted_actors: BTreeMap::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_contextual_claims(
+        mut self,
+        contextual_claims: ClaimNames,
+        trusted_actors: BTreeMap<String, String>,
+    ) -> Self {
+        self.contextual_claims = contextual_claims;
+        self.trusted_actors = trusted_actors;
+        self
     }
 }
 
@@ -67,6 +84,8 @@ impl fmt::Debug for AuthorityClaimConfig {
             .debug_struct("AuthorityClaimConfig")
             .field("principal_claim", &self.principal_claim)
             .field("purpose_claim", &self.purpose_claim)
+            .field("contextual_claims", &self.contextual_claims)
+            .field("trusted_actor_clients", &self.trusted_actors.keys())
             .finish()
     }
 }
@@ -118,9 +137,12 @@ pub struct RegistryAuthenticator {
     verifier: TokenVerifier,
     last_key_refusal_warning: Mutex<Option<Instant>>,
     audience: String,
+    scope_claim: String,
     principal_claim: String,
     purpose_claim: Option<String>,
     direct_claims: BTreeMap<String, DirectClaimExpectation>,
+    contextual_claims: ClaimNames,
+    trusted_actors: BTreeMap<String, String>,
 }
 
 impl RegistryAuthenticator {
@@ -135,13 +157,17 @@ impl RegistryAuthenticator {
         validate_verifier_profile(&verifier_config)?;
         let direct_claims = validate_claim_mapping(registry, &verifier_config, &claims)?;
         let audience = verifier_config.audiences[0].clone();
+        let scope_claim = verifier_config.scope_claim.clone();
         Ok(Self {
             verifier: TokenVerifier::new(verifier_config, key_source),
             last_key_refusal_warning: Mutex::new(None),
             audience,
+            scope_claim,
             principal_claim: claims.principal_claim,
             purpose_claim: claims.purpose_claim,
             direct_claims,
+            contextual_claims: claims.contextual_claims,
+            trusted_actors: claims.trusted_actors,
         })
     }
 
@@ -193,7 +219,8 @@ impl RegistryAuthenticator {
         }
         let scopes = verified
             .scopes
-            .into_iter()
+            .iter()
+            .cloned()
             .map(validate_scope)
             .collect::<Result<BTreeSet<_>, _>>()?;
         let direct_claims = self
@@ -211,6 +238,58 @@ impl RegistryAuthenticator {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
+        let actor_kind = match actor_kind(&verified.claims, &self.contextual_claims) {
+            Ok(kind) => Some(kind),
+            Err(ClaimError::Missing(_)) => None,
+            Err(_) => return Err(AuthenticationError::InvalidClaims),
+        };
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| AuthenticationError::InvalidClaims)?
+            .as_secs();
+        let grant = grant_claims(&verified.claims, &self.contextual_claims, now)
+            .map_err(|_| AuthenticationError::InvalidClaims)?;
+        if let Some(grant) = &grant {
+            grant
+                .verify_context(&verified, &self.audience)
+                .map_err(|_| AuthenticationError::InvalidClaims)?;
+        }
+        let requester_client = verified
+            .matched_client_id()
+            .map_err(|_| AuthenticationError::InvalidClaims)?
+            .map(str::to_owned);
+        let actor_subject = optional_actor_subject(claims.get("act"))?;
+        if let Some(actor) = actor_subject.as_deref() {
+            let client = requester_client
+                .as_deref()
+                .ok_or(AuthenticationError::InvalidClaims)?;
+            if self.trusted_actors.get(client).map(String::as_str) != Some(actor) {
+                return Err(AuthenticationError::InvalidClaims);
+            }
+        }
+        let grant_subjects = if grant.is_some() {
+            bounded_identity(claims.get("identity"))?
+        } else {
+            BTreeMap::new()
+        };
+        let direct_claims = if grant.is_some() {
+            self.direct_claims
+                .iter()
+                .filter_map(|(name, expectation)| {
+                    let value = if name == "sub" {
+                        subject.as_ref()
+                    } else {
+                        grant_subjects.get(name)
+                    };
+                    value.map(|value| {
+                        mapped_claim(value, expectation).map(|value| (name.clone(), value))
+                    })
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?
+        } else {
+            direct_claims
+        };
+
         VerifiedRequestClaims::authenticated(
             self.principal_claim.clone(),
             principal,
@@ -218,6 +297,15 @@ impl RegistryAuthenticator {
             purpose,
             direct_claims,
         )
+        .and_then(|claims| {
+            claims.with_contextual_authority(
+                actor_kind,
+                requester_client,
+                actor_subject,
+                grant,
+                grant_subjects,
+            )
+        })
         .map_err(|_| AuthenticationError::InvalidClaims)
     }
 }
@@ -243,9 +331,12 @@ impl fmt::Debug for RegistryAuthenticator {
             .debug_struct("RegistryAuthenticator")
             .field("issuer", &"<redacted>")
             .field("audience", &"<redacted>")
+            .field("scope_claim", &self.scope_claim)
             .field("principal_claim", &self.principal_claim)
             .field("purpose_claim", &self.purpose_claim)
             .field("direct_claims", &self.direct_claims.keys())
+            .field("contextual_claims", &self.contextual_claims)
+            .field("trusted_actor_clients", &self.trusted_actors.keys())
             .finish()
     }
 }
@@ -333,6 +424,22 @@ fn validate_claim_mapping(
     verifier: &TokenVerifierConfig,
     claims: &AuthorityClaimConfig,
 ) -> Result<BTreeMap<String, DirectClaimExpectation>, AuthenticationConfigError> {
+    claims
+        .contextual_claims
+        .validate()
+        .map_err(|_| AuthenticationConfigError::InvalidClaimMapping)?;
+    if claims.trusted_actors.len() > 128
+        || claims.trusted_actors.iter().any(|(client, actor)| {
+            !valid_config_value(client)
+                || client.chars().any(char::is_whitespace)
+                || !valid_config_value(actor)
+                || actor.chars().any(char::is_whitespace)
+                || uuid::Uuid::parse_str(actor).is_err()
+                || !verifier.allowed_clients.contains(client)
+        })
+    {
+        return Err(AuthenticationConfigError::InvalidClaimMapping);
+    }
     if !(valid_authority_claim_name(&claims.principal_claim) || claims.principal_claim == "sub")
         || claims.principal_claim == verifier.scope_claim
     {
@@ -372,6 +479,28 @@ fn validate_claim_mapping(
             AuthenticationConfigError::ConflictingClaimExpectation
         }
     })?;
+    for profile in registry
+        .entities()
+        .values()
+        .flat_map(|entity| entity.access_profiles.values())
+    {
+        if profile
+            .requester_clients
+            .iter()
+            .any(|client| !verifier.allowed_clients.contains(client))
+        {
+            return Err(AuthenticationConfigError::InvalidClaimMapping);
+        }
+        if profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+            && profile.task_grant.is_none()
+            && profile
+                .requester_clients
+                .iter()
+                .any(|client| !claims.trusted_actors.contains_key(client))
+        {
+            return Err(AuthenticationConfigError::InvalidClaimMapping);
+        }
+    }
     if inventory
         .principal_claims
         .iter()
@@ -473,6 +602,50 @@ fn optional_direct_string(value: Option<&Value>) -> Result<Option<String>, Authe
         VerifiedClaimValue::DirectString(value) => Ok(Some(value)),
         VerifiedClaimValue::DirectStringSet(_) => unreachable!("direct constructor returns string"),
     }
+}
+
+fn optional_actor_subject(value: Option<&Value>) -> Result<Option<String>, AuthenticationError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let object = value
+        .as_object()
+        .ok_or(AuthenticationError::InvalidClaims)?;
+    if object.len() != 1 {
+        return Err(AuthenticationError::InvalidClaims);
+    }
+    required_direct_string(object.get("sub")).map(Some)
+}
+
+fn bounded_identity(value: Option<&Value>) -> Result<BTreeMap<String, Value>, AuthenticationError> {
+    let object = value
+        .and_then(Value::as_object)
+        .ok_or(AuthenticationError::InvalidClaims)?;
+    if object.is_empty() || object.len() > 32 {
+        return Err(AuthenticationError::InvalidClaims);
+    }
+    object
+        .iter()
+        .map(|(name, value)| {
+            if name.is_empty()
+                || name.len() > MAX_CLAIM_NAME_BYTES
+                || name.chars().any(char::is_control)
+                || !match value {
+                    Value::String(value) => {
+                        !value.is_empty()
+                            && value.len() <= MAX_SCOPE_VALUE_BYTES
+                            && !value.chars().any(char::is_control)
+                    }
+                    Value::Bool(_) => true,
+                    Value::Number(value) => value.as_i64().is_some() || value.as_u64().is_some(),
+                    _ => false,
+                }
+            {
+                return Err(AuthenticationError::InvalidClaims);
+            }
+            Ok((name.clone(), value.clone()))
+        })
+        .collect()
 }
 
 fn mapped_claim(

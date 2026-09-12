@@ -28,15 +28,46 @@
       }
     },
     {
-      "id": "reviewer",
+      "id": "administrator",
+      "accessProfiles": [],
+      "allowHumanFixture": true,
+      "scopes": [
+        "casework:admin"
+      ],
+      "claims": {
+        "registry_actor_kind": "human",
+        "registry_principal": "professional-review-administrator"
+      }
+    },
+    {
+      "id": "supervisor",
       "accessProfiles": [
         "reviewer"
       ],
+      "allowBregAccess": true,
+      "allowHumanFixture": true,
       "scopes": [
+        "casework:supervisor",
         "starter:reviewer"
       ],
       "claims": {
-        "registry_principal": "synthetic-reviewer",
+        "registry_actor_kind": "human",
+        "registry_principal": "professional-review-supervisor",
+        "registry_purpose": "starter-learning"
+      }
+    },
+    {
+      "id": "staff",
+      "accessProfiles": [],
+      "allowBregAccess": true,
+      "allowHumanFixture": true,
+      "scopes": [
+        "casework:staff",
+        "starter:reviewer"
+      ],
+      "claims": {
+        "registry_actor_kind": "human",
+        "registry_principal": "professional-review-staff",
         "registry_purpose": "starter-learning"
       }
     }

@@ -131,7 +131,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 The command compiles both files in `questions/` into the same local Evidence Gateway service. The adult
@@ -237,7 +237,7 @@ evidencectl dev stop
 evidencectl dev clean
 ```
 
-If ports `8080` or `8081` belong to something else, pass `--evidence-port` and `--mint-port` with
+If ports `8080` or `8081` belong to something else, pass `--evidence-port` and `--issuer-port` with
 two unused ports, as [your first assertion](../first-evidence-assertion/) describes.
 
 ## Next

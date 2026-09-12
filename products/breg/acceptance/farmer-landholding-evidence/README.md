@@ -37,8 +37,8 @@ showing that declared capabilities are optional. It cannot create a landholding.
 
 Both status and category are in the registrar's reviewed processing ceiling;
 `include-category` selects optional disclosure within that ceiling and grants no
-additional authority. There are no CRUD create grants, other mutation actions
-or reviewed-change grants that can bypass the registration procedure. The reader
+additional authority. There are no CRUD create permissions, other mutation actions
+or reviewed-change permissions that can bypass the registration procedure. The reader
 can only read. Local unique parcel constraints still apply to every writer.
 
 The imported contract is synthetic and offline. Its fixed revision is a test

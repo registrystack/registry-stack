@@ -43,12 +43,12 @@ scenarios:
     evidence: [{path: crates/registry-breg/tests/postgres_pilot_acceptance.rs, name: real_postgres_five_domain_pilot_is_configured_production_closed_and_source_neutral}, {path: products/breg/scripts/check-source-neutrality.sh, name: check-source-neutrality.sh}, {path: products/breg/scripts/test_check_source_neutrality.py, name: test_public_kernel_contract_canary_is_rejected}]
   - id: BREG-J08
     state: enforced
-    doneWhen: "Hidden processing, unauthorized writes, wrong purpose, stale ETags, changed idempotency, and malformed tokens refuse without leakage."
-    evidence: [{path: crates/registry-breg/tests/compiler_contract.rs, name: anonymous_public_profile_cannot_filter_a_non_public_field}, {path: crates/registry-breg/tests/compiler_contract.rs, name: anonymous_public_surface_rejects_every_non_public_constraint_field}, {path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}, {path: crates/registry-breg/tests/http_auth.rs, name: issuer_audience_algorithm_token_type_and_signature_are_all_verified}, {path: crates/registry-breg/tests/postgres_record_profile_conformance.rs, name: real_postgres_registry_record_profile_matches_the_cross_product_semantic_gold}]
+    doneWhen: "Hidden processing, unauthorized writes, wrong purpose, stale ETags, changed idempotency, malformed tokens, cross-grant reads, and task-grant fallback to standing authority refuse without leakage."
+    evidence: [{path: crates/registry-breg/tests/compiler_contract.rs, name: anonymous_public_profile_cannot_filter_a_non_public_field}, {path: crates/registry-breg/tests/compiler_contract.rs, name: anonymous_public_surface_rejects_every_non_public_constraint_field}, {path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_http_mutations_are_guarded_and_exactly_replayable}, {path: crates/registry-breg/tests/http_auth.rs, name: issuer_audience_algorithm_token_type_and_signature_are_all_verified}, {path: crates/registry-breg/tests/http_auth.rs, name: task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority}, {path: crates/registry-breg/tests/postgres_record_profile_conformance.rs, name: real_postgres_registry_record_profile_matches_the_cross_product_semantic_gold}]
   - id: BREG-J09
     state: enforced
-    doneWhen: "Package, profile, purpose, row boundary, projection, and query changes invalidate replay after fresh authorization."
-    evidence: [{path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}, {path: crates/registry-breg/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}]
+    doneWhen: "Package, profile, purpose, row boundary, projection, query, and delegated task status changes invalidate replay after fresh authorization."
+    evidence: [{path: crates/registry-breg/tests/postgres_mutation.rs, name: real_postgres_mutation_is_audited_atomic_typed_and_exactly_replayable}, {path: crates/registry-breg/tests/postgres_read.rs, name: real_postgres_temporal_keyset_and_cursor_binding_edges_are_enforced}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: task_http_to_postgres_preserves_original_authority_and_completed_receipts}, {path: crates/registry-breg/tests/postgres_task_grants.rs, name: automatic_apply_rechecks_original_task_after_human_approval}]
   - id: BREG-J10
     state: enforced
     doneWhen: "Fault injection proves atomic record, revision, audit, idempotency, and configured outbox state."
@@ -85,7 +85,7 @@ scenarios:
     state: enforced
     domain: asset-registration-actions
     fixture: fixtures/asset-registration-actions
-    doneWhen: "Configured create-only immediate action journeys run through the authenticated PostgreSQL fixture runner without CRUD grants."
+    doneWhen: "Configured create-only immediate action journeys run through the authenticated PostgreSQL fixture runner without CRUD permissions."
     evidence: [{path: crates/registry-breg/tests/postgres_immediate_action_examples.rs, name: asset_registration_action_example_runs_through_authenticated_postgres_fixture_runner}]
   - id: BREG-J19
     state: enforced

@@ -151,14 +151,11 @@ build_payload() {
     cargo build --release --locked \
       -p registry-evidence \
       -p registry-evidencectl \
-      -p registry-mint \
       -p registry-evidence-oid4vci
     cp target/release/evidence "dist/bin/evidence-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidencectl "dist/bin/evidencectl-${RELEASE_TAG}-linux-amd64"
-    cp target/release/mint "dist/bin/mint-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence-oid4vci "dist/bin/evidence-oid4vci-${RELEASE_TAG}-linux-amd64"
     cp target/release/evidence dist/image-bin/evidence
-    cp target/release/mint dist/image-bin/mint
 
     if [[ "${include_discovery}" -eq 1 ]]; then
       cargo build --release --locked \
@@ -332,13 +329,12 @@ if [[ "${group}" == all || "${group}" == core ]]; then
   bin_assets+=(
     "evidence-${tag}-linux-amd64"
     "evidencectl-${tag}-linux-amd64"
-    "mint-${tag}-linux-amd64"
     "evidence-oid4vci-${tag}-linux-amd64"
     "registry-manifest-${tag}-linux-amd64"
     "relay-${tag}-linux-amd64"
     "relayctl-${tag}-linux-amd64"
   )
-  image_bin_binaries+=(evidence mint relay)
+  image_bin_binaries+=(evidence relay)
 fi
 
 for asset in "${bin_assets[@]}"; do

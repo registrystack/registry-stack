@@ -99,6 +99,9 @@ fn authorize_action<'a>(
     options: &QueryOptions,
 ) -> Option<AuthorizedActionSurface<'a>> {
     service.mutations.as_ref()?;
+    if claims.grant().is_some() {
+        return None;
+    }
     let inventory = service.registry.actions();
     // A caller cannot construct an alternate path, operation or action under a
     // valid route identifier. Discovery and dispatch use this same inventory.
@@ -124,7 +127,7 @@ fn authorize_action<'a>(
         .iter()
         .find(|action| action.id == route.action_id)?;
     let grant = action
-        .grants
+        .permissions
         .iter()
         .find(|grant| grant.profile_id == selected)?;
     if grant.anonymous
@@ -138,6 +141,34 @@ fn authorize_action<'a>(
             && !claims
                 .purpose()
                 .is_some_and(|purpose| grant.required_purposes.contains(purpose)))
+    {
+        return None;
+    }
+    if claims.actor_kind().is_some() && grant.actor_kind.is_none() {
+        return None;
+    }
+    if let Some(expected) = grant.actor_kind {
+        let actual = claims.actor_kind()?;
+        if !matches!(
+            (expected, actual),
+            (
+                crate::contract::ActorKindSource::Human,
+                registry_platform_oidc::ActorKind::Human
+            ) | (
+                crate::contract::ActorKindSource::Agent,
+                registry_platform_oidc::ActorKind::Agent
+            ) | (
+                crate::contract::ActorKindSource::Service,
+                registry_platform_oidc::ActorKind::Service
+            )
+        ) {
+            return None;
+        }
+    }
+    if !grant.requester_clients.is_empty()
+        && !claims
+            .requester_client()
+            .is_some_and(|client| grant.requester_clients.contains(client))
     {
         return None;
     }

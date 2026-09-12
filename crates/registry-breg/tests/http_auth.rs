@@ -26,7 +26,7 @@ use registry_breg::{compile_project, parse_project_yaml, CompileProfile, Compile
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    access_token_typ_set, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
     TokenVerifierConfig,
 };
 use registry_platform_testing::{
@@ -42,6 +42,7 @@ const PURPOSE: &str = "case-management-never-rendered";
 const JURISDICTION: &str = "area-a-never-rendered";
 const TENANT: &str = "tenant-a-never-rendered";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
+const ACTOR_ID: &str = "00000000-0000-4000-8000-0000000000aa";
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -67,7 +68,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label]
@@ -76,7 +77,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label, secret]
@@ -102,16 +103,54 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label]
         rowBoundaries:
           - {field: id, claim: record_id, operator: equals}
+"#;
+
+const CONTEXTUAL_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+entities:
+  - id: case
+    primaryDataset: test-dataset
+    route: cases
+    mutationMode: mutable
+    tombstone: false
+    classification: public
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
+accessProfiles:
+  - id: standing-agent
+    principalClaim: sub
+    actorKind: agent
+    requesterClients: [agent-client]
+    requiredPurposes: [citizen-self-service]
+    permissions:
+      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: []}
+  - id: delegated-agent
+    default: true
+    principalClaim: sub
+    actorKind: agent
+    requesterClients: [agent-client]
+    requiredPurposes: [record-review]
+    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}
+    permissions:
+      - entity: case
+        operations: [get]
+        readableFields: [label]
+        rowBoundaries:
+          - {field: tenant, claim: tenant_claim, operator: equals}
 "#;
 
 #[derive(Default)]
@@ -272,6 +311,171 @@ impl Harness {
             Value::Object(claims.clone()),
         )
     }
+}
+
+async fn contextual_harness() -> Harness {
+    let project = parse_project_yaml(CONTEXTUAL_PROJECT.as_bytes()).expect("project parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+    );
+    let idp = MockIdp::start().await;
+    let mut verifier = verifier_config(&idp);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
+    let claims = AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned()))
+        .with_contextual_claims(
+            ClaimNames::default(),
+            BTreeMap::from([("agent-client".to_owned(), ACTOR_ID.to_owned())]),
+        );
+    let authenticator = Arc::new(
+        authenticator_with_verifier(&registry, &idp, verifier, claims)
+            .expect("contextual authentication config is valid"),
+    );
+    let records = Arc::new(RecordingReadService::default());
+    let service = Arc::new(HttpService::new(
+        Arc::clone(&registry),
+        read_identity(),
+        records.clone(),
+        Arc::new(Ready),
+        cursor_codec(),
+    ));
+    let app = authenticated_router(service, Arc::clone(&authenticator));
+    Harness {
+        app,
+        authenticator,
+        records,
+        registry,
+        idp,
+    }
+}
+
+#[tokio::test]
+async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority() {
+    let harness = contextual_harness().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "record-review",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
+        "registry_grant_authority": "casework-v1",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "agent-client",
+        "registry_grant_resource": AUDIENCE,
+        "registry_grant_exp": now + 600,
+        "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"cases","operations":["get"]}]},
+        "tenant_claim": "flat-claim-must-not-control-task-row",
+        "identity": {"tenant_claim": "tenant-from-approved-identity"}
+    });
+    let token = harness.signed_token(claims.clone(), "JWT");
+    let delegated = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_eq!(delegated.status(), StatusCode::OK);
+    {
+        let requests = harness.records.requests.lock().unwrap();
+        let context = &requests[0].context;
+        let task_grant = context.task_grant().expect("task grant is retained");
+        assert_eq!(
+            task_grant.subjects(),
+            &BTreeMap::from([(
+                "tenant_claim".to_owned(),
+                json!("tenant-from-approved-identity"),
+            )])
+        );
+        assert_eq!(
+            context.row_boundaries()[0].values(),
+            &BTreeSet::from(["tenant-from-approved-identity".to_owned()])
+        );
+    }
+
+    let standing = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_ne!(standing.status(), StatusCode::OK);
+
+    let mut wider = claims;
+    wider["registry_grant_bounds"] =
+        json!({"type":"breg","permissions":[{"collection":"cases","operations":["get","list"]}]});
+    let refused = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&harness.signed_token(wider, "JWT"))],
+            None,
+        )
+        .await;
+    assert_ne!(refused.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
+    let harness = contextual_harness().await;
+    let claims = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "citizen-self-service",
+        "act": {"sub": ACTOR_ID}
+    });
+    let accepted = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&harness.signed_token(claims.clone(), "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let mut wrong_actor = claims;
+    wrong_actor["act"] = json!({"sub":"00000000-0000-4000-8000-0000000000cc"});
+    let refused = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&harness.signed_token(wrong_actor, "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
+    let direct = CONTEXTUAL_PROJECT.replace(
+        "operations: [get]\n        readableFields: [label]\n        rowBoundaries:",
+        "operations: [create, get]\n        readableFields: [label]\n        writableFields: [label]\n        rowBoundaries:",
+    );
+    let project = parse_project_yaml(direct.as_bytes()).expect("direct mutation project parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("direct target mutation is refused");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "access_profile.task_grant.direct_mutation_forbidden"
+    }));
+
+    let governed = include_str!("fixtures/authority-mapping.yaml")
+        .replace(
+            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
+            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}",
+        )
+        .replace(
+            "operations: [get, submit_request, approve_request",
+            "operations: [create, get, patch, submit_request, approve_request",
+        );
+    let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("governed request draft create and patch remain available");
 }
 
 fn read_identity() -> ReadRuntimeIdentity {
@@ -1076,7 +1280,7 @@ async fn refusals_and_debug_output_are_value_free() {
 fn action_only_claim_source() -> Value {
     let mut source = action_source::project();
     source["accessProfiles"][0]["requiredPurposes"] = json!([PURPOSE]);
-    source["accessProfiles"][0]["grants"][0]["targets"][0]["rowBoundaries"][0] =
+    source["accessProfiles"][0]["permissions"][0]["targets"][0]["rowBoundaries"][0] =
         json!({"field": "zone", "claim": "allowed_owners", "operator": "in"});
     source
 }
@@ -1177,7 +1381,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
     let mut conflicting = source;
     conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
-        "grants": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
+        "permissions": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
     }));
     let registry = compile_action_claim_source(&conflicting);
     assert_eq!(

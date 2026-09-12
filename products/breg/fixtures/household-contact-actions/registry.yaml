@@ -46,7 +46,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
-    grants:
+    permissions:
       - entity: household
         operations: [create, get]
         readableFields: [household-code, household-name, district, contact-person]
@@ -74,7 +74,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household:maintain]
     requiredPurposes: [household-maintenance]
-    grants:
+    permissions:
       - entity: household
         operations: [get, patch]
         readableFields: [household-code, household-name, district, contact-person]
@@ -85,7 +85,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:contact:register]
     requiredPurposes: [contact-registration]
-    grants:
+    permissions:
       - action: register-household-contact
         operations: [invoke]
         targets:

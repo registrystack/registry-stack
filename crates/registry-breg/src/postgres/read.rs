@@ -3156,7 +3156,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
+                    "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
                   }]
                 }"#,
             )
@@ -3206,7 +3206,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
@@ -3289,7 +3289,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
                       "rowBoundaries": []
@@ -3557,7 +3557,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],

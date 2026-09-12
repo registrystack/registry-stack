@@ -72,9 +72,8 @@ caseworkctl --version
 ```
 
 The installer verifies every downloaded binary against the release `SHA256SUMS` before anything
-reaches the install directory, and installs `casework`, `caseworkctl`, and `mint` together or not
-at all. Registry Mint comes along because a deployment with no identity provider uses it to issue
-access tokens; a deployment with its own OpenID Connect issuer can ignore it. The installer does
+reaches the install directory, and installs `casework` and `caseworkctl` together or not at all.
+The installer does
 not verify release authenticity. Replace `| bash` with `| less` to read it before running it on a
 host you operate. `CASEWORK_INSTALL_DIR` selects the install directory, and the default is
 `~/.local/bin`; `CASEWORK_VERSION` pins one release; `CASEWORK_ASSET_DIR` installs from a directory
@@ -395,7 +394,7 @@ no source review or application authority.
 `caseworkctl doctor` opens every live dependency the runtime opens, without binding a listener:
 
 ```sh
-caseworkctl --format json doctor --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
@@ -404,7 +403,7 @@ one that refuses and names it. Its secret preflight resolves the audit reference
 anything, and a reference that cannot resolve is reported by name with the rule it broke. Directory
 readiness requires a team serving every queue the package declares, and a gap is reported as an
 instruction to complete the queue assignments as an Administrator. A run that reaches the end
-prints a JSON report naming each check and each source it contacted.
+prints a report naming each check and each source it contacted.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
     and check_source_descriptions();

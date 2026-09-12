@@ -23,8 +23,6 @@ common:
     child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}
     candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-parent-reference-001}}
   verified_token_claims:
-    evidence_grant_id: synthetic-parentage-grant-001
-    evidence_authority: statutory-caseworker-v1
     grant:
       candidate_parent: {person_reference: synthetic-parent-reference-001}
   expectedRequestParts:
@@ -45,8 +43,6 @@ cases:
     signed_success: true
   - id: negative-false-is-success
     verified_token_claims:
-      evidence_grant_id: synthetic-parentage-grant-001
-      evidence_authority: statutory-caseworker-v1
       grant:
         candidate_parent: {person_reference: synthetic-non-parent-reference-003}
     derivationSelectorInputs:
@@ -78,7 +74,7 @@ cases:
   - {id: missing-record, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
   - {id: no-match, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
   - {id: negative-child-unresolved, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
-  - {id: negative-candidate-unresolved-or-typo, verified_token_claims: {evidence_grant_id: synthetic-parentage-grant-001, evidence_authority: statutory-caseworker-v1, grant: {candidate_parent: {person_reference: synthetic-non-parent-reference-003}}}, derivationSelectorInputs: {child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}, candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-non-parent-reference-003}}}, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}
+  - {id: negative-candidate-unresolved-or-typo, verified_token_claims: {grant: {candidate_parent: {person_reference: synthetic-non-parent-reference-003}}}, derivationSelectorInputs: {child: {profile: civil-record-reference-v1, values: {record_reference: synthetic-child-record-001}}, candidate-parent: {profile: person-reference-v1, values: {person_reference: synthetic-non-parent-reference-003}}}, source: {total: 1, records: [{returned_child_reference: synthetic-child-record-001, parent_references: [synthetic-parent-reference-001], reference_namespace: urn:example:fixture:person-reference, relationship_set_contract: urn:example:fixture:legal-parent-set:v1, relationship_set_complete: true}]}, expected_value: false, expected_lookup: match, derivation_runs: true, signed_success: true}
   - {id: negative-raw-record-search-zero-not-false, source: {total: 0, records: []}, expected_lookup: no_match, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
   - {id: ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}
   - {id: negative-role-resolution-ambiguous, source: {total: 2, records: [{}, {}]}, expected_lookup: ambiguous, expected_public_problem: evidence.unavailable, derivation_runs: false, signed_success: false}

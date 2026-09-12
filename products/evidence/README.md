@@ -99,9 +99,9 @@ OpenAPI document exactly as `source.openapi.yaml` and creates empty
 `questions/`, `derivations/`, and `fixtures/` directories. It always creates
 owner-only disposable local P-256 Evidence signing material plus distinct audit
 and subject-binding masters. The command does not select an API operation,
-invent a question, fixture, policy, production target, Mint configuration, or
+invent a question, fixture, policy, production target, issuer configuration, or
 deployable bundle. `evidencectl dev start` additionally creates session-scoped P-256
-Mint, caller, and holder keys so the local happy path needs no key ceremony.
+caller and holder keys and starts the pinned local issuer so the local happy path needs no key ceremony.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,
@@ -188,22 +188,19 @@ output by default; add the global `--format json` for machine-readable reports.
 Its common exit classes are `0` success, `1` refusal, `2` usage, and `3`
 operational failure.
 
-An existing OIDC issuer and Registry Mint are equal issuer choices from
-Evidence's perspective. Mint remains separately authored and checked with
-`mint check`. When selected, `evidencectl artifact inspect <candidate> --mint-config <mint.yaml>`
-performs only a read-only mechanical comparison of issuer, JWKS URI, audience,
-algorithm, token type, and configured claim names. It does not register a
-client, decide authority, copy Mint files, or mint a token.
+Configure an OIDC issuer with the exact issuer, JWKS URI, audience, allowed
+algorithms, token type, and claim mappings declared by the Evidence runtime.
+Register the workload's client, resource and scopes at that issuer. The maintained
+local development tooling uses pinned stock ThunderID; production issuer
+registration remains an operator responsibility. Inspect the deployment with
+`evidencectl artifact inspect <candidate>` and verify its actual token and
+resource journey before handoff.
 
-Starting with `v0.21.0`, Registry Stack releases official
-`ghcr.io/registrystack/evidence:v0.21.0` and
-`ghcr.io/registrystack/mint:v0.21.0` images. Both use a distroless nonroot
-runtime as UID and GID 65532. Pin the digest from the release manifest. Mount
-the Evidence runtime, reviewed bundle, secrets, and trust files at the absolute
-paths named by the runtime, with only the audit directory writable under
-`/var/lib/registry-evidence/audit`. Mount Mint configuration and its referenced
-files read-only under `/etc/registry-mint`, with persistent audit storage under
-`/var/lib/registry-mint/audit`.
+Registry Stack publishes the `ghcr.io/registrystack/evidence` runtime image.
+Pin the digest from the selected release. The image runs as UID and GID 65532.
+Mount the Evidence runtime, reviewed bundle, secrets, and trust files at the
+absolute paths named by the runtime, with only the audit directory writable
+under `/var/lib/registry-evidence/audit`.
 
 Docker Compose is a documented adapter, not build output: it mounts the
 reviewed bundle unchanged, uses a separate container runtime file and secret
@@ -268,7 +265,8 @@ a different release. A copy taken from this repository carries none and
 installs nothing until `EVIDENCECTL_VERSION` names one.
 
 The installer installs the three-binary Evidence toolset, the `evidence`
-runtime, `evidencectl` adopter tooling, and the `mint` token issuer, together
+runtime, `evidencectl` adopter tooling, and the `evidence-oid4vci` wallet
+delivery adapter, together
 or not at all, verifying every asset against `SHA256SUMS` before anything
 reaches the install directory. It supports Linux amd64, Linux arm64, and
 macOS arm64. It checks integrity, not authenticity: for a higher-assurance
@@ -306,7 +304,7 @@ production or release verification.
 To build the toolset from source instead:
 
 ```sh
-cargo build --release --locked -p registry-evidence -p registry-evidencectl -p registry-mint
+cargo build --release --locked -p registry-evidence -p registry-evidencectl -p registry-evidence-oid4vci
 ```
 
 ## Discovering available evidence

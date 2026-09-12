@@ -84,7 +84,7 @@ async fn setup_with_age(
     document["actions"][0]["handler"]["writes"].as_array_mut().unwrap().push(json!({
         "id":"local-register", "target":{"fromField":"local-register"},"operation":"patch","fields":["checked"]
     }));
-    document["accessProfiles"][0]["grants"][0]["targets"].as_array_mut().unwrap().push(json!({
+    document["accessProfiles"][0]["permissions"][0]["targets"].as_array_mut().unwrap().push(json!({
         "entity":"local-register", "rowBoundaries":[{"field":"zone","claim":"zone","operator":"equals"}]
     }));
     project = parse_project_yaml(&serde_json::to_vec(&document).unwrap()).unwrap();

@@ -23,7 +23,7 @@ profile:
     rule: Each authority path permits exactly the reviewed origin for each role and profile.
   value_claims:
     authenticated-context: Required exact field-name to verified-token claim-path map.
-    authenticated-grant: Required exact field-name to verified-token claim-path map plus configured grantIdClaim and grantAuthorityClaim; grantAuthority must equal the matched authority-profile identifier.
+    authenticated-grant: Required exact field-name to verified-token claim-path map plus a complete shared task grant. The signed principal, client, resource, source issuer, authority, purpose, Evidence requirement bound, and effective deadline must match the verified request and profile.
     request: Prohibited; selector values come only from the closed public request values object.
     completeness: Map keys must exactly equal the named profile field set; missing, extra, duplicate-target, or invalid claim paths fail startup.
     claim_path_pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'

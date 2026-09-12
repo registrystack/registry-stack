@@ -57,7 +57,7 @@ guided path.
 
 After BReg dev has published the dedicated source credentials, rehearse both live
 services with `evidencectl dev --project . --target ./targets/configured --detach`.
-This starts Evidence and a separate caller Mint using generated local authority;
+This starts Evidence and a separate stock caller issuer using generated local authority;
 it reuses the target's source connections and outbound TLS settings. The target's
 caller authentication and service identity remain the explicit build settings.
 

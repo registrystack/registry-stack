@@ -24,7 +24,7 @@ release_image_context="${RELEASE_IMAGE_CONTEXT:-${repo_root}}"
 created_builder=false
 
 case "${name}" in
-  discovery|evidence|mint|breg|casework|relay)
+  discovery|evidence|breg|casework|relay)
     dockerfile="${repo_root}/release/docker/Dockerfile.${name}"
     ;;
   *)

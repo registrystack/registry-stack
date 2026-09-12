@@ -15,11 +15,15 @@ entries:
   - id: sec-assurance-profile-fixture-boundary
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: assurance_profile_is_explicit_and_strict_profiles_require_fixtures}
-      - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_the_exact_loopback_mint_identity}
-      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_exact_local_mint}
+      - {file: crates/registry-evidence/src/config.rs, name: only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks}
+      - {file: crates/registry-evidence/src/auth.rs, name: jwks_fetch_policy_opens_http_only_for_the_supervised_local_issuer}
       - {file: crates/registry-evidence/src/bundle.rs, name: local_bundle_may_omit_fixtures_but_strict_bundles_remain_complete}
       - {file: crates/registry-evidence/src/bundle.rs, name: strict_assurance_rejects_partial_fixture_suites}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: local_runtime_prepares_a_bearer_free_procedure_and_keeps_the_real_security_path}
+  - id: sec-admission-clients-and-scopes
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: admission_lists_are_optional_but_present_means_nonempty_and_bounded}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: admission_gates_refuse_unadmitted_clients_and_missing_scopes}
   - id: expected-assurance-profile-mismatch
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}
@@ -41,7 +45,10 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: a_configured_metrics_listener_serves_beside_the_evidence_listener}
       - {file: crates/registry-evidence/src/config.rs, name: the_optional_metrics_listener_is_absent_by_default_and_stays_operator_private}
   - id: sec-no-entitlement-union
-    tests: [{file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}]
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
+      - {file: crates/registry-evidence/src/config.rs, name: task_grant_profiles_bind_trusted_source_and_verified_client}
+      - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
   - id: sec-authenticated-authorization-refusal-audited
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
@@ -75,6 +82,8 @@ entries:
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: compilation_refuses_an_authorization_scheme_that_is_not_an_http_token}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_secret}
       - {file: crates/registry-evidence/tests/source_contracts.rs, name: a_private_key_jwt_source_signs_the_configured_assertion_audience}
+      - {file: crates/registry-evidence/src/config.rs, name: oauth_resource_indicator_is_optional_and_rejects_relative_or_ambiguous_values}
+      - {file: crates/registry-evidence/tests/source_contracts.rs, name: oauth_resource_indicator_rejects_unusable_identifiers_before_credentials}
   - id: sec-candidate-material-rejected
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: one_runtime_proves_all_definitions_and_collapses_unresolved_relationships}]
   - id: sec-rhai-output-shape-closed
@@ -460,9 +469,11 @@ entries:
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_offer_without_authorization_is_refused}
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: an_unauthorized_offer_refusal_describes_nothing_this_deployment_offers}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_authorizes_an_offer}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_mint_issued_for_another_resource_server_is_refused}
-      - {file: crates/registry-evidence-oid4vci/tests/mint_offer_authorization.rs, name: a_token_this_issuer_did_not_sign_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: an_ordinary_service_offer_with_purpose_but_no_grant_remains_supported}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: stock_issuer_service_token_authorizes_the_offer_boundary}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: task_bound_and_partial_grants_cannot_create_deferred_wallet_offers}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: a_token_issued_for_another_resource_server_is_refused}
+      - {file: crates/registry-evidence-oid4vci/tests/offer_authorization.rs, name: a_token_this_issuer_did_not_sign_is_refused}
   - id: sec-oid4vci-code-single-use
     tests:
       - {file: crates/registry-evidence-oid4vci/src/service.rs, name: a_pre_authorized_code_is_redeemable_once}

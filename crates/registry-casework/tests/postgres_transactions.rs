@@ -972,7 +972,7 @@ async fn repeated_migration_is_a_ledger_no_op_and_never_drops_the_occurrence_ind
     let (store, client, schema) = isolated_schema("migrate").await;
     store.migrate().await.expect("first migration");
     let applied = applied_versions(&client).await;
-    assert_eq!(applied, (1..=13).collect::<Vec<i64>>());
+    assert_eq!(applied, (1..=14).collect::<Vec<i64>>());
     let index = occurrence_index(&client, &schema).await;
     assert!(index.1, "the occurrence identity index is unique");
 
@@ -999,13 +999,13 @@ async fn migration_13_adds_sync_claim_indexes_to_an_existing_schema() {
              DELETE FROM casework_schema_migrations WHERE version=13;",
         )
         .await
-        .expect("simulate a database at migration 12");
+        .expect("simulate a schema missing migration 13 indexes");
 
     store.migrate().await.expect("apply sync claim indexes");
 
     assert_eq!(
         applied_versions(&client).await,
-        (1..=13).collect::<Vec<_>>()
+        (1..=14).collect::<Vec<_>>()
     );
     let indexes: Vec<String> = client
         .query(

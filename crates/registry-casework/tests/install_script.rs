@@ -9,7 +9,7 @@ use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const TEST_VERSION: &str = "v9.8.7";
-const BINARIES: [&str; 3] = ["casework", "caseworkctl", "mint"];
+const BINARIES: [&str; 2] = ["casework", "caseworkctl"];
 
 // Distinguishes fixture roots built within the same process. The wall clock alone is not
 // enough: macOS reports CLOCK_REALTIME at 1 microsecond resolution, so two fixtures built in
@@ -62,7 +62,7 @@ fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
 #[test]
 fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry() {
     let fixture = InstallerFixture::new();
-    fixture.preinstall_pointer_toolset_without_mint();
+    fixture.preinstall_pointer_toolset_without_ctl();
 
     // The pointer is already a symbolic link, so no migration precedes the
     // switch and the switch is the first rename onto it.
@@ -105,7 +105,7 @@ fn failed_atomic_pointer_switch_preserves_bregs_mint_link() {
 }
 
 #[test]
-fn successful_pointer_switch_adopts_another_products_mint_link() {
+fn successful_pointer_switch_preserves_retired_command_owned_by_another_product() {
     let fixture = InstallerFixture::new();
     fixture.preinstall_casework_with_breg_mint();
 
@@ -119,7 +119,7 @@ fn successful_pointer_switch_adopts_another_products_mint_link() {
     fixture.assert_release_toolset_active();
     assert_eq!(
         fs::read_link(fixture.install_dir.join("mint")).unwrap(),
-        PathBuf::from(".casework-current/mint")
+        PathBuf::from(".breg-current/mint")
     );
 }
 
@@ -128,6 +128,9 @@ fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
     for signal in [None, Some(("INT", 130)), Some(("TERM", 143))] {
         let fixture = InstallerFixture::new();
         fixture.preinstall_casework_with_breg_mint();
+        let casework = fixture.install_dir.join("casework");
+        fs::remove_file(&casework).unwrap();
+        fs::write(&casework, "casework previous binary\n").unwrap();
         let caseworkctl = fixture.install_dir.join("caseworkctl");
         fs::remove_file(&caseworkctl).unwrap();
         fs::write(&caseworkctl, "caseworkctl local wrapper\n").unwrap();
@@ -137,8 +140,8 @@ fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
         let previous_mint_target = fs::read_link(fixture.install_dir.join("mint")).unwrap();
         let previous_caseworkctl_mode = fs::metadata(&caseworkctl).unwrap().permissions().mode();
 
-        // `caseworkctl` is adopted first. The injected second adoption moves
-        // the staged `mint` link into place and then either reports failure or
+        // Both commands require adoption. The injected second adoption moves
+        // the staged CLI link into place and then either reports failure or
         // terminates the installer, so both EXIT paths must roll back.
         let output = match signal {
             Some((name, _)) => fixture.run_signalled_command_adoption(2, name),
@@ -180,7 +183,7 @@ fn failed_post_switch_adoption_restores_every_changed_command_and_pointer() {
 #[test]
 fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
     let fixture = InstallerFixture::new();
-    fixture.preinstall_pointer_toolset_without_mint();
+    fixture.preinstall_pointer_toolset_without_ctl();
 
     let output = fixture.run(false);
 
@@ -191,7 +194,7 @@ fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
     );
     fixture.assert_release_toolset_active();
     assert!(
-        fixture.install_dir.join("mint").is_symlink(),
+        fixture.install_dir.join("caseworkctl").is_symlink(),
         "an adopted command must become a stable command link"
     );
 }
@@ -397,31 +400,34 @@ exec /bin/mv "${arguments[@]}"
     }
 
     /// A machine an earlier toolset installed through the pointer, carrying a
-    /// `mint` that another product's installer wrote directly. The pointer is
+    /// standalone CLI installed outside the pointer. The pointer is
     /// already a symbolic link, so the one-time migration does not run.
-    fn preinstall_pointer_toolset_without_mint(&self) {
+    fn preinstall_pointer_toolset_without_ctl(&self) {
         let toolset = self.install_dir.join(".casework-toolset.earlier");
         fs::create_dir_all(&toolset).unwrap();
-        for binary in ["casework", "caseworkctl"] {
-            let path = toolset.join(binary);
-            fs::write(&path, format!("{binary} previous binary\n")).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            std::os::unix::fs::symlink(
-                format!(".casework-current/{binary}"),
-                self.install_dir.join(binary),
-            )
-            .unwrap();
-        }
+        let binary = "casework";
+        let path = toolset.join(binary);
+        fs::write(&path, format!("{binary} previous binary\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            format!(".casework-current/{binary}"),
+            self.install_dir.join(binary),
+        )
+        .unwrap();
         std::os::unix::fs::symlink(
             ".casework-toolset.earlier",
             self.install_dir.join(".casework-current"),
         )
         .unwrap();
-        fs::write(self.install_dir.join("mint"), "mint previous binary\n").unwrap();
+        fs::write(
+            self.install_dir.join("caseworkctl"),
+            "caseworkctl previous binary\n",
+        )
+        .unwrap();
     }
 
-    /// An existing Casework toolset that carries `mint`, while another product
-    /// owns the public shared `mint` command through its own toolset pointer.
+    /// An existing Casework toolset beside a retired Mint command owned by
+    /// another product. Updating Casework must preserve that unrelated command.
     fn preinstall_casework_with_breg_mint(&self) {
         let casework_toolset = self.install_dir.join(".casework-toolset.earlier");
         let breg_toolset = self.install_dir.join(".breg-toolset.earlier");

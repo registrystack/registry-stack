@@ -8,7 +8,6 @@ source_repos:
   - registry-manifest
   - registry-relay
   - registry-evidence
-  - registry-mint
 last_reviewed: "2026-08-21"
 doc_type: explanation
 locale: en
@@ -48,8 +47,8 @@ Evidence Gateway answers one predefined requirement about one set of subjects wi
 assertion carrying the answer rather than the record.
 A requirement is what the tutorials call a question: the same object, written as
 `questions/<name>.yaml` by an author and called a requirement once `evidencectl` has compiled it.
-Registry Mint is a supporting service that issues the short-lived access tokens either surface
-verifies when a deployment has no identity provider.
+A deployment supplies a compatible OAuth issuer for the short-lived access tokens each protected
+surface verifies.
 The patterns that follow describe Relay and Evidence Gateway.
 
 ## Country evidence mesh
@@ -294,9 +293,8 @@ failure does not retry through sequential fanout.
 
 The caller's access token and the source credential serve different boundaries:
 
-- The caller holds a short-lived access token for Evidence Gateway, from the deployment's identity
-  provider or from Registry Mint when there is none. See the
-  [Registry Mint reference](../../reference/mint/).
+- The caller holds a short-lived access token for Evidence Gateway from the deployment's configured
+  OAuth issuer.
 - Where the authoritative source is an HTTP JSON one, Evidence Gateway holds its own compiled
   credential for it, in every bundle a production or evidence-grade deployment may load. The caller
   never sees it and cannot influence which credential is resolved. A statement source holds no

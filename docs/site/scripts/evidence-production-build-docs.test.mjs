@@ -28,13 +28,11 @@ async function page(path) {
 // deployment must be, and pinning them here only makes these pages harder to
 // write. If you are adding an assertion because a page happens to contain a
 // string, stop.
-test('production Evidence tutorials keep their secret handling, signing, and Mint boundaries explicit', async () => {
-  const [build, transit, rotation, mint, compose] = await Promise.all([
+test('production Evidence tutorials keep their secret handling and signing boundaries explicit', async () => {
+  const [build, transit, rotation] = await Promise.all([
     page('src/content/docs/tutorials/build-and-deploy-evidence-project.mdx'),
     page('src/content/docs/tutorials/move-evidence-to-production-signing.mdx'),
     page('src/content/docs/tutorials/rotate-evidence-signing-keys.mdx'),
-    page('src/content/docs/tutorials/issue-evidence-access-tokens-with-registry-mint.mdx'),
-    page('src/content/docs/tutorials/integrate-evidence-candidate-with-docker-compose.mdx'),
   ]);
 
   // The access token goes into an owner-only file, never onto a command line or
@@ -54,29 +52,15 @@ test('production Evidence tutorials keep their secret handling, signing, and Min
   // Rotation and revocation both depend on the floor that stops a retired
   // version from signing again.
   assert.match(rotation, /min_encryption_version/u);
-  // Mint is optional, signs through Transit rather than a local private key,
-  // and states the replay-protection limit an operator must not overclaim.
-  assert.match(mint, /Evidence Gateway does not require Mint/u);
-  assert.match(mint, /signer\.kind: transit/u);
-  assert.match(mint, /memory-only/u);
-  // The issued token is created owner-only and removed after use.
-  assert.match(mint, /umask 077/u);
-  assert.match(mint, /rm -f "<owner-only-token-file>"/u);
-  // Two services, two signing paths: sharing one would let either sign as the
-  // other.
-  assert.match(compose, /Do not share the Evidence Gateway proxy or socket with Mint/u);
 });
 
-test('the maintained Compose adapter keeps Evidence independent from Mint scaffolding', async () => {
+test('the maintained Compose adapter keeps Evidence deployment inputs explicit', async () => {
   const [readme, compose, runtime] = await Promise.all([
     readFile(resolve(repoRoot, 'docker/compose/README.md'), 'utf8'),
     readFile(resolve(repoRoot, 'docker/compose/docker-compose.yaml'), 'utf8'),
     readFile(resolve(repoRoot, 'docker/compose/runtime.docker.yaml'), 'utf8'),
   ]);
 
-  assert.doesNotMatch(readme, /--with-mint/u);
-  assert.doesNotMatch(compose, /--with-mint/u);
-  assert.doesNotMatch(compose, /MINT_(?:IMAGE|CONFIG_DIR|SECRET_ROOT)/u);
   assert.match(readme, /intentionally absent from the base adapter/u);
   for (const name of [
     'EVIDENCE_CANDIDATE_DIR',

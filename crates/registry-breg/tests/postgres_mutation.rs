@@ -2312,7 +2312,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["case-management","case-review"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
               "readableFields":["jurisdiction","label","note","quantity"],
               "writableFields":["jurisdiction","label","note","quantity"],
@@ -2321,7 +2321,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"review-operator","principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["create","get","list","patch","tombstone"],
               "readableFields":["jurisdiction","label","note","quantity"],
               "writableFields":["jurisdiction","label","note","quantity"],
@@ -2329,7 +2329,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             }]
           },{
             "id":"anonymous-reader","anonymous":true,
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["get","list"],
               "readableFields":["label"],
               "rowBoundaries": []
@@ -2337,7 +2337,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"label-editor","principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["get","patch"],
               "readableFields":["label"],
               "writableFields":["label"],
@@ -2346,7 +2346,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"case-operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"log","operations":["create","get","list"],
               "readableFields":["jurisdiction","message"],
               "writableFields":["jurisdiction","message"],

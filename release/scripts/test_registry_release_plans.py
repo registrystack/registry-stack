@@ -137,6 +137,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             "bregctl",
             "breg-installer",
         )
+    if version_tuple > CASEWORK_RELEASE_MINIMUM_VERSION:
+        inventory = tuple(name for name in inventory if name != "mint")
     if version_tuple >= CASEWORK_RELEASE_MINIMUM_VERSION:
         inventory += (
             "casework",
@@ -583,6 +585,14 @@ version = "1.1.0"
 
 
 class RegistryReleasePlanTest(unittest.TestCase):
+    def test_fixture_inventory_preserves_published_mint_release(self) -> None:
+        owner = _load_registry_release()
+        for version, includes_mint in (("0.30.0", True), ("0.30.1", False)):
+            with self.subTest(version=version):
+                document = manifest(version, "beta-fixture", f"v{version}", "candidate")
+                self.assertEqual(includes_mint, "mint" in document["artifacts"])
+                self.assertEqual([], owner.artifact_inventory_errors(version, document["artifacts"]))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

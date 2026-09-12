@@ -37,6 +37,13 @@
         "baseUrl": {
           "type": "string"
         },
+        "clientAssertionAudience": {
+          "description": "Explicit OAuth client assertion audience; omission preserves endpoint audience.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "clientAssertionKeyRef": {
           "pattern": "^secret:(?:env|file)/",
           "type": "string"
@@ -73,6 +80,23 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "resource": {
+          "description": "Exact resource indicator required by the configured authorization server.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopes": {
+          "description": "Explicit scopes for this source reader's service credential.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "tokenEndpoint": {
           "type": "string"
@@ -191,6 +215,13 @@
     "OidcConfig": {
       "additionalProperties": false,
       "properties": {
+        "allowedClients": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "audience": {
           "type": "string"
         },
@@ -315,6 +346,39 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "TaskAuthorityConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "exchangeAudience": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "signingKeyRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "statusClients": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Service client IDs mapped to their one protected resource audience.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "issuer",
+        "exchangeAudience",
+        "signingKeyRef",
+        "statusClients"
+      ],
       "type": "object"
     },
     "TlsTermination": {
@@ -461,6 +525,16 @@
         "minLength": 1
       },
       "type": "object"
+    },
+    "taskAuthority": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TaskAuthorityConfig"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "required": [

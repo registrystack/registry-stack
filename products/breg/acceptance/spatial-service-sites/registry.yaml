@@ -85,7 +85,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [service-sites:seed]
     requiredPurposes: [service-site-administration]
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [create, get, list, patch, batch]
@@ -96,7 +96,7 @@ accessProfiles:
         allowCount: true
   - id: map-reader
     anonymous: true
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]
@@ -112,7 +112,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [service-sites:map.read]
     requiredPurposes: [service-site-map]
-    grants:
+    permissions:
       - entity: service-site
         operations: [get, list]
         readableFields: [native-id, site-code, label, zone, service-kind, location, map-label]
@@ -127,7 +127,7 @@ accessProfiles:
             maximumLatitudeSpanDegrees: 0.20
   - id: directory-reader
     anonymous: true
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]
@@ -139,7 +139,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [service-sites:directory.read]
     requiredPurposes: [service-site-directory]
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]
@@ -150,7 +150,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [service-sites:site.read]
     requiredPurposes: [service-site-map]
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get]

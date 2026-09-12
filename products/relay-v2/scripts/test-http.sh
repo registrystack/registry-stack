@@ -10,6 +10,15 @@ CARGO_PROFILE_DEV_DEBUG=0 \
 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo test --locked -p registry-relay-v2 --features tooling --test acceptance_http
 
+if [[ "${RELAY_V2_STOCK_ISSUER:-0}" == "1" ]]; then
+  CARGO_INCREMENTAL=0 \
+  CARGO_PROFILE_DEV_DEBUG=0 \
+  CARGO_PROFILE_TEST_DEBUG=0 \
+    cargo test --locked -p registry-relay-v2 --features tooling --test acceptance_http \
+      stock_issuer_registered_authority_drives_a_protected_relay_lookup \
+      -- --exact --ignored
+fi
+
 CARGO_INCREMENTAL=0 \
 CARGO_PROFILE_DEV_DEBUG=0 \
 CARGO_PROFILE_TEST_DEBUG=0 \

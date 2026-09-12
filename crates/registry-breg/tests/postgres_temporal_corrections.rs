@@ -294,7 +294,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["history-maintenance"],"requiredScopes":["history-maintain"],
-            "grants":[{
+            "permissions":[{
               "entity":"membership","operations":["create","get","patch","batch"],
               "readableFields":["subject","group","valid-from","valid-to"],
               "writableFields":["subject","group","valid-from","valid-to","source-reference"],

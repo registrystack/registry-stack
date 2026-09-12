@@ -61,7 +61,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: case
         rowBoundaries: []
         operations: [get, list]
@@ -72,7 +72,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: case
         operations: [create, get, list, patch, tombstone, batch, revisions]
         allowCount: true
@@ -137,7 +137,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: household
         rowBoundaries: []
         operations: [get, lookup, list]
@@ -163,7 +163,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: household
         operations: [get, lookup]
         readableFields: [household-code]
@@ -204,7 +204,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: benefit-record
         rowBoundaries: []
         operations: [get, list]
@@ -253,7 +253,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: public-record
         rowBoundaries: []
         operations: [get, list]
@@ -264,7 +264,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: public-record
         rowBoundaries: []
         operations: [get, list]
@@ -304,7 +304,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: logical-record
         rowBoundaries: []
         operations: [get, list]
@@ -409,7 +409,7 @@ accessProfiles:
   - id: operator
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: permit
         rowBoundaries: []
         operations: [get, list]
@@ -430,7 +430,7 @@ accessProfiles:
         readableFields: [import-source, certificate-code]
   - id: redacted-reader
     anonymous: true
-    grants:
+    permissions:
       - entity: inspection
         rowBoundaries: []
         operations: [get]
@@ -464,7 +464,7 @@ accessProfiles:
   - id: map-reader
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: site
         rowBoundaries: []
         operations: [get, list]
@@ -476,7 +476,7 @@ accessProfiles:
             maximumLatitudeSpanDegrees: 2
   - id: tabular
     anonymous: true
-    grants:
+    permissions:
       - entity: site
         rowBoundaries: []
         operations: [get, list]
@@ -554,7 +554,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: assignment
         operations: [snapshot]
         readableFields: [label, starts, ends]
@@ -566,7 +566,7 @@ accessProfiles:
   - id: live-only
     principalClaim: registry_principal
     requiredScopes: [registry.read]
-    grants:
+    permissions:
       - entity: assignment
         rowBoundaries: []
         operations: [get, list]
@@ -574,7 +574,7 @@ accessProfiles:
   - id: revision-only
     principalClaim: registry_principal
     requiredScopes: [registry.read]
-    grants:
+    permissions:
       - entity: assignment
         rowBoundaries: []
         operations: [revisions]
@@ -617,13 +617,13 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - {entity: placement-correction, rowBoundaries: [], operations: [get, list], readableFields: [target, proposed-site]}
   - id: correction-officer
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: placement
         rowBoundaries: []
         operations: [get]
@@ -643,7 +643,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: placement
         rowBoundaries: []
         operations: [get]
@@ -657,7 +657,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: placement-correction
         rowBoundaries: []
         operations: [get, list]
@@ -1612,7 +1612,7 @@ async fn lookup_route_conceals_a_substituted_access_profile_selection() {
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: household
         rowBoundaries: []
         operations: [get]
@@ -4174,9 +4174,9 @@ async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_pro
         .unwrap()
         .clone();
     narrow["id"] = json!("metadata-narrow");
-    narrow["grants"][0]["operations"] = json!(["get", "list"]);
-    narrow["grants"][0]["readableFields"] = json!(["record", "label"]);
-    narrow["grants"][0]["writableFields"] = json!([]);
+    narrow["permissions"][0]["operations"] = json!(["get", "list"]);
+    narrow["permissions"][0]["readableFields"] = json!(["record", "label"]);
+    narrow["permissions"][0]["writableFields"] = json!([]);
     source["accessProfiles"]
         .as_array_mut()
         .unwrap()

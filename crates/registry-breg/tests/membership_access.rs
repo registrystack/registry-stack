@@ -45,22 +45,22 @@ fn membership_boundaries_compile_for_distinct_registry_models() {
 fn membership_boundaries_refuse_unenforced_authority_paths() {
     for (path, value, code) in [
         (
-            "/accessProfiles/0/grants/0/operations",
+            "/accessProfiles/0/permissions/0/operations",
             json!(["get", "patch"]),
             "access.membership.read_only",
         ),
         (
-            "/accessProfiles/0/grants/0/reviewStages",
+            "/accessProfiles/0/permissions/0/reviewStages",
             json!([{"stage":"review"}]),
             "access.membership.read_only",
         ),
         (
-            "/accessProfiles/0/grants/0/applyTargets",
+            "/accessProfiles/0/permissions/0/applyTargets",
             json!([{"entity":"facility","rowBoundaries":[]}]),
             "access.membership.read_only",
         ),
         (
-            "/accessProfiles/0/grants/0/requestPresence",
+            "/accessProfiles/0/permissions/0/requestPresence",
             json!([{"requestType":"request","rowBoundaries":[]}]),
             "access.membership.read_only",
         ),
@@ -75,22 +75,22 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
             "access.requirements.scope_missing",
         ),
         (
-            "/accessProfiles/0/grants/0/membershipBoundaries/0/field",
+            "/accessProfiles/0/permissions/0/membershipBoundaries/0/field",
             json!("label"),
             "access.membership.key_type",
         ),
         (
-            "/accessProfiles/0/grants/0/membershipBoundaries/0/principalField",
+            "/accessProfiles/0/permissions/0/membershipBoundaries/0/principalField",
             json!("active"),
             "access.membership.principal_type",
         ),
         (
-            "/accessProfiles/0/grants/0/membershipBoundaries/0/activeField",
+            "/accessProfiles/0/permissions/0/membershipBoundaries/0/activeField",
             json!("principal"),
             "access.membership.active_type",
         ),
         (
-            "/accessProfiles/0/grants/0/membershipBoundaries/0/membershipEntity",
+            "/accessProfiles/0/permissions/0/membershipBoundaries/0/membershipEntity",
             json!("facility"),
             "access.membership.source_recursive",
         ),
@@ -117,7 +117,7 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
     let mut value = source("facility");
     value["entities"][0]["readPaths"] =
         json!([{"id":"facilities","through":"membership","to":"facility","route":"facilities"}]);
-    value["accessProfiles"][1]["grants"][0]["readPaths"] =
+    value["accessProfiles"][1]["permissions"][0]["readPaths"] =
         json!([{"path":"facilities","readableFields":["label"]}]);
     let failure =
         compile(&value).expect_err("read paths cannot ignore protected target membership");
@@ -127,12 +127,12 @@ fn membership_boundaries_refuse_unenforced_authority_paths() {
         .any(|diagnostic| diagnostic.code == "access.membership.read_path_target"));
 
     let mut action = action_requirements::project();
-    action["accessProfiles"][0]["grants"][0]["membershipBoundaries"] =
-        source("facility")["accessProfiles"][0]["grants"][0]["membershipBoundaries"].clone();
+    action["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] =
+        source("facility")["accessProfiles"][0]["permissions"][0]["membershipBoundaries"].clone();
     let failure = compile(&action)
         .expect_err("an action grant must not silently ignore entity membership rules");
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| diagnostic.code == "action.grant.entity_fields_forbidden"));
+        .any(|diagnostic| diagnostic.code == "action.permission.entity_fields_forbidden"));
 }

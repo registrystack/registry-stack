@@ -186,7 +186,7 @@ expect:
 "#;
 
 /// The local clients `caseworkctl init` writes beside the standalone project.
-pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `caseworkctl dev`. Registry Mint, the local token issuer
+pub(super) const STANDALONE_DEV_CLIENTS: &str = r#"# Local callers for `caseworkctl dev`. The pinned local token issuer
 # that `dev` starts beside Casework, registers each client below and issues it
 # short-lived tokens carrying these claims. One client binds each access
 # profile `casework.yaml` declares, so a first start serves every role in the
@@ -230,7 +230,7 @@ directory:
 /// The local clients `caseworkctl init` writes beside the professional-review
 /// project. That project binds a BReg source, so its runtime needs a reader
 /// credential `dev` cannot generate; these clients serve a deployed runtime,
-/// and `mint` issues their tokens from the operator's own issuer.
+/// and the operator's own issuer provides their access tokens.
 pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for this Casework project. Each client binds one access
 # profile `casework.yaml` declares and carries the claims that profile reads:
 # `registry_principal` is this project's `principalClaim`, and
@@ -238,8 +238,8 @@ pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for 
 #
 # This project binds a BReg source, so `caseworkctl dev` serves it only beside
 # a running `bregctl dev` session for that registry, named with
-# `--source-project`: the local session borrows that registry's Mint as its
-# issuer and exports each client below as a registry client with the same
+# `--source-project`: the local session uses that registry's stock issuer
+# and exports each client below as a registry client with the same
 # principal, which `caseworkctl source add --apply` writes into the registry's
 # own dev-clients.yaml. For a deployment, point these clients at the runtime's
 # own token issuer instead.

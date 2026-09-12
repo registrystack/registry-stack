@@ -1,0 +1,16 @@
+delimiter: ':'
+description: Synthetic resource server for the integration fixture
+id: 0197aaaa-0000-7000-8000-0000000000b1
+identifier: urn:registry:tooling-test:evidence
+name: Synthetic Evidence
+ouHandle: default
+resource_type: resource_server
+resources:
+- actions:
+  - description: Invoke an evidence request
+    handle: invoke
+    kind: resource
+    name: Invoke
+  description: Synthetic evidence operations
+  handle: evidence
+  name: Evidence

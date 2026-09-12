@@ -27,13 +27,15 @@ seed: []
     )
     .expect("clients");
     let state = State {
-        version: 1,
+        version: 2,
         project: project.clone(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
         breg_port: 8094,
-        mint_port: 8095,
+        issuer_port: 8095,
+        issuer_image: None,
         database_port: 55448,
+        requires_postgis: false,
         webhook_port: None,
         clients_file: project.join("clients.yaml"),
         source_digest: "a".repeat(64),
@@ -65,11 +67,34 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     initialize(&state.root(), &state, &clients, &files).expect("initialize");
     let root = state.root();
     private::validate_tree(&root).expect("all generated state is private");
-    let issuer = private::read(
-        &root.join("credentials/issuer/assertion-key.jwk"),
-        MAX_BYTES,
-    )
-    .expect("issuer");
+    let issuer_state = fs::read_dir(root.join("issuer"))
+        .expect("the upstream issuer session state exists")
+        .count();
+    assert!(issuer_state > 0);
+    let server_file = fs::read_dir(root.join("issuer/resources/resource_servers"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let server: Value =
+        serde_norway::from_slice(&private::read(&server_file, MAX_BYTES).unwrap()).unwrap();
+    let resources = server["resources"].as_array().unwrap();
+    assert!(resources
+        .iter()
+        .any(|resource| resource["handle"] == "registry"));
+    assert!(
+        resources.iter().any(|resource| {
+            resource["handle"] == "generic"
+                && resource["parent"] == "registry"
+                && resource["actions"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|action| action["handle"] == "operate")
+        }),
+        "three-segment authored scopes need the upstream parent resource chain"
+    );
     let operator = private::read(
         &root.join("credentials/operator/assertion-key.jwk"),
         MAX_BYTES,
@@ -80,9 +105,9 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
         MAX_BYTES,
     )
     .expect("source");
-    assert!(issuer != operator);
+    assert!(operator.len() > 32);
     assert!(source != operator);
-    assert!(source != issuer);
+    assert!(source != operator);
     let report = serde_json::to_string(&state.report().unwrap()).expect("report");
     assert!(!report.contains("\"d\""));
     let runtime: Value = serde_norway::from_slice(
@@ -193,8 +218,10 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         id: "guest".into(),
         access_profiles: vec![],
         allow_breg_access: false,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });
@@ -202,17 +229,39 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         id: "casework-reviewer".into(),
         access_profiles: vec![],
         allow_breg_access: true,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:review".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    });
+    clients.clients.push(config::Client {
+        id: "casework-administrator".into(),
+        access_profiles: vec![],
+        allow_breg_access: false,
+        allow_human_fixture: true,
+        scopes: vec!["casework:admin".into()],
+        claims: BTreeMap::from([("registry_actor_kind".into(), json!("human"))]),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let root = state.root();
-    private::read(&root.join("mint/clients/guest.yaml"), MAX_BYTES)
-        .expect("the unbound client still registers with the local Mint");
-    private::read(&root.join("mint/clients/casework-reviewer.yaml"), MAX_BYTES)
-        .expect("the integration client registers with the local Mint");
+    let issuer = config::issuer_description(&state, &clients, &root).unwrap();
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "guest"));
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "casework-reviewer"));
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "casework-administrator"));
     let runtime: Value = serde_norway::from_slice(
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
@@ -229,6 +278,10 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         "the explicitly admitted integration client must be allowed: {allowed:?}"
     );
     assert!(
+        !allowed.iter().any(|id| id == "casework-administrator"),
+        "a teaching-human flag must not confer BREG access: {allowed:?}"
+    );
+    assert!(
         clients
             .clients
             .iter()
@@ -236,6 +289,38 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
             .all(|client| allowed.iter().any(|id| id == &client.id)),
         "each profile-bound client remains in allowedClients: {allowed:?}"
     );
+}
+
+#[test]
+fn human_teaching_clients_require_the_exact_explicit_fixture_flag() {
+    let without_flag = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    scopes: [casework:admin]
+    claims: {registry_actor_kind: human}
+"#;
+    assert!(config::clients(without_flag).is_err());
+
+    let without_marker = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    allowHumanFixture: true
+    scopes: [casework:admin]
+    claims: {}
+"#;
+    assert!(config::clients(without_marker).is_err());
+
+    let exact = br#"version: 1
+clients:
+  - id: administrator
+    accessProfiles: []
+    allowHumanFixture: true
+    scopes: [casework:admin]
+    claims: {registry_actor_kind: human}
+"#;
+    assert!(config::clients(exact).is_ok());
 }
 
 /// A client with no bound access profile never interferes with rehearsal
@@ -250,8 +335,10 @@ fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client(
         id: "guest".into(),
         access_profiles: vec![],
         allow_breg_access: false,
+        allow_human_fixture: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });
@@ -289,6 +376,171 @@ seed:
         format!("{error:#}").contains("bound client and access profile"),
         "{error:#}"
     );
+}
+
+#[test]
+fn clients_allow_only_explicit_unambiguous_shared_profile_variants() {
+    let bytes = r#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+  - id: operator-without-purpose
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator}
+    testBindings:
+      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}
+"#;
+    let parsed = config::clients(bytes.as_bytes()).expect("one default plus an exact test variant");
+    assert_eq!(
+        parsed.clients[1].test_bindings[0].step_id,
+        "without-purpose-is-concealed"
+    );
+
+    let duplicate = bytes.replace(
+        "      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}\n",
+        "",
+    );
+    assert!(config::clients(duplicate.as_bytes())
+        .unwrap_err()
+        .to_string()
+        .contains("at most one default"));
+
+    let duplicate_binding = format!("{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n");
+    assert!(config::clients(duplicate_binding.as_bytes())
+        .unwrap_err()
+        .to_string()
+        .contains("unique exact"));
+}
+
+#[test]
+fn journey_bindings_select_exact_claim_variant_and_reject_stale_entries() {
+    let client_bytes = br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+  - id: operator-without-purpose
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator}
+    testBindings:
+      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}
+"#;
+    let clients = config::clients(client_bytes).unwrap();
+    assert_eq!(
+        journey_client(
+            &clients,
+            "record-lifecycle",
+            "without-purpose-is-concealed",
+            "operator"
+        )
+        .unwrap()
+        .id,
+        "operator-without-purpose"
+    );
+    assert_eq!(
+        journey_client(&clients, "record-lifecycle", "create-record", "operator")
+            .unwrap()
+            .id,
+        "operator"
+    );
+    let journeys = br#"journeys:
+  - id: record-lifecycle
+    steps:
+      - id: create-record
+        accessProfile: operator
+        claims: {principal: operator, purpose: administration}
+"#;
+    assert!(bind_journey_profiles(journeys, &clients)
+        .unwrap_err()
+        .to_string()
+        .contains("unknown or profile-mismatched"));
+}
+
+#[test]
+fn anonymous_journey_steps_need_no_issuer_client() {
+    let clients = config::clients(
+        br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+"#,
+    )
+    .unwrap();
+    let journeys = br#"journeys:
+  - id: public-read
+    steps:
+      - id: list-public
+        accessProfile: public-reader
+        claims: {}
+"#;
+    bind_journey_profiles(journeys, &clients).unwrap();
+}
+
+#[test]
+fn explicit_binding_precedes_empty_claims_and_rejects_profile_mismatch() {
+    let clients = config::clients(
+        br#"version: 1
+clients:
+  - id: authenticated-public-reader
+    accessProfiles: [public-reader]
+    scopes: [registry:records:read]
+    claims: {registry_principal: reader}
+    testBindings:
+      - {journeyId: public-read, stepId: list-public}
+"#,
+    )
+    .unwrap();
+    let exact = exact_journey_client(&clients, "public-read", "list-public", "public-reader")
+        .unwrap()
+        .expect("the explicit binding wins even when authored claims are empty");
+    assert_eq!(exact.id, "authenticated-public-reader");
+    let journey = r#"journeys:
+  - id: public-read
+    steps:
+      - id: list-public
+        accessProfile: public-reader
+        claims: {}
+"#;
+    bind_journey_profiles(journey.as_bytes(), &clients).unwrap();
+
+    let mismatched = journey.replace(
+        "accessProfile: public-reader",
+        "accessProfile: other-reader",
+    );
+    assert!(bind_journey_profiles(mismatched.as_bytes(), &clients)
+        .unwrap_err()
+        .to_string()
+        .contains("unknown or profile-mismatched"));
+}
+
+#[test]
+fn rehearsal_tokens_request_only_the_exact_fixture_scope_subset() {
+    let client = config::Client {
+        id: "supervisor".into(),
+        access_profiles: vec!["reviewer".into()],
+        allow_breg_access: true,
+        allow_human_fixture: true,
+        scopes: vec!["casework:supervisor".into(), "starter:reviewer".into()],
+        claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    };
+    let step = json!({"claims":{"scopes":["starter:reviewer"]}});
+    let mut remembered = BTreeMap::new();
+
+    remember_rehearsal_scopes(&mut remembered, &client, &step).unwrap();
+
+    assert_eq!(remembered["supervisor"], ["starter:reviewer"]);
+    let widened = json!({"claims":{"scopes":["unregistered"]}});
+    assert!(remember_rehearsal_scopes(&mut remembered, &client, &widened).is_err());
 }
 
 #[test]
@@ -359,6 +611,34 @@ fn state_refuses_changed_ownership_without_touching_paths() {
 }
 
 #[test]
+fn a_retained_mint_state_is_named_before_v2_deserialization_without_mutation() {
+    let (_temp, state, clients, files) = fixture();
+    let root = state.root();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let state_file = root.join("state.json");
+    let mut old: Value =
+        serde_json::from_slice(&private::read(&state_file, MAX_BYTES).unwrap()).unwrap();
+    old["version"] = json!(1);
+    let fields = old.as_object_mut().unwrap();
+    let port = fields.remove("issuerPort").unwrap();
+    fields.insert("mintPort".to_owned(), port);
+    let bytes = serde_json::to_vec(&old).unwrap();
+    private::replace(&state_file, &bytes).unwrap();
+
+    let refusal = read_state(&root).unwrap_err().to_string();
+    assert!(
+        refusal.contains("Mint-based issuer (state v1)"),
+        "{refusal}"
+    );
+    assert!(
+        refusal.contains("does not implement retained issuer migration"),
+        "{refusal}"
+    );
+    assert!(!refusal.contains("migrate-issuer PROJECT"), "{refusal}");
+    assert_eq!(private::read(&state_file, MAX_BYTES).unwrap(), bytes);
+}
+
+#[test]
 fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());
@@ -422,10 +702,9 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
     };
     // Docker belongs to no release of this stack and names itself in its own
     // shape, so it is never compared against the stack's version.
-    let session = |breg: String, mint: String| {
+    let session = |breg: String| {
         BTreeMap::from([
             ("breg".to_owned(), installed(&breg)),
-            ("mint".to_owned(), installed(&mint)),
             (
                 "docker".to_owned(),
                 installed("Docker version 29.4.0, build 1a2b3c4"),
@@ -433,19 +712,10 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
         ])
     };
 
-    matching_versions(&session(format!("breg {own}"), format!("mint {own}")))
-        .expect("the three binaries of one release start a session");
+    matching_versions(&session(format!("breg {own}")))
+        .expect("the stack binaries of one release start a session");
 
-    for (name, binaries) in [
-        (
-            "breg",
-            session("breg 0.26.1".to_owned(), format!("mint {own}")),
-        ),
-        (
-            "mint",
-            session(format!("breg {own}"), "mint 0.26.1".to_owned()),
-        ),
-    ] {
+    for (name, binaries) in [("breg", session("breg 0.26.1".to_owned()))] {
         let refusal = format!(
             "{:#}",
             matching_versions(&binaries).expect_err("a prerequisite from another release")
@@ -457,11 +727,8 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
 
     // A prerequisite that declines to identify itself still serves the
     // session, as the installed lifecycle proof starts one that never answers.
-    matching_versions(&session(
-        UNREPORTED_VERSION.to_owned(),
-        format!("mint {own}"),
-    ))
-    .expect("a prerequisite that reports no version is not compared");
+    matching_versions(&session(UNREPORTED_VERSION.to_owned()))
+        .expect("a prerequisite that reports no version is not compared");
 
     // A start resolves the prerequisites and compares them before it inspects
     // a container or launches the supervisor.
@@ -470,21 +737,23 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
     fs::create_dir(&prerequisites).unwrap();
     for (name, reported) in [
         ("breg", "breg 0.26.1".to_owned()),
-        ("mint", format!("mint {own}")),
         ("docker", "Docker version 29.4.0, build 1a2b3c4".to_owned()),
     ] {
         script(&prerequisites.join(name), &format!("echo '{reported}'"));
     }
+    let ports = unused_ports();
     let refused = format!(
         "{:#}",
         start(StartArgs {
             project: project.clone(),
             clients_file: None,
-            breg_port: None,
-            mint_port: None,
-            database_port: None,
+            breg_port: Some(ports[0]),
+            issuer_port: Some(ports[1]),
+            issuer_image: None,
+            database_port: Some(ports[2]),
             breg_bin: Some(prerequisites.join("breg")),
-            mint_bin: Some(prerequisites.join("mint")),
+            mint_port: None,
+            mint_bin: None,
             docker_bin: Some(prerequisites.join("docker")),
         })
         .expect_err("a breg from another release never starts a session")
@@ -551,13 +820,31 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
     assert!(runtime.password() != migration.password());
     assert!(!environment.contains(runtime.password().unwrap()));
     assert!(!environment.contains(migration.password().unwrap()));
-    for file in ["audit-key", "cursor-key", "mint-audit-key"] {
+    for file in ["audit-key", "cursor-key"] {
         let bytes = private::read(&root.join("secrets").join(file), 64).unwrap();
         assert_eq!(bytes.len(), 43);
         assert!(bytes
             .iter()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')));
     }
+}
+
+#[test]
+fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let output = match Command::new("openssl")
+        .arg("verify")
+        .arg("-CAfile")
+        .arg(state.root().join("tls/ca.pem"))
+        .arg(state.root().join("tls/server.pem"))
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("run openssl verify: {error}"),
+    };
+    assert!(output.status.success(), "generated TLS chain must verify");
 }
 
 /// The pinned image and the two deadlines are facts an operator checks before
@@ -585,6 +872,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         .to_string();
     for fact in [
         IMAGE.to_owned(),
+        SPATIAL_IMAGE.to_owned(),
         format!("{} seconds", CHILD_DEADLINE.as_secs()),
         format!("{} seconds", READY_DEADLINE.as_secs()),
     ] {
@@ -977,13 +1265,15 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
     let captured = capture(project, &client_bytes).unwrap();
     private::directory(&project.join(".breg")).unwrap();
     let state = State {
-        version: 1,
+        version: 2,
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
         breg_port: 8094,
-        mint_port: 8095,
+        issuer_port: 8095,
+        issuer_image: None,
         database_port: 55448,
+        requires_postgis: false,
         webhook_port: None,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: captured.digest,
@@ -1010,9 +1300,11 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
         project: project.to_path_buf(),
         clients_file: None,
         breg_port: None,
-        mint_port: None,
+        issuer_port: None,
+        issuer_image: None,
         database_port: None,
         breg_bin: Some(project.join("missing-breg")),
+        mint_port: None,
         mint_bin: None,
         docker_bin: None,
     })
@@ -1079,7 +1371,12 @@ fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     // After `dev stop --remove` nothing remains for the source pin to protect,
     // so an edited project starts a fresh session on the retained ports.
     let (_temporary, project) = write_init_project();
-    let state = retained_session(&project, None);
+    let mut state = retained_session(&project, None);
+    let ports = unused_ports();
+    state.breg_port = ports[0];
+    state.issuer_port = ports[1];
+    state.database_port = ports[2];
+    state.save().unwrap();
     let previous_key =
         fs::read(state.root().join("credentials/operator/assertion-key.jwk")).unwrap();
     let registry = project.join("registry.yaml");
@@ -1102,10 +1399,10 @@ fn changed_inputs_replace_a_session_whose_records_were_discarded() {
     assert_eq!(
         (
             replaced.breg_port,
-            replaced.mint_port,
+            replaced.issuer_port,
             replaced.database_port
         ),
-        (8094, 8095, 55448)
+        (ports[0], ports[1], ports[2])
     );
     assert_eq!(replaced.clients_file, state.clients_file);
     assert!(replaced.container_id.is_none());
@@ -1141,12 +1438,23 @@ fn export_args(state: &State) -> export_client::ExportClientArgs {
     }
 }
 
+/// The rendered machine registration for the fixture's `source` client: the
+/// one agent document under the issuer provisioning tree.
+fn source_agent_path(state: &State) -> std::path::PathBuf {
+    let directory = state.root().join("issuer/registry-schema/agents");
+    let entry = std::fs::read_dir(&directory)
+        .expect("the issuer provisioning tree exists")
+        .find_map(|entry| entry.ok())
+        .expect("at least one rendered agent");
+    directory.join(entry.path().file_name().expect("a file name"))
+}
+
 #[test]
 fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_changes() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let before = fs::read(state.root().join("state.json")).unwrap();
-    let registrations = fs::read(state.root().join("mint/clients/source.yaml")).unwrap();
+    let registrations = fs::read(source_agent_path(&state)).unwrap();
     let retained_clients = fs::read(state.root().join("clients.json")).unwrap();
     // Authored input is deliberately absent: only the retained session is used.
     let report = export_client::run(export_args(&state)).unwrap();
@@ -1168,10 +1476,7 @@ fn export_client_copies_a_stopped_retained_pair_and_retries_without_state_change
         fs::read(state.root().join("clients.json")).unwrap(),
         retained_clients
     );
-    assert_eq!(
-        fs::read(state.root().join("mint/clients/source.yaml")).unwrap(),
-        registrations
-    );
+    assert_eq!(fs::read(source_agent_path(&state)).unwrap(), registrations);
     assert_eq!(
         fs::read(&export_args(&state).assertion_key_file).unwrap(),
         key
@@ -1286,7 +1591,7 @@ fn plain_init_source_client_has_only_the_explicit_lookup_profile_and_a_distinct_
     state.status = Status::Stopped;
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let key = fs::read(state.root().join("credentials/source/assertion-key.jwk")).unwrap();
-    for other in ["operator", "reader", "issuer"] {
+    for other in ["operator", "reader"] {
         assert_ne!(
             key,
             fs::read(
@@ -1585,4 +1890,93 @@ fn old_event_free_sessions_keep_working_without_receiver_state() {
     assert!(!state.root().join("secrets/webhook-key").exists());
     let report = events::report(&state.root(), false).unwrap();
     assert_eq!(report["deliveries"], json!([]));
+}
+
+#[test]
+fn fresh_token_rejects_path_clients_and_stopped_sessions_without_network() {
+    let (_temp, state, clients, files) = fixture();
+    for client in ["../operator", "/operator", "", "operator/header"] {
+        assert!(fresh_token(&state.project, client)
+            .unwrap_err()
+            .to_string()
+            .contains("bounded local client"));
+    }
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    assert!(fresh_token(&state.project, "operator")
+        .unwrap_err()
+        .to_string()
+        .contains("must be ready"));
+    assert!(!state.root().join("secrets/operator.header").exists());
+}
+
+fn unused_ports() -> [u16; 3] {
+    let sockets = [0; 3].map(|_| std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap());
+    sockets
+        .each_ref()
+        .map(|socket| socket.local_addr().unwrap().port())
+}
+
+#[test]
+fn candidate_issuer_image_is_immutable_and_retained() {
+    let image = format!("sha256:{}", "a".repeat(64));
+    assert_eq!(candidate_issuer_image(&image).unwrap(), image);
+    for invalid in [
+        "latest",
+        "ghcr.io/example/candidate:latest",
+        "sha256:short",
+        &format!("sha256:{}", "A".repeat(64)),
+    ] {
+        assert!(candidate_issuer_image(invalid).is_err());
+    }
+    let (_temporary, mut state, _clients, _files) = fixture();
+    state.issuer_image = Some(image.clone());
+    let encoded = serde_json::to_vec(&state).unwrap();
+    let restored: State = serde_json::from_slice(&encoded).unwrap();
+    assert_eq!(restored.issuer_image, Some(image));
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("issuerImage");
+    assert!(serde_json::from_value::<State>(legacy)
+        .unwrap()
+        .issuer_image
+        .is_none());
+}
+
+#[test]
+fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
+    let args = [
+        "bregctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001",
+        "--connection",
+        "/tmp/task-connection.yaml",
+        "/tmp/project",
+    ];
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(args).is_ok());
+    assert!(<crate::Cli as clap::Parser>::try_parse_from([
+        "bregctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001"
+    ])
+    .is_err());
+    let mut arbitrary = args.to_vec();
+    arbitrary.extend(["--purpose", "invented"]);
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
+}
+
+#[test]
+fn retained_database_selection_preserves_spatial_and_legacy_sessions() {
+    let (_temporary, mut state, _clients, _files) = fixture();
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("requiresPostgis");
+    let restored: State = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.database_image(), IMAGE);
+    state.requires_postgis = true;
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_eq!(restored.database_image(), SPATIAL_IMAGE);
 }

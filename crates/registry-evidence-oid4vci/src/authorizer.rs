@@ -18,7 +18,8 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig,
+    grant_claims, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig,
 };
 
 use crate::config::{AccessTokenAlgorithm, OfferAuthorizationConfig, ValidationMode};
@@ -65,6 +66,10 @@ pub trait OfferAuthorizer: Send + Sync {
 #[derive(Debug)]
 pub struct MintResourceServer {
     verifier: Arc<TokenVerifier>,
+    /// Scopes every offer token must carry. Checked against the verified
+    /// token's scope set after verification, with the same closed refusal a
+    /// refused client gets, before any offer is stored or Evidence contacted.
+    required_scopes: Vec<String>,
 }
 
 impl MintResourceServer {
@@ -80,17 +85,30 @@ impl MintResourceServer {
             JwksFetcherConfig::defaults(),
             fetch_url_policy(config, mode),
         ));
-        Self::new(Arc::new(TokenVerifier::new(
-            verifier_profile(config),
-            fetcher,
-        )))
+        let required_scopes = config.required_scopes.clone().unwrap_or_default();
+        Self {
+            verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
+            required_scopes,
+        }
     }
 
     /// Build the resource server over an already constructed verifier, for a
-    /// deployment that resolved its key source another way.
+    /// deployment that resolved its key source another way. No scope gate is
+    /// applied; the verifier alone decides.
     #[must_use]
     pub fn new(verifier: Arc<TokenVerifier>) -> Self {
-        Self { verifier }
+        Self {
+            verifier,
+            required_scopes: Vec::new(),
+        }
+    }
+
+    /// State scopes every offer token must carry, for a deployment that built
+    /// its verifier another way but still wants the scope gate.
+    #[must_use]
+    pub fn with_required_scopes(mut self, required_scopes: Vec<String>) -> Self {
+        self.required_scopes = required_scopes;
+        self
     }
 }
 
@@ -158,13 +176,43 @@ impl OfferAuthorizer for MintResourceServer {
             return Err(AuthorizationError::Missing);
         }
         match self.verifier.verify(credential).await {
-            Ok(verified) => Ok(AuthorizedOffer {
-                client: verified
-                    .matched_client
-                    .or_else(|| verified.claims.client_id.clone())
-                    .or_else(|| verified.claims.azp.clone()),
-                subject: verified.claims.sub.clone(),
-            }),
+            Ok(verified) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| AuthorizationError::Refused)?
+                    .as_secs();
+                if !matches!(
+                    grant_claims(&verified.claims, &ClaimNames::default(), now),
+                    Ok(None)
+                ) {
+                    // A wallet offer creates a deferred bearer lifecycle whose
+                    // later redemption cannot recheck the task authority. No
+                    // complete, partial, malformed, or expired task grant may
+                    // cross this boundary.
+                    return Err(AuthorizationError::Refused);
+                }
+                // The scope gate runs only on the verified token's scope set:
+                // a correctly signed token for this audience whose client
+                // holds static attributes but no offer scope grants nothing.
+                if !self.required_scopes.is_empty() {
+                    let present: std::collections::HashSet<&str> =
+                        verified.scopes.iter().map(String::as_str).collect();
+                    if !self
+                        .required_scopes
+                        .iter()
+                        .all(|scope| present.contains(scope.as_str()))
+                    {
+                        return Err(AuthorizationError::Refused);
+                    }
+                }
+                Ok(AuthorizedOffer {
+                    client: verified
+                        .matched_client
+                        .or_else(|| verified.claims.client_id.clone())
+                        .or_else(|| verified.claims.azp.clone()),
+                    subject: verified.claims.sub.clone(),
+                })
+            }
             Err(error) if is_key_source_failure(&error) => {
                 tracing::warn!(
                     target: "registry_evidence_oid4vci::authorizer",

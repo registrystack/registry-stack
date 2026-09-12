@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use crate::compiler::{compile_project, CompileProfile};
 use crate::contract::parse_project_yaml;
 use crate::cursor::CursorCodec;
@@ -9,6 +10,9 @@ use crate::postgres::{
     ConnectionConfig, ExpectedRegistryIdentity, PoolBounds, PostgresRecordMutationService,
     RegistryLockKey,
 };
+use registry_platform_httputil::FetchUrlPolicy;
+use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -41,7 +45,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [case.rename]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - action: rename-case
         operations: [invoke]
         targets:
@@ -52,7 +56,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [case.supervise]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - action: rename-case
         operations: [invoke]
         targets: [{entity: case, rowBoundaries: []}]
@@ -64,6 +68,55 @@ fn compiled() -> Arc<CompiledRegistry> {
     Arc::new(
         compile_project(&project, &[], CompileProfile::Authoring).expect("action fixture compiles"),
     )
+}
+
+#[tokio::test]
+async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_action() {
+    let registry = compiled();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
+    )
+    .expect("action verifier config is valid");
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let token = idp.mint_token(json!({
+        "aud": audience,
+        "sub": "citizen-sub",
+        "azp": "agent-client",
+        "registry_principal": "citizen-sub",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "case-management",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
+        "registry_grant_authority": "casework-v1",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "agent-client",
+        "registry_grant_resource": audience,
+        "registry_grant_exp": now + 600,
+        "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"cases","operations":["get"]}]},
+        "identity": {"tenant": "tenant-a"},
+        "scope": "case.rename"
+    }));
+    let claims = auth
+        .authenticate(&token)
+        .await
+        .expect("signed task token verifies");
+    let service = service_for(registry.clone(), true);
+    let route = &registry.actions().routes[0];
+    assert!(authorize_action(&service, route, &claims, &QueryOptions::default()).is_none());
+    assert!(visible_actions(&service, &claims, &QueryOptions::default()).is_empty());
 }
 
 #[test]

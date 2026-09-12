@@ -107,7 +107,7 @@ jq -e --arg tag "${tag}" '
   ($tag | capture("^v(?<major>[0-9]+)\\.(?<minor>[0-9]+)\\.") |
     {major: (.major | tonumber), minor: (.minor | tonumber)}) as $version |
   (if ($version.major > 0 or $version.minor >= 30)
-   then ["breg", "casework", "discovery", "evidence", "mint", "relay"]
+   then ["breg", "casework", "discovery", "evidence", "relay"]
    elif $version.minor >= 26 then ["breg", "discovery", "evidence", "mint", "relay"]
    elif $version.minor >= 24 then ["discovery", "evidence", "mint", "relay"]
    elif $version.minor >= 21 then ["evidence", "mint", "relay"]
@@ -132,6 +132,7 @@ jq -e --arg tag "${tag}" '
 Starting with `v0.21.0`, the exact image set is Evidence Gateway, Registry
 Mint, and Registry Relay. Registry Discovery joins at `v0.24.0`, and Base
 Registry Engine joins at `v0.26.0`, and Registry Casework joins at `v0.30.0`.
+Mint is retired from `v0.30.0`; historical releases retain their original roster.
 The final release tags recorded in the manifest must resolve to the same digests
 as their candidate bindings:
 
@@ -174,7 +175,8 @@ tar -tzf "${evidence}"
 Starting with `v0.21.0`, the archive contains image-specific SPDX and Syft
 reports and Grype reports for `evidence`, `mint`, and `relay`, joined by
 `discovery` from `v0.24.0`, `breg` from `v0.26.0`, and `casework` from
-`v0.30.0`; `v0.19.x` and `v0.20.x` archives contain those reports for `relay`
+`v0.30.0`. Mint reports are excluded from `v0.30.0` onward; `v0.19.x` and
+`v0.20.x` archives contain those reports for `relay`
 only. The archive also
 contains the advisory verdict used for candidate acceptance. Each report names
 the exact candidate digest that was promoted. The archive hash is covered by

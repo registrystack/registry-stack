@@ -175,6 +175,8 @@ def artifact_inventory_errors(version: str, artifacts: dict[Any, Any]) -> list[s
     if parsed_version is not None:
         artifact_names = set(artifacts)
         expected_inventory = set(RELAY_V2_ARTIFACT_INVENTORY)
+        if parsed_version > (0, 30, 0):
+            expected_inventory.remove("mint")
         if parsed_version >= RELAY_INSTALLER_MINIMUM_VERSION:
             expected_inventory.add("relay-installer")
         if parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION:

@@ -1211,7 +1211,7 @@ fn validate_action_claims(
         return Err(MutationError::InvalidRequest);
     }
     let grant = action
-        .grants
+        .permissions
         .iter()
         .find(|grant| grant.profile_id == claims.access_profile())
         .ok_or(MutationError::InvalidRequest)?;

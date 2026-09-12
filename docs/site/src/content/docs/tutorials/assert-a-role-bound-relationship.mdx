@@ -249,10 +249,10 @@ Return to the registry terminal and press `Ctrl+C`.
 
 ## If a local port is already in use
 
-This tutorial needs three loopback ports: `8002` for `registry.py`, and `8080` and `8081` for
-Evidence Gateway and Registry Mint. If another tutorial's services are still running,
+This tutorial needs three loopback ports: `8002` for `registry.py`, plus the Evidence Gateway and
+stock identity-provider ports. If another tutorial's services are still running,
 `evidencectl dev start .` cannot bind. Stop them with `evidencectl dev stop` in that project, or
-start this one on two unused ports with `--evidence-port` and `--mint-port`.
+start this one on two unused ports with `--evidence-port` and `--issuer-port`.
 
 Port `8002` appears twice inside `registry.py`, in the OpenAPI `servers` URL and in the listener,
 and again in the `--openapi` argument. Change all three before running `evidencectl init`, because

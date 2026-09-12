@@ -17,13 +17,12 @@
 # deliberately does not do.
 #
 # This gate builds the toolset from the checked-out source unless CASEWORK_BIN,
-# CASEWORKCTL_BIN, MINT_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
+# CASEWORKCTL_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
 # released bytes, then replays each registered tutorial's own shell fences from
 # an empty reader directory, the way a reader starts after installing the
 # binaries. The Base Registry Engine binaries are part of the toolset because
-# the two-product page runs a registry beside Casework, and because
-# `caseworkctl dev` drives `bregctl` from PATH to borrow that registry's local
-# session. What CI runs is what a reader copies.
+# the two-product page runs a registry beside Casework. What CI runs is what a
+# reader copies.
 #
 # Usage:
 #   scripts/check-casework-tutorial.sh              replay every registered tutorial
@@ -65,12 +64,12 @@
 # is exactly when the journey is worth walking again.
 #
 # Configuration:
-#   CASEWORK_BIN / CASEWORKCTL_BIN / MINT_BIN  run these exact binaries instead
+#   CASEWORK_BIN / CASEWORKCTL_BIN             run these exact binaries instead
 #   BREG_BIN / BREGCTL_BIN                     of building from source
 #   CASEWORK_TUTORIAL_CARGO_PROFILE            ci (default) or release
 #   CASEWORK_TUTORIAL_DOCS_ROOT                docs content directory override (tests)
 #
-# CASEWORKCTL_DEV_CASEWORK_PORT, CASEWORKCTL_DEV_MINT_PORT and
+# CASEWORKCTL_DEV_CASEWORK_PORT, CASEWORKCTL_DEV_ISSUER_PORT and
 # CASEWORKCTL_DEV_DATABASE_PORT are deliberately not set here. The tutorial's
 # own commands pass no port flags, so leaving the three unset replays the
 # default ports a reader gets. They reach `caseworkctl dev` through the
@@ -229,9 +228,9 @@ load_spec() {
 	tutorials/review-breg-changes-in-casework)
 		# The page opens with two install one-liners, which this gate replaces
 		# with the toolset under test. It starts a registry with `bregctl dev`
-		# and then Casework with `caseworkctl dev --source-project`, which
-		# borrows the registry session's issuer, so the registry has to be
-		# running first and both sessions are stopped at the end.
+		# and then Casework through the bounded --source-project bridge, so
+		# the registry has to be running first and both sessions are stopped
+		# at the end.
 		SPEC_STEPS=(
 			"run:Create the two projects"
 			"run:Connect the registry to Casework"
@@ -298,8 +297,8 @@ SHIM_DIR="$WORK_ROOT/bin"
 # and on the two-product page `bregctl dev` beside it, running with a database
 # container behind each, and deleting the work root alone would orphan those
 # containers. Stopping with --remove is idempotent, so a journey that already
-# stopped its own sessions costs nothing here. Casework sessions stop first,
-# because each one borrows the issuer of the registry session beside it.
+# stopped its own sessions costs nothing here. Casework sessions stop first so
+# they no longer reconcile against a registry that is stopping.
 # Returns non-zero when a session was left behind, which is what keeps its
 # project under the work root for a second attempt.
 stop_dev_sessions() {
@@ -360,23 +359,21 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${MINT_BIN:-}" ||
-		-z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
+	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-casework -p registry-caseworkctl -p registry-mint \
+			-p registry-casework -p registry-caseworkctl \
 			-p registry-breg --features registry-breg/runtime \
 			-p registry-bregctl --bins)
 		CASEWORK_BIN="$TARGET_DIR/$profile_dir/casework"
 		CASEWORKCTL_BIN="$TARGET_DIR/$profile_dir/caseworkctl"
-		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 		BREG_BIN="$TARGET_DIR/$profile_dir/breg"
 		BREGCTL_BIN="$TARGET_DIR/$profile_dir/bregctl"
 	fi
 	local bin
-	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$MINT_BIN" "$BREG_BIN" "$BREGCTL_BIN"; do
+	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$BREG_BIN" "$BREGCTL_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -392,12 +389,11 @@ prepare_toolset() {
 	done
 
 	# The tutorials call the binaries by name, `caseworkctl dev` resolves
-	# `casework`, `mint` and `bregctl` from PATH, and `bregctl dev` resolves
-	# `breg` and `mint` the same way, so serve all five from a shim dir.
+	# `casework` and `bregctl` from PATH, and `bregctl dev` resolves
+	# `breg` the same way, so serve all four from a shim directory.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$CASEWORK_BIN" "$SHIM_DIR/casework"
 	ln -s "$CASEWORKCTL_BIN" "$SHIM_DIR/caseworkctl"
-	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
 	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
 }

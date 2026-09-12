@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Installed-binary proof that `caseworkctl dev` is the whole local runtime.
 //!
-//! Opt in after building `casework`, `mint` and `caseworkctl`; Docker must be
+//! Opt in after building `casework` and `caseworkctl`; Docker must be
 //! available. This creates and removes only its own synthetic database.
 //!
 //! ```sh
-//! cargo build -p registry-casework -p registry-mint -p registry-caseworkctl
+//! cargo build --locked -p registry-casework -p registry-caseworkctl
 //! cargo test -p registry-caseworkctl --test dev_lifecycle -- --ignored
 //! ```
 
@@ -22,7 +22,6 @@ use std::{
 struct Session {
     project: PathBuf,
     casework_bin: PathBuf,
-    mint_bin: PathBuf,
     ports: [u16; 3],
     _workspace: tempfile::TempDir,
 }
@@ -59,20 +58,18 @@ impl Session {
     /// a restart proves the session keeps them rather than probing new ones.
     fn start(&self) -> Value {
         let project = self.project.to_str().expect("a UTF-8 project path");
-        let [casework_port, mint_port, database_port] = self.ports.map(|port| port.to_string());
+        let [casework_port, issuer_port, database_port] = self.ports.map(|port| port.to_string());
         let report = self.success(&[
             "dev",
             project,
             "--casework-port",
             &casework_port,
-            "--mint-port",
-            &mint_port,
+            "--issuer-port",
+            &issuer_port,
             "--database-port",
             &database_port,
             "--casework-bin",
             self.casework_bin.to_str().expect("a UTF-8 casework path"),
-            "--mint-bin",
-            self.mint_bin.to_str().expect("a UTF-8 mint path"),
         ]);
         assert_eq!(report["status"], "ready", "{report:#}");
         assert_eq!(
@@ -81,7 +78,7 @@ impl Session {
         );
         assert_eq!(
             report["tokenEndpoint"],
-            format!("http://127.0.0.1:{mint_port}/token")
+            format!("http://127.0.0.1:{issuer_port}/oauth2/token")
         );
         report
     }
@@ -93,32 +90,26 @@ impl Session {
         self.success(&invocation)
     }
 
-    /// A short-lived access token for one local client, obtained exactly as a
-    /// reader obtains one: the reported token endpoint, the reported client ID
-    /// file, and the reported private key. The value is never printed.
+    /// Obtain a fresh token through the maintained local development command.
+    /// Read its private header file without printing the bearer.
     fn token(&self, report: &Value, id: &str) -> String {
-        let client = client(report, id);
-        let client_id =
-            fs::read_to_string(client["clientIdFile"].as_str().expect("a client ID file"))
-                .expect("the reported client ID file is readable");
-        let output = Command::new(&self.mint_bin)
-            .arg("token")
-            .arg("--url")
-            .arg(report["tokenEndpoint"].as_str().expect("a token endpoint"))
-            .arg("--client-id")
-            .arg(client_id.trim())
-            .arg("--key")
-            .arg(client["assertionKeyFile"].as_str().expect("a key file"))
-            .output()
-            .expect("mint launches");
-        assert!(
-            output.status.success(),
-            "mint refused a token for {id}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let token = String::from_utf8(output.stdout)
-            .expect("a compact token is ASCII")
+        let _ = client(report, id);
+        let issued = self.success(&[
+            "dev",
+            "token",
+            id,
+            self.project.to_str().expect("a UTF-8 project path"),
+        ]);
+        let header = fs::read_to_string(
+            issued["headerFile"]
+                .as_str()
+                .expect("a private header file"),
+        )
+        .expect("the reported header is readable");
+        let token = header
             .trim()
+            .strip_prefix("Authorization: Bearer ")
+            .expect("the local command writes a bearer header")
             .to_owned();
         assert_eq!(
             token.split('.').count(),
@@ -271,13 +262,12 @@ fn inbox(session: &Session, report: &Value) -> Vec<Value> {
 }
 
 #[test]
-#[ignore = "requires Docker and a built casework and mint"]
+#[ignore = "requires Docker and a built casework"]
 fn dev_serves_a_tutorial_project_and_retains_its_records() {
     let workspace = tempfile::tempdir().expect("a work directory");
     let session = Session {
         project: workspace.path().join("casework"),
         casework_bin: prerequisite("casework"),
-        mint_bin: prerequisite("mint"),
         ports: free_ports(),
         _workspace: workspace,
     };

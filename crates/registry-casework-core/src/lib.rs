@@ -16,6 +16,7 @@ mod model;
 mod policy;
 mod routing;
 mod source_retention;
+mod task_grant;
 mod timing;
 mod transition;
 
@@ -31,5 +32,6 @@ pub use model::*;
 pub use policy::*;
 pub use routing::*;
 pub use source_retention::*;
+pub use task_grant::*;
 pub use timing::*;
 pub use transition::*;

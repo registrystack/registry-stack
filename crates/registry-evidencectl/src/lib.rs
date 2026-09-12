@@ -94,7 +94,7 @@ enum Command {
     /// Compatibility operations over deployment artifacts.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
-    /// Run the private local Registry Mint and Evidence Gateway pair.
+    /// Run the private local issuer and Evidence Gateway pair.
     Dev(dev::DevArgs),
     /// Prepare a closed request for the active local project.
     #[command(subcommand)]
@@ -205,9 +205,6 @@ impl std::error::Error for SafeCliFailure {}
 struct ArtifactInspectArgs {
     /// Deployment project containing runtime.yaml beside bundle/.
     project: PathBuf,
-    /// Mechanically compare this Registry Mint configuration with Evidence authentication.
-    #[arg(long)]
-    mint_config: Option<PathBuf>,
 }
 
 /// Return the complete command tree without running Evidence adopter tooling.
@@ -336,7 +333,6 @@ pub fn main_entry() -> ExitCode {
         ),
         Command::Artifact(ArtifactCommand::Inspect(args)) => doctor::run(doctor::DoctorArgs {
             project: args.project,
-            mint_config: args.mint_config,
             json: format == OutputFormat::Json,
         }),
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
@@ -620,6 +616,20 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                 }
                 .into());
             }
+            if error
+                .downcast_ref::<dev::RetiredMintDevelopment>()
+                .is_some()
+            {
+                return Err(SafeCliFailure {
+                    operational: false,
+                    code: "evidence.dev.mint-retired",
+                    artifact: "local development command".to_owned(),
+                    path: "$".to_owned(),
+                    message: "Registry Mint development flags were removed.".to_owned(),
+                    suggested_action: "Stop any retained Mint session with its matching older evidencectl, then start a fresh session with --issuer-port and the pinned local issuer.".to_owned(),
+                }
+                .into());
+            }
             safe_command(
                 Err(error),
                 "evidence.dev.failed",
@@ -780,8 +790,16 @@ mod tests {
             "project",
             "--evidence-port",
             "18080",
-            "--mint-port",
+            "--issuer-port",
             "18081",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "dev",
+            "token",
+            "local-tutorial-caller",
+            "project"
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());

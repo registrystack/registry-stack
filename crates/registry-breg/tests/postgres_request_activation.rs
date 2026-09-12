@@ -1075,7 +1075,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
           "accessProfiles":[
             {{
               "id":"steward","default":true,"principalClaim":"registry_principal",
-              "grants":[{{
+              "permissions":[{{
                 "entity":"asset-site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -1093,7 +1093,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
             }},
             {{
               "id":"submitter","default":true,"principalClaim":"registry_principal",
-              "grants":[{{
+              "permissions":[{{
                 "entity":"correction-request",
                 "operations":["create","get","list","revisions","patch","submit_request","revise_request","cancel_request"],
                 "revisionAccess":true,
@@ -1104,7 +1104,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
             }},
             {{
               "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],
-              "grants":[{{
+              "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","list","approve_request","reject_request","request_revision"],
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],
@@ -1114,7 +1114,7 @@ fn project_bytes_for_variant(variant: Variant, sequence: u64) -> Vec<u8> {
             }},
             {{
               "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],
-              "grants":[{{
+              "permissions":[{{
                 "entity":"correction-request",
                 "operations":["get","apply_request"],
                 "readableFields":["tenant","placement","proposed-site","reason"{request_extra_read_write}],

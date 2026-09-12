@@ -1,17 +1,17 @@
 # Identity-provider portability journey
 
-This opt-in local journey obtains actual tokens from Registry Mint and a
+This opt-in local journey obtains actual tokens from the pinned stock ThunderID issuer and a
 digest-pinned Keycloak 26.7.3 container, then passes them through BReg's real
 authenticator and HTTP router. It uses generated credentials and synthetic
 identities only. Docker, Cargo, and `uv` are required.
 
 ```sh
-cargo build --locked -p registry-mint --bin mint
+cargo build --locked -p registry-bregctl -p registry-breg --bin bregctl --bin breg
 uv run products/breg/scripts/test-issuer-portability.py
 ```
 
-`CARGO_TARGET_DIR` is respected; `--mint /absolute/path/to/mint` selects an
-already-built matching binary. The runner owns a unique disposable container,
+`CARGO_TARGET_DIR` is respected; `--bregctl` and `--breg` select already-built matching
+binaries. The runner owns a unique disposable container,
 dynamic loopback ports, and an owner-only temporary directory. It cleans up
 services and credentials when finished. It does not contact an existing realm.
 
@@ -23,19 +23,19 @@ for the product's PostgreSQL tests, and opt in:
 uv run products/breg/scripts/test-issuer-portability.py --with-postgres
 ```
 
-This additional case records the first approval using a real Mint token,
+This additional case records the first approval using a real stock-issuer token,
 reconstructs BReg with Keycloak trust against the same database, refuses the
-old Mint token and the same service principal's attempt to approve another
+old stock-issuer token and the same service principal's attempt to approve another
 stage, then accepts the independent human's Keycloak token. The runner never
 creates or resets the supplied database. Builds finish before token issuance.
 It also continues the original principal's pagination cursor and replays a
 committed approval receipt after cutover. Another principal cannot reuse the cursor.
 
 The default registry project requires the `registry_principal` direct claim,
-`registry.read` permission, `registry-administration` purpose, and `districts`
+`registry:read` permission, `registry-administration` purpose, and `districts`
 assignment. It authorizes GET only, for assigned districts. The proof covers:
 
-- Mint client credentials and Keycloak service-account client credentials.
+- Stock ThunderID and Keycloak service-account client credentials.
 - Keycloak's interactive authorization endpoint, real login form and session,
   authorization-code redirect, state validation, and PKCE code exchange.
   Direct password grants are disabled.
@@ -47,9 +47,9 @@ assignment. It authorizes GET only, for assigned districts. The proof covers:
 - New issuer acceptance after explicit trust replacement, old issuer refusal,
   and wrong-resource refusal.
 
-Mint issues its registered scopes and configured audience. It does not offer
-request-time scope downscoping or resource selection. Keycloak uses an optional
-`registry.read` client scope and a BReg audience mapper. Both therefore issue
+The stock issuer receives the exact resource, scopes, and authority from the retained development
+client registration. Keycloak uses an optional
+`registry:read` client scope and a BReg audience mapper. Both therefore issue
 the same BReg permission and resource contract through different provisioning
 mechanisms. No production authentication dependency on either issuer is added.
 

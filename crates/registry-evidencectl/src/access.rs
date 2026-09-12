@@ -144,7 +144,9 @@ pub(crate) struct ActiveClient {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ActiveClientRegistration {
     pub(crate) client_id: String,
-    pub(crate) registration: Value,
+    pub(crate) public_jwks: String,
+    pub(crate) requester_tags: Vec<String>,
+    pub(crate) evidence_audience: String,
 }
 
 pub fn run(command: AccessCommand) -> Result<ExitCode> {
@@ -218,7 +220,7 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
         validate_identifier(policy_id, "policy")?;
     }
     let _lifecycle = dev::lock_project_lifecycle(&project)?;
-    let live = prepare_live_context(&project)?;
+    require_stopped_or_absent_session(&project)?;
     let policies = load_policy_documents(&project)?;
     validate_client_policies(&policy_ids, &policies)?;
     let existing_clients = load_client_documents_if_present(&project)?;
@@ -278,22 +280,11 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
         return Err(error);
     }
 
-    let reload_requested =
-        if let Err(error) = synchronize_live_client(&project, &document, live.as_ref()) {
-            return Err(
-                error.context("client was saved, but the running local session was not reloaded")
-            );
-        } else {
-            live.is_some()
-        };
     println!(
         "Added client {} with {}.",
         document.client_id,
         joined_policies(&document.policies)
     );
-    if reload_requested {
-        println!("Registry Mint reload requested.");
-    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -326,7 +317,7 @@ fn revoke_client(args: &ClientRevokeArgs) -> Result<ExitCode> {
     let project = canonical_project(&args.project)?;
     validate_identifier(&args.client, "client")?;
     let _lifecycle = dev::lock_project_lifecycle(&project)?;
-    let live = prepare_live_context(&project)?;
+    require_stopped_or_absent_session(&project)?;
     let policies = load_policy_documents(&project)?;
     let path = client_document_path(&project, &args.client);
     let mut document = read_client_document(&path)?;
@@ -334,29 +325,9 @@ fn revoke_client(args: &ClientRevokeArgs) -> Result<ExitCode> {
     if document.status == ClientStatus::Revoked {
         bail!("client {} is already revoked", args.client);
     }
-    if let Some(context) = &live {
-        validate_path_mode(
-            &context
-                .generated_directory
-                .join(format!("{}.yaml", document.client_id)),
-            false,
-            PRIVATE_FILE_MODE,
-        )?;
-    }
     document.status = ClientStatus::Revoked;
     replace_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
-    let reload_requested =
-        if let Err(error) = synchronize_live_revocation(&project, &document, live.as_ref()) {
-            return Err(
-                error.context("client was revoked, but the running local session was not reloaded")
-            );
-        } else {
-            live.is_some()
-        };
     println!("Revoked client {}.", document.client_id);
-    if reload_requested {
-        println!("Registry Mint reload requested.");
-    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -382,7 +353,7 @@ pub(crate) fn resolve_ready_client(
     })
 }
 
-/// Load active editable clients as exact Mint registration documents.
+/// Load active editable clients as exact local issuer registrations.
 pub(crate) fn load_active_clients(
     project: &Path,
     policy_tags: &BTreeMap<String, String>,
@@ -420,94 +391,19 @@ pub(crate) fn load_active_clients(
             .collect::<Result<Vec<_>>>()?;
         registrations.push(ActiveClientRegistration {
             client_id: document.client_id.clone(),
-            registration: mint_registration(document, requester_tags),
+            public_jwks: serde_json::to_string(&json!({"keys": document.keys}))?,
+            requester_tags,
+            evidence_audience: document.evidence_audience.clone(),
         });
     }
     Ok(registrations)
 }
 
-fn mint_registration(document: &ClientDocument, requester_tags: Vec<String>) -> Value {
-    json!({
-        "clientId": document.client_id,
-        "principal": document.principal,
-        "evidenceAudience": document.evidence_audience,
-        "requesterTags": requester_tags,
-        "keys": document.keys,
-    })
-}
-
-#[derive(Clone, Debug)]
-struct LiveContext {
-    policy_tags: BTreeMap<String, String>,
-    generated_directory: PathBuf,
-}
-
-fn prepare_live_context(project: &Path) -> Result<Option<LiveContext>> {
-    let Some(ready) = dev::try_load_ready_state(project)? else {
-        return Ok(None);
-    };
-    if ready.access_policies.is_empty() {
-        bail!(
-            "the running local session uses the implicit tutorial caller; stop and restart it after defining access policies"
-        );
+fn require_stopped_or_absent_session(project: &Path) -> Result<()> {
+    if dev::try_load_ready_state(project)?.is_some() {
+        bail!("stop the local development session before changing clients; the next start reprovisions the complete issuer registration");
     }
-    let policy_tags = ready
-        .access_policies
-        .into_iter()
-        .map(|policy| (policy.id, policy.requester_tag))
-        .collect::<BTreeMap<_, _>>();
-    // Validate the complete editable registry and exact policy generation
-    // before a mutation publishes anything.
-    load_active_clients(project, &policy_tags)?;
-    let generated_directory = project.join(".evidence/dev/generated/clients");
-    validate_path_mode(&generated_directory, true, PRIVATE_DIRECTORY_MODE)?;
-    Ok(Some(LiveContext {
-        policy_tags,
-        generated_directory,
-    }))
-}
-
-fn synchronize_live_client(
-    project: &Path,
-    document: &ClientDocument,
-    live: Option<&LiveContext>,
-) -> Result<()> {
-    let Some(live) = live else {
-        return Ok(());
-    };
-    let registration = load_active_clients(project, &live.policy_tags)?
-        .into_iter()
-        .find(|registration| registration.client_id == document.client_id)
-        .ok_or_else(|| anyhow::anyhow!("new client is not active in the editable registry"))?;
-    let generated_path = live
-        .generated_directory
-        .join(format!("{}.yaml", document.client_id));
-    write_new_yaml_atomic(
-        &generated_path,
-        &registration.registration,
-        PRIVATE_FILE_MODE,
-    )?;
-    dev::request_mint_reload(project)
-}
-
-fn synchronize_live_revocation(
-    project: &Path,
-    document: &ClientDocument,
-    live: Option<&LiveContext>,
-) -> Result<()> {
-    let Some(live) = live else {
-        return Ok(());
-    };
-    // The remaining registry must still be a valid all-or-nothing snapshot.
-    load_active_clients(project, &live.policy_tags)?;
-    let generated_path = live
-        .generated_directory
-        .join(format!("{}.yaml", document.client_id));
-    validate_path_mode(&generated_path, false, PRIVATE_FILE_MODE)?;
-    fs::remove_file(&generated_path)
-        .with_context(|| format!("removing revoked registration {}", generated_path.display()))?;
-    sync_directory(&live.generated_directory)?;
-    dev::request_mint_reload(project)
+    Ok(())
 }
 
 fn validate_client_policies(

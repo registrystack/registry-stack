@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-08-19"
+last_reviewed: "2026-09-13"
 doc_type: tutorial
 persona:
   - assertion provider
@@ -615,7 +615,7 @@ accredited.
 
 ## Start the project
 
-Compile the two questions and start Evidence Gateway and Registry Mint:
+Compile the two questions and start Evidence Gateway with its stock identity provider:
 
 ```sh
 evidencectl dev start .
@@ -623,7 +623,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 Evidence Gateway now reads the live SMART server through the loopback adapter. It fixes one GET

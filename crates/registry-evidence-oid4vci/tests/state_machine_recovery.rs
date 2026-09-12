@@ -45,7 +45,7 @@ credentialIssuer: https://wallet.example.org
 listener: {address: 127.0.0.1, port: 8090}
 evidence:
   baseUrl: https://evidence.example.org
-mint:
+tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyFile: unused-delivery-client.jwk.json

@@ -240,6 +240,8 @@ while the public-binary adopter workflow proves signed activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
 for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.
+For bounded institutional-agent authority and current-status checks, see
+[task grants for governed writes](TASK_GRANTS.md).
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
 The additional `spatial-service-sites` project covers governed Point queries

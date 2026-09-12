@@ -252,6 +252,17 @@
     "RawAuthorityClaimsConfig": {
       "additionalProperties": false,
       "properties": {
+        "contextual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawContextualClaimNames"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "principal": {
           "maxLength": 128,
           "minLength": 1,
@@ -293,10 +304,65 @@
             "string",
             "null"
           ]
+        },
+        "trustedActors": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "type": "object"
         }
       },
       "required": [
         "principal"
+      ],
+      "type": "object"
+    },
+    "RawContextualClaimNames": {
+      "additionalProperties": false,
+      "properties": {
+        "actorKind": {
+          "type": "string"
+        },
+        "approver": {
+          "type": "string"
+        },
+        "grantAuthority": {
+          "type": "string"
+        },
+        "grantBounds": {
+          "type": "string"
+        },
+        "grantClient": {
+          "type": "string"
+        },
+        "grantExp": {
+          "type": "string"
+        },
+        "grantId": {
+          "type": "string"
+        },
+        "grantResource": {
+          "type": "string"
+        },
+        "grantSourceIssuer": {
+          "type": "string"
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actorKind",
+        "purpose",
+        "grantId",
+        "grantAuthority",
+        "grantSourceIssuer",
+        "grantClient",
+        "grantResource",
+        "grantExp",
+        "grantBounds",
+        "approver"
       ],
       "type": "object"
     },
@@ -975,6 +1041,48 @@
         "runtime"
       ],
       "type": "object"
+    },
+    "TaskGrantStatusConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "baseUrl": {
+          "type": "string"
+        },
+        "caBundleRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caseworkResource": {
+          "type": "string"
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "privateKeyRef": {
+          "type": "string"
+        },
+        "sourceIssuer": {
+          "type": "string"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority",
+        "sourceIssuer",
+        "baseUrl",
+        "tokenEndpoint",
+        "clientId",
+        "privateKeyRef",
+        "caseworkResource"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://id.registrystack.org/schemas/breg/runtime/runtime.v1alpha1.schema.json",
@@ -1074,6 +1182,13 @@
     },
     "secretProviders": {
       "$ref": "#/$defs/RawSecretProvidersConfig"
+    },
+    "taskGrantStatus": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/TaskGrantStatusConfig"
+      },
+      "type": "array"
     }
   },
   "required": [

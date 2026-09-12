@@ -5,6 +5,9 @@ use std::fmt;
 
 use crate::contract::Operation;
 use crate::model::HttpMethod;
+use crate::task_grant::TaskGrantBinding;
+use registry_platform_oidc::{ActorKind, GrantClaims};
+use serde_json::Value;
 
 const MAX_DIRECT_VALUE_BYTES: usize = 512;
 const MAX_STRING_SET_VALUES: usize = 64;
@@ -77,6 +80,11 @@ pub struct VerifiedRequestClaims {
     scopes: BTreeSet<String>,
     purpose: Option<String>,
     direct_claims: BTreeMap<String, VerifiedClaimValue>,
+    actor_kind: Option<ActorKind>,
+    requester_client: Option<String>,
+    actor_subject: Option<String>,
+    grant: Option<GrantClaims>,
+    grant_subjects: BTreeMap<String, Value>,
 }
 
 impl VerifiedRequestClaims {
@@ -99,7 +107,28 @@ impl VerifiedRequestClaims {
             scopes,
             purpose,
             direct_claims,
+            actor_kind: None,
+            requester_client: None,
+            actor_subject: None,
+            grant: None,
+            grant_subjects: BTreeMap::new(),
         })
+    }
+
+    pub(crate) fn with_contextual_authority(
+        mut self,
+        actor_kind: Option<ActorKind>,
+        requester_client: Option<String>,
+        actor_subject: Option<String>,
+        grant: Option<GrantClaims>,
+        grant_subjects: BTreeMap<String, Value>,
+    ) -> Result<Self, VerifiedContextError> {
+        self.actor_kind = actor_kind;
+        self.requester_client = requester_client.map(validate_value).transpose()?;
+        self.actor_subject = actor_subject.map(validate_value).transpose()?;
+        self.grant = grant;
+        self.grant_subjects = grant_subjects;
+        Ok(self)
     }
 
     #[must_use]
@@ -110,6 +139,11 @@ impl VerifiedRequestClaims {
             scopes: BTreeSet::new(),
             purpose: None,
             direct_claims: BTreeMap::new(),
+            actor_kind: None,
+            requester_client: None,
+            actor_subject: None,
+            grant: None,
+            grant_subjects: BTreeMap::new(),
         }
     }
 
@@ -132,6 +166,22 @@ impl VerifiedRequestClaims {
     pub(crate) fn direct_claim(&self, name: &str) -> Option<&VerifiedClaimValue> {
         self.direct_claims.get(name)
     }
+
+    pub(crate) fn actor_kind(&self) -> Option<ActorKind> {
+        self.actor_kind
+    }
+    pub(crate) fn requester_client(&self) -> Option<&str> {
+        self.requester_client.as_deref()
+    }
+    pub(crate) fn actor_subject(&self) -> Option<&str> {
+        self.actor_subject.as_deref()
+    }
+    pub(crate) fn grant(&self) -> Option<&GrantClaims> {
+        self.grant.as_ref()
+    }
+    pub(crate) fn grant_subjects(&self) -> &BTreeMap<String, Value> {
+        &self.grant_subjects
+    }
 }
 
 impl fmt::Debug for VerifiedRequestClaims {
@@ -143,6 +193,16 @@ impl fmt::Debug for VerifiedRequestClaims {
             .field("scope_count", &self.scopes.len())
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
             .field("direct_claims", &self.direct_claims.keys())
+            .field("actor_kind", &self.actor_kind)
+            .field(
+                "requester_client",
+                &self.requester_client.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "actor_subject",
+                &self.actor_subject.as_ref().map(|_| "<redacted>"),
+            )
+            .field("task_grant", &self.grant.as_ref().map(|_| "<redacted>"))
             .finish()
     }
 }
@@ -209,6 +269,7 @@ pub struct AuthorizedRequestContext {
     request_actions: Vec<VerifiedRequestAction>,
     request_presence: Vec<VerifiedRequestPresence>,
     submitter_targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
+    task_grant: Option<TaskGrantBinding>,
 }
 
 impl AuthorizedRequestContext {
@@ -226,6 +287,7 @@ impl AuthorizedRequestContext {
             request_actions: Vec::new(),
             request_presence: Vec::new(),
             submitter_targets: BTreeMap::new(),
+            task_grant: None,
         }
     }
 
@@ -235,6 +297,15 @@ impl AuthorizedRequestContext {
     ) -> Self {
         self.submitter_targets = targets;
         self
+    }
+
+    pub(crate) fn with_task_grant(mut self, grant: Option<TaskGrantBinding>) -> Self {
+        self.task_grant = grant;
+        self
+    }
+
+    pub fn task_grant(&self) -> Option<&TaskGrantBinding> {
+        self.task_grant.as_ref()
     }
 
     pub(crate) fn submitter_targets(&self) -> &BTreeMap<String, Vec<VerifiedRowBoundary>> {
@@ -292,6 +363,10 @@ impl fmt::Debug for AuthorizedRequestContext {
             .field("row_boundaries", &self.row_boundaries)
             .field("request_action_count", &self.request_actions.len())
             .field("request_presence_count", &self.request_presence.len())
+            .field(
+                "task_grant",
+                &self.task_grant.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }

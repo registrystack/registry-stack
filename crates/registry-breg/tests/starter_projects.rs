@@ -40,7 +40,7 @@ fn published_starters_compile_with_reviewed_update_policy() {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        editor["grants"][0]["operations"]
+        editor["permissions"][0]["operations"]
             .as_array_mut()
             .unwrap()
             .push("patch".into());

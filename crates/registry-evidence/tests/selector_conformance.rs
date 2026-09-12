@@ -303,16 +303,15 @@ async fn every_selector_profile_runs_the_complete_signed_service_path() {
         ),
         (
             "selector-positive-grant",
-            access_token(json!({
-                "evidence_grant_id": "synthetic-grant-001",
-                "evidence_authority": "authenticated-grant-v1",
-                "grant": {"subject": {
+            access_token(task_grant_claims(
+                "authenticated-grant-v1",
+                json!({
                     "given_name": "Adaeze",
                     "family_name": "Okafor",
                     "birth_date": "1990-07-11",
                     "event_reference": "synthetic-event-001"
-                }}
-            })),
+                }),
+            )),
             grant_request(None),
             vec!["subject"],
         ),
@@ -471,16 +470,15 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             "birth_date": "2000-02-29"
         }
     }));
-    let grant_token = access_token(json!({
-        "evidence_grant_id": "synthetic-grant-001",
-        "evidence_authority": "authenticated-grant-v1",
-        "grant": {"subject": {
+    let grant_token = access_token(task_grant_claims(
+        "authenticated-grant-v1",
+        json!({
             "given_name": "Adaeze",
             "family_name": "Okafor",
             "birth_date": "1990-07-11",
             "event_reference": "synthetic-event-001"
-        }}
-    }));
+        }),
+    ));
     let mut executed = BTreeSet::new();
 
     assert_authorization_error(
@@ -623,7 +621,8 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
     executed.insert("caller-added-disambiguator-rejected-from-demographics-v1");
 
     let grant_authority_without_id = access_token(json!({
-        "evidence_authority": "authenticated-grant-v1",
+        "registry_actor_kind": "agent",
+        "registry_grant_authority": "authenticated-grant-v1",
         "grant": {"subject": {
             "given_name": "Adaeze",
             "family_name": "Okafor",
@@ -635,20 +634,21 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         service
             .authorize(&grant_authority_without_id, &grant_request(None))
             .await,
-        Err(AuthorizationStageError::Authentication)
+        Err(AuthorizationStageError::Authorization(
+            AuthorizationError::Unauthorized
+        ))
     ));
     executed.insert("authenticated-grant-id-not-bound");
 
-    let wrong_grant_authority = access_token(json!({
-        "evidence_grant_id": "synthetic-grant-001",
-        "evidence_authority": "other-authority-v1",
-        "grant": {"subject": {
+    let wrong_grant_authority = access_token(task_grant_claims(
+        "other-authority-v1",
+        json!({
             "given_name": "Adaeze",
             "family_name": "Okafor",
             "birth_date": "1990-07-11",
             "event_reference": "synthetic-event-001"
-        }}
-    }));
+        }),
+    ));
     assert_authorization_error(
         &service,
         &wrong_grant_authority,
@@ -961,6 +961,83 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
     );
 }
 
+#[tokio::test]
+async fn task_grant_context_is_bound_before_selector_or_source_access() {
+    let service = prepare_service(false).await;
+    let request = grant_request(None);
+    assert_authorization_error(
+        &service,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
+    let subject = json!({
+        "given_name": "Adaeze",
+        "family_name": "Okafor",
+        "birth_date": "1990-07-11",
+        "event_reference": "synthetic-event-001"
+    });
+
+    for (name, member, value) in [
+        (
+            "source issuer",
+            "registry_grant_source_issuer",
+            json!("https://other.invalid"),
+        ),
+        ("client", "registry_grant_client", json!("other-client")),
+        (
+            "resource",
+            "registry_grant_resource",
+            json!("other-resource"),
+        ),
+        ("purpose", "registry_purpose", json!("other-purpose")),
+        (
+            "requirement",
+            "registry_grant_bounds",
+            json!({"type":"evidence", "requirement":"urn:example:other"}),
+        ),
+    ] {
+        let mut claims = task_grant_claims("authenticated-grant-v1", subject.clone());
+        claims[member] = value;
+        assert_authorization_error(
+            &service,
+            &access_token(claims),
+            &request,
+            AuthorizationError::Unauthorized,
+        )
+        .await;
+        assert!(!name.is_empty());
+    }
+
+    let mut wrong_actor = task_grant_claims("authenticated-grant-v1", subject.clone());
+    wrong_actor["registry_actor_kind"] = json!("service");
+    assert_authorization_error(
+        &service,
+        &access_token(wrong_actor),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
+
+    let mut expired = task_grant_claims("authenticated-grant-v1", subject);
+    expired["registry_grant_exp"] = json!(Utc::now().timestamp());
+    assert_authorization_error(
+        &service,
+        &access_token(expired),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
+
+    assert!(service
+        .server
+        .received_requests()
+        .await
+        .expect("source journal is readable")
+        .is_empty());
+}
+
 #[test]
 fn configuration_selector_negatives_are_rejected_at_immutable_bundle_load() {
     assert_invalid_bundle(|text| {
@@ -1084,7 +1161,8 @@ fn authenticator() -> Authenticator {
             vec![TOKEN_AUDIENCE.to_owned()],
             vec![Algorithm::EdDSA],
             vec!["at+jwt".to_owned()],
-        ),
+        )
+        .with_allowed_clients(vec!["evidence-task-agent".to_owned()]),
         fetcher,
     ));
     Authenticator::new(
@@ -1093,11 +1171,11 @@ fn authenticator() -> Authenticator {
             principal_claim: "sub".to_owned(),
             requester_tags_claim: "evidence_tags".to_owned(),
             evidence_audience_claim: "evidence_audience".to_owned(),
-            grant_id_claim: "evidence_grant_id".to_owned(),
-            grant_authority_claim: "evidence_authority".to_owned(),
+            contextual_claims: registry_platform_oidc::ClaimNames::default(),
             actor_claim: None,
         },
     )
+    .with_resources(vec![TOKEN_AUDIENCE.to_owned()])
 }
 
 fn access_token(extra: Value) -> String {
@@ -1108,6 +1186,8 @@ fn access_token(extra: Value) -> String {
         "sub": "selector-requester-principal-canary",
         "iat": now - 1,
         "exp": now + 3600,
+        "client_id": "evidence-task-agent",
+        "registry_actor_kind": "service",
         "evidence_tags": ["selector-reviewer"],
         "evidence_audience": EVIDENCE_AUDIENCE
     });
@@ -1118,6 +1198,25 @@ fn access_token(extra: Value) -> String {
             .extend(extra);
     }
     token_with_claims(claims)
+}
+
+fn task_grant_claims(authority: &str, subject: Value) -> Value {
+    let now = Utc::now().timestamp();
+    json!({
+        "registry_actor_kind": "agent",
+        "registry_grant_id": "synthetic-grant-001",
+        "registry_grant_authority": authority,
+        "registry_grant_source_issuer": "https://casework.invalid",
+        "registry_grant_client": "evidence-task-agent",
+        "registry_grant_resource": TOKEN_AUDIENCE,
+        "registry_purpose": "fixture-procedure",
+        "registry_grant_exp": now + 300,
+        "registry_grant_bounds": {
+            "type": "evidence",
+            "requirement": "urn:example:fixture:requirement:property-with-event:v1"
+        },
+        "grant": {"subject": subject}
+    })
 }
 
 fn token_with_claims(claims: Value) -> String {

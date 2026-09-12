@@ -131,9 +131,9 @@ pub struct CompiledChangeRequest {
     pub effects: Vec<CompiledChangeRequestEffect>,
     pub stages: Vec<CompiledChangeRequestStage>,
     pub actions: Vec<CompiledChangeRequestActionRoute>,
-    pub review_grants: Vec<CompiledChangeRequestReviewGrant>,
-    pub apply_grants: Vec<CompiledChangeRequestApplyGrant>,
-    pub presence_grants: Vec<CompiledChangeRequestPresenceGrant>,
+    pub review_permissions: Vec<CompiledChangeRequestReviewPermission>,
+    pub apply_permissions: Vec<CompiledChangeRequestApplyPermission>,
+    pub presence_permissions: Vec<CompiledChangeRequestPresencePermission>,
     pub target_entities: BTreeSet<String>,
     pub maximum_targets: u16,
     pub maximum_field_mutations: u16,
@@ -340,7 +340,7 @@ pub struct CompiledChangeRequestActionRoute {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestReviewGrant {
+pub struct CompiledChangeRequestReviewPermission {
     pub profile_id: String,
     pub stage: String,
     pub target_entity_id: String,
@@ -350,7 +350,7 @@ pub struct CompiledChangeRequestReviewGrant {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestApplyGrant {
+pub struct CompiledChangeRequestApplyPermission {
     pub profile_id: String,
     pub target_entity_id: String,
     pub row_boundaries: Vec<RowBoundarySource>,
@@ -358,7 +358,7 @@ pub struct CompiledChangeRequestApplyGrant {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledChangeRequestPresenceGrant {
+pub struct CompiledChangeRequestPresencePermission {
     pub profile_id: String,
     pub target_entity_id: String,
     pub request_row_boundaries: Vec<RowBoundarySource>,
@@ -397,7 +397,7 @@ pub struct CompiledAction {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<CompiledActionRequirement>,
     pub target_uses: Vec<CompiledActionTargetUse>,
-    pub grants: Vec<CompiledActionGrant>,
+    pub permissions: Vec<CompiledActionPermission>,
     pub result_effects: BTreeSet<String>,
     pub maximum_targets: u16,
     pub maximum_field_mutations: u16,
@@ -532,22 +532,26 @@ pub struct CompiledActionAccessEntry {
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionGrant {
+pub struct CompiledActionPermission {
     pub profile_id: String,
     pub default: bool,
     pub anonymous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_kind: Option<crate::contract::ActorKindSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub requester_clients: BTreeSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal_claim: Option<String>,
     pub required_scopes: BTreeSet<String>,
     pub required_purposes: BTreeSet<String>,
     pub operations: BTreeSet<Operation>,
-    pub targets: Vec<CompiledActionTargetGrant>,
+    pub targets: Vec<CompiledActionTargetPermission>,
     pub results: BTreeSet<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct CompiledActionTargetGrant {
+pub struct CompiledActionTargetPermission {
     pub entity_id: String,
     pub row_boundaries: Vec<RowBoundarySource>,
 }

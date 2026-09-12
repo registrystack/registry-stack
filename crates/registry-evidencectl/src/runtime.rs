@@ -52,9 +52,6 @@ pub(crate) struct DoctorArgs {
     /// runtime.yaml beside bundle/. New dependency checks use --runtime-config.
     #[arg(long, conflicts_with = "runtime_config")]
     project: Option<PathBuf>,
-    /// Compatibility Mint configuration for the former artifact inspection.
-    #[arg(long, value_name = "PATH", conflicts_with = "runtime_config")]
-    mint_config: Option<PathBuf>,
     /// Compatibility spelling for JSON artifact-inspection output.
     #[arg(long, conflicts_with_all = ["runtime_config", "output_format"])]
     json: bool,
@@ -86,7 +83,6 @@ pub(crate) fn run(args: DoctorArgs, format: OutputFormat) -> Result<ExitCode> {
         let project = args.project.unwrap_or_else(|| PathBuf::from("."));
         return crate::doctor::run(crate::doctor::DoctorArgs {
             project,
-            mint_config: args.mint_config,
             json: args.json || format == OutputFormat::Json,
         });
     }
