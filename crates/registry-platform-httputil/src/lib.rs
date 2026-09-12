@@ -11,11 +11,12 @@ pub mod client;
 pub mod destination;
 
 pub use client::{
-    BearerToken, OAuthErrorCode, PrivateKeyJwt, PrivateKeyJwtConfig, ServiceBaseUrl,
-    ServiceBaseUrlError, ServiceBaseUrlJoinError, StaticToken, TokenError, TokenProvider,
-    TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
-    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
-    MAXIMUM_TOKEN_RESPONSE_BYTES,
+    valid_resource_uri, valid_scope_token, BearerToken, OAuthErrorCode, PrivateKeyJwt,
+    PrivateKeyJwtConfig, ServiceBaseUrl, ServiceBaseUrlError, ServiceBaseUrlJoinError, StaticToken,
+    TokenError, TokenProvider, TransportKind, DEFAULT_ASSERTION_LIFETIME_SECONDS,
+    DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
+    MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
+    MAXIMUM_SCOPE_PARAMETER_BYTES, MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 
 /// Maximum number of response header field lines accepted by shared transports.

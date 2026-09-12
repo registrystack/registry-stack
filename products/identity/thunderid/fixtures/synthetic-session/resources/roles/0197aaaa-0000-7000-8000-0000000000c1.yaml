@@ -1,0 +1,12 @@
+assignments:
+- id: 0197aaaa-0000-7000-8000-0000000000a1
+  type: agent
+description: May invoke the synthetic resource
+id: 0197aaaa-0000-7000-8000-0000000000c1
+name: Synthetic Invoker
+ouHandle: default
+permissions:
+- permissions:
+  - evidence:invoke
+  resourceServerId: 0197aaaa-0000-7000-8000-0000000000b1
+resource_type: role

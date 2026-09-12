@@ -1,0 +1,10 @@
+{
+  "schema": "registry.thunderid-pin/v1",
+  "version": "1.0.1",
+  "image": "ghcr.io/thunder-id/thunderid:1.0.1@sha256:d3c0613ff447a551fd440768a15bdfb6668948e80809cbb50f82d6752f22ab3e",
+  "source": {
+    "commit": "12f517c4384004e360e26eb7eb1ab0501b678bb2",
+    "archiveUrl": "https://codeload.github.com/thunder-id/thunderid/tar.gz/12f517c4384004e360e26eb7eb1ab0501b678bb2",
+    "archiveSha256": "0a572a0c970f5b08bd7c59db94ea21f75ca675291b76df5034e6eaa2aba0aa7e"
+  }
+}

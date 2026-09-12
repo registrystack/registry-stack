@@ -16,9 +16,11 @@ pub use outbound::{
     transport_protects_the_credential, OutboundOptions,
 };
 pub use private_key_jwt::{
-    PrivateKeyJwt, PrivateKeyJwtConfig, DEFAULT_ASSERTION_LIFETIME_SECONDS,
-    DEFAULT_REFRESH_MARGIN_SECONDS, MAXIMUM_ASSERTION_LIFETIME_SECONDS,
-    MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS, MAXIMUM_TOKEN_RESPONSE_BYTES,
+    valid_resource_uri, valid_scope_token, PrivateKeyJwt, PrivateKeyJwtConfig,
+    DEFAULT_ASSERTION_LIFETIME_SECONDS, DEFAULT_REFRESH_MARGIN_SECONDS,
+    MAXIMUM_ASSERTION_LIFETIME_SECONDS, MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
+    MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES, MAXIMUM_SCOPE_PARAMETER_BYTES,
+    MAXIMUM_TOKEN_RESPONSE_BYTES,
 };
 pub use token::{BearerToken, OAuthErrorCode, StaticToken, TokenError, TokenProvider};
 
