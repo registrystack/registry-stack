@@ -3430,3 +3430,31 @@ fn legacy_issuer_state_and_unsafe_token_clients_are_refused_without_effects() {
             .contains("bounded local client"));
     }
 }
+
+#[test]
+fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
+    let args = [
+        "caseworkctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001",
+        "--connection",
+        "/tmp/task-connection.yaml",
+        "/tmp/project",
+    ];
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(args).is_ok());
+    assert!(<crate::Cli as clap::Parser>::try_parse_from([
+        "caseworkctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001"
+    ])
+    .is_err());
+    let mut arbitrary = args.to_vec();
+    arbitrary.extend(["--purpose", "invented"]);
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
+}

@@ -1692,3 +1692,31 @@ fn candidate_issuer_image_is_immutable_and_retained() {
         .issuer_image
         .is_none());
 }
+
+#[test]
+fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
+    let args = [
+        "bregctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001",
+        "--connection",
+        "/tmp/task-connection.yaml",
+        "/tmp/project",
+    ];
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(args).is_ok());
+    assert!(<crate::Cli as clap::Parser>::try_parse_from([
+        "bregctl",
+        "dev",
+        "grant",
+        "task-agent",
+        "--grant",
+        "01970000-0000-7000-8000-000000000001"
+    ])
+    .is_err());
+    let mut arbitrary = args.to_vec();
+    arbitrary.extend(["--purpose", "invented"]);
+    assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
+}

@@ -29,6 +29,8 @@ pub mod bootstrap;
 pub mod citizen;
 pub mod container;
 pub mod description;
+pub mod grant;
+pub mod grant_file;
 pub mod issuer;
 pub mod local;
 mod local_session;
@@ -58,6 +60,8 @@ pub enum ToolingError {
     CommandFailed { step: &'static str },
     #[error("the issuer did not become reachable: {step}")]
     Unreachable { step: &'static str },
+    #[error("the approved task grant could not be acquired: {reason}")]
+    GrantAcquisition { reason: &'static str },
     #[error("the functional token check failed: {reason}")]
     TokenCheck { reason: &'static str },
     #[error("an unexpected port occupant refused this session: {detail}")]

@@ -109,3 +109,52 @@ flag. Neither operation removes retained files.
 ### Citizen delegation
 
 Citizen authorization-code delegation uses the reviewed native patch and rebuilt Gate in [the native extension](../../products/identity/thunderid/extension/README.md). `citizen::render` appends the closed provider, human type, consent flow and agent registration before `local::start`; use the build metadata's immutable candidate image ID. Copy the exact destination resource from its client export. This path always requires fresh purpose/field consent and admits no institutional grant namespace.
+
+## Acquire an approved task
+
+`bregctl`, `caseworkctl`, and `evidencectl` expose the same bounded command:
+
+```sh
+bregctl dev grant task-agent --grant APPROVED-GRANT-UUID \
+  --connection /absolute/private/task-connection.yaml ./project
+```
+
+The grant must already have been approved through the configured Casework API
+or UI from a governed task template and current source-backed work item. This
+command neither approves a task nor accepts purpose, selectors, operations or
+other grant bounds. It does not start services or change runtime trust. Configure
+Casework and the consuming resource with the intended shared issuer first;
+independent default local-development issuer sessions do not automatically share
+trust.
+
+Keep the connection file and existing registered agent key owner-only (0600).
+Its closed v1 format is:
+
+```yaml
+version: 1
+caseworkUrl: https://casework.example
+# Stock ThunderID 1.0.1 expects its issuer URL as the client assertion audience.
+tokenEndpoint: https://issuer.example/oauth2/token
+clientAssertionAudience: https://issuer.example
+bootstrapResource: urn:casework:example
+clients:
+  task-agent:
+    assertionKeyFile: /absolute/private/task-agent.jwk
+    resource: urn:breg:example
+    scopes: [records:get]
+```
+
+The OAuth client must already be registered with that key and permitted to
+exchange assertions from the configured Casework authority. Before approval,
+its client-credentials permission is only `casework:grants:assert` at the
+bootstrap resource. The requested resource and scopes above are fixed ceilings;
+the real Casework assertion supplies immutable authority, subjects and task
+bounds, and the issuer enforces the scope subset.
+
+Each invocation acquires a fresh bootstrap token, requests a short-lived signed
+Casework assertion, and performs uncached RFC 8693 exchange. Only the final bearer
+is written to `.breg/grants/<client>-<grant>.header` (or `.casework/grants/` or
+`.evidence/grants/`). The response reports that path and the original grant
+expiry, never a token. A refusal leaves an existing header unchanged; the
+resource's current authority checks still govern any attempted use. Run the
+command again using the same connection after restarting configured services.

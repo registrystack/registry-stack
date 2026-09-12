@@ -22,6 +22,7 @@ getrandom.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
 reqwest.workspace = true
+rustix.workspace = true
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,6 +30,7 @@ serde_norway.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 url.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 p256.workspace = true
