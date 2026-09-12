@@ -303,7 +303,7 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     const recoveredExecuted = await restartedClient.executeRecoveredLifecycleActionJson(
       recoveredLifecycle,
     );
-    assert.equal(JSON.parse(recoveredExecuted.valueJson).id,lifecycleRecordId);
+    assert.deepEqual(JSON.parse(recoveredExecuted.valueJson),receipt);
     assert.equal(requests.at(-1).headers['idempotency-key'],'recover-apply');
     const executed = await client.executeLifecycleActionJson(actions[0],'exact-apply');
     assert.match(requests.at(-1).url.split('?')[0],/\/actions\/apply$/);
@@ -315,7 +315,8 @@ test('native JSON methods preserve values, metadata, cursors and mutation precon
     assert.equal(executedValue.id,lifecycleRecordId);
     assert.equal(executedValue.revision,receiptRevision);
     assert.equal(executedValue.actorReference,'opaque-applier');
-    assert.equal(executedValue.request.application.id,applicationId);
+    assert.deepEqual(executedValue,receipt);
+    assert.equal(executedValue.request.application.applicationId,applicationId);
     assert.equal(executedValue.request.application.proposalVersion,proposalVersion);
     assert.equal(executedValue.request.application.effectDigest,digest);
 
