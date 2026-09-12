@@ -59,6 +59,7 @@ zeroize.workspace = true
 
 [dev-dependencies]
 registry-breg = { workspace = true, features = ["postgres-test"] }
+registry-evidence.workspace = true
 registry-thunderid-tooling.workspace = true
 reqwest.workspace = true
 jsonschema.workspace = true

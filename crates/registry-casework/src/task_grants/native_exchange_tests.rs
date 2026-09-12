@@ -1,8 +1,8 @@
-//! Actual Casework approval -> native RFC 8693 exchange -> BREG PostgreSQL mutation.
+//! Actual Casework approval -> native RFC 8693 exchange -> Evidence and BREG resources.
 //! Credentials and protected response bodies stay in memory and never enter logs or argv.
 //! Set the two disposable database variables named by the ignore reason, then run
 //! `cargo test --locked -p registry-casework --features postgres-test --lib
-//! approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_writes -- --ignored`.
+//! approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes -- --ignored`.
 use super::*;
 use async_trait::async_trait;
 use axum::{
@@ -12,16 +12,32 @@ use axum::{
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use registry_casework_core::*;
+use registry_evidence::{runtime::EvidenceRuntime, server as evidence_server};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_thunderid_tooling::{container::Session, description::*, local, render};
-use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, path::Path, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
+use wiremock::{
+    matchers::{method, path},
+    Mock, MockServer, ResponseTemplate,
+};
 #[path = "native_resource.rs"]
 mod resource;
 const CASEWORK_RESOURCE: &str = "urn:casework:native-task";
 const BREG_RESOURCE: &str = "urn:breg:task-test";
+const EVIDENCE_RESOURCE: &str = "urn:registry:evidence:fixture";
+const EVIDENCE_REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
+const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
+const EVIDENCE_TAG: &str = "fixture-agency";
 const AUTHORITY: &str = "https://casework.example";
+const EVIDENCE_SIGNING_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
 fn binding() -> SourceBinding {
     SourceBinding {
@@ -80,10 +96,24 @@ impl SourceAdapter for Source {
         fields: &[String],
         _: Option<(&str, EphemeralCredential<'_>)>,
     ) -> Result<TaskSubjectContext, SourceAdapterError> {
-        assert_eq!(fields, &["tenant"]);
+        let values = match fields {
+            [field] if field == "tenant" => BTreeMap::from([("tenant".into(), json!("tenant-a"))]),
+            [birth_date, family_name, given_name]
+                if birth_date == "birth_date"
+                    && family_name == "family_name"
+                    && given_name == "given_name" =>
+            {
+                BTreeMap::from([
+                    ("birth_date".into(), json!("2000-01-01")),
+                    ("family_name".into(), json!("Diallo")),
+                    ("given_name".into(), json!("Amina")),
+                ])
+            }
+            _ => panic!("unexpected governed task fields: {fields:?}"),
+        };
         Ok(TaskSubjectContext {
             binding: binding(),
-            values: std::collections::BTreeMap::from([("tenant".into(), json!("tenant-a"))]),
+            values,
         })
     }
     async fn prepare_action(
@@ -149,11 +179,247 @@ impl Drop for Issuer {
         let _ = local::stop(&self.session(), Path::new("docker"));
     }
 }
+
+struct EvidenceDeployment {
+    base_url: String,
+    _runtime: Arc<EvidenceRuntime>,
+    server: tokio::task::JoinHandle<std::io::Result<()>>,
+    bundle_root: PathBuf,
+    runtime_path: PathBuf,
+    _source: MockServer,
+}
+
+impl Drop for EvidenceDeployment {
+    fn drop(&mut self) {
+        self.server.abort();
+        let _ = fs::set_permissions(&self.runtime_path, fs::Permissions::from_mode(0o644));
+        unseal(&self.bundle_root);
+    }
+}
+
+async fn start_evidence(root: &Path, issuer: &Issuer) -> EvidenceDeployment {
+    let source = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/facts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "total": 1,
+            "date_of_birth": "2000-01-01"
+        })))
+        .mount(&source)
+        .await;
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let evidence_root = root.join("evidence-deployment");
+    let bundle_root = evidence_root.join("bundle");
+    let secret_root = evidence_root.join("secrets");
+    let runtime_path = evidence_root.join("runtime.yaml");
+    let audit_path = evidence_root.join("audit.jsonl");
+    fs::create_dir_all(&bundle_root).unwrap();
+    fs::create_dir_all(&secret_root).unwrap();
+    fs::set_permissions(&secret_root, fs::Permissions::from_mode(0o700)).unwrap();
+    copy_tree(
+        &Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/evidence/fixtures/acceptance/adult-status"),
+        &bundle_root,
+    );
+    rewrite_evidence_fixture(
+        &bundle_root,
+        &source.uri(),
+        &issuer.url(),
+        &format!("{}/oauth2/jwks", issuer.url()),
+        &format!("http://127.0.0.1:{port}"),
+    );
+    write_secret(
+        &secret_root,
+        "audit-hash-key",
+        "casework-evidence-audit-secret-32-bytes",
+    );
+    write_secret(
+        &secret_root,
+        "subject-binding-key",
+        "casework-evidence-binding-secret-32-bytes",
+    );
+    write_secret(&secret_root, "signing-key", EVIDENCE_SIGNING_KEY);
+    write_secret(&secret_root, "source-a-token", "source-fixture-token");
+    fs::write(
+        &runtime_path,
+        format!(
+            r#"version: 1
+bundleDirectory: {bundle}
+listener:
+  bindHost: 127.0.0.1
+  port: {port}
+  tlsTermination: operator-controlled-upstream
+  trustProxyIdentityHeaders: false
+  maximumRequestBytes: 65536
+  maximumConcurrentRequests: 64
+  requestTimeoutMilliseconds: 10000
+  shutdownGraceMilliseconds: 30000
+secretProviders:
+  file:
+    root: {secrets}
+signer:
+  kind: local-jwk
+  privateKeyRef: secret:file/signing-key
+auditStorage:
+  path: {audit}
+  maximumFileBytes: 10485760
+outboundTls:
+  systemRoots: true
+  trustProfiles: {{}}
+"#,
+            bundle = bundle_root.display(),
+            secrets = secret_root.display(),
+            audit = audit_path.display(),
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&runtime_path, fs::Permissions::from_mode(0o444)).unwrap();
+    seal(&bundle_root);
+    let runtime = Arc::new(EvidenceRuntime::initialize(&runtime_path).await.unwrap());
+    let served = Arc::clone(&runtime);
+    let server =
+        tokio::spawn(
+            async move { evidence_server::serve(served, std::future::pending::<()>()).await },
+        );
+    let base_url = format!("http://127.0.0.1:{port}");
+    let probe = reqwest::Client::builder().no_proxy().build().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if probe
+                .get(format!("{base_url}/ready"))
+                .send()
+                .await
+                .is_ok_and(|response| response.status().is_success())
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    EvidenceDeployment {
+        base_url,
+        _runtime: runtime,
+        server,
+        bundle_root,
+        runtime_path,
+        _source: source,
+    }
+}
+
+fn rewrite_evidence_fixture(
+    bundle_root: &Path,
+    source_origin: &str,
+    issuer_origin: &str,
+    issuer_jwks_uri: &str,
+    public_origin: &str,
+) {
+    let path = bundle_root.join("evidence.yaml");
+    let mut document = fs::read_to_string(&path).unwrap();
+    for (from, to) in [
+        ("assuranceProfile: evidence-grade", "assuranceProfile: local"),
+        (
+            "baseUrl: https://source.invalid",
+            &format!("baseUrl: {source_origin}"),
+        ),
+        (
+            "publicOrigin: https://evidence.invalid",
+            &format!("publicOrigin: {public_origin}"),
+        ),
+        (
+            "issuer: https://identity.invalid",
+            &format!("issuer: {issuer_origin}"),
+        ),
+        (
+            "audiences: [evidence-fixture]",
+            &format!("audiences: [{EVIDENCE_RESOURCE}]"),
+        ),
+        (
+            "jwksUri: https://identity.invalid/.well-known/jwks.json",
+            &format!("jwksUri: {issuer_jwks_uri}"),
+        ),
+        ("algorithms: [ES256]", "algorithms: [RS256]"),
+        (
+            "  principalClaim: sub\n  requesterTagsClaim: evidence_tags",
+            "  principalClaim: sub\n  allowedClients: [evidence-task-agent]\n  requesterTagsClaim: evidence_tags",
+        ),
+        (
+            "  statutory-caseworker-v1:\n    kind: statutory",
+            "  casework:\n    requesterClients: [evidence-task-agent]\n    grantSourceIssuer: https://casework.example\n    kind: statutory",
+        ),
+        (
+            "        subjects: [{role: subject, selectorProfile: person-demographics-v1, valueOrigin: request}]",
+            "        subjects:\n          - role: subject\n            selectorProfile: person-demographics-v1\n            valueOrigin: authenticated-grant\n            valueClaims: {given_name: identity.given_name, family_name: identity.family_name, birth_date: identity.birth_date}",
+        ),
+    ] {
+        assert_eq!(document.matches(from).count(), 1, "fixture drift for {from}");
+        document = document.replace(from, to);
+    }
+    fs::write(&path, document).unwrap();
+    let config =
+        registry_evidence::config::EvidenceConfig::parse_yaml(&fs::read(&path).unwrap()).unwrap();
+    let discovery = registry_evidence::discovery::render(&config)
+        .unwrap()
+        .unwrap();
+    fs::write(bundle_root.join("catalog.jsonld"), discovery).unwrap();
+}
+
+fn write_secret(root: &Path, name: &str, value: &str) {
+    let path = root.join(name);
+    fs::write(&path, value).unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+fn copy_tree(source: &Path, target: &Path) {
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let destination = target.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            fs::create_dir(&destination).unwrap();
+            copy_tree(&entry.path(), &destination);
+        } else {
+            fs::copy(entry.path(), destination).unwrap();
+        }
+    }
+}
+
+fn seal(root: &Path) {
+    for entry in fs::read_dir(root).unwrap() {
+        let entry = entry.unwrap();
+        let child = entry.path();
+        if child.is_dir() {
+            seal(&child);
+        } else {
+            fs::set_permissions(child, fs::Permissions::from_mode(0o444)).unwrap();
+        }
+    }
+    fs::set_permissions(root, fs::Permissions::from_mode(0o555)).unwrap();
+}
+
+fn unseal(root: &Path) {
+    let _ = fs::set_permissions(root, fs::Permissions::from_mode(0o755));
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_dir() {
+            unseal(&child);
+        } else {
+            let _ = fs::set_permissions(child, fs::Permissions::from_mode(0o644));
+        }
+    }
+}
 fn start_issuer(
     root: &Path,
     casework_port: u16,
     human: &registry_platform_crypto::PrivateJwk,
     agent: &registry_platform_crypto::PrivateJwk,
+    evidence_agent: &registry_platform_crypto::PrivateJwk,
     status: &registry_platform_crypto::PrivateJwk,
     seed: &registry_platform_crypto::PrivateJwk,
 ) -> Issuer {
@@ -175,6 +441,12 @@ fn start_issuer(
             client(
                 "task-agent",
                 agent,
+                Some("agent"),
+                &["casework:grants:assert"],
+            ),
+            client(
+                "evidence-task-agent",
+                evidence_agent,
                 Some("agent"),
                 &["casework:grants:assert"],
             ),
@@ -212,15 +484,59 @@ fn start_issuer(
     description.schema_attributes.sort();
     description.schema_attributes.dedup();
     let authority_server = description.resource_servers[0].id.clone();
+    description.resource_servers.push(ResourceServer {
+        id: Uuid::new_v4().to_string(),
+        name: "Evidence task target".into(),
+        identifier: EVIDENCE_RESOURCE.into(),
+        description: "Evidence resource reached only after task exchange".into(),
+        resources: vec![Resource {
+            name: "Evidence".into(),
+            handle: "evidence".into(),
+            parent: None,
+            description: "Evidence invocation".into(),
+            actions: vec![Action {
+                name: "Invoke".into(),
+                handle: "invoke".into(),
+                description: "Invoke one Evidence requirement".into(),
+            }],
+        }],
+    });
     description
         .machine_clients
         .iter_mut()
         .find(|c| c.client_id == "task-agent")
         .unwrap()
         .token_exchange = Some(TokenExchangeClient {
+        assertion_resource_server_id: authority_server.clone(),
+        assertion_scope: "casework:grants:assert".into(),
+    });
+    let evidence_client = description
+        .machine_clients
+        .iter_mut()
+        .find(|client| client.client_id == "evidence-task-agent")
+        .unwrap();
+    evidence_client.token_exchange = Some(TokenExchangeClient {
         assertion_resource_server_id: authority_server,
         assertion_scope: "casework:grants:assert".into(),
     });
+    // These static sentinels make the test prove that the exchange copied the
+    // authority-signed values. A token built from registered client attributes
+    // would fail the Evidence profile below.
+    evidence_client.attributes.extend([
+        ("evidence_tags".into(), json!(["must-not-survive"])),
+        (
+            "evidence_audience".into(),
+            json!("https://must-not-survive.invalid"),
+        ),
+    ]);
+    evidence_client
+        .token_attributes
+        .extend(["evidence_tags".into(), "evidence_audience".into()]);
+    description
+        .schema_attributes
+        .extend(["evidence_tags".into(), "evidence_audience".into()]);
+    description.schema_attributes.sort();
+    description.schema_attributes.dedup();
     description.exchange_issuers.push(ExchangeIssuer {
         id: Uuid::new_v4().to_string(),
         name: "Casework task authority".into(),
@@ -331,10 +647,19 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
         .unwrap()
         .agent_id
         .clone();
+    let evidence_agent = issuer
+        .description
+        .machine_clients
+        .iter()
+        .find(|c| c.client_id == "evidence-task-agent")
+        .unwrap()
+        .agent_id
+        .clone();
     let breg: Value = serde_json::from_str(resource::PROJECT).unwrap();
     let operations = breg["accessProfiles"][1]["permissions"][0]["operations"].clone();
     let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
+    let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template]})).unwrap();
     store
         .activate_task_templates(&project.task_templates)
         .await
@@ -377,6 +702,7 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     .with_allowed_clients(vec![
         "human-client".into(),
         "task-agent".into(),
+        "evidence-task-agent".into(),
         "breg-status".into(),
     ]);
     let auth = crate::CaseworkAuthenticator::new(
@@ -436,23 +762,29 @@ async fn request(
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires Docker plus disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL"]
-async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_writes() {
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes() {
     let root = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let casework_port = listener.local_addr().unwrap().port();
-    let (human_key, agent_key, status_key, seed_key) =
-        (key("human"), key("agent"), key("status"), key("seed"));
-    let (h, a, s, d) = (
+    let (human_key, agent_key, evidence_agent_key, status_key, seed_key) = (
+        key("human"),
+        key("agent"),
+        key("evidence-agent"),
+        key("status"),
+        key("seed"),
+    );
+    let (h, a, e, s, d) = (
         human_key.clone(),
         agent_key.clone(),
+        evidence_agent_key.clone(),
         status_key.clone(),
         seed_key.clone(),
     );
     let path = root.path().to_path_buf();
     let issuer =
-        tokio::task::spawn_blocking(move || start_issuer(&path, casework_port, &h, &a, &s, &d))
+        tokio::task::spawn_blocking(move || start_issuer(&path, casework_port, &h, &a, &e, &s, &d))
             .await
             .unwrap();
     let f = fixture(&issuer, key("casework-task-authority")).await;
@@ -487,6 +819,16 @@ async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_wr
     assert_eq!(
         preview["templates"][0]["subjects"]["tenant_claim"],
         "tenant-a"
+    );
+    let evidence_preview = preview["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|template| template["id"] == "evidence-check")
+        .unwrap();
+    assert_eq!(
+        evidence_preview["evidenceContext"],
+        json!({"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE})
     );
     let (code, grant) = request(
         &f.app,
@@ -620,6 +962,110 @@ async fn approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_wr
             "re-exchange must preserve {name}"
         );
     }
+    let (code, evidence_grant) = request(
+        &f.app,
+        "POST",
+        &base,
+        &human,
+        true,
+        Some(json!({"templateId":"evidence-check","templateVersion":"1"})),
+        Some("native-evidence-approval"),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(
+        evidence_grant["evidenceContext"],
+        json!({"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE})
+    );
+    let evidence_grant_id = evidence_grant["id"].as_str().unwrap();
+    let evidence_bootstrap = bearer(
+        &provider(
+            &issuer.url(),
+            "evidence-task-agent",
+            &evidence_agent_key,
+            CASEWORK_RESOURCE,
+            "casework:grants:assert",
+        )
+        .bearer_token()
+        .await
+        .unwrap(),
+    );
+    let (code, evidence_assertion) = request(
+        &f.app,
+        "POST",
+        &format!("/v1/task-grants/{evidence_grant_id}/assertion"),
+        &evidence_bootstrap,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let evidence_exchange = provider(
+        &issuer.url(),
+        "evidence-task-agent",
+        &evidence_agent_key,
+        EVIDENCE_RESOURCE,
+        "evidence:invoke",
+    );
+    let evidence_token = bearer(
+        &evidence_exchange
+            .exchange(evidence_assertion["assertion"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let evidence_claims = payload(&evidence_token);
+    assert_eq!(evidence_claims["registry_grant_id"], evidence_grant_id);
+    assert_eq!(
+        evidence_claims["registry_grant_bounds"],
+        json!({"type":"evidence","requirement":EVIDENCE_REQUIREMENT})
+    );
+    assert_eq!(evidence_claims["evidence_tags"], json!([EVIDENCE_TAG]));
+    assert_eq!(evidence_claims["evidence_audience"], EVIDENCE_AUDIENCE);
+    assert_eq!(
+        evidence_claims["identity"],
+        json!({"birth_date":"2000-01-01","family_name":"Diallo","given_name":"Amina"})
+    );
+    let evidence = start_evidence(root.path(), &issuer).await;
+    let evidence_response = reqwest::Client::builder()
+        .no_proxy()
+        .build()
+        .unwrap()
+        .post(format!("{}/v1/evidence", evidence.base_url))
+        .header("authorization", format!("Bearer {evidence_token}"))
+        .header("accept", "application/jose+json")
+        .json(&json!({
+            "requestNonce":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "requirement":EVIDENCE_REQUIREMENT,
+            "purpose":"fixture-eligibility",
+            "subjects":[{
+                "role":"subject",
+                "selector":{"profile":"person-demographics-v1"}
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    let evidence_status = evidence_response.status();
+    let evidence_content_type = evidence_response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .cloned();
+    let evidence_body = evidence_response.bytes().await.unwrap();
+    assert_eq!(
+        evidence_status,
+        reqwest::StatusCode::OK,
+        "Evidence refusal: {}",
+        String::from_utf8_lossy(&evidence_body)
+    );
+    assert_eq!(
+        evidence_content_type.as_ref().unwrap(),
+        "application/jose+json"
+    );
+    let signed_evidence: Value = serde_json::from_slice(&evidence_body).unwrap();
+    assert!(signed_evidence["protected"].is_string());
+    assert!(signed_evidence["payload"].is_string());
+    assert!(signed_evidence["signature"].is_string());
     let db = resource::TestDatabase::create(8).await;
     let registry = Arc::new(
         registry_breg::compile_project(
