@@ -2195,14 +2195,44 @@ fn tokens(state: &State, clients: &Clients) -> Result<()> {
 /// assertion key never leaves the session's private credentials tree, and the
 /// credential is stored owner-only for the seeding and rehearsal steps.
 fn token(state: &State, id: &str) -> Result<()> {
+    let client: Clients = serde_json::from_slice(&private::read(
+        &state.root().join("clients.json"),
+        MAX_BYTES,
+    )?)?;
+    let scopes = client
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .with_context(|| format!("the retained client {id} is not registered"))?
+        .scopes
+        .clone();
+    token_with_scopes(state, id, scopes)
+}
+
+fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .context("cannot build the dev token runtime")?;
-    runtime.block_on(token_async(state, id))
+    runtime.block_on(token_async_with_scopes(state, id, scopes))
 }
 
 async fn token_async(state: &State, id: &str) -> Result<()> {
+    let client: Clients = serde_json::from_slice(&private::read(
+        &state.root().join("clients.json"),
+        MAX_BYTES,
+    )?)?;
+    let scopes = client
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .with_context(|| format!("the retained client {id} is not registered"))?
+        .scopes
+        .clone();
+    token_async_with_scopes(state, id, scopes).await
+}
+
+async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()> {
     use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
 
     let root = state.root();
@@ -2218,15 +2248,6 @@ async fn token_async(state: &State, id: &str) -> Result<()> {
         String::from_utf8(key_bytes.to_vec()).context("the retained client key is unreadable")?;
     let key = registry_platform_crypto::PrivateJwk::parse(&key_text)
         .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
-    let client: Clients =
-        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
-    let scopes = client
-        .clients
-        .iter()
-        .find(|client| client.id == id)
-        .with_context(|| format!("the retained client {id} is not registered"))?
-        .scopes
-        .clone();
     let provider = PrivateKeyJwt::new(
         PrivateKeyJwtConfig::new(endpoint, id.to_owned(), key)
             // ThunderID v1.0.1 checks the assertion audience against the
@@ -2332,6 +2353,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         MAX_BYTES,
     )?)?;
     let mut bindings = Vec::new();
+    let mut rehearsal_scopes = BTreeMap::<String, Vec<String>>::new();
     for journey in journeys["journeys"]
         .as_array()
         .context("journeys must contain an array")?
@@ -2347,6 +2369,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             let step_id = step["id"].as_str().context("journey step requires an id")?;
             let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
             let credential = if let Some(client) = explicit {
+                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
                 json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
             } else if step["claims"]
                 .as_object()
@@ -2355,10 +2378,14 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
                 json!({"type":"anonymous"})
             } else {
                 let client = journey_client(clients, journey_id, step_id, profile)?;
+                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
                 json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
             };
             bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
         }
+    }
+    for (client, scopes) in rehearsal_scopes {
+        token_with_scopes(state, &client, scopes)?;
     }
     let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});
     private::replace(
@@ -2406,6 +2433,37 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     config::runtime(&root, state, clients, revision, false)?;
     state.package_revision = Some(revision.into());
     state.save()
+}
+
+fn remember_rehearsal_scopes(
+    remembered: &mut BTreeMap<String, Vec<String>>,
+    client: &config::Client,
+    step: &Value,
+) -> Result<()> {
+    let scopes = step["claims"]["scopes"]
+        .as_array()
+        .context("an authenticated journey step must declare scopes")?
+        .iter()
+        .map(|scope| {
+            scope
+                .as_str()
+                .map(str::to_owned)
+                .context("journey scopes must be strings")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if scopes.iter().any(|scope| !client.scopes.contains(scope)) {
+        bail!("journey scopes exceed the bound local client's registered scopes");
+    }
+    match remembered.get(&client.id) {
+        Some(existing) if existing != &scopes => {
+            bail!("one local client cannot bind journey steps with different scope sets")
+        }
+        None => {
+            remembered.insert(client.id.clone(), scopes);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Clear only this journal's rebuild outputs, preserving predecessor packages.

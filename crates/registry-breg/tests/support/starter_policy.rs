@@ -264,6 +264,19 @@ fn starter_runtime_config(
     config["identity"]["instanceId"] = json!(manifest.instance_id);
     config["identity"]["databaseId"] = json!(manifest.database_id);
     config["package"]["compilerSourceRevision"] = json!(manifest.compiler.source_revision);
+    config["authentication"]["oidc"]["allowedClients"] = json!(["staff", "supervisor"]);
+    config["authentication"]["authorityClaims"]["contextual"] = json!({
+        "actorKind": "registry_actor_kind",
+        "purpose": "registry_purpose",
+        "grantId": "registry_grant_id",
+        "grantAuthority": "registry_grant_authority",
+        "grantSourceIssuer": "registry_grant_source_issuer",
+        "grantClient": "registry_grant_client",
+        "grantResource": "registry_grant_resource",
+        "grantExp": "registry_grant_exp",
+        "grantBounds": "registry_grant_bounds",
+        "approver": "registry_approver"
+    });
     write_private(&path, serde_norway::to_string(&config).unwrap().as_bytes());
     path
 }
@@ -285,12 +298,17 @@ fn authored_credentials(
                 .map(|value| value.as_str().unwrap())
                 .collect::<Vec<_>>()
                 .join(" ");
-            let token = idp.mint_token(json!({
+            let mut token_claims = json!({
                 "aud": AUDIENCE,
+                "client_id": claims["requesterClient"].as_str().unwrap_or("staff"),
                 "registry_principal": claims["principal"],
                 "registry_purpose": claims["purpose"],
                 "scope": scopes,
-            }));
+            });
+            if !claims["actorKind"].is_null() {
+                token_claims["registry_actor_kind"] = claims["actorKind"].clone();
+            }
+            let token = idp.mint_token(token_claims);
             bindings.push(SchemaTestCredentialBinding::bearer(
                 journey["id"].as_str().unwrap(),
                 step["id"].as_str().unwrap(),
@@ -322,7 +340,12 @@ impl StarterHttp<'_> {
         body: Option<Value>,
         extra_headers: &[(&str, &str)],
     ) -> (StatusCode, Value, HeaderMap) {
-        let token = self.idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": actor.principal, "registry_purpose": "starter-learning", "scope": actor.scope}));
+        let mut token_claims = json!({"aud": AUDIENCE, "client_id": "staff", "registry_principal": actor.principal, "registry_purpose": "starter-learning", "scope": actor.scope});
+        if profile == "reviewer" {
+            token_claims["client_id"] = json!("supervisor");
+            token_claims["registry_actor_kind"] = json!("human");
+        }
+        let token = self.idp.mint_token(token_claims);
         let separator = if path.contains('?') { '&' } else { '?' };
         let mut request = Request::builder()
             .method(method)

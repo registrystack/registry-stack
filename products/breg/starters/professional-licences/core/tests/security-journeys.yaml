@@ -209,7 +209,7 @@
           "entity": "scope-correction",
           "accessProfile": "reviewer",
           "claims": {
-            "principal": "professional-review-supervisor",
+            "principal": "synthetic-editor",
             "scopes": [
               "starter:reviewer"
             ],

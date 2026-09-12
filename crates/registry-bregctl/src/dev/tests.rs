@@ -521,6 +521,29 @@ clients:
 }
 
 #[test]
+fn rehearsal_tokens_request_only_the_exact_fixture_scope_subset() {
+    let client = config::Client {
+        id: "supervisor".into(),
+        access_profiles: vec!["reviewer".into()],
+        allow_breg_access: true,
+        allow_human_fixture: true,
+        scopes: vec!["casework:supervisor".into(), "starter:reviewer".into()],
+        claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
+        client_id_file: None,
+        assertion_key_file: None,
+    };
+    let step = json!({"claims":{"scopes":["starter:reviewer"]}});
+    let mut remembered = BTreeMap::new();
+
+    remember_rehearsal_scopes(&mut remembered, &client, &step).unwrap();
+
+    assert_eq!(remembered["supervisor"], ["starter:reviewer"]);
+    let widened = json!({"claims":{"scopes":["unregistered"]}});
+    assert!(remember_rehearsal_scopes(&mut remembered, &client, &widened).is_err());
+}
+
+#[test]
 fn credential_publication_recovers_one_owned_half_and_refuses_conflicting_bytes() {
     let (_temp, state, mut clients, files) = fixture();
     let out = state.project.join("out");
