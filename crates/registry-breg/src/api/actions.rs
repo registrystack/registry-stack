@@ -151,9 +151,16 @@ fn authorize_action<'a>(
         let actual = claims.actor_kind()?;
         if !matches!(
             (expected, actual),
-            (crate::contract::ActorKindSource::Human, registry_platform_oidc::ActorKind::Human)
-                | (crate::contract::ActorKindSource::Agent, registry_platform_oidc::ActorKind::Agent)
-                | (crate::contract::ActorKindSource::Service, registry_platform_oidc::ActorKind::Service)
+            (
+                crate::contract::ActorKindSource::Human,
+                registry_platform_oidc::ActorKind::Human
+            ) | (
+                crate::contract::ActorKindSource::Agent,
+                registry_platform_oidc::ActorKind::Agent
+            ) | (
+                crate::contract::ActorKindSource::Service,
+                registry_platform_oidc::ActorKind::Service
+            )
         ) {
             return None;
         }
