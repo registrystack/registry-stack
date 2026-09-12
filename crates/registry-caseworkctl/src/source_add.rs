@@ -52,7 +52,15 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     }
     let mut authored: Value = serde_norway::from_slice(&bytes)
         .context("parsing BReg registry.yaml without duplicate or custom YAML values")?;
-    let changes = apply_breg_candidate(&mut authored, &request_entity, &projection)?;
+    let mut changes = apply_breg_candidate(&mut authored, &request_entity, &projection)?;
+    let reviewer_clients = local_reviewer_clients(&project)?;
+    if let Value::Array(existing) = &mut changes {
+        existing.extend(bind_local_reviewers(
+            &mut authored,
+            request.0,
+            &reviewer_clients,
+        )?);
+    }
     let proposed =
         render_candidate_preserving_authored_text(&bytes, &request_entity, &authored, &projection)?;
     let candidate_explanation = verify_candidate(&args.bregctl_bin, &registry, &proposed)?;
@@ -498,6 +506,86 @@ fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value)
     )
 }
 
+fn local_reviewer_clients(project: &Path) -> Result<Vec<String>> {
+    let bytes = match fs::read(project.join("dev-clients.yaml")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).context("reading Casework dev clients"),
+    };
+    let clients: Value =
+        serde_norway::from_slice(&bytes).context("parsing Casework dev clients")?;
+    let policy = load_casework_policy(project)?;
+    let profiles = policy["accessProfiles"]
+        .as_array()
+        .context("casework.yaml has no accessProfiles")?;
+    let mut result = Vec::new();
+    for client in clients["clients"]
+        .as_array()
+        .context("dev-clients.yaml has no clients")?
+    {
+        let profile_id = client["accessProfile"]
+            .as_str()
+            .context("a Casework dev client has no accessProfile")?;
+        let profile = profiles
+            .iter()
+            .find(|profile| profile["id"] == profile_id)
+            .context("a Casework dev client names an unknown access profile")?;
+        if matches!(profile["role"].as_str(), Some("staff" | "supervisor")) {
+            result.push(
+                client["id"]
+                    .as_str()
+                    .context("a Casework dev client has no id")?
+                    .to_owned(),
+            );
+        }
+    }
+    result.sort();
+    result.dedup();
+    Ok(result)
+}
+
+fn bind_local_reviewers(
+    authored: &mut Value,
+    request: &Value,
+    clients: &[String],
+) -> Result<Vec<Value>> {
+    if clients.is_empty() {
+        return Ok(Vec::new());
+    }
+    let profile_ids = request["reviewPermissions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(request["applyPermissions"].as_array().into_iter().flatten())
+        .filter_map(|permission| permission["profile"].as_str())
+        .collect::<BTreeSet<_>>();
+    let profiles = authored["accessProfiles"]
+        .as_array_mut()
+        .context("BReg registry.yaml has no accessProfiles")?;
+    let expected_clients = serde_json::to_value(clients)?;
+    let mut changes = Vec::new();
+    for id in profile_ids {
+        let profile = profiles
+            .iter_mut()
+            .find(|profile| profile["id"] == id)
+            .with_context(|| format!("BReg reviewer profile {id} is absent"))?;
+        let actor = profile.get("actorKind");
+        let requesters = profile.get("requesterClients");
+        match (actor, requesters) {
+            (None, None) | (Some(Value::Null), Some(Value::Null)) => {
+                profile["actorKind"] = json!("human");
+                profile["requesterClients"] = expected_clients.clone();
+                changes.push(json!({"file":"registry.yaml","path":format!("/accessProfiles/{id}/actorKind"),"operation":"ensure_exact"}));
+                changes.push(json!({"file":"registry.yaml","path":format!("/accessProfiles/{id}/requesterClients"),"operation":"ensure_exact"}));
+            }
+            (Some(actor), Some(requesters))
+                if actor == "human" && requesters == &expected_clients => {}
+            _ => bail!("BReg reviewer profile {id} has an incompatible actor/client binding"),
+        }
+    }
+    Ok(changes)
+}
+
 fn render_candidate_preserving_authored_text(
     original: &[u8],
     entity_id: &str,
@@ -535,12 +623,58 @@ fn render_candidate_preserving_authored_text(
     if !has_profile {
         rendered = insert_access_profile(&rendered, entity_id, projection)?;
     }
+    for profile in expected["accessProfiles"].as_array().into_iter().flatten() {
+        if profile["actorKind"] == "human" {
+            let id = profile["id"]
+                .as_str()
+                .context("bound BReg profile has no id")?;
+            let requester_clients = profile["requesterClients"]
+                .as_array()
+                .context("bound BReg profile has no requesterClients")?
+                .iter()
+                .map(|client| {
+                    client
+                        .as_str()
+                        .map(str::to_owned)
+                        .context("bound BReg requester client is not a string")
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let current: Value = serde_norway::from_str(&rendered)?;
+            let current_profile = current["accessProfiles"]
+                .as_array()
+                .and_then(|profiles| profiles.iter().find(|profile| profile["id"] == id));
+            if current_profile.is_some_and(|profile| profile.get("actorKind").is_none()) {
+                rendered = insert_profile_actor_binding(&rendered, id, &requester_clients)?;
+            }
+        }
+    }
     let round_trip: Value =
         serde_norway::from_str(&rendered).context("parsing narrow BReg YAML patch")?;
     if &round_trip != expected {
         bail!("narrow BReg YAML patch changed unexpected authored content; no files were written");
     }
     Ok(rendered)
+}
+
+fn insert_profile_actor_binding(
+    text: &str,
+    profile_id: &str,
+    clients: &[String],
+) -> Result<String> {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let access_profiles = lines
+        .iter()
+        .position(|line| {
+            leading_spaces(line) == 0 && line.trim_start().starts_with("accessProfiles:")
+        })
+        .context("narrow YAML patch could not locate accessProfiles")?;
+    let marker = format!("- id: {profile_id}");
+    let profile = (access_profiles + 1..lines.len())
+        .find(|index| leading_spaces(lines[*index]) == 2 && lines[*index].trim() == marker)
+        .with_context(|| format!("narrow YAML patch could not locate BReg profile {profile_id}"))?;
+    let clients = clients.join(", ");
+    let block = format!("    actorKind: human\n    requesterClients: [{clients}]\n");
+    Ok(insert_at_line(&lines, profile + 1, &block))
 }
 
 fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
@@ -1463,6 +1597,45 @@ mod tests {
             "applyPermissions": [{"profile": "reviewer"}]
         });
         (authored, request)
+    }
+
+    #[test]
+    fn local_reviewers_bind_the_selected_profiles_to_exact_human_clients() {
+        let (mut authored, request) = reviewer_fixture();
+        let clients = vec!["staff".to_owned(), "supervisor".to_owned()];
+        let changes = bind_local_reviewers(&mut authored, &request, &clients).unwrap();
+        let reviewer = &authored["accessProfiles"][0];
+        assert_eq!(reviewer["actorKind"], "human");
+        assert_eq!(reviewer["requesterClients"], json!(clients));
+        assert_eq!(changes.len(), 2);
+        assert!(bind_local_reviewers(&mut authored, &request, &clients)
+            .unwrap()
+            .is_empty());
+
+        authored["accessProfiles"][0]["requesterClients"] = json!(["another-client"]);
+        assert!(bind_local_reviewers(&mut authored, &request, &clients).is_err());
+    }
+
+    #[test]
+    fn narrow_yaml_patch_preserves_comments_while_binding_reviewers() {
+        let input = "# registry\naccessProfiles:\n  - id: reviewer\n    # retained reviewer scope\n    principalClaim: registry_principal\n    requiredScopes: [starter:reviewer]\n    requiredPurposes: [starter-learning]\nentities:\n  - id: request\n    route: requests\n";
+        let mut expected: Value = serde_norway::from_str(input).unwrap();
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
+        bind_local_reviewers(
+            &mut expected,
+            &request,
+            &["staff".into(), "supervisor".into()],
+        )
+        .unwrap();
+        apply_breg_candidate(&mut expected, "request", &[]).unwrap();
+        let rendered =
+            render_candidate_preserving_authored_text(input.as_bytes(), "request", &expected, &[])
+                .unwrap();
+        assert!(rendered.contains("# retained reviewer scope"));
+        assert_eq!(
+            serde_norway::from_str::<Value>(&rendered).unwrap(),
+            expected
+        );
     }
 
     #[test]

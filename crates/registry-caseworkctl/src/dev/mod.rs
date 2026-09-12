@@ -101,7 +101,7 @@ enum DevAction {
     ///
     /// A resident supervisor owns this project's PostgreSQL container and
     /// Casework child. Standalone sessions also own a pinned issuer container;
-    /// --source-project sessions use the running BReg session's stock issuer. The database runs the pinned
+    /// --source-project sessions use the running Base Registry Engine (BReg) session's stock issuer. The database runs the pinned
     /// image
     /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
     /// which the supervisor pulls on the first start. Each supervised
@@ -172,7 +172,7 @@ struct StartArgs {
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
-    /// Running BReg dev project serving a declared source. This compatibility
+    /// Running Base Registry Engine (BReg) dev project serving a declared source. This compatibility
     /// bridge is available only without explicit integrations or task templates.
     #[arg(long, value_name = "[ID=]PATH")]
     source_project: Vec<String>,
