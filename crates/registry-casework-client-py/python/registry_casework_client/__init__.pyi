@@ -1,4 +1,4 @@
-from typing import Generic, Literal, NotRequired, TypeAlias, TypedDict, TypeVar
+from typing import Generic, Literal, TypeAlias, TypedDict, TypeVar
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -38,7 +38,9 @@ class EvidenceRequesterContext(TypedDict):
 class TaskApprovalRequest(TypedDict):
     templateId: str
     templateVersion: str
-class TaskTemplatePreview(TypedDict):
+class _OptionalEvidenceContext(TypedDict, total=False):
+    evidenceContext: EvidenceRequesterContext
+class TaskTemplatePreview(_OptionalEvidenceContext):
     id: str
     version: str
     label: str
@@ -46,7 +48,6 @@ class TaskTemplatePreview(TypedDict):
     client: str
     resource: str
     scopes: list[str]
-    evidenceContext: NotRequired[EvidenceRequesterContext]
     purpose: str
     bounds: TaskGrantBounds
     subjects: dict[str, str | int | bool]
@@ -54,7 +55,7 @@ class TaskTemplatePreview(TypedDict):
 class TaskTemplatePreviews(TypedDict):
     itemRevision: int
     templates: list[TaskTemplatePreview]
-class TaskGrantView(TypedDict):
+class TaskGrantView(_OptionalEvidenceContext):
     id: str
     templateId: str
     templateVersion: str
@@ -62,7 +63,6 @@ class TaskGrantView(TypedDict):
     client: str
     resource: str
     scopes: list[str]
-    evidenceContext: NotRequired[EvidenceRequesterContext]
     purpose: str
     bounds: TaskGrantBounds
     expiresAt: int
