@@ -1509,7 +1509,6 @@ authentication.allowedClients
 authentication.allowedClients[]
 authentication.audiences
 authentication.audiences[]
-authentication.evidenceAudienceClaim
 authentication.claims
 authentication.claims.actorKind
 authentication.claims.approver
@@ -1521,6 +1520,7 @@ authentication.claims.grantId
 authentication.claims.grantResource
 authentication.claims.grantSourceIssuer
 authentication.claims.purpose
+authentication.evidenceAudienceClaim
 authentication.issuer
 authentication.jwksUri
 authentication.kind
@@ -1535,6 +1535,7 @@ authentication.tokenTypes
 authentication.tokenTypes[]
 authorityProfiles
 authorityProfiles.*
+authorityProfiles.*.grantSourceIssuer
 authorityProfiles.*.grants
 authorityProfiles.*.grants[]
 authorityProfiles.*.grants[].audienceFrom
@@ -1552,7 +1553,6 @@ authorityProfiles.*.grants[].subjects[].valueClaims
 authorityProfiles.*.grants[].subjects[].valueClaims.*
 authorityProfiles.*.grants[].subjects[].valueOrigin
 authorityProfiles.*.kind
-authorityProfiles.*.grantSourceIssuer
 authorityProfiles.*.requesterClients
 authorityProfiles.*.requesterClients[]
 authorityProfiles.*.requesterTags
