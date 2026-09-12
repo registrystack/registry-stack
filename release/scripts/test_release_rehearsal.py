@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -14,6 +16,40 @@ SCRIPT = ROOT / "release/scripts/rehearse-release"
 
 
 class ReleaseRehearsalTest(unittest.TestCase):
+    def test_advisory_bootstrap_cannot_qualify_as_normal_rehearsal(self) -> None:
+        document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+        jobs = document["jobs"]
+        bootstrap = next(
+            step for step in jobs["validate"]["steps"]
+            if step.get("name") == "Check complete release image onboarding"
+        )
+        steps = jobs["rehearse"]["steps"]
+        strict = next(
+            step for step in steps
+            if step.get("name") == "Require reviewed image baselines for release rehearsal"
+        )
+        self.assertNotIn("if", strict)
+        self.assertLess(steps.index(strict), next(
+            index for index, step in enumerate(steps)
+            if step.get("name") == "Setup Node"
+        ))
+        env = {**os.environ, "REHEARSAL_VERSION": "0.30.0"}
+        for advisory, code in (("false", 1), ("true", 0), ("invalid", 2)):
+            with self.subTest(advisory=advisory):
+                result = subprocess.run(
+                    ["bash", "-c", bootstrap["run"]], cwd=ROOT,
+                    env={**env, "REHEARSAL_ADVISORY_EVIDENCE": advisory},
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(code, result.returncode, result.stderr)
+        result = subprocess.run(
+            ["bash", "-c", strict["run"]], cwd=ROOT,
+            env={**env, "REHEARSAL_ADVISORY_EVIDENCE": "true"},
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("casework advisory baseline is missing", result.stderr)
+
     def test_workflow_is_manual_read_only_and_ubuntu_bounded(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")
         document = yaml.safe_load(text)

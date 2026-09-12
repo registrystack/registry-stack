@@ -86,6 +86,14 @@ jobs:
           git fetch --no-tags --force origin
           refs/heads/main:refs/remotes/origin/main
 
+      - name: Require reviewed image baselines for release rehearsal
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        run: >-
+          python3 release/scripts/release_candidate.py check-image-onboarding
+          --version "${REHEARSAL_VERSION}"
+          --root .
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:

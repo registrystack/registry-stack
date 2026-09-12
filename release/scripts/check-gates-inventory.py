@@ -757,6 +757,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
             "false) ;;",
             "advisory_evidence must be a typed boolean",
             "needs: validate",
+            "name: Require reviewed image baselines for release rehearsal",
         ),
     ),
     (
