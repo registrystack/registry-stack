@@ -22,8 +22,7 @@ local tutorials, which start disposable versions of everything on your machine.
 - **HTTPS in front of it.** The process listens on a private address; your reverse proxy or
   ingress terminates TLS and routes traffic to it.
 - **A token issuer.** Evidence Gateway verifies bearer tokens from one OpenID Connect issuer and
-  issues none. Your identity provider fills this role, or
-  [Registry Mint](../../configure/mint/) does when you have none.
+  issues none. Configure a compatible OAuth issuer for this role.
 - **A signing key you control.** Production signing uses a Vault or OpenBao Transit key that never
   leaves the vault, reached through a proxy on the same host. A local development profile may use
   a key file instead.
@@ -56,8 +55,7 @@ can use either one as a source through the same fixed HTTP request it makes to a
 ## How it ships
 
 Each release publishes reproducible binaries for the runtime, the `evidencectl` authoring tool,
-Registry Mint, and the wallet delivery service, with an installer that verifies checksums before
-installing. Each release also publishes container images built on a distroless base with no shell,
+and the wallet delivery service, with an installer that verifies checksums before installing. Each release also publishes container images built on a distroless base with no shell,
 running as a non-root user, and records the digest of every image it promotes. Pin that digest
 rather than a movable tag.
 
@@ -67,8 +65,7 @@ around the published image, and
 shows the shape: the reviewed bundle mounted unchanged, a separate runtime file and secret root,
 a persistent audit volume, and TLS in front.
 
-{/* Evidence: crates/registry-evidencectl/install.sh; release/docker/Dockerfile.evidence;
-    release/docker/Dockerfile.mint; release/VERIFY.md; products/evidence/README.md. */}
+{/* Evidence: crates/registry-evidencectl/install.sh; release/docker/Dockerfile.evidence; release/VERIFY.md; products/evidence/README.md. */}
 
 ## What stays your job
 

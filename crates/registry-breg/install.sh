@@ -2,7 +2,7 @@
 set -euo pipefail
 
 repo="registrystack/registry-stack"
-binaries=(breg bregctl mint)
+binaries=(breg bregctl)
 # Publication packaging replaces this empty value with the asset's canonical tag.
 default_version=""
 script_name="${BASH_SOURCE[0]:-}"
@@ -30,17 +30,14 @@ asset_dir="${BREG_ASSET_DIR:-}"
 
 usage() {
 	cat <<EOF
-Install the Base Registry Engine runtime, the bregctl adopter tooling, and the
-mint token issuer that a local registry uses when no identity provider is at
-hand. The mint binary is the one the Evidence toolset installer ships; the two
-installers install the same release asset.
+Install the Base Registry Engine runtime and the bregctl adopter tooling.
 
 Quick install:
   curl -fsSL https://github.com/${repo}/releases/latest/download/breg-install.sh | bash
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-three binaries together or not at all. It does not verify release authenticity. For
+two binaries together or not at all. It does not verify release authenticity. For
 a higher-assurance installation, follow the release verification guide for the
 pinned tag, then rerun with BREG_ASSET_DIR set to the verified
 directory:
@@ -367,7 +364,6 @@ Try it:
   bregctl init --help
   bregctl check --help
   breg --help
-  mint --help
 
 EOF
 

@@ -33,14 +33,13 @@ deploy a service for you.
 
 You need a released Evidence Gateway toolset on `PATH`, an editable project that runs locally, and an
 operator who can provision owner-only secrets and a private listener on the target host.
-Use Registry Mint only when no suitable OpenID Connect (OIDC) issuer exists. An existing OIDC
-issuer and Mint are equivalent choices from Evidence Gateway's perspective.
+Configure a compatible OpenID Connect (OIDC) issuer for Evidence Gateway access tokens.
 
 A production or evidence-grade target also needs a Vault or OpenBao Transit key before you build,
 not after. The target's `governance.yaml` names one governed public JWK, and for these profiles
 that JWK is the public half of a non-exportable Transit key, so the key has to exist before the
 target is complete. Provision it with
-[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/).
+[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/).
 The build itself never contacts Transit; the workload-local proxy is what the target-host ceremony
 and the running service reach.
 
@@ -136,7 +135,7 @@ governed service, authentication, authority, source, disclosure, or signing fiel
 `public-keys/` contains the exact active and published service JWKs named by `governance.yaml`.
 Production and evidence-grade targets bind the matching non-exportable provider key through the
 Transit signer in `runtime.yaml`. Use
-[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
 before building the first strict candidate.
 
 ## Build the candidate
@@ -266,7 +265,6 @@ rm -f "<owner-only-curl-config>"
 ## Next
 
 - [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
-- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
 - [Integrate an Evidence Gateway candidate with Docker Compose](../integrate-evidence-candidate-with-docker-compose/)
 - [Rotate Evidence Gateway signing keys](../rotate-evidence-signing-keys/)
 - [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

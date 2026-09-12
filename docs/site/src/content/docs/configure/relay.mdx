@@ -191,8 +191,8 @@ operations:
 
 The named search makes the query shape and its authorization independently reviewable. A client
 with only the list scope cannot search, and a client with only the protected search scope cannot
-list. [Configure Registry Mint](../mint/) to issue the access token that carries a scope such as
-`registry:business:premises-search-registrar` when the deployment has no other identity provider.
+list. Configure the deployment's OAuth issuer to issue an access token that carries a scope such as
+`registry:business:premises-search-registrar`.
 The request is explicit:
 
 ```http
@@ -345,8 +345,8 @@ different interpretation.
 
 ## Next
 
-- [Configure Registry Mint](../mint/) to issue tokens for the scopes declared in this project's
-  access profiles.
+- Configure the deployment's OAuth issuer to issue tokens for the scopes declared in this
+  project's access profiles.
 - [Operate Registry Relay](../../operate/relay/) to deploy the packaged revision.
 - [Semantics, classification, and disclosure in Relay](../../explanation/relay-semantics-and-disclosure/)
   for the concepts this authoring model builds on.

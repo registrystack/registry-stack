@@ -17,7 +17,7 @@
 # deliberately does not do.
 #
 # This gate builds the Casework toolset from the checked-out source unless
-# CASEWORK_BIN, CASEWORKCTL_BIN and MINT_BIN select exact candidate or released
+# CASEWORK_BIN and CASEWORKCTL_BIN select exact candidate or released
 # bytes, then replays the registered tutorial's own shell fences from an empty
 # reader directory, the way a reader starts after installing the binaries. What
 # CI runs is what a reader copies.
@@ -62,7 +62,7 @@
 # is exactly when the journey is worth walking again.
 #
 # Configuration:
-#   CASEWORK_BIN / CASEWORKCTL_BIN / MINT_BIN  run these exact binaries instead
+#   CASEWORK_BIN / CASEWORKCTL_BIN             run these exact binaries instead
 #                                              of building from source
 #   CASEWORK_TUTORIAL_CARGO_PROFILE            ci (default) or release
 #   CASEWORK_TUTORIAL_DOCS_ROOT                docs content directory override (tests)
@@ -316,18 +316,17 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
+	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-casework -p registry-caseworkctl -p registry-mint --bins)
+			-p registry-casework -p registry-caseworkctl --bins)
 		CASEWORK_BIN="$TARGET_DIR/$profile_dir/casework"
 		CASEWORKCTL_BIN="$TARGET_DIR/$profile_dir/caseworkctl"
-		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 	fi
 	local bin
-	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$MINT_BIN"; do
+	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -343,11 +342,10 @@ prepare_toolset() {
 	done
 
 	# The tutorial calls the binaries by name, and `caseworkctl dev` resolves
-	# `casework` and `mint` from PATH, so serve them from a shim dir.
+	# `casework` from PATH, so serve both commands from a shim directory.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$CASEWORK_BIN" "$SHIM_DIR/casework"
 	ln -s "$CASEWORKCTL_BIN" "$SHIM_DIR/caseworkctl"
-	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
 # ---------------------------------------------------------------------------

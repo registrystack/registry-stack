@@ -58,7 +58,7 @@ test('rejects a current page that names Notary only to say it is retired', async
       'status: current',
       [
         'Registry Notary is retired. The stability promises below cover',
-        'Registry Relay, Evidence, and Registry Mint.',
+        'Registry Relay and Evidence.',
         '',
         '| Registry Notary | Retired | No stability promise remains. |',
       ].join('\n'),

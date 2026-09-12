@@ -205,6 +205,7 @@ export default defineConfig({
     // path and is no longer published as current guidance.
     '/tutorials/first-run-with-registry-lab/': internalRedirect('/'),
     '/tutorials/first-run-with-solmara-lab/': internalRedirect('/start/evidence-quickstart/'),
+    '/tutorials/query-a-spatial-registry-from-qgis/': internalRedirect('/start/breg-quickstart/'),
     '/tutorials/review-a-dhis2-evidence-source/': internalRedirect('/tutorials/issue-immunization-evidence-from-dhis2/'),
     // Retired monorepo lab tutorials redirect to the current integration guidance.
     // Retired advanced tutorials land on current task, explanation, or
@@ -359,6 +360,7 @@ export default defineConfig({
               collapsed: true,
               items: [
                 { label: 'Request an assertion', slug: 'tutorials/request-evidence-from-an-application' },
+                { label: 'Configure token acquisition', slug: 'configure/request-an-access-token' },
                 { label: 'Verify and retain assertions', slug: 'tutorials/verify-an-assertion-as-a-consumer' },
                 { label: 'Manage verifier trust', slug: 'tutorials/manage-evidence-verifier-trust' },
                 { label: 'Automate with OpenFn', slug: 'explanation/openfn-adaptors' },
@@ -469,7 +471,6 @@ export default defineConfig({
                 { label: 'Derive from PublicSchema', slug: 'tutorials/derive-a-registry-from-publicschema' },
                 { label: 'Review changes', slug: 'tutorials/review-registry-changes' },
                 { label: 'Send events to a webhook', slug: 'tutorials/send-registry-events-to-a-webhook' },
-                { label: 'Map a registry in QGIS', slug: 'tutorials/query-a-spatial-registry-from-qgis' },
               ],
             },
             {
@@ -537,17 +538,6 @@ export default defineConfig({
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
         }] : []),
-        {
-          label: 'Registry Mint',
-          collapsed: true,
-          items: [
-            { label: 'Configuration', slug: 'configure/mint' },
-            { label: 'Add to Evidence Gateway', slug: 'tutorials/issue-evidence-access-tokens-with-registry-mint' },
-            { label: 'Request an access token', slug: 'configure/request-an-access-token' },
-            { label: 'Use with QGIS', slug: 'configure/use-mint-with-qgis-and-standard-oauth-clients' },
-            { label: 'Reference', slug: 'reference/mint' },
-          ],
-        },
         {
           label: 'Registry Discovery',
           collapsed: true,

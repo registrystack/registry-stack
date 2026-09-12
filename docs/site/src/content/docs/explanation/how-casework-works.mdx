@@ -256,7 +256,7 @@ A pending or uncertain attempt blocks that erasure until the attempt is recovere
 - Nothing is delivered outward. Casework records reminders and applies authored queue steps inside the item, and sends no message to a person or a system.
 - Casework serves an API and renders no interface of its own. The Registry App Kit is a separate project that provides a staff interface for BReg-backed work.
 - The API does not enable CORS, because a browser talks to its own host and that host calls Casework server to server on a private network.
-- Casework issues no tokens and stores no users. Identity belongs to your OpenID Connect provider, or to Registry Mint when you have none.
+- Casework issues no tokens and stores no users. Identity belongs to your OpenID Connect provider.
 - A source-neutral core and generic clients hold no registry protocol types, and no registry depends on Casework.
 
 {/* Evidence: products/casework/CHANGELOG.md;

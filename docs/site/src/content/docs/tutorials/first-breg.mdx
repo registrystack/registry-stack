@@ -30,21 +30,19 @@ Everything you keep goes into one directory, `tutorial-work`.
 />
 
 {/* Evidence: crates/registry-bregctl/src/lib.rs, init_files();
-    crates/registry-bregctl/src/dev/mod.rs, start();
-    crates/registry-mint/src/main.rs. */}
+    crates/registry-bregctl/src/dev/mod.rs, start(). */}
 
 ## Install Base Registry Engine
 
-Install `breg`, `bregctl`, and `mint`. Registry Mint issues the local access tokens this tutorial
-uses, standing in for the identity provider a deployment would have:
+Install `breg` and `bregctl`. The local development command starts the maintained stock identity
+provider and registers the tutorial clients:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
-mint --version
 ```
 
-The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
+The installer checks both binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
 Keep that directory on your `PATH`.
 
@@ -153,8 +151,9 @@ The first start downloads the pinned PostgreSQL image, so it takes longer than t
 The command returns once the registry answers. Its report names the service URLs,
 package revision, and private credential file paths for each client.
 
-`dev` started PostgreSQL in a container, registered the clients from `dev-clients.yaml` with
-Registry Mint under a fresh key each, built a package, replayed `tests/journeys.yaml` against a
+`dev` started PostgreSQL and the maintained stock identity provider in containers, registered the
+clients from `dev-clients.yaml` under a fresh key each, built a package, replayed
+`tests/journeys.yaml` against a
 throwaway database, activated the package, and started BReg at the address the report shows.
 
 The services keep running after the command returns, so this one terminal is enough.
@@ -165,27 +164,22 @@ Run the same command again at any time to print the report again.
 
 ## Get a token
 
-Save the registry address, then ask Mint for a token as the `operator` client and write it into a
-file `curl` can send as an authorization header:
+Save the registry address, then ask the local issuer for a token as the `operator` client. The
+command writes a header file that `curl` can send:
 
 ```sh
 registry_url=http://127.0.0.1:8090
-credentials=tutorial-work/project/.breg/dev/credentials/operator
-umask 077
-mint token --url http://127.0.0.1:8091/token \
-  --client-id "$(cat "$credentials/client-id")" --key "$credentials/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/authorization.header
+bregctl dev token tutorial-work/project operator
+authorization_header=tutorial-work/project/.breg/dev/secrets/operator.header
 ```
 
-Success prints nothing.
-`mint token` signs a request with the client's private key and posts it to the token endpoint, the
-way an application would; the token carries the `operator` scopes and claims and lasts five minutes.
+`bregctl dev token` requests a fresh token through the registered client and reports the private
+header-file path. The token carries the `operator` scopes and claims and lasts five minutes.
 
-The header file holds that token and is readable only by your user; keep it out of version control
-and support messages.
+The header file is readable only by your user; keep it out of version control and support messages.
 If a request returns `401` after a pause, [renew the token](#renew-an-expired-token) and retry.
 
-{/* Evidence: crates/registry-mint/src/cli.rs; crates/registry-mint/src/main.rs;
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, fresh_token();
     crates/registry-bregctl/src/dev/config.rs. */}
 
 ## Read the registry
@@ -195,7 +189,7 @@ and BReg checks the token against them:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   "$registry_url/v1/records/records?accessProfile=operator" | python3 -m json.tool
 ```
 
@@ -242,7 +236,7 @@ Create the business record and save the response:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: tutorial-create-1' \
   --data '{"data":{"code":"DEMO-002","label":"North Quay Engineering"}}' \
@@ -302,7 +296,7 @@ Ask for labels only:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header --get \
+  --header @"$authorization_header" --get \
   --data-urlencode 'accessProfile=operator' \
   --data-urlencode '$select=label' \
   --data-urlencode '$top=10' \
@@ -317,7 +311,7 @@ Try a filter on `label`:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/authorization.header --get \
+  --header @"$authorization_header" --get \
   --data-urlencode 'accessProfile=operator' \
   --data-urlencode "\$filter=label eq 'North Quay Engineering'" \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
@@ -342,7 +336,7 @@ Repeat the request on `code`, which is filterable, and match the code you create
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header --get \
+  --header @"$authorization_header" --get \
   --data-urlencode 'accessProfile=operator' \
   --data-urlencode "\$filter=code eq 'DEMO-002'" \
   "$registry_url/v1/records/records" | python3 -m json.tool
@@ -364,7 +358,7 @@ Read the created record and save its HTTP headers:
 ```sh
 record_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/created.json"))["data"]["recordIdentifier"])')
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   --dump-header tutorial-work/record.headers \
   "$registry_url/v1/records/records/$record_id?accessProfile=operator" | python3 -m json.tool
 ```
@@ -381,7 +375,7 @@ own before writing:
 
 ```sh
 curl --silent --show-error --fail-with-body \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   --header 'Content-Type: application/json-patch+json' \
   --header 'Idempotency-Key: tutorial-patch-1' \
   --header "If-Match: $record_etag" \
@@ -397,7 +391,7 @@ Try a different update while still using the old ETag:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   --header 'Content-Type: application/json-patch+json' \
   --header 'Idempotency-Key: tutorial-patch-2' \
   --header "If-Match: $record_etag" \
@@ -424,7 +418,7 @@ Omit the required `code` field:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/authorization.header \
+  --header @"$authorization_header" \
   --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: tutorial-missing-code' \
   --data '{"data":{"label":"South Harbour Logistics"}}' \
@@ -486,9 +480,9 @@ If it fails, the registry is stopped: start it again with the command from
 
 | Symptom | Next move |
 | --- | --- |
-| `bregctl`, `breg`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
-| `bregctl dev` refuses over a reported version | The `breg` or `mint` it resolved comes from another release than `bregctl`. The refusal names both versions. Install all three from the same release, or put the matching build first on `PATH`. |
-| `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--mint-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
+| `bregctl` or `breg` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| `bregctl dev` refuses over a reported version | The `breg` it resolved comes from another release than `bregctl`. Install both from the same release, or put the matching build first on `PATH`. |
+| `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--issuer-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
 | `bregctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed, such as `test.step.failed` with the journey step's own message. Otherwise check that Docker is running. The private logs are under `tutorial-work/project/.breg/dev/logs/`; do not share the credential or secret files beside them. |
 | A create returns `409` with code `idempotency.conflict` | The key was already used with a different body. Reuse the exact body, or choose a new key for a new write. |
 | A create returns `409` with code `mutation.conflict` | The code is already taken; codes are unique in this project. Choose a new code and a new key. |

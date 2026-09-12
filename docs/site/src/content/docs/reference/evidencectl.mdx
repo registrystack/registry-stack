@@ -142,7 +142,7 @@ requires a new Evidence Gateway generation.
 
 The local access commands do not define production authority or production clients. Production
 authority profiles remain in the deployment target's governed `governance.yaml`. Production client
-registrations remain in a separately governed Registry Mint registry. Files under `access/` and
+registrations remain in the deployment's governed OAuth issuer. Files under `access/` and
 `.evidence/` do not become production candidate inputs.
 
 Use `keygen`, `source suggest`, `request`, `verify`, and `audit` for their documented authoring or
@@ -222,5 +222,4 @@ The generated `evidencectl` syntax is published only after its exact source vers
 recorded human review.
 
 - [Configure Evidence Gateway](../../configure/evidence/)
-- [Registry Mint reference](../mint/)
 - [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
