@@ -5,7 +5,7 @@ import { writeSummary } from '../lib/summary.js';
 import { Workload, STEADY_MIX } from '../lib/workload.js';
 
 const ops = positiveNumber('OPS', __ENV.OPS, 50);
-const duration = __ENV.DURATION || '10m';
+const duration = __ENV.DURATION || '3m';
 
 export const options = {
   scenarios: {
@@ -30,7 +30,7 @@ export const options = {
   noConnectionReuse: false,
 };
 
-const workload = new Workload(__ENV.BREG_URL, __ENV.TOKEN_URL, __ENV.CLIENT_ID, __ENV.CLIENT_SECRET);
+const workload = new Workload(__ENV.BREG_URL);
 
 export default function () {
   workload.step(workload.token(), STEADY_MIX);

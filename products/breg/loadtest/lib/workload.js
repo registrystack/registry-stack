@@ -10,9 +10,14 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { SharedArray } from 'k6/data';
 import { Counter } from 'k6/metrics';
-import { driverToken } from './token.js';
 
 export const cursorPagesFollowed = new Counter('cursor_pages_followed');
+
+const authorization = open(__ENV.AUTHORIZATION_HEADER_FILE, 'r').trim();
+if (!authorization.startsWith('Authorization: Bearer ') || authorization.split('.').length !== 3) {
+  throw new Error('AUTHORIZATION_HEADER_FILE must contain one bregctl dev Authorization header');
+}
+const authorizationValue = authorization.slice('Authorization: '.length);
 
 export const establishmentIds = new SharedArray('establishmentIds', function () {
   return sharedLines(__ENV.ESTABLISHMENT_IDS_FILE, 'id');
@@ -38,21 +43,18 @@ function sharedLines(path, column) {
 }
 
 function headers(token, extra = {}) {
-  return Object.assign({ Authorization: `Bearer ${token}` }, extra);
+  return Object.assign({ Authorization: token }, extra);
 }
 
 export class Workload {
-  constructor(baseUrl, tokenUrl, clientId, clientSecret) {
+  constructor(baseUrl) {
     this.baseUrl = baseUrl;
-    this.tokenUrl = tokenUrl;
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
     this.createCounter = 0;
     this.randomState = 0;
   }
 
   token() {
-    return driverToken(this.tokenUrl, this.clientId, this.clientSecret);
+    return authorizationValue;
   }
 
   random() {

@@ -8,7 +8,7 @@ evidence="$loadtest_dir/support/evidence.py"
 dbstats="$loadtest_dir/dbstats.sh"
 
 usage() {
-  printf '%s\n' "usage: products/breg/loadtest/run.sh --profile steady|sweep|burst|herd|token-soak|cursor-smoke [--ops N] [--duration 10m] [extra k6 args]" >&2
+  printf '%s\n' "usage: products/breg/loadtest/run.sh --profile steady|sweep|burst|cursor-smoke [--ops N] [--duration 3m] [extra k6 args]" >&2
   exit 2
 }
 
@@ -69,21 +69,49 @@ if [[ ! -f "$run_dir/seed/establishment-ids.txt" || ! -f "$run_dir/seed/seed-sum
   exit 2
 fi
 
-read -r breg_url metrics_url token_url driver_client_id < <(python3 - "$run_dir/env.json" <<'PY'
+read -r breg_url bregctl project < <(python3 - "$run_dir/env.json" <<'PY'
 import json
 import sys
 
 environment = json.load(open(sys.argv[1], encoding="utf-8"))
-print(environment["breg_url"], environment["metrics_url"], environment["token_url"], environment["driver_client_id"])
+print(environment["breg_url"], environment["bregctl"], environment["project"])
 PY
 )
+if [[ "$bregctl" != "$repository_root/target/debug/bregctl" || "$project" != "$run_dir/project" ]]; then
+  printf '%s\n' 'load-test environment references paths outside its owned checkout state' >&2
+  exit 2
+fi
+
+duration_seconds() {
+  python3 - "$1" <<'PY'
+import re,sys
+value=sys.argv[1]
+parts=list(re.finditer(r'([0-9]+(?:[.][0-9]+)?)(ms|s|m|h)',value))
+if not parts or ''.join(part.group(0) for part in parts)!=value:
+    raise SystemExit(2)
+scale={'ms':0.001,'s':1,'m':60,'h':3600}
+print(sum(float(part.group(1))*scale[part.group(2)] for part in parts))
+PY
+}
+
+require_token_window() {
+  local label="$1"
+  shift
+  local total=0 seconds value
+  for value in "$@"; do
+    seconds=$(duration_seconds "$value") || {
+      printf '%s\n' "$label contains an invalid k6 duration: $value" >&2
+      exit 2
+    }
+    total=$(python3 -c 'import sys; print(float(sys.argv[1])+float(sys.argv[2]))' "$total" "$seconds")
+  done
+  python3 -c 'import sys; raise SystemExit(0 if float(sys.argv[1]) <= 240 else 1)' "$total" || {
+    printf '%s\n' "$label must finish within 4 minutes so one fresh bregctl dev token remains valid." >&2
+    exit 2
+  }
+}
 
 export BREG_URL="$breg_url"
-export METRICS_URL="$metrics_url"
-export TOKEN_URL="$token_url"
-export CLIENT_ID="$driver_client_id"
-CLIENT_SECRET="$(<"$run_dir/secrets/driver-client-secret")"
-export CLIENT_SECRET
 export ESTABLISHMENT_IDS_FILE="$run_dir/seed/establishment-ids.txt"
 export FOLLOW_CURSOR="${FOLLOW_CURSOR:-1}"
 export RANDOM_SEED="${RANDOM_SEED:-20260902}"
@@ -91,16 +119,10 @@ export RANDOM_SEED="${RANDOM_SEED:-20260902}"
 umask 077
 mkdir -p "$run_dir/results"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-metrics_pid=""
 db_pid=""
 last_run_status=0
 
 stop_samplers() {
-  if [[ -n "$metrics_pid" ]]; then
-    kill "$metrics_pid" 2>/dev/null || true
-    wait "$metrics_pid" 2>/dev/null || true
-    metrics_pid=""
-  fi
   if [[ -n "$db_pid" ]]; then
     kill "$db_pid" 2>/dev/null || true
     wait "$db_pid" 2>/dev/null || true
@@ -129,16 +151,13 @@ run_one() {
     --profile "$manifest_profile" \
     "${manifest_parameters[@]}"
 
-  "$dbstats" reset
   "$dbstats" snapshot >"$result_dir/db-before.json"
   export K6_SUMMARY_PATH="$result_dir/k6-summary.json"
 
-  python3 "$evidence" sample-metrics \
-    --url "$metrics_url" \
-    --out "$result_dir/telemetry.jsonl" \
-    --server-pid "$run_dir/breg.pid" \
-    --mint-pid "$run_dir/mint.pid" &
-  metrics_pid=$!
+  AUTHORIZATION_HEADER_FILE=$(python3 "$loadtest_dir/support/loadenv.py" header \
+    --bregctl "$bregctl" --project "$project" --client loadtest-driver)
+  export AUTHORIZATION_HEADER_FILE
+
   "$dbstats" sample 1 >"$result_dir/db-waits.jsonl" &
   db_pid=$!
 
@@ -149,17 +168,7 @@ run_one() {
   stop_samplers
   "$dbstats" snapshot >"$result_dir/db-after.json"
 
-  local secret_arguments=()
-  local secret_path
-  for secret_path in \
-    "$run_dir/secrets/"* \
-    "$run_dir/keys/mint/"* \
-    "$run_dir/keys/operator/"* \
-    "$run_dir/tls/"*.key; do
-    if [[ -f "$secret_path" ]]; then
-      secret_arguments+=(--secret-file "$secret_path")
-    fi
-  done
+  local secret_arguments=(--secret-file "$AUTHORIZATION_HEADER_FILE")
   python3 "$evidence" assert-safe \
     --artifact-dir "$result_dir" \
     --samples "$result_dir/k6-samples.json" \
@@ -173,7 +182,6 @@ run_one() {
       --manifest "$result_dir/manifest.json" \
       --k6-summary "$result_dir/k6-summary.json" \
       --samples "$result_dir/k6-samples.json" \
-      --telemetry "$result_dir/telemetry.jsonl" \
       --db-after "$result_dir/db-after.json" \
       --db-waits "$result_dir/db-waits.jsonl" \
       --safety "$result_dir/safety.json" \
@@ -202,6 +210,8 @@ if [[ "$profile" == sweep ]]; then
   hold="${HOLD:-2m}"
   warmup_ops="${WARMUP_OPS:-50}"
   warmup_duration="${WARMUP_DURATION:-2m}"
+  require_token_window WARMUP_DURATION "$warmup_duration"
+  require_token_window HOLD "$hold"
   if [[ ! "$warmup_ops" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
     printf '%s\n' 'WARMUP_OPS must be a positive number' >&2
     exit 2
@@ -218,6 +228,9 @@ if [[ "$profile" == sweep ]]; then
   mkdir -m 700 "$sweep_root"
   printf '%s\n' "== read-only warmup: $warmup_ops ops/s for $warmup_duration (excluded from evidence)"
   export OPS="$warmup_ops" DURATION="$warmup_duration" K6_SUMMARY_PATH=""
+  AUTHORIZATION_HEADER_FILE=$(python3 "$loadtest_dir/support/loadenv.py" header \
+    --bregctl "$bregctl" --project "$project" --client loadtest-driver)
+  export AUTHORIZATION_HEADER_FILE
   k6 run --quiet --no-thresholds --summary-mode disabled "${pass_through[@]}" "$script"
 
   overall_status=0
@@ -239,26 +252,20 @@ fi
 result_dir="$run_dir/results/$stamp-$profile"
 case "$profile" in
   steady)
-    export OPS="${OPS:-50}" DURATION="${DURATION:-10m}"
+    export OPS="${OPS:-50}" DURATION="${DURATION:-3m}"
+    require_token_window DURATION "$DURATION"
     run_one "$result_dir" steady "$script" \
       "offeredOps=$OPS" "duration=$DURATION" "followCursor=$FOLLOW_CURSOR" "randomSeed=$RANDOM_SEED"
     ;;
   burst)
     export OPS="${OPS:-50}" PEAK_OPS="${PEAK_OPS:-250}"
-    export BASELINE_DURATION="${BASELINE_DURATION:-2m}" RAMP_DURATION="${RAMP_DURATION:-30s}"
-    export PEAK_DURATION="${PEAK_DURATION:-30s}" RECOVERY_DURATION="${RECOVERY_DURATION:-3m}"
+    export BASELINE_DURATION="${BASELINE_DURATION:-30s}" RAMP_DURATION="${RAMP_DURATION:-15s}"
+    export PEAK_DURATION="${PEAK_DURATION:-30s}" RECOVERY_DURATION="${RECOVERY_DURATION:-90s}"
+    require_token_window 'burst phase schedule' "$BASELINE_DURATION" "$RAMP_DURATION" "$PEAK_DURATION" "$RAMP_DURATION" "$RECOVERY_DURATION"
     run_one "$result_dir" burst "$script" \
       "baselineOps=$OPS" "peakOps=$PEAK_OPS" "baselineDuration=$BASELINE_DURATION" \
       "rampDuration=$RAMP_DURATION" "peakDuration=$PEAK_DURATION" \
       "recoveryDuration=$RECOVERY_DURATION" "followCursor=$FOLLOW_CURSOR" "randomSeed=$RANDOM_SEED"
-    ;;
-  herd)
-    export VUS="${VUS:-200}" DURATION="${DURATION:-30s}"
-    run_one "$result_dir" herd "$script" "vus=$VUS" "duration=$DURATION"
-    ;;
-  token-soak)
-    export VUS="${VUS:-200}" DURATION="${DURATION:-1m}"
-    run_one "$result_dir" token-soak "$script" "vus=$VUS" "duration=$DURATION"
     ;;
   cursor-smoke)
     export FOLLOW_CURSOR=1
