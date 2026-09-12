@@ -16,12 +16,8 @@
 //! configuration's credential to another.
 //!
 //! The assertion itself is built by
-//! [`registry_platform_authcommon::client_assertion`]. Nothing else in the
-//! stack calls that builder yet: `registry-mint`'s own caller tooling
-//! (`crates/registry-mint/src/caller.rs`) signs a client assertion for testing
-//! Mint's token endpoint, but it builds its own claims, header, and algorithm
-//! mapping rather than reusing this one. What this module owns is the token
-//! request that presents one and the credential it is exchanged for.
+//! [`registry_platform_authcommon::client_assertion`]. This module owns the
+//! token request that presents it and the credential it is exchanged for.
 //!
 //! # What is cached, and for how long
 //!

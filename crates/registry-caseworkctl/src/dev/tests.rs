@@ -211,8 +211,7 @@ fn clients_file_refuses_invalid_and_reserved_claim_names() {
     assert!(refusal.contains("claim names"), "{refusal}");
     assert!(refusal.contains("RFC 6749 scope-tokens"), "{refusal}");
 
-    // `aud` was previously accepted here, then rejected when `dev` copied it
-    // into Mint's closed client-registration contract.
+    // Registered claims belong to the issuer, not authored client claims.
     let reserved = STANDALONE_DEV_CLIENTS.replace("registry_actor_kind: human", "aud: human");
     assert_ne!(reserved, STANDALONE_DEV_CLIENTS);
     let refusal = format!("{:#}", config::clients(reserved.as_bytes()).unwrap_err());
@@ -498,7 +497,7 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     assert_eq!(config.kind, registry_casework::RUNTIME_CONFIG_KIND);
     assert_eq!(config.package.root, project);
     assert_eq!(config.listener.bind, "127.0.0.1:8092".parse().unwrap());
-    // Mint emits one space-delimited `scope` claim, not the deployment default.
+    // The local issuer emits one space-delimited `scope` claim.
     assert_eq!(config.authentication.oidc.scope_claim, "scope");
     assert!(matches!(
         config.authentication.oidc.jwks_source,
