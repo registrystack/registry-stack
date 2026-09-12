@@ -620,11 +620,13 @@ fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAutho
 
 /// The BReg dev client bound to one Casework dev client: same id and scopes
 /// and claims, no access profile of its own. A staff or supervisor client
-/// additionally carries the selected request's reviewer scopes and any
-/// required purpose claim.
+/// additionally carries the selected request's reviewer scopes, maps its
+/// Casework principal into the BReg reviewer claim, and carries any required
+/// purpose claim.
 fn human_dev_client(
     client: &Value,
     role: &str,
+    casework_principal_claim: &str,
     authority: Option<&ReviewerAuthority>,
 ) -> Result<Value> {
     let id = client["id"]
@@ -647,6 +649,22 @@ fn human_dev_client(
         let authority = authority.context(
             "a Casework staff or supervisor dev client has no reviewer authority to bind",
         )?;
+        let principal = claims
+            .get(casework_principal_claim)
+            .cloned()
+            .with_context(|| {
+                format!(
+                    "Casework dev client {id} has no string value for its configured principal claim"
+                )
+            })?;
+        match claims.get(READER_PRINCIPAL_CLAIM) {
+            Some(existing) if existing != &principal => bail!(
+                "Casework dev client {id} sets a BReg reviewer principal that conflicts with its configured Casework principal"
+            ),
+            _ => {
+                claims.insert(READER_PRINCIPAL_CLAIM.to_owned(), principal);
+            }
+        }
         scopes.extend(authority.scopes.iter().cloned());
         if let Some(purpose) = &authority.purpose {
             match claims.get(PURPOSE_CLAIM) {
@@ -711,13 +729,18 @@ fn plan_breg_dev_clients(
         let profile_id = client["accessProfile"]
             .as_str()
             .context("a Casework dev client's accessProfile must be a string")?;
-        let role = profiles
+        let profile = profiles
             .iter()
             .find(|profile| profile["id"] == profile_id)
-            .and_then(|profile| profile["role"].as_str())
             .context("a Casework dev client names an access profile absent from casework.yaml")?;
+        let role = profile["role"]
+            .as_str()
+            .context("a Casework access profile's role must be a string")?;
+        let principal_claim = profile["principalClaim"]
+            .as_str()
+            .context("a Casework access profile's principalClaim must be a string")?;
         needs_authority |= matches!(role, "staff" | "supervisor");
-        eligible.push((client, role.to_owned()));
+        eligible.push((client, role.to_owned(), principal_claim.to_owned()));
     }
     let authority = if needs_authority {
         Some(reviewer_authority(authored, request)?)
@@ -725,8 +748,13 @@ fn plan_breg_dev_clients(
         None
     };
     let mut clients = vec![reader_dev_client()];
-    for (client, role) in &eligible {
-        clients.push(human_dev_client(client, role, authority.as_ref())?);
+    for (client, role, principal_claim) in &eligible {
+        clients.push(human_dev_client(
+            client,
+            role,
+            principal_claim,
+            authority.as_ref(),
+        )?);
     }
 
     match fs::read(&dev_clients_path) {
@@ -948,6 +976,11 @@ fn verify_candidate(binary: &Path, registry: &Path, proposed: &str) -> Result<Va
 fn copy_tree(source: &Path, destination: &Path, root: &Path) -> Result<()> {
     for entry in fs::read_dir(source).context("reading BReg project for candidate staging")? {
         let entry = entry?;
+        // Neither path is an authored BReg input. In particular, .breg
+        // can contain live control sockets that cannot be copied as files.
+        if source == root && matches!(entry.file_name().to_str(), Some(".breg" | ".git")) {
+            continue;
+        }
         let kind = entry.file_type()?;
         if kind.is_symlink() {
             bail!("BReg candidate staging refuses symlinks");
@@ -1460,8 +1493,13 @@ mod tests {
         assert!(authority.scopes.is_empty());
         assert_eq!(authority.purpose, None);
 
-        let client = json!({"id":"staff","scopes":["casework:staff"],"claims":{}});
-        let merged = human_dev_client(&client, "staff", Some(&authority)).unwrap();
+        let client = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"registry_principal":"staff-1"}
+        });
+        let merged =
+            human_dev_client(&client, "staff", "registry_principal", Some(&authority)).unwrap();
         assert!(merged["claims"].get("registry_purpose").is_none());
     }
 
@@ -1471,16 +1509,75 @@ mod tests {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: Some("starter-learning".to_owned()),
         };
-        let client = json!({"id":"staff","scopes":["casework:staff"],"claims":{"registry_purpose":"other-purpose"}});
-        let error = human_dev_client(&client, "staff", Some(&authority)).unwrap_err();
+        let client = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"registry_principal":"staff-1","registry_purpose":"other-purpose"}
+        });
+        let error =
+            human_dev_client(&client, "staff", "registry_principal", Some(&authority)).unwrap_err();
         let message = format!("{error:#}");
         assert!(message.contains("staff"), "{message}");
         assert!(!message.contains("other-purpose"), "{message}");
         assert!(!message.contains("starter-learning"), "{message}");
 
-        let matching = json!({"id":"staff","scopes":["casework:staff"],"claims":{"registry_purpose":"starter-learning"}});
-        let merged = human_dev_client(&matching, "staff", Some(&authority)).unwrap();
+        let matching = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"registry_principal":"staff-1","registry_purpose":"starter-learning"}
+        });
+        let merged =
+            human_dev_client(&matching, "staff", "registry_principal", Some(&authority)).unwrap();
         assert_eq!(merged["claims"]["registry_purpose"], "starter-learning");
+    }
+
+    #[test]
+    fn human_dev_client_maps_the_configured_casework_principal_for_breg_review() {
+        let authority = ReviewerAuthority {
+            scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
+            purpose: None,
+        };
+        let client = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"employee_id":"employee-123"}
+        });
+        let merged = human_dev_client(&client, "staff", "employee_id", Some(&authority)).unwrap();
+
+        assert_eq!(merged["claims"]["employee_id"], "employee-123");
+        assert_eq!(merged["claims"][READER_PRINCIPAL_CLAIM], "employee-123");
+
+        let conflicting = json!({
+            "id":"staff",
+            "scopes":["casework:staff"],
+            "claims":{"employee_id":"employee-123","registry_principal":"other-person"}
+        });
+        let error =
+            human_dev_client(&conflicting, "staff", "employee_id", Some(&authority)).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("staff"), "{message}");
+        assert!(!message.contains("employee-123"), "{message}");
+        assert!(!message.contains("other-person"), "{message}");
+    }
+
+    #[test]
+    fn candidate_staging_excludes_private_runtime_and_vcs_state() {
+        let registry = tempfile::tempdir().unwrap();
+        let staging = tempfile::tempdir().unwrap();
+        fs::write(registry.path().join("registry.yaml"), "apiVersion: v1\n").unwrap();
+        fs::create_dir_all(registry.path().join("schemas")).unwrap();
+        fs::write(registry.path().join("schemas/entity.json"), "{}").unwrap();
+        fs::create_dir_all(registry.path().join(".breg/dev")).unwrap();
+        fs::write(registry.path().join(".breg/dev/private"), "secret").unwrap();
+        fs::create_dir_all(registry.path().join(".git")).unwrap();
+        fs::write(registry.path().join(".git/config"), "private").unwrap();
+
+        copy_tree(registry.path(), staging.path(), registry.path()).unwrap();
+
+        assert!(staging.path().join("registry.yaml").is_file());
+        assert!(staging.path().join("schemas/entity.json").is_file());
+        assert!(!staging.path().join(".breg").exists());
+        assert!(!staging.path().join(".git").exists());
     }
 
     #[test]

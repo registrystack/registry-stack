@@ -56,7 +56,9 @@ Casework access profile.
 Casework schedules source readback. It is deliberately excluded from the BReg
 source binding generation because changing polling cadence changes neither
 source authority nor saved source state. A cadence change therefore does not
-invalidate displayed bindings or durable attempts.
+invalidate displayed bindings or durable attempts. When a readback pass lasts
+longer than the interval, Casework skips missed ticks instead of replaying them
+back-to-back against the source.
 
 See the complete maintained
 [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml) and

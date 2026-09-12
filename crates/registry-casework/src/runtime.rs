@@ -13,6 +13,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tokio::time::{Interval, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::{
@@ -182,7 +183,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             "source reconciliation",
             worker_stopped.clone(),
             async move {
-                let mut interval = tokio::time::interval(interval_duration);
+                let mut interval = reconciliation_timer(interval_duration);
                 loop {
                     interval.tick().await;
                     if let Err(error) = reconciliation.reconcile_source(&source_id).await {
@@ -230,6 +231,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
 /// directly from its operator-configured binding.
 fn reconciliation_interval(binding: &BregBinding) -> Duration {
     Duration::from_millis(binding.reconciliation_interval_milliseconds)
+}
+
+fn reconciliation_timer(period: Duration) -> Interval {
+    let mut interval = tokio::time::interval(period);
+    interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    interval
 }
 
 /// Serve until a supervised background loop stops. The listener never stops on
@@ -852,6 +859,13 @@ mod tests {
             reconciliation_interval(&breg_binding(120_000)),
             Duration::from_millis(120_000)
         );
+    }
+
+    #[tokio::test]
+    async fn reconciliation_skips_ticks_missed_during_a_slow_pass() {
+        let interval = reconciliation_timer(Duration::from_secs(1));
+        assert_eq!(interval.period(), Duration::from_secs(1));
+        assert_eq!(interval.missed_tick_behavior(), MissedTickBehavior::Skip);
     }
 }
 

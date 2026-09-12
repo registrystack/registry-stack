@@ -198,7 +198,9 @@ accept at most 300000, and are refused when the connect timeout is the larger of
 `reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
 source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
 The interval changes scheduling only. Changing it does not invalidate displayed source bindings or
-durable attempts because it does not change source authority or saved source state.
+durable attempts because it does not change source authority or saved source state. If one pass
+outlasts the interval, Casework skips missed ticks instead of replaying them back-to-back against the
+source.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
