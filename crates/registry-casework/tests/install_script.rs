@@ -405,16 +405,15 @@ exec /bin/mv "${arguments[@]}"
     fn preinstall_pointer_toolset_without_ctl(&self) {
         let toolset = self.install_dir.join(".casework-toolset.earlier");
         fs::create_dir_all(&toolset).unwrap();
-        for binary in ["casework"] {
-            let path = toolset.join(binary);
-            fs::write(&path, format!("{binary} previous binary\n")).unwrap();
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-            std::os::unix::fs::symlink(
-                format!(".casework-current/{binary}"),
-                self.install_dir.join(binary),
-            )
-            .unwrap();
-        }
+        let binary = "casework";
+        let path = toolset.join(binary);
+        fs::write(&path, format!("{binary} previous binary\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            format!(".casework-current/{binary}"),
+            self.install_dir.join(binary),
+        )
+        .unwrap();
         std::os::unix::fs::symlink(
             ".casework-toolset.earlier",
             self.install_dir.join(".casework-current"),
