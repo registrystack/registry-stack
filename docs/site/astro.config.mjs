@@ -132,6 +132,7 @@ const caseworkOpenApiSchema = {
 const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
+  '/tutorials/review-breg-changes-in-casework/',
   '/explanation/how-casework-works/',
   '/configure/casework/',
   '/operate/casework/',
@@ -528,6 +529,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'start/casework' },
             { label: 'Decide your first work item', slug: 'tutorials/first-casework' },
+            { label: 'Review BReg changes in Casework', slug: 'tutorials/review-breg-changes-in-casework' },
             { label: 'How Casework works', slug: 'explanation/how-casework-works' },
             { label: 'Author a policy', slug: 'configure/casework' },
             { label: 'Deploy Casework', slug: 'operate/casework' },

@@ -54,11 +54,33 @@ function extractBashArray(source, name) {
     .filter(Boolean);
 }
 
-async function caseworkSpec() {
+async function spec(slug) {
   const source = await readFile(gate, 'utf8');
-  const branch = source.match(/\n\ttutorials\/first-casework\)[\s\S]*?\n\t\t;;/u)?.[0];
-  assert.ok(branch, 'the first Registry Casework replay spec must exist');
+  const branch = source.match(
+    new RegExp(`\\n\\t${slug.replaceAll('/', '\\/')}\\)[\\s\\S]*?\\n\\t\\t;;`, 'u'),
+  )?.[0];
+  assert.ok(branch, `the ${slug} replay spec must exist`);
   return branch;
+}
+
+const caseworkSpec = () => spec('tutorials/first-casework');
+const reviewSpec = () => spec('tutorials/review-breg-changes-in-casework');
+
+// Split the gate's report into one block per tutorial, keyed by slug, so a
+// test can ask about one tutorial's fences without the other's in the way.
+function reportBlocks(output) {
+  const blocks = new Map();
+  let current = null;
+  for (const line of output.split('\n')) {
+    const header = line.match(/^(tutorials\/[a-z0-9-]+): \d+ sh fences, \d+ executed$/u);
+    if (header) {
+      current = [];
+      blocks.set(header[1], current);
+    } else if (current) {
+      current.push(line);
+    }
+  }
+  return blocks;
 }
 
 // Counts are reported, never required: a writer who adds or removes a command
@@ -68,18 +90,28 @@ test('the dry-run gate resolves every registered Registry Casework tutorial', as
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
   assert.match(output, /tutorials\/first-casework: \d+ sh fences, \d+ executed/u);
-  assert.match(output, /Checked 1 tutorial\./u);
+  assert.match(output, /tutorials\/review-breg-changes-in-casework: \d+ sh fences, \d+ executed/u);
+  assert.match(output, /Checked 2 tutorials\./u);
 });
 
 // The unexecuted surface is information a reviewer needs, not a rule. The
-// install one-liner reaches the network, and it is the only fence the journey
-// leaves alone: everything after it is what the gate proves.
+// install one-liners reach the network, and they are the only fences each
+// journey leaves alone: everything after them is what the gate proves.
 test('the gate names the sh fences it did not execute', async () => {
   const { code, output } = await runGate();
   assert.equal(code, 0, output);
-  const unexecuted = output.match(/not executed: fence \d+ under "[^"]+"/gu) ?? [];
-  assert.equal(unexecuted.length, 1, output);
-  assert.match(unexecuted[0], /under "Install Registry Casework"/u);
+  const blocks = reportBlocks(output);
+  const unexecutedUnder = (slug) =>
+    (blocks.get(slug) ?? [])
+      .map((line) => line.match(/not executed: fence \d+ under "([^"]+)"/u)?.[1])
+      .filter(Boolean);
+  assert.deepEqual(unexecutedUnder('tutorials/first-casework'), ['Install Registry Casework'], output);
+  const review = unexecutedUnder('tutorials/review-breg-changes-in-casework');
+  assert.ok(review.length > 0, output);
+  assert.ok(
+    review.every((heading) => heading === 'Install both products'),
+    output,
+  );
 });
 
 // The journey has to start the runtime the page leaves running and stop it
@@ -112,9 +144,103 @@ test('the registered journey runs every profile the page teaches', async () => {
   }
 });
 
-// Run the outer cleanup's session stop against a stand-in caseworkctl that
-// records what it was asked to do, over a reader directory holding the given
-// state files.
+// The two-product journey has to start the registry before Casework, because
+// `caseworkctl dev` borrows the registry session's issuer, and it has to stop
+// both at the end: a replay that stopped only one would hold a database
+// container after the gate exits.
+test('the two-product journey starts the registry first and stops both sessions', async () => {
+  const steps = extractBashArray(await reviewSpec(), 'SPEC_STEPS').map((step) =>
+    step.replaceAll('"', ''),
+  );
+  assert.equal(steps[0], 'run:Create the two projects');
+  assert.ok(steps.indexOf('run:Start the registry') < steps.indexOf('run:Start Casework'));
+  assert.equal(steps.at(-1), 'run:Stop both sessions');
+});
+
+// The point of the two-product journey is one change request moving from a
+// registry submission through a Casework review and application back into the
+// registry, so each leg has to stay in it.
+test('the two-product journey runs every leg the page teaches', async () => {
+  const steps = extractBashArray(await reviewSpec(), 'SPEC_STEPS').map((step) =>
+    step.replaceAll('"', ''),
+  );
+  for (const step of [
+    'run:Connect the registry to Casework',
+    'run:Submit a change request',
+    'run:Open the inbox as Staff',
+    'run:Approve the review',
+    'run:Apply the change',
+    'run:Verify the registry',
+  ]) {
+    assert.ok(steps.includes(step), `${step} must stay in the journey`);
+  }
+});
+
+// The two Casework decisions and the registry's own view of the result are
+// read with curl --write-out and a human-readable example runner, so a review
+// that stopped reaching the source, or an application that stopped changing
+// the registry, would leave every command exiting zero.
+test('the two-product journey retains the outcomes the page teaches', async () => {
+  const branch = await reviewSpec();
+  for (const expected of [
+    '"resultingState": "approved"',
+    '"resultingState": "applied"',
+    '"bregState": "applied"',
+  ]) {
+    assert.ok(branch.includes(expected), `${expected} must stay asserted`);
+  }
+});
+
+// Run the toolset preparation with every binary supplied, so no build runs,
+// and report what the shim directory serves.
+async function runPrepareToolset() {
+  const source = await readFile(gate, 'utf8');
+  const root = await mkdtemp(join(tmpdir(), 'casework-toolset-test-'));
+  const binDir = join(root, 'supplied');
+  const shimDir = join(root, 'bin');
+  await mkdir(binDir);
+  const names = ['casework', 'caseworkctl', 'mint', 'breg', 'bregctl'];
+  for (const name of names) {
+    await writeFile(join(binDir, name), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
+  }
+  const harness = join(root, 'toolset.sh');
+  await writeFile(
+    harness,
+    [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      `SHIM_DIR='${shimDir}'`,
+      await liftFunction(source, 'prepare_toolset'),
+      'prepare_toolset',
+      `ls '${shimDir}'`,
+      '',
+    ].join('\n'),
+  );
+  try {
+    const result = await runShell(
+      `CASEWORK_BIN='${join(binDir, 'casework')}' CASEWORKCTL_BIN='${join(binDir, 'caseworkctl')}' ` +
+        `MINT_BIN='${join(binDir, 'mint')}' BREG_BIN='${join(binDir, 'breg')}' ` +
+        `BREGCTL_BIN='${join(binDir, 'bregctl')}' bash ${harness}`,
+    );
+    return { ...result, names };
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+// The two-product page calls `bregctl` and `breg` by name beside the Casework
+// binaries, and `caseworkctl dev` drives `bregctl` from PATH to borrow the
+// registry session, so the shim directory has to serve all five.
+test('the toolset serves the Base Registry Engine binaries beside the Casework ones', async () => {
+  const { code, output, names } = await runPrepareToolset();
+  assert.equal(code, 0, output);
+  const served = output.trim().split('\n').filter(Boolean).sort();
+  assert.deepEqual(served, [...names].sort());
+});
+
+// Run the outer cleanup's session stop against stand-in caseworkctl and
+// bregctl binaries that record what they were asked to do, over a reader
+// directory holding the given state files.
 async function runStopDevSessions({ stateFiles, stub }) {
   const source = await readFile(gate, 'utf8');
   const root = await mkdtemp(join(tmpdir(), 'casework-stop-test-'));
@@ -122,11 +248,13 @@ async function runStopDevSessions({ stateFiles, stub }) {
   const shimDir = join(root, 'bin');
   const calls = join(root, 'calls.log');
   await mkdir(shimDir);
-  await writeFile(
-    join(shimDir, 'caseworkctl'),
-    `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >>'${calls}'\n${stub}\n`,
-    { mode: 0o755 },
-  );
+  for (const binary of ['caseworkctl', 'bregctl']) {
+    await writeFile(
+      join(shimDir, binary),
+      `#!/usr/bin/env bash\nprintf '${binary} %s\\n' "$*" >>'${calls}'\n${stub}\n`,
+      { mode: 0o755 },
+    );
+  }
   for (const relative of stateFiles) {
     await mkdir(dirname(join(readerDir, relative)), { recursive: true });
     await writeFile(join(readerDir, relative), '{}\n');
@@ -159,26 +287,32 @@ async function runStopDevSessions({ stateFiles, stub }) {
   }
 }
 
-// A journey that fails halfway leaves `caseworkctl dev` running with a
-// database container behind it, and deleting the work root alone would orphan
-// that container. The outer cleanup stops every session the replay started,
-// with the toolset under test, and reclaims the container and volume.
+// A journey that fails halfway leaves `caseworkctl dev`, and on the two-product
+// page `bregctl dev` beside it, running with a database container behind each,
+// and deleting the work root alone would orphan those containers. The outer
+// cleanup stops every session the replay started, with the toolset under test,
+// and reclaims the containers and volumes. Casework sessions stop first,
+// because each one borrows the issuer of the registry session beside it.
 test('the cleanup stops every local development session the replay started', async () => {
   const { code, output, readerDir, calls } = await runStopDevSessions({
     stateFiles: [
       'first-casework/tutorial-work/casework/.casework/dev/state.json',
       'another/project/.casework/dev/state.json',
+      'review-breg-changes-in-casework/tutorial-work/registry/.breg/dev/state.json',
     ],
     stub: 'exit 0',
   });
   assert.equal(code, 0, output);
   assert.deepEqual(
-    calls.sort(),
+    calls.slice(0, 2).sort(),
     [
-      `dev stop ${join(readerDir, 'another/project')} --remove`,
-      `dev stop ${join(readerDir, 'first-casework/tutorial-work/casework')} --remove`,
+      `caseworkctl dev stop ${join(readerDir, 'another/project')} --remove`,
+      `caseworkctl dev stop ${join(readerDir, 'first-casework/tutorial-work/casework')} --remove`,
     ],
   );
+  assert.deepEqual(calls.slice(2), [
+    `bregctl dev stop ${join(readerDir, 'review-breg-changes-in-casework/tutorial-work/registry')} --remove`,
+  ]);
 });
 
 test('the cleanup leaves a stopped session alone', async () => {
@@ -297,10 +431,11 @@ test('the gate sets none of the development port overrides', async () => {
 // ---------------------------------------------------------------------------
 
 // Build a docs root the gate will accept: every excluded page must exist and
-// still carry Registry Casework commands, and the one registered page is the
-// real one, edited.
+// still carry Registry Casework commands, and every registered page is the
+// real one, with the first tutorial edited.
 async function docsFixtureRoot(edit = (page) => page) {
   const source = await readFile(gate, 'utf8');
+  const registered = extractBashArray(source, 'CASEWORK_TUTORIALS');
   const excluded = extractBashArray(source, 'EXCLUDED_CASEWORK_TUTORIALS');
   const sections = extractBashArray(source, 'CASEWORK_DOC_SECTIONS');
   const root = await mkdtemp(join(tmpdir(), 'casework-tutorial-coverage-test-'));
@@ -312,6 +447,12 @@ async function docsFixtureRoot(edit = (page) => page) {
       join(root, `${slug}.mdx`),
       '---\ntitle: stub\n---\n\n```sh\ncaseworkctl check .\n```\n',
     );
+  }
+  for (const slug of registered) {
+    if (slug === 'tutorials/first-casework') {
+      continue;
+    }
+    await writeFile(join(root, `${slug}.mdx`), await readFile(resolve(docsRoot, `${slug}.mdx`)));
   }
   const page = await readFile(firstCasework, 'utf8');
   await writeFile(join(root, 'tutorials/first-casework.mdx'), edit(page));

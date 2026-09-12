@@ -39,7 +39,9 @@ available only to builds with the `postgres-test` feature and an explicit
 
 `authentication.oidc` requires `issuer` and `audience`. `jwksSource` defaults to
 discovery and can instead select a static `documentRef`. `scopeClaim` defaults
-to `registry_scopes`. `humanIdentity` defaults to claim
+to `registry_scopes` for compatibility with existing deployments. Registry Mint
+emits `scope`, so the maintained example and `caseworkctl init` set that explicit
+override. `humanIdentity` defaults to claim
 `registry_actor_kind` with value `human` and applies only to human roles.
 Principal selection belongs exclusively to each authored
 `accessProfiles[].principalClaim` in `casework.yaml`. The removed runtime field
@@ -50,6 +52,14 @@ keyed-chain secret. `sources` is keyed by the exact source ids declared by the
 selected policy; missing, extra, or empty ids are refused. Source access remains
 bound to each source's configured reader profile and does not grant a caller a
 Casework access profile.
+
+`sources.<id>.reconciliationIntervalMilliseconds` controls only how often
+Casework schedules source readback. It is deliberately excluded from the BReg
+source binding generation because changing polling cadence changes neither
+source authority nor saved source state. A cadence change therefore does not
+invalidate displayed bindings or durable attempts. When a readback pass lasts
+longer than the interval, Casework skips missed ticks instead of replaying them
+back-to-back against the source.
 
 See the complete maintained
 [`runtime.example.yaml`](examples/professional-review/runtime.example.yaml) and

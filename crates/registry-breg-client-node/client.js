@@ -1,6 +1,6 @@
 'use strict';
 
-const { types: { isProxy } } = require('node:util');
+const { types: { isProxy, isSharedArrayBuffer } } = require('node:util');
 const native = require('./index');
 
 const MAX_JSON_DEPTH = 128;
@@ -48,6 +48,64 @@ function inputError(kind) {
       ? 'Base Registry client configuration is invalid'
       : 'Base Registry client arguments are invalid',
   });
+}
+
+function plainDataObject(value, expectedFields) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
+    throw inputError('invalid_request');
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid_request');
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== 'string')
+    || keys.length !== expectedFields.length
+    || keys.some((key) => !expectedFields.includes(key))) throw inputError('invalid_request');
+  const result = Object.create(null);
+  for (const field of expectedFields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw inputError('invalid_request');
+    }
+    result[field] = descriptor.value;
+  }
+  return result;
+}
+
+function webhookHeaders(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value) || isProxy(value)) {
+    throw inputError('invalid_request');
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) throw inputError('invalid_request');
+  const keys = Reflect.ownKeys(value);
+  if (keys.some((key) => typeof key !== 'string')) {
+    throw inputError('invalid_request');
+  }
+  const result = Object.create(null);
+  for (const name of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name);
+    if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')
+      || typeof descriptor.value !== 'string') throw inputError('invalid_request');
+    result[name] = descriptor.value;
+  }
+  return result;
+}
+
+function verifyWebhookDelivery(value) {
+  try {
+    const input = plainDataObject(value, ['method', 'path', 'headers', 'body', 'key']);
+    if (typeof input.method !== 'string' || typeof input.path !== 'string'
+      || !Buffer.isBuffer(input.body) || !Buffer.isBuffer(input.key)
+      || isSharedArrayBuffer(input.body.buffer) || isSharedArrayBuffer(input.key.buffer)) {
+      throw inputError('invalid_request');
+    }
+    input.headers = webhookHeaders(input.headers);
+    input.body = Buffer.from(input.body);
+    input.key = Buffer.from(input.key);
+    return native.verifyWebhookDelivery(input);
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
 }
 
 function chargeString(value, budget, kind) {
@@ -289,6 +347,7 @@ class BaseRegistryClient extends native.BaseRegistryClient {
 }
 
 module.exports = {
+  verifyWebhookDelivery,
   BaseRegistryClient,
   BaseRegistryClientError,
   BRegMetadata: native.BRegMetadata,

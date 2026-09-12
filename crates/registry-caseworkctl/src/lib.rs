@@ -59,7 +59,7 @@ enum Command {
     /// Preview or record an operator settlement of one uncertain source attempt.
     Attempt(AttemptArgs),
     /// Start, stop and inspect this project's retained local Casework runtime.
-    Dev(dev::DevArgs),
+    Dev(Box<dev::DevArgs>),
     /// Supervise one project's owned local services. Not for direct use.
     #[command(name = "__dev-supervisor", hide = true)]
     DevSupervisor(dev::SupervisorArgs),
@@ -790,7 +790,7 @@ fn run(cli: Cli) -> Result<Value> {
                 args.apply,
             ),
         },
-        Command::Dev(args) => dev::run(args),
+        Command::Dev(args) => dev::run(*args),
         Command::DevSupervisor(_) => unreachable!("the supervisor is dispatched before run"),
         Command::DevServiceGuard(_) => unreachable!("the service guard is dispatched before run"),
     }

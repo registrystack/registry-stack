@@ -1330,9 +1330,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # The two-product page runs a Base Registry Engine beside Casework,
+          # so its binaries are part of the toolset the replay serves.
           CARGO_TARGET_DIR="target/casework-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-casework -p registry-caseworkctl -p registry-mint --bins
+            -p registry-casework -p registry-caseworkctl -p registry-mint \
+            -p registry-breg --features registry-breg/runtime \
+            -p registry-bregctl --bins
 
       - name: Verify the retained local development lifecycle
         shell: bash
@@ -1350,11 +1354,13 @@ jobs:
           CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/casework
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/caseworkctl
           MINT_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/mint
+          BREG_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/breg
+          BREGCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/bregctl
         run: |
           set -euo pipefail
-          # The tutorial passes no port flags, and this runner listens on none
-          # of the three defaults, so the replay runs on the ports a reader
-          # gets. The runtime the page starts runs PostgreSQL in a disposable
+          # The tutorials pass no port flags, and this runner listens on none
+          # of the defaults, so the replay runs on the ports a reader gets.
+          # Each runtime the pages start runs PostgreSQL in a disposable
           # container of its own, which is why the replay stays on the Docker
           # runner rather than inside a clean read-only container.
           bash docs/site/scripts/check-casework-tutorial.sh
@@ -1455,6 +1461,9 @@ jobs:
           node-version: 22.12.0
           cache: npm
           cache-dependency-path: docs/site/package-lock.json
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
 
       - name: Install docs shell dependency
         run: |

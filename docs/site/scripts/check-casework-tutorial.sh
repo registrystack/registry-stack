@@ -16,19 +16,22 @@
 # an array of strings a page must contain, stop: that is the pinning this file
 # deliberately does not do.
 #
-# This gate builds the Casework toolset from the checked-out source unless
-# CASEWORK_BIN, CASEWORKCTL_BIN and MINT_BIN select exact candidate or released
-# bytes, then replays the registered tutorial's own shell fences from an empty
-# reader directory, the way a reader starts after installing the binaries. What
-# CI runs is what a reader copies.
+# This gate builds the toolset from the checked-out source unless CASEWORK_BIN,
+# CASEWORKCTL_BIN, MINT_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
+# released bytes, then replays each registered tutorial's own shell fences from
+# an empty reader directory, the way a reader starts after installing the
+# binaries. The Base Registry Engine binaries are part of the toolset because
+# the two-product page runs a registry beside Casework, and because
+# `caseworkctl dev` drives `bregctl` from PATH to borrow that registry's local
+# session. What CI runs is what a reader copies.
 #
 # Usage:
 #   scripts/check-casework-tutorial.sh              replay every registered tutorial
 #   scripts/check-casework-tutorial.sh --dry-run    resolve the journeys only
 #
-# The full run needs Docker, because `caseworkctl dev`, which the tutorial
-# starts, runs PostgreSQL in a container. The dry run needs neither Docker nor a
-# compiler, which is what lets it run in the docs checks.
+# The full run needs Docker, because `caseworkctl dev` and `bregctl dev`, which
+# the tutorials start, each run PostgreSQL in a container. The dry run needs
+# neither Docker nor a compiler, which is what lets it run in the docs checks.
 #
 # Registering a tutorial means adding its slug to CASEWORK_TUTORIALS and a
 # branch to load_spec. Each spec holds two things:
@@ -63,7 +66,7 @@
 #
 # Configuration:
 #   CASEWORK_BIN / CASEWORKCTL_BIN / MINT_BIN  run these exact binaries instead
-#                                              of building from source
+#   BREG_BIN / BREGCTL_BIN                     of building from source
 #   CASEWORK_TUTORIAL_CARGO_PROFILE            ci (default) or release
 #   CASEWORK_TUTORIAL_DOCS_ROOT                docs content directory override (tests)
 #
@@ -97,6 +100,7 @@ CASEWORK_DOC_SECTIONS=(
 
 CASEWORK_TUTORIALS=(
 	tutorials/first-casework
+	tutorials/review-breg-changes-in-casework
 )
 
 # Every other page that runs Registry Casework commands, and the reason it is
@@ -222,6 +226,37 @@ load_spec() {
 			'"profileId": "staff"'
 		)
 		;;
+	tutorials/review-breg-changes-in-casework)
+		# The page opens with two install one-liners, which this gate replaces
+		# with the toolset under test. It starts a registry with `bregctl dev`
+		# and then Casework with `caseworkctl dev --source-project`, which
+		# borrows the registry session's issuer, so the registry has to be
+		# running first and both sessions are stopped at the end.
+		SPEC_STEPS=(
+			"run:Create the two projects"
+			"run:Connect the registry to Casework"
+			"run:Start the registry"
+			"run:Start Casework"
+			"run:Submit a change request"
+			"run:Open the inbox as Staff"
+			"run:Approve the review"
+			"run:Apply the change"
+			"run:Verify the registry"
+			"run:Stop both sessions"
+		)
+		# The two decisions are read with curl --write-out and no
+		# --fail-with-body, and the registry's own view of the result is read
+		# through the example runner, which exits zero on any answer it can
+		# show. A review that stopped reaching the registry, an application
+		# that stopped changing the record, or a registry that stopped
+		# recording the applied state would leave the whole journey green.
+		# These are the assertions that catch it.
+		SPEC_ASSERTS=(
+			'"resultingState": "approved"'
+			'"resultingState": "applied"'
+			'"bregState": "applied"'
+		)
+		;;
 	*)
 		printf '%s is not a registered Registry Casework tutorial in %s\n' \
 			"$1" "${BASH_SOURCE[0]}" >&2
@@ -259,22 +294,31 @@ READER_DIR="$WORK_ROOT/reader"
 SHIM_DIR="$WORK_ROOT/bin"
 
 # Stop every local development session the replay started, and reclaim its
-# container and volume. A journey that fails halfway leaves `caseworkctl dev`
-# running with a database container behind it, and deleting the work root
-# alone would orphan that container. Stopping with --remove is idempotent, so
-# a journey that already stopped its own session costs nothing here. Returns
-# non-zero when a session was left behind, which is what keeps its project
-# under the work root for a second attempt.
+# container and volume. A journey that fails halfway leaves `caseworkctl dev`,
+# and on the two-product page `bregctl dev` beside it, running with a database
+# container behind each, and deleting the work root alone would orphan those
+# containers. Stopping with --remove is idempotent, so a journey that already
+# stopped its own sessions costs nothing here. Casework sessions stop first,
+# because each one borrows the issuer of the registry session beside it.
+# Returns non-zero when a session was left behind, which is what keeps its
+# project under the work root for a second attempt.
 stop_dev_sessions() {
-	local state project status=0
-	[[ -d "$READER_DIR" && -x "$SHIM_DIR/caseworkctl" ]] || return 0
-	while IFS= read -r state; do
-		project="$(dirname "$(dirname "$(dirname "$state")")")"
-		if ! "$SHIM_DIR/caseworkctl" dev stop "$project" --remove >/dev/null 2>&1; then
-			printf 'could not stop the local development session in %s\n' "$project" >&2
-			status=1
-		fi
-	done < <(find "$READER_DIR" -path '*/.casework/dev/state.json' 2>/dev/null)
+	local tool state_glob state project status=0
+	[[ -d "$READER_DIR" ]] || return 0
+	for tool in caseworkctl bregctl; do
+		[[ -x "$SHIM_DIR/$tool" ]] || continue
+		case "$tool" in
+		caseworkctl) state_glob='*/.casework/dev/state.json' ;;
+		bregctl) state_glob='*/.breg/dev/state.json' ;;
+		esac
+		while IFS= read -r state; do
+			project="$(dirname "$(dirname "$(dirname "$state")")")"
+			if ! "$SHIM_DIR/$tool" dev stop "$project" --remove >/dev/null 2>&1; then
+				printf 'could not stop the local development session in %s\n' "$project" >&2
+				status=1
+			fi
+		done < <(find "$READER_DIR" -path "$state_glob" 2>/dev/null)
+	done
 	return "$status"
 }
 
@@ -316,18 +360,23 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
+	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${MINT_BIN:-}" ||
+		-z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-casework -p registry-caseworkctl -p registry-mint --bins)
+			-p registry-casework -p registry-caseworkctl -p registry-mint \
+			-p registry-breg --features registry-breg/runtime \
+			-p registry-bregctl --bins)
 		CASEWORK_BIN="$TARGET_DIR/$profile_dir/casework"
 		CASEWORKCTL_BIN="$TARGET_DIR/$profile_dir/caseworkctl"
 		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
+		BREG_BIN="$TARGET_DIR/$profile_dir/breg"
+		BREGCTL_BIN="$TARGET_DIR/$profile_dir/bregctl"
 	fi
 	local bin
-	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$MINT_BIN"; do
+	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$MINT_BIN" "$BREG_BIN" "$BREGCTL_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -342,12 +391,15 @@ prepare_toolset() {
 		fi
 	done
 
-	# The tutorial calls the binaries by name, and `caseworkctl dev` resolves
-	# `casework` and `mint` from PATH, so serve them from a shim dir.
+	# The tutorials call the binaries by name, `caseworkctl dev` resolves
+	# `casework`, `mint` and `bregctl` from PATH, and `bregctl dev` resolves
+	# `breg` and `mint` the same way, so serve all five from a shim dir.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$CASEWORK_BIN" "$SHIM_DIR/casework"
 	ln -s "$CASEWORKCTL_BIN" "$SHIM_DIR/caseworkctl"
 	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
+	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
+	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
 }
 
 # ---------------------------------------------------------------------------

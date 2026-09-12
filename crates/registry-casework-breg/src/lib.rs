@@ -518,6 +518,26 @@ fn read_error(error: BaseRegistryClientError) -> SourceAdapterError {
     }
 }
 
+fn initial_refusal(
+    status: u16,
+    code: BRegProblemCode,
+    execution: PreparedExecution,
+) -> Option<SourceAdapterError> {
+    if execution != PreparedExecution::Initial {
+        return None;
+    }
+    if code == BRegProblemCode::IdempotencyConflict {
+        return Some(SourceAdapterError::RequestRejected);
+    }
+    Some(match status {
+        400 | 422 => SourceAdapterError::RequestRejected,
+        404 => SourceAdapterError::RecordMissing,
+        401 | 403 => SourceAdapterError::ReviewerNotAuthorized,
+        409 | 412 => SourceAdapterError::ActionNotOffered,
+        _ => return None,
+    })
+}
+
 fn source_operation(
     operation: &OperationName,
 ) -> Result<BRegLifecycleOperation, SourceAdapterError> {
@@ -891,7 +911,11 @@ impl SourceAdapter for BregAdapter {
         if let Some(reason) = input.reason {
             action = action
                 .with_reason(reason)
-                .map_err(|_| SourceAdapterError::Invalid)?;
+                .map_err(|_| match action.operation() {
+                    BRegLifecycleOperation::ApproveRequest
+                    | BRegLifecycleOperation::ApplyRequest => SourceAdapterError::ReasonUnsupported,
+                    _ => SourceAdapterError::Invalid,
+                })?;
         }
         let key = BRegIdempotencyKey::parse(input.idempotency_key)
             .map_err(|_| SourceAdapterError::Invalid)?;
@@ -959,11 +983,9 @@ impl SourceAdapter for BregAdapter {
                 // Only the maintained client's validated problem response from
                 // the actual POST proves a refusal. A protocol failure carrying
                 // a 4xx status is not equivalent evidence.
-                BaseRegistryClientError::Problem {
-                    status: 400 | 401 | 403 | 404 | 409 | 412 | 422,
-                    ..
-                } if input.execution == PreparedExecution::Initial => {
-                    SourceAdapterError::DefinitiveRefusal
+                BaseRegistryClientError::Problem { status, code, .. } => {
+                    initial_refusal(status, code, input.execution)
+                        .unwrap_or(SourceAdapterError::Uncertain)
                 }
                 _ => SourceAdapterError::Uncertain,
             })?;
@@ -1096,5 +1118,58 @@ mod tests {
     fn open_core_operation_names_do_not_expand_breg_authority() {
         let custom = OperationName::parse("verify_documents").expect("custom core operation");
         assert_eq!(source_operation(&custom), Err(SourceAdapterError::Denied));
+    }
+
+    #[test]
+    fn initial_problem_statuses_preserve_each_refusal_class() {
+        for (statuses, expected) in [
+            (&[400, 422][..], SourceAdapterError::RequestRejected),
+            (&[404][..], SourceAdapterError::RecordMissing),
+            (&[401, 403][..], SourceAdapterError::ReviewerNotAuthorized),
+            (&[409, 412][..], SourceAdapterError::ActionNotOffered),
+        ] {
+            for status in statuses {
+                assert_eq!(
+                    initial_refusal(
+                        *status,
+                        BRegProblemCode::MutationConflict,
+                        PreparedExecution::Initial,
+                    ),
+                    Some(expected)
+                );
+                assert_eq!(
+                    initial_refusal(
+                        *status,
+                        BRegProblemCode::MutationConflict,
+                        PreparedExecution::Recovery,
+                    ),
+                    None
+                );
+            }
+        }
+        assert_eq!(
+            initial_refusal(
+                500,
+                BRegProblemCode::ServiceUnavailable,
+                PreparedExecution::Initial,
+            ),
+            None
+        );
+        assert_eq!(
+            initial_refusal(
+                409,
+                BRegProblemCode::IdempotencyConflict,
+                PreparedExecution::Initial,
+            ),
+            Some(SourceAdapterError::RequestRejected)
+        );
+        assert_eq!(
+            initial_refusal(
+                409,
+                BRegProblemCode::IdempotencyConflict,
+                PreparedExecution::Recovery,
+            ),
+            None
+        );
     }
 }

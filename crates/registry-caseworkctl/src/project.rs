@@ -67,7 +67,7 @@ fn runtime_example(project: &Path, include_source: bool) -> Result<String> {
         "authentication": {"oidc": {
             "issuer": "https://identity.example.test/realms/registry",
             "audience": "urn:example:casework",
-            "scopeClaim": "registry_scopes",
+            "scopeClaim": "scope",
             "humanIdentity": {"claim": "registry_actor_kind", "value": "human"}
         }},
         "audit": {"path": package_root.join("state/audit.ndjson"), "hashKeyRef": "secret:file/casework-audit-key"},
@@ -236,9 +236,13 @@ pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for 
 # `registry_principal` is this project's `principalClaim`, and
 # `registry_actor_kind: human` is the claim Casework requires of a person.
 #
-# This project binds a BReg source, so `caseworkctl dev` does not serve it: a
-# source binding needs a running source system and its own reader credential.
-# Point these clients at the deployed runtime's own token issuer.
+# This project binds a BReg source, so `caseworkctl dev` serves it only beside
+# a running `bregctl dev` session for that registry, named with
+# `--source-project`: the local session borrows that registry's Mint as its
+# issuer and exports each client below as a registry client with the same
+# principal, which `caseworkctl source add --apply` writes into the registry's
+# own dev-clients.yaml. For a deployment, point these clients at the runtime's
+# own token issuer instead.
 version: 1
 clients:
   - id: administrator
@@ -588,7 +592,7 @@ fn read_package_input(path: &Path) -> Result<Vec<u8>> {
     fs::read(path).with_context(|| format!("reading package input {}", path.display()))
 }
 
-fn project_input_path(project: &Path, relative: &str) -> Result<PathBuf> {
+pub(super) fn project_input_path(project: &Path, relative: &str) -> Result<PathBuf> {
     let path = Path::new(relative);
     if relative.is_empty()
         || path.is_absolute()
@@ -1172,6 +1176,11 @@ mod tests {
             let text = fs::read_to_string(&clients).unwrap();
             let value: Value = serde_norway::from_str(&text).unwrap();
             assert_eq!(value["version"], 1);
+            let runtime: Value = serde_norway::from_str(
+                &fs::read_to_string(project.join("runtime.example.yaml")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(runtime["authentication"]["oidc"]["scopeClaim"], "scope");
             let declared: Vec<&str> = value["clients"]
                 .as_array()
                 .unwrap()

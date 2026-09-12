@@ -98,8 +98,11 @@ enum DevAction {
     /// Start or reuse the project's retained local database and services.
     ///
     /// A resident supervisor owns this project's PostgreSQL container plus its
-    /// local Registry Mint and Casework children. The database runs the pinned
-    /// image
+    /// local Registry Mint and Casework children. A project that declares
+    /// Base Registry Engine sources starts no Mint of its own: pass
+    /// --source-project and the session borrows the issuer, audience, and
+    /// clients of the `bregctl dev` session serving each source. The database
+    /// runs the pinned image
     /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
@@ -131,12 +134,20 @@ struct StartArgs {
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
+    /// Base Registry Engine project whose running `bregctl dev` session serves
+    /// a declared source, as ID=PATH, or PATH alone when the project declares
+    /// one source (retained for restarts). The session borrows that registry's
+    /// local Mint as its issuer and exports every local client from it.
+    #[arg(long, value_name = "[ID=]PATH")]
+    source_project: Vec<String>,
     #[arg(long, hide = true, env = "CASEWORK_BIN")]
     casework_bin: Option<PathBuf>,
     #[arg(long, hide = true)]
     mint_bin: Option<PathBuf>,
     #[arg(long, hide = true)]
     docker_bin: Option<PathBuf>,
+    #[arg(long, hide = true, env = "BREGCTL_BIN")]
+    bregctl_bin: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]
@@ -214,6 +225,32 @@ struct State {
     /// to the owner.
     #[serde(default)]
     failure: Option<String>,
+    /// Declared sources and the retained `bregctl dev` project serving each,
+    /// by source identifier. A session with sources runs no Mint of its own:
+    /// it borrows the first registry's issuer, so every human token a reader
+    /// mints carries both the Casework and the registry authority.
+    #[serde(default)]
+    sources: BTreeMap<String, SourceSession>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SourceSession {
+    /// The Base Registry Engine project whose `bregctl dev` session serves this source.
+    project: PathBuf,
+    /// What the registry session reported when it last exported the clients,
+    /// absent until the first export completes.
+    #[serde(default)]
+    binding: Option<SourceBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SourceBinding {
+    breg_url: String,
+    token_endpoint: String,
+    audience: String,
+    event_source: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -271,8 +308,44 @@ impl State {
     fn mint_origin(&self) -> String {
         format!("http://127.0.0.1:{}", self.mint_port)
     }
+    /// The registry session whose Mint this session borrows, once bound.
+    fn borrowed(&self) -> Option<&SourceBinding> {
+        self.sources
+            .values()
+            .find_map(|source| source.binding.as_ref())
+    }
+    fn token_endpoint(&self) -> String {
+        match self.borrowed() {
+            Some(binding) => binding.token_endpoint.clone(),
+            None => format!("{}/token", self.mint_origin()),
+        }
+    }
+    /// The issuer the runtime trusts: the borrowed registry Mint, whose token
+    /// endpoint is its origin plus `/token`, else this session's own Mint.
+    fn issuer(&self) -> String {
+        match self.borrowed() {
+            Some(binding) => binding
+                .token_endpoint
+                .strip_suffix("/token")
+                .unwrap_or(&binding.token_endpoint)
+                .to_owned(),
+            None => self.mint_origin(),
+        }
+    }
     fn audience(&self) -> String {
-        format!("urn:casework:dev:{}", self.owner)
+        match self.borrowed() {
+            Some(binding) => binding.audience.clone(),
+            None => format!("urn:casework:dev:{}", self.owner),
+        }
+    }
+    /// The loopback ports this session's own services listen on. A session
+    /// with sources borrows the registry's Mint and starts none of its own.
+    fn listening_ports(&self) -> Vec<u16> {
+        if self.sources.is_empty() {
+            vec![self.casework_port, self.mint_port]
+        } else {
+            vec![self.casework_port]
+        }
     }
     fn administrator(&self) -> Result<&ReportedClient> {
         self.clients
@@ -290,8 +363,10 @@ impl State {
         let root = self.root();
         json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":root.join("state.json"),"operatorConfig":root.join("operator.yaml"),
-            "caseworkUrl":self.casework_origin(),"tokenEndpoint":format!("{}/token",self.mint_origin()),
+            "caseworkUrl":self.casework_origin(),"tokenEndpoint":self.token_endpoint(),
             "audience":self.audience(),"journal":root.join("logs/casework.log"),
+            "sources":self.sources.iter().map(|(id,source)|(id.clone(),json!({"project":source.project,
+                "bregUrl":source.binding.as_ref().map(|binding|binding.breg_url.clone())}))).collect::<serde_json::Map<_,_>>(),
             "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"role":client.role,
                 "clientIdFile":root.join("credentials").join(&client.id).join("client-id"),
                 "assertionKeyFile":root.join("credentials").join(&client.id).join("assertion-key.jwk")})).collect::<Vec<_>>(),
@@ -397,12 +472,15 @@ fn bounded(path: &Path, label: &str) -> Result<Vec<u8>> {
 }
 
 #[derive(Debug)]
-/// Everything the retained session is pinned to: the authored policy the
-/// supervised runtime serves, and the local clients bound to it.
+/// Everything the retained session is pinned to: the authored policy and
+/// imported source descriptions the supervised runtime serves, and the local
+/// clients bound to them.
 struct Captured {
     clients: Clients,
     digest: String,
     reported: Vec<ReportedClient>,
+    /// The registry project serving each declared source.
+    sources: BTreeMap<String, PathBuf>,
 }
 
 /// Catch terminal interruption while the foreground command waits for its
@@ -440,13 +518,25 @@ impl Drop for StartInterruption {
     }
 }
 
-fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
+fn capture(
+    project: &Path,
+    client_bytes: &[u8],
+    source_project_args: &[String],
+    retained: &BTreeMap<String, SourceSession>,
+) -> Result<Captured> {
     let policy = crate::project::load_and_check_policy(project)?;
-    if !policy.sources.is_empty() {
-        bail!("caseworkctl dev serves a project with no declared sources, because every source binding needs a running source system and its own reader credential. Run this project against a deployed Casework runtime, or start with the standalone-decision template");
-    }
+    let declared: Vec<String> = policy
+        .sources
+        .iter()
+        .map(|source| source.id.clone())
+        .collect();
+    let sources = source_projects(&declared, source_project_args, retained)?;
     let clients = config::clients(client_bytes)?;
-    let bound = config::bind(&clients, &policy)?;
+    let bound = if sources.is_empty() {
+        config::bind(&clients, &policy)
+    } else {
+        config::bind_source_backed(&clients, &policy)
+    }?;
     let reported = bound
         .iter()
         .map(|entry| ReportedClient {
@@ -463,11 +553,297 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<Captured> {
         hasher.update((bytes.len() as u64).to_be_bytes());
         hasher.update(bytes);
     }
+    for source in &policy.sources {
+        let path = crate::project::project_input_path(project, &source.description)?;
+        let description = bounded(&path, &format!("source description {}", source.id))?;
+        hasher.update((description.len() as u64).to_be_bytes());
+        hasher.update(description);
+    }
+    // Records retained for one registry project must not be served over
+    // another: the registry each source binds is part of the pinned inputs.
+    for (id, registry) in &sources {
+        for bytes in [id.as_bytes(), registry.as_os_str().as_encoded_bytes()] {
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(bytes);
+        }
+    }
     Ok(Captured {
         clients,
         digest: config::hex_lower(&hasher.finalize()),
         reported,
+        sources,
     })
+}
+
+/// The registry project serving each declared source: the one named with
+/// `--source-project`, else the one the retained session started with.
+fn source_projects(
+    declared: &[String],
+    arguments: &[String],
+    retained: &BTreeMap<String, SourceSession>,
+) -> Result<BTreeMap<String, PathBuf>> {
+    let mut sources = BTreeMap::new();
+    for argument in arguments {
+        let (id, path) = match argument.split_once('=') {
+            Some((id, path)) if !id.is_empty() && !path.contains('=') => (id.to_owned(), path),
+            Some(_) => bail!("--source-project takes ID=PATH, or PATH alone"),
+            None => match declared {
+                [only] => (only.clone(), argument.as_str()),
+                _ => bail!(
+                    "this project declares the sources {}; name the one each registry project serves as --source-project ID=PATH",
+                    declared.join(", ")
+                ),
+            },
+        };
+        if !declared.contains(&id) {
+            bail!(
+                "this project declares no source named {id}; its sources are {}",
+                declared.join(", ")
+            );
+        }
+        let registry = project(Path::new(path)).with_context(|| {
+            format!("the registry project for source {id} must be an existing directory")
+        })?;
+        if sources.insert(id.clone(), registry).is_some() {
+            bail!("--source-project names the source {id} more than once");
+        }
+    }
+    for id in declared {
+        if sources.contains_key(id) {
+            continue;
+        }
+        match retained.get(id) {
+            Some(source) => {
+                sources.insert(id.clone(), source.project.clone());
+            }
+            None => bail!(
+                "source {id} needs the Base Registry Engine project that bregctl dev serves for it; pass --source-project {id}=PATH"
+            ),
+        }
+    }
+    Ok(sources)
+}
+
+/// Bind every declared source to the registry session serving it: export the
+/// reader and every local client from that session, confirm the registry is
+/// answering, copy its issuer's published keys, and write the operator
+/// configuration that names them all. Runs on every start, so the retained
+/// copies follow the registry session they were exported from.
+fn bind_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Result<()> {
+    export_sources(bregctl, state, clients)?;
+    for (id, source) in &state.sources {
+        let binding = source
+            .binding
+            .as_ref()
+            .with_context(|| format!("source {id} has no registry binding after export"))?;
+        let ready = http_with_timeout(
+            "GET",
+            &format!("{}/ready", binding.breg_url),
+            None,
+            &[],
+            None,
+            HTTP_TIMEOUT,
+            None,
+        );
+        if !matches!(ready, Ok((200, _))) {
+            bail!(
+                "the registry serving source {id} is not answering at {}; start it with bregctl dev {} first",
+                binding.breg_url,
+                source.project.display()
+            );
+        }
+    }
+    let root = state.root();
+    private::replace(
+        &root.join("secrets/mint-jwks"),
+        &issuer_keys(&state.issuer())?,
+    )?;
+    private::replace(
+        &root.join("operator.yaml"),
+        serde_norway::to_string(&config::operator(state)?)?.as_bytes(),
+    )
+}
+
+/// Export the Casework reader and every local client from each source's
+/// registry session, recording what the session reports about itself.
+fn export_sources(bregctl: &Path, state: &mut State, clients: &Clients) -> Result<()> {
+    let root = state.root();
+    let mut bound = BTreeMap::new();
+    for (id, source) in &state.sources {
+        let event_source = event_source(&source.project)?;
+        let secrets = root.join("secrets");
+        let report = export_client(
+            bregctl,
+            &root,
+            &source.project,
+            "casework-reader",
+            &secrets.join(format!("{id}-reader-client-id")),
+            &secrets.join(format!("{id}-reader-assertion-key.jwk")),
+        )?;
+        for client in &clients.clients {
+            let directory = root.join("credentials").join(&client.id);
+            export_client(
+                bregctl,
+                &root,
+                &source.project,
+                &client.id,
+                &directory.join("client-id"),
+                &directory.join("assertion-key.jwk"),
+            )?;
+        }
+        let binding = source_binding(&report, event_source)?;
+        // The registry session routes its events to its own receiver; this
+        // key authenticates the receiver Casework publishes regardless.
+        let webhook = secrets.join(format!("{id}-webhook-key"));
+        if !webhook.exists() {
+            private::create(&webhook, config::hex_secret()?.as_bytes())?;
+        }
+        bound.insert(id.clone(), binding);
+    }
+    // One issuer serves the session, so every registry must share a local Mint.
+    let mut issuers = bound
+        .values()
+        .map(|binding| (&binding.token_endpoint, &binding.audience));
+    let first = issuers.next();
+    if issuers.any(|issuer| Some(issuer) != first) {
+        bail!("the registry sessions serving this project's sources use different local Mints; a local session borrows exactly one issuer");
+    }
+    for (id, binding) in bound {
+        if let Some(source) = state.sources.get_mut(&id) {
+            source.binding = Some(binding);
+        }
+    }
+    state.save()
+}
+
+fn source_binding(report: &Value, event_source: String) -> Result<SourceBinding> {
+    let text = |field: &str| -> Result<String> {
+        report[field]
+            .as_str()
+            .map(str::to_owned)
+            .with_context(|| format!("bregctl dev export-client reported no {field}"))
+    };
+    Ok(SourceBinding {
+        breg_url: text("bregUrl")?,
+        token_endpoint: text("tokenEndpoint")?,
+        audience: text("audience")?,
+        event_source,
+    })
+}
+
+/// Refuse an idempotent start when a registry project now names a different
+/// retained BReg session. Its Mint audience and keys are part of the running
+/// Casework process, so replacing them requires an explicit Casework restart.
+fn require_active_source_bindings(bregctl: &Path, state: &State) -> Result<()> {
+    let scratch = tempfile::Builder::new()
+        .prefix(".active-source-check-")
+        .tempdir_in(state.root())
+        .context("creating private active-source check directory")?;
+    fs::set_permissions(scratch.path(), fs::Permissions::from_mode(0o700))?;
+    private::check(scratch.path(), true)?;
+    for (id, source) in &state.sources {
+        let report = export_client(
+            bregctl,
+            &state.root(),
+            &source.project,
+            "casework-reader",
+            &scratch.path().join(format!("{id}-client-id")),
+            &scratch.path().join(format!("{id}-assertion-key.jwk")),
+        )?;
+        let current = source_binding(&report, event_source(&source.project)?)?;
+        if source.binding.as_ref() != Some(&current) {
+            bail!(
+                "the active local development session still uses an earlier BReg session for source {id}; stop Casework and start it again to bind the current registry issuer and credentials"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Export one client pair from a registry session. The session owns the
+/// retained pair, so any earlier copy is replaced rather than compared.
+fn export_client(
+    bregctl: &Path,
+    root: &Path,
+    registry: &Path,
+    client: &str,
+    client_id_file: &Path,
+    assertion_key_file: &Path,
+) -> Result<Value> {
+    for path in [client_id_file, assertion_key_file] {
+        if path.exists() {
+            private::check(path, false)?;
+            fs::remove_file(path)?;
+        }
+    }
+    let bytes = command(
+        Command::new(bregctl)
+            .args(["--format", "json", "dev", "export-client"])
+            .arg(registry)
+            .arg("--client")
+            .arg(client)
+            .arg("--client-id-file")
+            .arg(client_id_file)
+            .arg("--assertion-key-file")
+            .arg(assertion_key_file),
+        root,
+        "export-client",
+        None,
+    )?;
+    let report: Value = serde_json::from_slice(&bytes)
+        .context("bregctl dev export-client returned no JSON report")?;
+    if report["ok"] != true {
+        bail!("bregctl dev export-client did not report success for client {client}");
+    }
+    for path in [client_id_file, assertion_key_file] {
+        private::check(path, false)?;
+    }
+    Ok(report)
+}
+
+/// The event source a registry names for itself, from its authored registry.yaml.
+fn event_source(registry: &Path) -> Result<String> {
+    let authored: Value =
+        serde_norway::from_slice(&bounded(&registry.join("registry.yaml"), "registry.yaml")?)
+            .context("registry.yaml must parse")?;
+    let id = authored["registry"]["id"]
+        .as_str()
+        .context("registry.yaml declares no registry.id")?;
+    let instance = authored["package"]["instanceId"]
+        .as_str()
+        .context("registry.yaml declares no package.instanceId")?;
+    Ok(format!(
+        "urn:registrystack:registry:{id}:instance:{instance}"
+    ))
+}
+
+/// The published keys of the borrowed issuer, located through its discovery
+/// document and accepted only from the issuer's own origin.
+fn issuer_keys(issuer: &str) -> Result<Vec<u8>> {
+    let (status, discovery) = http_with_timeout(
+        "GET",
+        &format!("{issuer}/.well-known/openid-configuration"),
+        None,
+        &[],
+        None,
+        HTTP_TIMEOUT,
+        None,
+    )
+    .with_context(|| format!("the registry issuer at {issuer} is not answering"))?;
+    if status != 200 || discovery["issuer"] != issuer {
+        bail!("the registry issuer at {issuer} publishes no discovery document for itself");
+    }
+    let jwks_uri = discovery["jwks_uri"]
+        .as_str()
+        .filter(|uri| uri.starts_with(&format!("{issuer}/")))
+        .with_context(|| {
+            format!("the registry issuer at {issuer} names no key document of its own")
+        })?;
+    let (status, keys) = http_with_timeout("GET", jwks_uri, None, &[], None, HTTP_TIMEOUT, None)?;
+    if status != 200 || keys["keys"].as_array().is_none_or(|keys| keys.is_empty()) {
+        bail!("the registry issuer at {issuer} publishes no keys");
+    }
+    Ok(serde_json::to_vec(&keys)?)
 }
 
 fn start(args: StartArgs) -> Result<Value> {
@@ -482,11 +858,21 @@ fn start(args: StartArgs) -> Result<Value> {
     };
     let clients_file = clients_file(args.clients_file.as_deref(), existing.as_ref(), &project)?;
     let client_bytes = bounded(&clients_file, "clients file")?;
+    let no_sources = BTreeMap::new();
+    let retained_sources = existing
+        .as_ref()
+        .map_or(&no_sources, |state| &state.sources);
     let Captured {
         clients,
         digest,
         reported,
-    } = capture(&project, &client_bytes)?;
+        sources,
+    } = capture(
+        &project,
+        &client_bytes,
+        &args.source_project,
+        retained_sources,
+    )?;
     // The source pin protects the records a session retains. Once `dev stop
     // --remove` has discarded them, changed inputs start a fresh session on
     // the ports and clients file the previous one used.
@@ -511,6 +897,10 @@ fn start(args: StartArgs) -> Result<Value> {
         if control(&root, "status").is_ok_and(|status| status == "ready") {
             if args.clients_file.is_some() && state.clients_file != clients_file {
                 bail!("the active local development session still uses {}; stop it before selecting a different --clients-file path", state.clients_file.display());
+            }
+            if !state.sources.is_empty() {
+                let bregctl = executable("bregctl", args.bregctl_bin.as_deref())?;
+                require_active_source_bindings(&bregctl, &state)?;
             }
             return Ok(state.report());
         }
@@ -554,17 +944,35 @@ fn start(args: StartArgs) -> Result<Value> {
             directory_teams: 0,
             binaries: BTreeMap::new(),
             failure: None,
+            sources: sources
+                .iter()
+                .map(|(id, registry)| {
+                    (
+                        id.clone(),
+                        SourceSession {
+                            project: registry.clone(),
+                            binding: None,
+                        },
+                    )
+                })
+                .collect(),
         };
         ports(state.casework_port, state.mint_port, state.database_port)?;
-        for port in [state.casework_port, state.mint_port, state.database_port] {
+        for port in state.listening_ports() {
             probe(port)?;
         }
+        probe(state.database_port)?;
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
     let casework = executable("casework", args.casework_bin.as_deref())?;
     let mint = executable("mint", args.mint_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
+    let bregctl = if state.sources.is_empty() {
+        None
+    } else {
+        Some(executable("bregctl", args.bregctl_bin.as_deref())?)
+    };
     // Identify the prerequisites before the session stops a container or
     // launches the supervisor: a casework or mint from another release has to
     // be named here, while the terminal that asked for the start is reading.
@@ -573,9 +981,19 @@ fn start(args: StartArgs) -> Result<Value> {
         ("mint".into(), binary(&root, &mint)?),
         ("docker".into(), binary(&root, &docker)?),
     ]);
+    if let Some(bregctl) = &bregctl {
+        state
+            .binaries
+            .insert("bregctl".into(), binary(&root, bregctl)?);
+    }
     matching_versions(&state.binaries)?;
-    for port in [state.casework_port, state.mint_port] {
+    for port in state.listening_ports() {
         probe(port)?;
+    }
+    // Bind the sources while the terminal is reading: a registry session that
+    // is not running, or one whose issuer cannot be read, is named here.
+    if let Some(bregctl) = &bregctl {
+        bind_sources(bregctl, &mut state, &clients)?;
     }
     // Verify the container before accepting a retained database port.
     if let Some(container) = inspect(&docker, &state)? {
@@ -723,7 +1141,7 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if service_ports_must_be_free(&state.status) {
-        for port in [state.casework_port, state.mint_port] {
+        for port in state.listening_ports() {
             probe(port)?;
         }
     }
@@ -1064,19 +1482,22 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         ensure_active(&terminate)?;
         database(&args.docker_bin, &mut state, &terminate)?;
         ensure_active(&terminate)?;
-        children.mint = Some(service(
-            &args.mint_bin,
-            &["serve", "--config"],
-            &root.join("mint/mint.yaml"),
-            &[],
-            &root,
-            "mint",
-        )?);
-        ready(
-            &format!("{}/ready", state.mint_origin()),
-            children.mint.as_ref().context("Mint child missing")?,
-            &terminate,
-        )?;
+        // A source-backed session borrows the registry session's Mint.
+        if state.sources.is_empty() {
+            children.mint = Some(service(
+                &args.mint_bin,
+                &["serve", "--config"],
+                &root.join("mint/mint.yaml"),
+                &[],
+                &root,
+                "mint",
+            )?);
+            ready(
+                &format!("{}/ready", state.mint_origin()),
+                children.mint.as_ref().context("Mint child missing")?,
+                &terminate,
+            )?;
+        }
         ensure_active(&terminate)?;
         // Migrations are idempotent and guarded by an advisory lock. Run them
         // on every start so a retained database is upgraded with the binaries
@@ -1653,14 +2074,14 @@ fn reported_version(binary: &Binary) -> Option<&str> {
     binary.version.split_whitespace().nth(1)
 }
 
-/// Refuse a session whose casework or mint comes from another release. The
-/// three executables share a configuration contract, a token shape and a
-/// schema, so an older casework beside this caseworkctl fails deep inside a
+/// Refuse a session whose casework, mint or bregctl comes from another
+/// release. The executables share a configuration contract, a token shape and
+/// a schema, so an older casework beside this caseworkctl fails deep inside a
 /// supervised phase, where the cause reads as an unrelated refusal about the
 /// database. Docker belongs to no release of this stack and is never compared.
 fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
     let own = registry_platform_buildinfo::DISPLAY_VERSION;
-    for name in ["casework", "mint"] {
+    for name in ["casework", "mint", "bregctl"] {
         let Some(prerequisite) = binaries.get(name) else {
             continue;
         };
@@ -1669,7 +2090,7 @@ fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
         };
         if reported != own {
             bail!(
-                "the installed {name} at {} reports version {reported}, and this caseworkctl reports version {own}. A local session runs casework, mint and caseworkctl together, so install all three from the same release, or put the matching build first on PATH",
+                "the installed {name} at {} reports version {reported}, and this caseworkctl reports version {own}. A local session runs casework, mint, caseworkctl and, for a source-backed project, bregctl together, so install them from the same release, or put the matching build first on PATH",
                 prerequisite.path.display()
             );
         }
@@ -2955,7 +3376,7 @@ fn token(mint: &Path, state: &State, id: &str, terminate: &AtomicBool) -> Result
         Command::new(mint)
             .arg("token")
             .arg("--url")
-            .arg(format!("{}/token", state.mint_origin()))
+            .arg(state.token_endpoint())
             .arg("--client-id")
             .arg(id)
             .arg("--key")
@@ -3156,7 +3577,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
         Ok(body)
     };
     let mut directory = read_directory(&token)?;
-    let issuer = state.mint_origin();
+    let issuer = state.issuer();
     let principals: BTreeMap<&str, &str> = state
         .clients
         .iter()

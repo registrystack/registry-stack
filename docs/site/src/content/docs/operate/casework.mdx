@@ -127,7 +127,7 @@ authentication:
   oidc:
     issuer: https://identity.example.org/realms/registry
     audience: urn:example:casework
-    scopeClaim: registry_scopes
+    scopeClaim: scope
     humanIdentity:
       claim: registry_actor_kind
       value: human
@@ -169,8 +169,10 @@ mode that serves an authored project with no manifest beside it. Apply HSTS on t
 responses; the runtime adds its remaining security headers and `Cache-Control: no-store` to every
 response it returns.
 
-`scopeClaim` defaults to `registry_scopes` and carries every required scope for the selected
-profile. `humanIdentity` defaults to the claim `registry_actor_kind` with the value `human`, must
+`scopeClaim` defaults to `registry_scopes` for compatibility with earlier deployments. When the
+issuer is Registry Mint, set `scopeClaim: scope` explicitly so its OAuth `scope` values carry every
+required scope for the selected profile. `humanIdentity` defaults to the claim
+`registry_actor_kind` with the value `human`, must
 differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
 Each access profile names its own `principalClaim`; there is no runtime-wide principal claim.
 The runtime accepts RS256 and ES256 signatures and the token types `at+jwt` and `JWT`.
@@ -191,9 +193,15 @@ non-empty `kid`. It is read once, at startup, so a key rotation at the issuer is
 that secret and a restart of every serving process.
 
 Each source binding also accepts `eventType`, which defaults to `casework-lifecycle-v1`,
-`trustedRootCertificatesRef` for a private certificate authority in front of the source, and
+`trustedRootCertificatesRef` for a private certificate authority in front of the source,
 `requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which default to 30000 and 10000,
-accept at most 300000, and are refused when the connect timeout is the larger of the two.
+accept at most 300000, and are refused when the connect timeout is the larger of the two, and
+`reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
+source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
+The interval changes scheduling only. Changing it does not invalidate displayed source bindings or
+durable attempts because it does not change source authority or saved source state. If one pass
+outlasts the interval, Casework skips missed ticks instead of replaying them back-to-back against the
+source.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
@@ -205,8 +213,8 @@ before they become the anchor for verification.
 {/* Evidence: crates/registry-casework/src/config.rs, RuntimeConfig, TlsTermination,
     ListenerNetworkExposure, OidcConfig, HumanIdentityConfig, OidcJwksSource, valid_listener(),
     and parse_static_jwks();
-    crates/registry-casework-breg/src/config.rs, BregBinding, DEFAULT_EVENT_TYPE,
-    DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
+    crates/registry-casework-breg/src/config.rs, BregBinding, binding_generation(),
+    DEFAULT_EVENT_TYPE, DEFAULT_REQUEST_TIMEOUT_MILLISECONDS, and MAXIMUM_TIMEOUT_MILLISECONDS;
     crates/registry-casework/src/http.rs; products/casework/README.md. */}
 
 ### Create the secret files
@@ -322,7 +330,8 @@ The audit publication worker runs once a second: it reads pending records, appen
 keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that
 failed (`pending-read`, `record-identity`, `sink-append`, or `published-mark`) rather than the
 record, and retries; a passing run restores readiness. A maintenance pass runs every two seconds
-and a source reconciliation pass every 60 seconds per bound source. A source outage stays visible
+and a source reconciliation pass per bound source at that binding's
+`reconciliationIntervalMilliseconds`, every 60 seconds unless set. A source outage stays visible
 on the affected work-item operations rather than turning an inbox into an apparently complete empty
 page.
 

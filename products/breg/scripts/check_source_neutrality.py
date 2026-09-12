@@ -132,6 +132,10 @@ PRODUCTION_INPUT_DIRECTORIES = ("resources", "schemas", "migrations", "templates
 EXCLUDED_SOURCE_DIRECTORIES = {"tests", "fixtures", "examples", "benches"}
 RAW_STRING_START = re.compile(r'(?:br|r)(?P<hashes>#{0,255})"')
 PUBLIC_KERNEL_CONTRACTS = ("products/breg/contracts/package-layout.yaml",)
+SHIPPED_STARTER_CATALOG = Path("crates/registry-bregctl/src/starters.rs")
+SHIPPED_STARTER_ROOT = Path("products/breg/starters")
+STARTER_ID_ASSIGNMENT = re.compile(r'^\s*id:\s*"(?P<value>[a-z0-9-]+)",\s*$', re.MULTILINE)
+STARTER_FILE_INCLUDE = re.compile(r'include_bytes!\(\s*"(?P<value>[^"]+)"\s*\)')
 DOMAIN_COMPONENT = re.compile(
     r"(?i)(?:^|[._:/-])(?:"
     + "|".join(re.escape(value) for value in FORBIDDEN_DOMAIN_COMPONENTS)
@@ -276,9 +280,9 @@ def without_cfg_test_items(source: str) -> str:
     return "".join(masked)
 
 
-def rust_string_literals(source: str) -> list[str]:
-    """Return simple and raw Rust string bodies for identifier inspection."""
-    literals: list[str] = []
+def rust_string_literal_spans(source: str) -> list[tuple[str, tuple[int, int]]]:
+    """Return simple and raw Rust string bodies with their source spans."""
+    literals: list[tuple[str, tuple[int, int]]] = []
     index = 0
     while index < len(source):
         raw = RAW_STRING_START.match(source, index)
@@ -288,7 +292,7 @@ def rust_string_literals(source: str) -> list[str]:
             end = source.find(delimiter, body_start)
             if end < 0:
                 break
-            literals.append(source[body_start:end])
+            literals.append((source[body_start:end], (body_start, end)))
             index = end + len(delimiter)
             continue
         if source.startswith('b"', index) or source[index] == '"':
@@ -310,7 +314,7 @@ def rust_string_literals(source: str) -> list[str]:
                     break
                 body.append(character)
                 position += 1
-            literals.append("".join(body))
+            literals.append(("".join(body), (body_start, position)))
             index = position + 1
             continue
         if source.startswith("b'", index) or source[index] == "'":
@@ -335,6 +339,11 @@ def rust_string_literals(source: str) -> list[str]:
                 continue
         index += 1
     return literals
+
+
+def rust_string_literals(source: str) -> list[str]:
+    """Return simple and raw Rust string bodies for identifier inspection."""
+    return [literal for literal, _ in rust_string_literal_spans(source)]
 
 
 def cargo_feature_names(source: str) -> list[str]:
@@ -365,6 +374,36 @@ def is_production_input(path: Path, crate_root: Path) -> bool:
     return bool(set(path.relative_to(crate_root).parts) & set(PRODUCTION_INPUT_DIRECTORIES))
 
 
+def shipped_starter_catalog_literal_spans(
+    repository_root: Path, source: Path, text: str
+) -> set[tuple[int, int]]:
+    """Return exact catalog literal spans backed by shipped starter files."""
+    if source.relative_to(repository_root) != SHIPPED_STARTER_CATALOG:
+        return set()
+
+    starter_root = (repository_root / SHIPPED_STARTER_ROOT).resolve()
+    allowed: set[tuple[int, int]] = set()
+    for match in STARTER_ID_ASSIGNMENT.finditer(text):
+        value = match.group("value")
+        core = (starter_root / value / "core").resolve()
+        if core.is_dir() and core.is_relative_to(starter_root):
+            allowed.add(match.span("value"))
+    for match in STARTER_FILE_INCLUDE.finditer(text):
+        value = match.group("value")
+        target = (source.parent / value).resolve()
+        relative_target = (
+            target.relative_to(starter_root) if target.is_relative_to(starter_root) else None
+        )
+        if (
+            target.is_file()
+            and relative_target is not None
+            and len(relative_target.parts) >= 3
+            and relative_target.parts[1] == "core"
+        ):
+            allowed.add(match.span("value"))
+    return allowed
+
+
 def find_violations(repository_root: Path) -> list[str]:
     violations: list[str] = []
     for source in source_files(repository_root):
@@ -378,6 +417,9 @@ def find_violations(repository_root: Path) -> list[str]:
             None,
         )
         inspected = without_cfg_test_items(text) if source.suffix == ".rs" else text
+        starter_catalog_literal_spans = shipped_starter_catalog_literal_spans(
+            repository_root, source, inspected
+        )
         lowered = inspected.lower()
         for marker in FORBIDDEN_FIXTURE_IDENTIFIERS:
             if marker in lowered:
@@ -389,7 +431,12 @@ def find_violations(repository_root: Path) -> list[str]:
                     violations.append(
                         f"{relative}: contains fixture Rust type identifier {identifier}"
                     )
-            for literal in rust_string_literals(inspected):
+            for literal, span in rust_string_literal_spans(inspected):
+                # Shipped starters are deliberately authored examples embedded by
+                # bregctl. Exempt only catalog ids backed by a core directory and
+                # include_bytes! paths resolving to files beneath that directory.
+                if span in starter_catalog_literal_spans:
+                    continue
                 identifier = domain_identifier(literal)
                 if identifier is not None:
                     violations.append(

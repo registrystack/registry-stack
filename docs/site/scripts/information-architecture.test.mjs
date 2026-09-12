@@ -236,6 +236,7 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
   for (const route of [
     '/start/casework/',
     '/tutorials/first-casework/',
+    '/tutorials/review-breg-changes-in-casework/',
     '/configure/casework/',
     '/operate/casework/',
     '/reference/apis/registry-casework/',
@@ -648,6 +649,7 @@ test('keeps the Casework journey in one product lane', () => {
   assert.deepEqual(slugs, [
     'start/casework',
     'tutorials/first-casework',
+    'tutorials/review-breg-changes-in-casework',
     'explanation/how-casework-works',
     'configure/casework',
     'operate/casework',

@@ -39,7 +39,7 @@ Version 1.
 | Conditional Evidence in Rhai under `registry.action-handler/v2`, calling `evidence::resolve` inside a governed action | Trial | `action_evidence_compiler.rs` and `postgres_action_evidence.rs`, over `acceptance/farmer-landholding-evidence` |
 | Protected evidence-use retention and the operator command `bregctl evidence-retention erase-expired` | Trial | `postgres_action_evidence_retention.rs` and `crates/registry-bregctl/tests/evidence_retention.rs` |
 | `bregctl init --from publicschema`, deriving a project from the pinned offline snapshot by `--starter`, `--selection`, or terminal selection | Enforced | `crates/registry-bregctl/src/init_from_model/` unit tests and `crates/registry-bregctl/tests/cli.rs` |
-| Four published starters under `starters/*/core`, with `bregctl examples list` and `bregctl examples run` | Enforced | `starter_projects.rs`, `support/starter_policy.rs`, and `crates/registry-bregctl/src/dev/examples.rs` |
+| Four published starters under `starters/*/core`, with `bregctl init --template <ID>` creating a project from one and `bregctl examples list` and `bregctl examples run` describing and running its scenarios | Enforced | `starter_projects.rs`, `support/starter_policy.rs`, `crates/registry-bregctl/src/starters.rs`, and `crates/registry-bregctl/src/dev/examples.rs` |
 | `bregctl dev [project]`, reading the project's `dev-clients.yaml` without a flag | Enforced | `crates/registry-bregctl/src/dev/tests.rs` and `crates/registry-bregctl/tests/dev_lifecycle.rs` |
 
 The two trial rows are the ABI and helper that `immediate-actions.md` and

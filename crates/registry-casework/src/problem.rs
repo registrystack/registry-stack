@@ -10,13 +10,16 @@ use registry_casework_core::{
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
-    REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
-    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
-    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
-    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
-    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
-    WORK_ITEM_SUPERSEDED_PROBLEM,
+    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
+    REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
+    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
+    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
+    SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
+    SOURCE_RECORD_MISSING_PROBLEM, SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
+    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
+    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
+    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
+    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 
 /// Resolve a Casework problem code under its registered product prefix.
@@ -47,12 +50,18 @@ pub enum ProblemCode {
     RequestInvalid,
     RequestMethodNotAllowed,
     RequestNotFound,
+    RequestReasonUnsupported,
+    RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     RuntimeFailure,
     ServiceUnavailable,
     SourceBadGateway,
     SourceNotFound,
+    SourceRecordMissing,
+    SourceReviewerNotAuthorized,
+    SourceProfileNotApplicable,
+    SourceProfileRequired,
     SourceSignatureInvalid,
     WorkItemAlreadyClaimed,
     WorkItemNotHolder,
@@ -86,12 +95,18 @@ impl ProblemCode {
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
+        Self::RequestReasonUnsupported,
+        Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::SourceProfileNotApplicable,
+        Self::SourceProfileRequired,
         Self::SourceBadGateway,
         Self::SourceNotFound,
+        Self::SourceRecordMissing,
+        Self::SourceReviewerNotAuthorized,
         Self::SourceSignatureInvalid,
         Self::WorkItemAlreadyClaimed,
         Self::WorkItemNotHolder,
@@ -125,12 +140,18 @@ impl ProblemCode {
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
+            Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
+            Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
+            Self::SourceRecordMissing => SOURCE_RECORD_MISSING_PROBLEM,
+            Self::SourceReviewerNotAuthorized => SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
+            Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
+            Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
             Self::WorkItemAlreadyClaimed => WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
             Self::WorkItemNotHolder => WORK_ITEM_NOT_HOLDER_PROBLEM,
@@ -158,10 +179,14 @@ impl ProblemCode {
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 StatusCode::FORBIDDEN
             }
-            Self::RequestInvalid | Self::SourceSignatureInvalid => StatusCode::BAD_REQUEST,
-            Self::RequestNotFound | Self::SourceNotFound | Self::WorkItemNotVisible => {
-                StatusCode::NOT_FOUND
-            }
+            Self::RequestInvalid
+            | Self::SourceProfileNotApplicable
+            | Self::SourceProfileRequired
+            | Self::SourceSignatureInvalid => StatusCode::BAD_REQUEST,
+            Self::RequestNotFound
+            | Self::SourceNotFound
+            | Self::SourceRecordMissing
+            | Self::WorkItemNotVisible => StatusCode::NOT_FOUND,
             Self::RequestMethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::IdempotencyKeyReused
             | Self::WorkItemAlreadyClaimed
@@ -173,9 +198,12 @@ impl ProblemCode {
             Self::PreconditionFailed => StatusCode::PRECONDITION_FAILED,
             Self::RequestBodyTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::RequestUnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            Self::RequestUnprocessable => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::RequestReasonUnsupported
+            | Self::RequestSourceRejected
+            | Self::RequestUnprocessable => StatusCode::UNPROCESSABLE_ENTITY,
             Self::PreconditionRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::SourceBadGateway => StatusCode::BAD_GATEWAY,
+            Self::SourceReviewerNotAuthorized => StatusCode::FORBIDDEN,
             Self::RuntimeFailure => StatusCode::INTERNAL_SERVER_ERROR,
             Self::ServiceUnavailable | Self::WorkItemSourceUnavailable => {
                 StatusCode::SERVICE_UNAVAILABLE
@@ -205,12 +233,18 @@ impl ProblemCode {
             Self::RequestInvalid => "Invalid request",
             Self::RequestMethodNotAllowed => "Method not allowed",
             Self::RequestNotFound => "Route not found",
+            Self::RequestReasonUnsupported => "Reason not supported",
+            Self::RequestSourceRejected => "Source rejected request",
             Self::RequestUnprocessable => "Request could not be processed",
             Self::RequestUnsupportedMediaType => "Unsupported media type",
             Self::RuntimeFailure => "Casework runtime failure",
             Self::ServiceUnavailable => "Casework service unavailable",
             Self::SourceBadGateway => "Invalid source response",
             Self::SourceNotFound => "Source not found",
+            Self::SourceRecordMissing => "Source record missing",
+            Self::SourceReviewerNotAuthorized => "Source reviewer not authorized",
+            Self::SourceProfileNotApplicable => "Source profile not applicable",
+            Self::SourceProfileRequired => "Source profile required",
             Self::SourceSignatureInvalid => "Source signature invalid",
             Self::WorkItemAlreadyClaimed => "Work item already claimed",
             Self::WorkItemNotHolder => "Work item held by another person",
@@ -261,6 +295,12 @@ impl ProblemCode {
             Self::RequestInvalid => "The Casework request is invalid.",
             Self::RequestMethodNotAllowed => "This route does not accept that HTTP method.",
             Self::RequestNotFound => "The requested Casework route does not exist.",
+            Self::RequestReasonUnsupported => {
+                "The reason field is not supported for approve or apply on this source. Omit it and try again."
+            }
+            Self::RequestSourceRejected => {
+                "The source refused the request body. Fix the request before trying again."
+            }
             Self::RequestUnprocessable => "The request body does not match the Casework contract.",
             Self::RequestUnsupportedMediaType => {
                 "Send a JSON request body with Content-Type application/json."
@@ -273,6 +313,18 @@ impl ProblemCode {
                 "The source returned a response that does not match its registered contract."
             }
             Self::SourceNotFound => "The requested source is not registered.",
+            Self::SourceRecordMissing => {
+                "The bound source record is no longer at the registered location."
+            }
+            Self::SourceReviewerNotAuthorized => {
+                "The source refused the reviewer binding. Check the selected source profile and credential."
+            }
+            Self::SourceProfileNotApplicable => {
+                "Omit the Registry-Source-Profile header for this request."
+            }
+            Self::SourceProfileRequired => {
+                "Send the Registry-Source-Profile header to select the source profile for this request."
+            }
             Self::SourceSignatureInvalid => "The event's signature did not verify.",
             Self::WorkItemAlreadyClaimed => "Someone else claimed this item a moment ago.",
             Self::WorkItemNotHolder => {
@@ -336,6 +388,7 @@ const HOSTED_READ: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::RuntimeFailure,
 ];
@@ -348,6 +401,7 @@ const HOSTED_PAGE: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const HOSTED_ITEM_PAGE: &[ProblemCode] = &[
@@ -359,6 +413,7 @@ const HOSTED_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::RuntimeFailure,
 ];
@@ -373,6 +428,7 @@ const HOSTED_CREATE: &[ProblemCode] = &[
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const HOSTED_MUTATION: &[ProblemCode] = &[
@@ -388,6 +444,7 @@ const HOSTED_MUTATION: &[ProblemCode] = &[
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::IdempotencyExpired,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::WorkItemAlreadyClaimed,
     ProblemCode::WorkItemNotHolder,
     ProblemCode::WorkItemNotOffered,
@@ -400,6 +457,7 @@ const ITEM_READ: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemSourceUnavailable,
@@ -413,6 +471,7 @@ const SOURCE_ITEM_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemSourceUnavailable,
@@ -459,6 +518,7 @@ const DRAFT_MUTATION: &[ProblemCode] = &[
     ProblemCode::PreconditionRequired,
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::WorkItemNotHolder,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemSourceUnavailable,
@@ -469,13 +529,18 @@ const DECISION: &[ProblemCode] = &[
     ProblemCode::ProfileNotAuthorized,
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
+    ProblemCode::RequestReasonUnsupported,
+    ProblemCode::RequestSourceRejected,
     ProblemCode::RequestUnprocessable,
     ProblemCode::RequestUnsupportedMediaType,
     ProblemCode::PreconditionFailed,
     ProblemCode::PreconditionRequired,
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
+    ProblemCode::SourceRecordMissing,
+    ProblemCode::SourceReviewerNotAuthorized,
     ProblemCode::WorkItemNotHolder,
     ProblemCode::WorkItemNotOffered,
     ProblemCode::WorkItemNotVisible,
@@ -494,6 +559,7 @@ const RECOVERY: &[ProblemCode] = &[
     ProblemCode::RequestUnsupportedMediaType,
     ProblemCode::IdempotencyKeyReused,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemRecoveryPending,
@@ -507,6 +573,7 @@ const HOLDINGS: &[ProblemCode] = &[
     ProblemCode::OperationNotAuthorized,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemSourceUnavailable,
     ProblemCode::RuntimeFailure,
@@ -529,6 +596,7 @@ const DIRECTORY_PAGE: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileNotApplicable,
     ProblemCode::RuntimeFailure,
 ];
 const ABSENCE_CREATE: &[ProblemCode] = &[
@@ -634,6 +702,7 @@ const CLOCK_ITEM_READ: &[ProblemCode] = &[
     ProblemCode::ProfileNotHuman,
     ProblemCode::RequestInvalid,
     ProblemCode::ServiceUnavailable,
+    ProblemCode::SourceProfileRequired,
     ProblemCode::SourceBadGateway,
     ProblemCode::WorkItemNotVisible,
     ProblemCode::WorkItemProposalChanged,

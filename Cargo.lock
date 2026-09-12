@@ -3424,8 +3424,10 @@ version = "0.30.0"
 dependencies = [
  "async-trait",
  "axum",
+ "base64",
  "jsonschema",
  "registry-platform-canonical-json",
+ "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-record",

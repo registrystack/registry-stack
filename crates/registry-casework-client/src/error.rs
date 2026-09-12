@@ -6,13 +6,16 @@ use registry_casework_core::{
     IDEMPOTENCY_EXPIRED_PROBLEM, IDEMPOTENCY_KEY_REUSED_PROBLEM, OPERATION_NOT_AUTHORIZED_PROBLEM,
     PRECONDITION_FAILED_PROBLEM, PRECONDITION_REQUIRED_PROBLEM, PROFILE_NOT_AUTHORIZED_PROBLEM,
     PROFILE_NOT_HUMAN_PROBLEM, REQUEST_BODY_TOO_LARGE_PROBLEM, REQUEST_INVALID_PROBLEM,
-    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM, REQUEST_UNPROCESSABLE_PROBLEM,
-    REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM, SERVICE_UNAVAILABLE_PROBLEM,
-    SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM, SOURCE_SIGNATURE_INVALID_PROBLEM,
-    WORK_ITEM_ALREADY_CLAIMED_PROBLEM, WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM,
-    WORK_ITEM_NOT_VISIBLE_PROBLEM, WORK_ITEM_PROPOSAL_CHANGED_PROBLEM,
-    WORK_ITEM_RECOVERY_PENDING_PROBLEM, WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM,
-    WORK_ITEM_SUPERSEDED_PROBLEM,
+    REQUEST_METHOD_NOT_ALLOWED_PROBLEM, REQUEST_NOT_FOUND_PROBLEM,
+    REQUEST_REASON_UNSUPPORTED_PROBLEM, REQUEST_SOURCE_REJECTED_PROBLEM,
+    REQUEST_UNPROCESSABLE_PROBLEM, REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM, RUNTIME_FAILURE_PROBLEM,
+    SERVICE_UNAVAILABLE_PROBLEM, SOURCE_BAD_GATEWAY_PROBLEM, SOURCE_NOT_FOUND_PROBLEM,
+    SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM, SOURCE_PROFILE_REQUIRED_PROBLEM,
+    SOURCE_RECORD_MISSING_PROBLEM, SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
+    SOURCE_SIGNATURE_INVALID_PROBLEM, WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
+    WORK_ITEM_NOT_HOLDER_PROBLEM, WORK_ITEM_NOT_OFFERED_PROBLEM, WORK_ITEM_NOT_VISIBLE_PROBLEM,
+    WORK_ITEM_PROPOSAL_CHANGED_PROBLEM, WORK_ITEM_RECOVERY_PENDING_PROBLEM,
+    WORK_ITEM_SOURCE_UNAVAILABLE_PROBLEM, WORK_ITEM_SUPERSEDED_PROBLEM,
 };
 use registry_platform_httputil::client::TransportKind;
 use std::fmt;
@@ -51,12 +54,18 @@ pub enum CaseworkProblemCode {
     RequestInvalid,
     RequestMethodNotAllowed,
     RequestNotFound,
+    RequestReasonUnsupported,
+    RequestSourceRejected,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
     RuntimeFailure,
     ServiceUnavailable,
+    SourceProfileNotApplicable,
+    SourceProfileRequired,
     SourceBadGateway,
     SourceNotFound,
+    SourceRecordMissing,
+    SourceReviewerNotAuthorized,
     SourceSignatureInvalid,
     WorkItemAlreadyClaimed,
     WorkItemNotHolder,
@@ -75,7 +84,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 40] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -95,12 +104,18 @@ impl CaseworkProblemCode {
         Self::RequestInvalid,
         Self::RequestMethodNotAllowed,
         Self::RequestNotFound,
+        Self::RequestReasonUnsupported,
+        Self::RequestSourceRejected,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
         Self::RuntimeFailure,
         Self::ServiceUnavailable,
+        Self::SourceProfileNotApplicable,
+        Self::SourceProfileRequired,
         Self::SourceBadGateway,
         Self::SourceNotFound,
+        Self::SourceRecordMissing,
+        Self::SourceReviewerNotAuthorized,
         Self::SourceSignatureInvalid,
         Self::WorkItemAlreadyClaimed,
         Self::WorkItemNotHolder,
@@ -134,12 +149,18 @@ impl CaseworkProblemCode {
             Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
             Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
             Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
+            Self::RequestReasonUnsupported => REQUEST_REASON_UNSUPPORTED_PROBLEM,
+            Self::RequestSourceRejected => REQUEST_SOURCE_REJECTED_PROBLEM,
             Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
             Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::RuntimeFailure => RUNTIME_FAILURE_PROBLEM,
             Self::ServiceUnavailable => SERVICE_UNAVAILABLE_PROBLEM,
+            Self::SourceProfileNotApplicable => SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM,
+            Self::SourceProfileRequired => SOURCE_PROFILE_REQUIRED_PROBLEM,
             Self::SourceBadGateway => SOURCE_BAD_GATEWAY_PROBLEM,
             Self::SourceNotFound => SOURCE_NOT_FOUND_PROBLEM,
+            Self::SourceRecordMissing => SOURCE_RECORD_MISSING_PROBLEM,
+            Self::SourceReviewerNotAuthorized => SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM,
             Self::SourceSignatureInvalid => SOURCE_SIGNATURE_INVALID_PROBLEM,
             Self::WorkItemAlreadyClaimed => WORK_ITEM_ALREADY_CLAIMED_PROBLEM,
             Self::WorkItemNotHolder => WORK_ITEM_NOT_HOLDER_PROBLEM,
@@ -174,12 +195,18 @@ impl CaseworkProblemCode {
             REQUEST_INVALID_PROBLEM => Self::RequestInvalid,
             REQUEST_METHOD_NOT_ALLOWED_PROBLEM => Self::RequestMethodNotAllowed,
             REQUEST_NOT_FOUND_PROBLEM => Self::RequestNotFound,
+            REQUEST_REASON_UNSUPPORTED_PROBLEM => Self::RequestReasonUnsupported,
+            REQUEST_SOURCE_REJECTED_PROBLEM => Self::RequestSourceRejected,
             REQUEST_UNPROCESSABLE_PROBLEM => Self::RequestUnprocessable,
             REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM => Self::RequestUnsupportedMediaType,
             RUNTIME_FAILURE_PROBLEM => Self::RuntimeFailure,
             SERVICE_UNAVAILABLE_PROBLEM => Self::ServiceUnavailable,
+            SOURCE_PROFILE_NOT_APPLICABLE_PROBLEM => Self::SourceProfileNotApplicable,
+            SOURCE_PROFILE_REQUIRED_PROBLEM => Self::SourceProfileRequired,
             SOURCE_BAD_GATEWAY_PROBLEM => Self::SourceBadGateway,
             SOURCE_NOT_FOUND_PROBLEM => Self::SourceNotFound,
+            SOURCE_RECORD_MISSING_PROBLEM => Self::SourceRecordMissing,
+            SOURCE_REVIEWER_NOT_AUTHORIZED_PROBLEM => Self::SourceReviewerNotAuthorized,
             SOURCE_SIGNATURE_INVALID_PROBLEM => Self::SourceSignatureInvalid,
             WORK_ITEM_ALREADY_CLAIMED_PROBLEM => Self::WorkItemAlreadyClaimed,
             WORK_ITEM_NOT_HOLDER_PROBLEM => Self::WorkItemNotHolder,
@@ -209,8 +236,14 @@ impl CaseworkProblemCode {
             Self::ProfileNotAuthorized | Self::ProfileNotHuman | Self::OperationNotAuthorized => {
                 403
             }
-            Self::RequestInvalid | Self::SourceSignatureInvalid => 400,
-            Self::RequestNotFound | Self::SourceNotFound | Self::WorkItemNotVisible => 404,
+            Self::RequestInvalid
+            | Self::SourceProfileNotApplicable
+            | Self::SourceProfileRequired
+            | Self::SourceSignatureInvalid => 400,
+            Self::RequestNotFound
+            | Self::SourceNotFound
+            | Self::SourceRecordMissing
+            | Self::WorkItemNotVisible => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
             | Self::WorkItemAlreadyClaimed
@@ -222,9 +255,12 @@ impl CaseworkProblemCode {
             Self::PreconditionFailed => 412,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::RequestUnprocessable => 422,
+            Self::RequestReasonUnsupported
+            | Self::RequestSourceRejected
+            | Self::RequestUnprocessable => 422,
             Self::PreconditionRequired => 428,
             Self::SourceBadGateway => 502,
+            Self::SourceReviewerNotAuthorized => 403,
             Self::RuntimeFailure => 500,
             Self::ServiceUnavailable | Self::WorkItemSourceUnavailable => 503,
             Self::Unknown(_) => return None,
@@ -300,6 +336,14 @@ impl CaseworkProblemCode {
                 "Route not found",
                 "The requested Casework route does not exist.",
             ),
+            Self::RequestReasonUnsupported => (
+                "Reason not supported",
+                "The reason field is not supported for approve or apply on this source. Omit it and try again.",
+            ),
+            Self::RequestSourceRejected => (
+                "Source rejected request",
+                "The source refused the request body. Fix the request before trying again.",
+            ),
             Self::RequestUnprocessable => (
                 "Request could not be processed",
                 "The request body does not match the Casework contract.",
@@ -316,6 +360,14 @@ impl CaseworkProblemCode {
                 "Casework service unavailable",
                 "Casework storage is unavailable. Try again after the service recovers.",
             ),
+            Self::SourceProfileNotApplicable => (
+                "Source profile not applicable",
+                "Omit the Registry-Source-Profile header for this request.",
+            ),
+            Self::SourceProfileRequired => (
+                "Source profile required",
+                "Send the Registry-Source-Profile header to select the source profile for this request.",
+            ),
             Self::SourceBadGateway => (
                 "Invalid source response",
                 "The source returned a response that does not match its registered contract.",
@@ -323,6 +375,14 @@ impl CaseworkProblemCode {
             Self::SourceNotFound => (
                 "Source not found",
                 "The requested source is not registered.",
+            ),
+            Self::SourceRecordMissing => (
+                "Source record missing",
+                "The bound source record is no longer at the registered location.",
+            ),
+            Self::SourceReviewerNotAuthorized => (
+                "Source reviewer not authorized",
+                "The source refused the reviewer binding. Check the selected source profile and credential.",
             ),
             Self::SourceSignatureInvalid => (
                 "Source signature invalid",
@@ -476,5 +536,60 @@ mod tests {
                 "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
             ))
         );
+    }
+
+    #[test]
+    fn source_profile_header_problems_have_exact_recovery_contracts() {
+        for (value, expected, title, detail) in [
+            (
+                "source-profile.not-applicable",
+                CaseworkProblemCode::SourceProfileNotApplicable,
+                "Source profile not applicable",
+                "Omit the Registry-Source-Profile header for this request.",
+            ),
+            (
+                "source-profile.required",
+                CaseworkProblemCode::SourceProfileRequired,
+                "Source profile required",
+                "Send the Registry-Source-Profile header to select the source profile for this request.",
+            ),
+        ] {
+            let code = CaseworkProblemCode::parse(value);
+            assert_eq!(code, expected);
+            assert_eq!(code.expected_status(), Some(400));
+            assert_eq!(code.expected_text(), Some((title, detail)));
+        }
+    }
+
+    #[test]
+    fn source_refusal_problems_have_exact_safe_contracts() {
+        for (value, expected, status, title, detail) in [
+            (
+                "request.source-rejected",
+                CaseworkProblemCode::RequestSourceRejected,
+                422,
+                "Source rejected request",
+                "The source refused the request body. Fix the request before trying again.",
+            ),
+            (
+                "source.record-missing",
+                CaseworkProblemCode::SourceRecordMissing,
+                404,
+                "Source record missing",
+                "The bound source record is no longer at the registered location.",
+            ),
+            (
+                "source.reviewer-not-authorized",
+                CaseworkProblemCode::SourceReviewerNotAuthorized,
+                403,
+                "Source reviewer not authorized",
+                "The source refused the reviewer binding. Check the selected source profile and credential.",
+            ),
+        ] {
+            let code = CaseworkProblemCode::parse(value);
+            assert_eq!(code, expected);
+            assert_eq!(code.expected_status(), Some(status));
+            assert_eq!(code.expected_text(), Some((title, detail)));
+        }
     }
 }

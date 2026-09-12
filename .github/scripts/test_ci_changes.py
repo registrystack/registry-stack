@@ -1035,18 +1035,23 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/check-casework-tutorial.sh",
             "docs/site/scripts/check-casework-tutorial.test.mjs",
             "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
             "docs/site/package.json",
         )
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
-        # The replay builds and runs these three: the runtime the reader calls,
-        # the tool that starts and seeds the local session, and Registry Mint,
-        # which issues every token the reader's calls carry.
+        # The replay builds and runs these five: the runtime the reader calls,
+        # the tool that starts and seeds the local session, Registry Mint,
+        # which issues every token the reader's calls carry, and the Base
+        # Registry Engine runtime and tool the two-product page runs beside
+        # Casework.
         for path in (
             "crates/registry-casework/src/http.rs",
             "crates/registry-caseworkctl/src/dev/mod.rs",
             "crates/registry-mint/src/lib.rs",
+            "crates/registry-breg/src/lib.rs",
+            "crates/registry-bregctl/src/dev/mod.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
@@ -1976,13 +1981,16 @@ on:
                 for output, value in expected.items():
                     self.assertEqual(outputs[output], value, output)
 
-    def test_docs_job_fetches_ignored_openapi_inputs_before_script_tests(self) -> None:
+    def test_docs_job_prepares_generator_inputs_before_script_tests(self) -> None:
         workflow = Path(".github/workflows/ci.yml").read_text(encoding="utf-8")
         docs_job = workflow.split("\n  docs:\n", 1)[1].split("\n  docs-required:\n", 1)[0]
+        rust = "run: rustup toolchain install 1.95.0 --profile minimal"
         fetch = "run: node scripts/fetch-openapi.mjs"
         test_scripts = "run: npm test"
 
+        self.assertIn(rust, docs_job)
         self.assertIn(fetch, docs_job)
+        self.assertLess(docs_job.index(rust), docs_job.index(test_scripts))
         self.assertLess(docs_job.index(fetch), docs_job.index(test_scripts))
 
     def test_every_referenced_changes_output_is_declared_and_emitted(self) -> None:

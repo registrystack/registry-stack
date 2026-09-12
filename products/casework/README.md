@@ -78,10 +78,11 @@ the item, so a later configuration change does not rewrite existing work.
 `GET /v1/work-items/{itemId}/history` is the separate source-scoped history
 read. It requires a `Registry-Source-Profile` header and answers from the
 source, so hosted work has no usable answer there and a call without that
-header returns `request.invalid` with HTTP 400. `hosted-history` is the
-staff-readable route for hosted work and refuses a source-profile header for the
-same reason. A profile with no source, such as every profile in the
-`standalone-decision` starter, therefore reads `hosted-history`.
+header returns `source-profile.required` with HTTP 400. `hosted-history` is the
+staff-readable route for hosted work and returns `source-profile.not-applicable`
+with HTTP 400 when that header is present. A profile with no source, such as
+every profile in the `standalone-decision` starter, therefore reads
+`hosted-history`.
 
 Requester terminal results are ordered by terminal time and stable event id.
 Each result is either a completed outcome with an opaque `actorRef`, or a
@@ -155,7 +156,10 @@ person, and traversed absence ids. If the chain ends without an eligible staff
 member, the item remains open in its serving queue with
 `staffingDiagnostic: no_cover_available`; this staffing state is returned on
 the item rather than as a problem response. A source-backed item requires
-`Registry-Source-Profile`. Omitting that header selects hosted work.
+`Registry-Source-Profile`. Omitting that header selects hosted work when the
+selected Casework profile is a deciding profile for at least one hosted kind;
+otherwise a deployment with a configured source returns
+`source-profile.required`.
 
 Caseload movement is a review-then-apply operation for Supervisor profiles in
 currently served queues. Preview returns only caller-visible items held by the
@@ -439,7 +443,10 @@ record reference plus explicitly configured routing and display reference
 fields, requests no reviewer reason fields, and carries no decision or
 application operation.
 Human review and application calls use the person's token and explicitly
-selected BReg profile.
+selected BReg profile. BReg `reject` and `request_correction` actions accept a
+bounded reason. `approve` and `apply` do not; Casework refuses a reason on those
+actions as `request.reason-unsupported` before preparing a durable source
+attempt.
 
 Synchronization orders observations by the physical BReg record revision. At
 the same revision, a changed HTTP representation ETag refreshes the existing
@@ -485,6 +492,13 @@ leaves the work item synchronizing until the next source observation. Apply
 records an `attempt_settled` history event with the attempt, binding reference,
 operation, outcome, reason, and decider, and no actor, in the same transaction
 as the state change. The command makes no BReg call.
+
+A validated refusal from the first BReg action attempt keeps its source class.
+Invalid action input returns `request.source-rejected`; a missing bound record
+returns `source.record-missing`; and a refused reviewer binding returns
+`source.reviewer-not-authorized`. A stale action remains
+`work-item.not-offered`. Each problem uses a static detail and returns the item
+to its holder without leaving an uncertain attempt.
 
 The HTTP contract is generated deterministically from the Rust-owned problem
 catalog and per-operation response table. The generator also checks the exact

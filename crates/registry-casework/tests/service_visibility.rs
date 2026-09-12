@@ -16,14 +16,15 @@ use registry_casework::{
     PostgresStore, ServiceError, StoreError,
 };
 use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActorContext, AttemptState, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
-    DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    InboxView, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
-    PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, RecoveryEvidence, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
-    SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER, CASEWORK_API_VERSION, CASEWORK_KIND,
-    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
+    standalone_decision_starter_kind, AccessProfile, ActiveSubjectsPage, ActorContext,
+    AttemptState, AuthoritativeObservation, BootstrapDirectoryRequest, CallerSubjectView,
+    CaseworkIdentity, CaseworkProject, CaseworkRole, DiscoveryCursor, EphemeralCredential,
+    EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView, IssuerPrincipal, OccurrenceKind,
+    OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
+    QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
+    SourceReceipt, SourceRequestPolicy, SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER,
+    CASEWORK_API_VERSION, CASEWORK_KIND, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
+    IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
@@ -101,7 +102,7 @@ struct MockSource {
     execute_calls: Arc<AtomicUsize>,
     execute_succeeds: bool,
     advance_binding_on_success: bool,
-    definitive_refusal_after: Option<usize>,
+    execution_error_after: Option<(usize, SourceAdapterError)>,
     approve_reads: HashSet<String>,
 }
 
@@ -130,7 +131,7 @@ impl MockSource {
             execute_calls: Arc::new(AtomicUsize::new(0)),
             execute_succeeds: false,
             advance_binding_on_success: false,
-            definitive_refusal_after: None,
+            execution_error_after: None,
             approve_reads: HashSet::new(),
         }
     }
@@ -163,10 +164,17 @@ impl MockSource {
 
     fn with_recovery_definitive_refusal(id: Uuid, read: CallerRead) -> (Self, Arc<AtomicUsize>) {
         let mut source = Self::with_reads([(id, read)]);
-        source.definitive_refusal_after = Some(1);
+        source.execution_error_after = Some((1, SourceAdapterError::ActionNotOffered));
         source.approve_reads.insert(id.to_string());
         let execute_calls = Arc::clone(&source.execute_calls);
         (source, execute_calls)
+    }
+
+    fn with_action_error(id: Uuid, error: SourceAdapterError) -> Self {
+        let mut source = Self::with_reads([(id, CallerRead::Visible("authorized"))]);
+        source.execution_error_after = Some((0, error));
+        source.approve_reads.insert(id.to_string());
+        source
     }
 
     fn with_unavailable_discovery_and_terminal_read(id: Uuid) -> Self {
@@ -521,6 +529,9 @@ impl SourceAdapter for MockSource {
         request: PrepareActionRequest<'_>,
     ) -> Result<PreparedSourceAttempt, SourceAdapterError> {
         self.prepare_calls.fetch_add(1, Ordering::SeqCst);
+        if request.reason.is_some() && matches!(request.operation.as_str(), "approve" | "apply") {
+            return Err(SourceAdapterError::ReasonUnsupported);
+        }
         Ok(PreparedSourceAttempt {
             source_binding: request.displayed_binding.clone(),
             recovery_evidence: RecoveryEvidence::new(vec![1])?,
@@ -532,11 +543,10 @@ impl SourceAdapter for MockSource {
         request: ExecutePreparedRequest<'_>,
     ) -> Result<SourceReceipt, SourceAdapterError> {
         let call_index = self.execute_calls.fetch_add(1, Ordering::SeqCst);
-        if self
-            .definitive_refusal_after
-            .is_some_and(|threshold| call_index >= threshold)
-        {
-            return Err(SourceAdapterError::DefinitiveRefusal);
+        if let Some((threshold, error)) = self.execution_error_after {
+            if call_index >= threshold {
+                return Err(error);
+            }
         }
         if !self.execute_succeeds {
             return Err(SourceAdapterError::Invalid);
@@ -1818,7 +1828,7 @@ async fn definitive_refusal_during_recovery_releases_the_attempt_fence() {
         assert!(
             matches!(
                 recovery,
-                Err(ServiceError::Adapter(SourceAdapterError::DefinitiveRefusal))
+                Err(ServiceError::Adapter(SourceAdapterError::ActionNotOffered))
             ),
             "{recovery:?}"
         );
@@ -2349,6 +2359,120 @@ async fn recovery_problem_discloses_only_the_entitled_original_attempt() {
     assert_eq!(recovered["attempt"]["attemptId"], attempt_id.to_string());
     assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
     assert_eq!(execute_calls.load(Ordering::SeqCst), 2);
+}
+
+async fn assert_decision_refusal_problem(
+    source_error: SourceAdapterError,
+    expected_status: StatusCode,
+    expected_code: &str,
+    expected_detail: &str,
+) {
+    let subject_id = Uuid::from_u128(1_020);
+    let fixture = fixture_with_source(
+        MockSource::with_action_error(subject_id, source_error),
+        policy(10, 1_000),
+    )
+    .await;
+    add_item(&fixture.service, subject_id, None).await;
+    let item = fixture
+        .service
+        .store()
+        .inbox_candidates(&fixture.staff, 1, None, None)
+        .await
+        .unwrap()
+        .items
+        .pop()
+        .unwrap();
+    let claimed = fixture
+        .service
+        .store()
+        .claim(
+            &fixture.staff,
+            item.item_id,
+            item.revision,
+            "claim-source-refusal",
+        )
+        .await
+        .unwrap();
+    let configured_project = project(policy(10, 1_000));
+    let app = router(HttpState {
+        service: fixture.service.clone(),
+        authenticator: Arc::new(authenticator(&configured_project)),
+        project: Arc::new(configured_project),
+    });
+    let decision_path = format!("/v1/work-items/{}/decisions", claimed.item_id);
+    let expected_revision = format!("\"{}\"", claimed.revision);
+    let response = app
+        .oneshot(authenticated_request(
+            "POST",
+            &decision_path,
+            &access_token("staff"),
+            "staff",
+            json!({
+                "displayedBinding": claimed.binding,
+                "sourceProfileId": "reader",
+                "operation": "approve"
+            }),
+            &[
+                (SOURCE_PROFILE_HEADER, "reader"),
+                (IF_MATCH_HEADER, expected_revision.as_str()),
+                (IDEMPOTENCY_KEY_HEADER, "source-refusal"),
+            ],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), expected_status);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], expected_code);
+    assert_eq!(problem["detail"], expected_detail);
+}
+
+#[tokio::test]
+async fn source_request_rejection_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::RequestRejected,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "request.source-rejected",
+        "The source refused the request body. Fix the request before trying again.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn missing_source_record_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::RecordMissing,
+        StatusCode::NOT_FOUND,
+        "source.record-missing",
+        "The bound source record is no longer at the registered location.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn refused_reviewer_binding_has_a_distinct_http_problem() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::ReviewerNotAuthorized,
+        StatusCode::FORBIDDEN,
+        "source.reviewer-not-authorized",
+        "The source refused the reviewer binding. Check the selected source profile and credential.",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stale_source_action_remains_not_offered() {
+    let _database = DATABASE.lock().await;
+    assert_decision_refusal_problem(
+        SourceAdapterError::ActionNotOffered,
+        StatusCode::CONFLICT,
+        "work-item.not-offered",
+        "The registry did not offer this action to you. Refresh to check again.",
+    )
+    .await;
 }
 
 async fn zero_local_candidates_distinguish_empty_source_from_outage() {
@@ -3268,16 +3392,16 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         MockSource::with_successful_action(item_subject, CallerRead::Visible("authorized"));
     let project = project(policy(10, 1_000));
     let service = CaseworkService::new(
-        store,
+        store.clone(),
         project.clone(),
         [Arc::new(source) as Arc<dyn SourceAdapter>],
     )
     .unwrap();
-    let authenticator = Arc::new(authenticator(&project));
+    let casework_authenticator = Arc::new(authenticator(&project));
     let app = router(HttpState {
         service: service.clone(),
-        authenticator,
-        project: Arc::new(project),
+        authenticator: casework_authenticator,
+        project: Arc::new(project.clone()),
     });
 
     let bootstrap = authenticated_request(
@@ -3312,6 +3436,55 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         .pop()
         .expect("seeded work item");
     let item_path = format!("/v1/work-items/{}", item.item_id);
+
+    let missing_source_profile = authenticated_request(
+        "GET",
+        "/v1/work-items?view=my_teams",
+        &access_token("staff"),
+        "staff",
+        json!(null),
+        &[],
+    );
+    let response = app.clone().oneshot(missing_source_profile).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], "source-profile.required");
+    assert!(problem["detail"]
+        .as_str()
+        .is_some_and(|detail| detail.contains("Registry-Source-Profile")));
+
+    let mut mixed_project = project.clone();
+    let mut hosted_kind = standalone_decision_starter_kind();
+    hosted_kind.queue = QUEUE.to_owned();
+    assert!(!hosted_kind
+        .deciding_profiles
+        .iter()
+        .any(|profile| profile == "supervisor"));
+    mixed_project.hosted_kinds.push(hosted_kind);
+    let mixed_service = CaseworkService::new(
+        store,
+        mixed_project.clone(),
+        [Arc::new(MockSource::with_reads([])) as Arc<dyn SourceAdapter>],
+    )
+    .unwrap();
+    let mixed_app = router(HttpState {
+        service: mixed_service,
+        authenticator: Arc::new(authenticator(&mixed_project)),
+        project: Arc::new(mixed_project),
+    });
+    let hosted_supervisor = authenticated_request(
+        "GET",
+        "/v1/work-items?view=my_teams",
+        &access_token("supervisor"),
+        "supervisor",
+        json!(null),
+        &[],
+    );
+    let response = mixed_app.oneshot(hosted_supervisor).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let page = response_body(response).await;
+    assert_eq!(page["items"], json!([]));
+    assert_eq!(page["status"], "complete");
 
     let next = authenticated_request(
         "GET",
@@ -3532,6 +3705,44 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     }
     assert_eq!(prepare_calls.load(Ordering::SeqCst), 0);
     assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+
+    let unsupported_reason = authenticated_request(
+        "POST",
+        &format!("{item_path}/decisions"),
+        &access_token("staff"),
+        "staff",
+        json!({
+            "displayedBinding": binding(),
+            "sourceProfileId": "reader",
+            "operation": "approve",
+            "reason": "not accepted by this source operation"
+        }),
+        &[
+            (SOURCE_PROFILE_HEADER, "reader"),
+            (IF_MATCH_HEADER, "\"2\""),
+            (IDEMPOTENCY_KEY_HEADER, "approve-with-reason"),
+        ],
+    );
+    let response = app.clone().oneshot(unsupported_reason).await.unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let problem = response_body(response).await;
+    assert_eq!(problem["code"], "request.reason-unsupported");
+    assert!(problem["detail"]
+        .as_str()
+        .is_some_and(|detail| detail.contains("reason")));
+    assert_eq!(prepare_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(execute_calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        service
+            .store()
+            .load_prepared_attempt_by_key(
+                &would_be_service_actor,
+                item.item_id,
+                "approve-with-reason"
+            )
+            .await,
+        Err(StoreError::NotFound)
+    ));
 }
 
 fn authenticator(project: &CaseworkProject) -> CaseworkAuthenticator {

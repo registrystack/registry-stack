@@ -69,6 +69,15 @@ refusal that holds a durable attempt adds `Registry-Casework-Attempt`.
 Every Casework problem response carries one `code` from this closed catalogue, always answered with the
 HTTP status listed beside it.
 
+For a source-backed decision, `request.source-rejected` means you must fix the promoted action body,
+`source.record-missing` means the bound record is no longer at its registered location, and
+`source.reviewer-not-authorized` means you must check the selected source profile and credential.
+Only `work-item.not-offered` tells you to refresh the item because the action is stale.
+
+{/* Evidence: crates/registry-casework-core/src/adapter.rs, SourceAdapterError;
+    crates/registry-casework-breg/src/lib.rs, execute_prepared();
+    crates/registry-casework/src/http.rs, the ServiceError conversion. */}
+
 <ApiReferenceTable id="problem-codes" source="casework-api" />
 
 {/* Problem code table generated from docs/site/src/data/casework-api.yaml by
@@ -102,10 +111,11 @@ in a family grants nothing on its own.
 Two history reads sit under the same work item and answer different questions.
 `GET /v1/work-items/{itemId}/hosted-history` is the staff read of hosted lifecycle history, open to a
 human Staff or Supervisor profile under current deciding-profile and served-queue authority, and it
-refuses a request that carries `Registry-Source-Profile`.
+returns `source-profile.not-applicable` when a request carries `Registry-Source-Profile`.
 `GET /v1/work-items/{itemId}/history` is the source-scoped variant and requires
-`Registry-Source-Profile`, returning entries under the caller's current source visibility. Both order entries by `occurredAt` and `eventId` and page with an opaque
-cursor.
+`Registry-Source-Profile`, returning `source-profile.required` when it is absent and entries under
+the caller's current source visibility when it is present. Both order entries by `occurredAt` and
+`eventId` and page with an opaque cursor.
 
 {/* Evidence: crates/registry-casework/src/http.rs, hosted_staff_history() and reject_source_profile();
     products/casework/generated/registry-casework.openapi.json. */}
