@@ -3,6 +3,7 @@
 use std::{collections::BTreeSet, fmt};
 
 use chrono::NaiveDate;
+use registry_platform_oidc::ActorKind;
 use serde_json::Value;
 use thiserror::Error;
 
@@ -415,6 +416,11 @@ pub fn match_entitlement(
     request: &EvidenceRequest,
     context: &AuthenticatedContext,
 ) -> Result<MatchedEntitlement, AuthorizationError> {
+    let has_task_grant = match context.grant() {
+        Ok(Some(_)) if context.actor_kind() == ActorKind::Agent => true,
+        Ok(Some(_)) | Err(_) => return Err(AuthorizationError::Unauthorized),
+        Ok(None) => false,
+    };
     let requirement = bundle
         .config
         .requirements
@@ -454,7 +460,21 @@ pub fn match_entitlement(
                 .subjects
                 .iter()
                 .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
-            if uses_authenticated_grant && context.grant_authority() != Some(authority_profile) {
+            // A token carrying a grant cannot fall back to a standing profile
+            // if any immutable grant binding fails. Conversely, a standing
+            // token cannot enter a grant-bound profile.
+            if uses_authenticated_grant != has_task_grant {
+                continue;
+            }
+            if uses_authenticated_grant
+                && !task_grant_matches(
+                    context,
+                    authority_profile,
+                    authority,
+                    &request.requirement,
+                    &request.purpose,
+                )
+            {
                 continue;
             }
             matched.push(MatchedEntitlement {
@@ -472,6 +492,31 @@ pub fn match_entitlement(
         0 => Err(AuthorizationError::Unauthorized),
         _ => Err(AuthorizationError::AmbiguousAuthority),
     }
+}
+
+fn task_grant_matches(
+    context: &AuthenticatedContext,
+    authority_profile: &str,
+    authority: &crate::config::AuthorityProfile,
+    requirement: &str,
+    purpose: &str,
+) -> bool {
+    let Ok(Some(grant)) = context.grant() else {
+        return false;
+    };
+    context.actor_kind() == ActorKind::Agent
+        && grant.principal() == context.principal()
+        && grant.authority() == authority_profile
+        && authority.grant_source_issuer.as_deref() == Some(grant.source_issuer())
+        && context.client().is_some_and(|client| {
+            client == grant.client()
+                && authority
+                    .requester_clients
+                    .iter()
+                    .any(|allowed| allowed == client)
+        })
+        && grant.purpose() == purpose
+        && grant.bounds().evidence_requirement() == Some(requirement)
 }
 
 /// Resolve the complete role-bound selector set for one matched entitlement.
@@ -741,16 +786,20 @@ pub fn resolve_offline_fixture_authorization(
         subjects,
         holder_keys,
     };
-    let (authority_name, authority) = bundle
+    let (authority_name, authority, configured_grant) = bundle
         .config
         .authority_profiles
         .iter()
-        .find(|(_, authority)| {
-            authority.grants.iter().any(|grant| {
-                grant.requirement == request.requirement
-                    && grant.purpose == request.purpose
-                    && same_subject_tuples(&grant.subjects, &request.subjects)
-            })
+        .find_map(|(authority_name, authority)| {
+            authority
+                .grants
+                .iter()
+                .find(|grant| {
+                    grant.requirement == request.requirement
+                        && grant.purpose == request.purpose
+                        && same_subject_tuples(&grant.subjects, &request.subjects)
+                })
+                .map(|grant| (authority_name, authority, grant))
         })
         .ok_or(AuthorizationError::Unauthorized)?;
     let claims = case
@@ -758,20 +807,78 @@ pub fn resolve_offline_fixture_authorization(
         .or_else(|| common.and_then(|value| value.get("verified_token_claims")))
         .cloned()
         .unwrap_or_else(|| Value::Object(Default::default()));
-    let grant_id = claims
-        .get("evidence_grant_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let grant_authority = claims
-        .get("evidence_authority")
-        .and_then(Value::as_str)
-        .unwrap_or(authority_name)
-        .to_owned();
+    let uses_task_grant = configured_grant
+        .subjects
+        .iter()
+        .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
+    let (actor_kind, client, task_grant) = if uses_task_grant {
+        let client = authority
+            .requester_clients
+            .first()
+            .ok_or(AuthorizationError::Unauthorized)?;
+        let source_issuer = authority
+            .grant_source_issuer
+            .as_deref()
+            .ok_or(AuthorizationError::Unauthorized)?;
+        let resource = bundle
+            .config
+            .authentication
+            .audiences
+            .first()
+            .ok_or(AuthorizationError::Unauthorized)?;
+        let names = &bundle.config.authentication.claims;
+        let now = chrono::Utc::now().timestamp();
+        let mut grant_claims = serde_json::json!({
+            "sub": "offline-fixture-principal",
+            "exp": now + 300,
+        });
+        let object = grant_claims
+            .as_object_mut()
+            .ok_or(AuthorizationError::Unauthorized)?;
+        object.insert(
+            names.grant_id.clone(),
+            Value::String("offline-fixture-grant".to_owned()),
+        );
+        object.insert(
+            names.grant_authority.clone(),
+            Value::String(authority_name.to_owned()),
+        );
+        object.insert(
+            names.grant_source_issuer.clone(),
+            Value::String(source_issuer.to_owned()),
+        );
+        object.insert(names.grant_client.clone(), Value::String(client.to_owned()));
+        object.insert(
+            names.grant_resource.clone(),
+            Value::String(resource.to_owned()),
+        );
+        object.insert(
+            names.purpose.clone(),
+            Value::String(request.purpose.clone()),
+        );
+        object.insert(names.grant_exp.clone(), Value::from(now + 300));
+        object.insert(
+            names.grant_bounds.clone(),
+            serde_json::json!({"type": "evidence", "requirement": request.requirement}),
+        );
+        let parsed: registry_platform_oidc::Claims =
+            serde_json::from_value(grant_claims).map_err(|_| AuthorizationError::Unauthorized)?;
+        let grant = registry_platform_oidc::grant_claims(
+            &parsed,
+            names,
+            u64::try_from(now).map_err(|_| AuthorizationError::Unauthorized)?,
+        )
+        .map_err(|_| AuthorizationError::Unauthorized)?;
+        (ActorKind::Agent, Some(client.as_str()), Ok(grant))
+    } else {
+        (ActorKind::Service, None, Ok(None))
+    };
     let context = AuthenticatedContext::offline_fixture_context(
         authority.requester_tags.clone(),
         audience,
-        grant_id.as_deref(),
-        Some(&grant_authority),
+        actor_kind,
+        client,
+        task_grant,
         claims,
     );
     Ok(authorize_and_resolve(bundle, &request, &context)?)
@@ -1286,8 +1393,7 @@ mod tests {
             "principal",
             Vec::new(),
             "urn:example:relying-party",
-            None,
-            None,
+            Ok(None),
             Value::Null,
         );
         let presented = holder_key_request(vec![holder_key(0), holder_key(1)]);

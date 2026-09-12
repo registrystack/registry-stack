@@ -27,10 +27,10 @@ use zeroize::{Zeroize, Zeroizing};
 use crate::bundle::{ArtifactFault, Bundle, SourceExtract};
 use crate::config::{
     is_http_token_byte, is_uri_byte, validate_local_unauthenticated_source_origin,
-    AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem, EvidenceConfig,
-    FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig, PreparationChannelPolicy,
-    SchemaFault, SecretRef, SelectorInput, SourceAuthentication, SourceConfig,
-    SourceConnectionConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
+    validate_oauth_resource, AcquisitionPosture, CredentialPlacement, DeclaredUnresolvedProblem,
+    EvidenceConfig, FixedRequest, HttpMethod, OutboundTlsConfig, PathBindingConfig,
+    PreparationChannelPolicy, SchemaFault, SecretRef, SelectorInput, SourceAuthentication,
+    SourceConfig, SourceConnectionConfig, SourceSelectorSet, SqliteParameterBinding, SqliteRequest,
     RESERVED_SQL_PARAMETER,
 };
 use crate::model::SelectorValue;
@@ -662,6 +662,7 @@ struct OauthPlan {
     client_authentication: OauthClientAuthentication,
     scope: Option<String>,
     audience: Option<String>,
+    resource: Option<String>,
     maximum_cache_lifetime: Duration,
     /// Lifetime used when the provider omits `expires_in`.
     assumed_lifetime: Option<Duration>,
@@ -1895,6 +1896,7 @@ fn compile_authentication(
             client_assertion_audience,
             scope,
             audience,
+            resource,
             credential_placement,
             maximum_cache_seconds,
             assumed_lifetime_seconds,
@@ -1911,6 +1913,9 @@ fn compile_authentication(
             let token_endpoint = validate_url(token_endpoint, false)?;
             if token_endpoint.query().is_some() {
                 return Err(SourceError::InvalidPlan);
+            }
+            if let Some(resource) = resource {
+                validate_oauth_resource(resource).map_err(|_| SourceError::InvalidPlan)?;
             }
             let client_authentication = match (
                 client_secret_ref,
@@ -1941,6 +1946,7 @@ fn compile_authentication(
                 client_authentication,
                 scope: scope.clone(),
                 audience: audience.clone(),
+                resource: resource.clone(),
                 maximum_cache_lifetime: Duration::from_secs(*maximum_cache_seconds),
                 assumed_lifetime: assumed_lifetime_seconds.map(Duration::from_secs),
                 admission_timeout,
@@ -2200,6 +2206,9 @@ impl OauthPlan {
         }
         if let Some(audience) = self.audience.as_deref() {
             form.push(("audience", audience));
+        }
+        if let Some(resource) = self.resource.as_deref() {
+            form.push(("resource", resource));
         }
         // No supported form places a client credential in the request URI,
         // where proxy and ingress logs would capture it.
@@ -3683,6 +3692,7 @@ mod tests {
             },
             scope: Some("fixture.read".into()),
             audience: None,
+            resource: None,
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_millis(20),
@@ -3762,6 +3772,7 @@ mod tests {
             },
             scope: None,
             audience: None,
+            resource: None,
             maximum_cache_lifetime: Duration::from_secs(60),
             assumed_lifetime: None,
             admission_timeout: Duration::from_secs(5),

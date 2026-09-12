@@ -325,10 +325,13 @@ allOf:
         authentication:
           properties:
             issuer:
-              pattern: ^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}$)
+              pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4})$
             jwksUri:
-              pattern: >-
-                ^(?:https://|http://127\.0\.0\.1:[1-9][0-9]{0,4}/\.well-known/jwks\.json$)
+              # Local development permits a supervised issuer on the exact
+              # canonical loopback origin, serving its JWKS from that origin at
+              # any absolute path without query or fragment. The route is the
+              # issuer's to choose; the origin is not.
+              pattern: ^(?:https://.*|http://127\.0\.0\.1:[1-9][0-9]{0,4}/[^\s?#]*)$
   - if:
       properties:
         assuranceProfile:
@@ -477,8 +480,6 @@ $defs:
       - principalClaim
       - requesterTagsClaim
       - evidenceAudienceClaim
-      - grantIdClaim
-      - grantAuthorityClaim
       - maximumTokenLifetimeSeconds
       - revokedKeyIds
     properties:
@@ -557,17 +558,12 @@ $defs:
           Names the verified claim that fixes the audience an assertion is issued to, and
           the public request cannot choose another audience.
         $ref: '#/$defs/claim-name'
-      grantIdClaim:
+      claims:
         description: >-
-          Names the verified claim carrying the grant identifier, read only when a subject's
-          `valueOrigin` is `authenticated-grant`.
-        $ref: '#/$defs/claim-name'
-      grantAuthorityClaim:
-        description: >-
-          Names the verified claim carrying the granting authority, read only when a subject's
-          `valueOrigin` is `authenticated-grant`; the claim value must equal the matched authority-profile
-          id.
-        $ref: '#/$defs/claim-name'
+          Optional direct claim-name mapping for the shared contextual-authorization profile.
+          Omission uses the registry_* names defined by the profile. Names remain direct JWT
+          members even when they contain a dot.
+        $ref: '#/$defs/contextual-claim-names'
       maximumTokenLifetimeSeconds:
         description: >-
           Caps the accepted `exp - iat` interval, and its presence requires `iat` and an `exp`
@@ -595,6 +591,38 @@ $defs:
           Names the verified claim read as the actor alongside the principal, and omitting
           the key enables no fallback actor source.
         $ref: '#/$defs/claim-name'
+      allowedClients:
+        description: >-
+          Explicit machine-client admission, matched against the verified token's
+          `client_id`/`azp`; never `sub`. Omitting the key keeps the issuer-vouched-client
+          behavior. Audience plus static issuer-governed attributes alone cannot establish
+          that a client was granted this resource's permission, which is what
+          `requiredScopes` closes.
+        type: array
+        minItems: 1
+        maxItems: 32
+        uniqueItems: true
+        items:
+          description: One client identifier admitted to call this deployment.
+          type: string
+          minLength: 1
+          maxLength: 128
+      requiredScopes:
+        description: >-
+          Scopes every inbound token must carry, read from the verified token's scope set
+          after signature verification and before any authority claim is read. Omitting
+          the key keeps the no-scope-gate behavior; a missing scope is never inferred from
+          tags, principal, roles, `sub`, or request fields.
+        type: array
+        minItems: 1
+        maxItems: 32
+        uniqueItems: true
+        items:
+          description: One RFC 6749 scope-token every inbound token must carry.
+          type: string
+          minLength: 1
+          maxLength: 256
+          pattern: ^[\x21\x23-\x5B\x5D-\x7E]+$
   audit:
     type: object
     additionalProperties: false
@@ -679,6 +707,20 @@ $defs:
   claim-name:
     type: string
     pattern: ^[A-Za-z_][A-Za-z0-9_.-]{0,127}$
+  contextual-claim-names:
+    type: object
+    additionalProperties: false
+    properties:
+      actorKind: {$ref: '#/$defs/claim-name', default: registry_actor_kind}
+      purpose: {$ref: '#/$defs/claim-name', default: registry_purpose}
+      grantId: {$ref: '#/$defs/claim-name', default: registry_grant_id}
+      grantAuthority: {$ref: '#/$defs/claim-name', default: registry_grant_authority}
+      grantSourceIssuer: {$ref: '#/$defs/claim-name', default: registry_grant_source_issuer}
+      grantClient: {$ref: '#/$defs/claim-name', default: registry_grant_client}
+      grantResource: {$ref: '#/$defs/claim-name', default: registry_grant_resource}
+      grantExp: {$ref: '#/$defs/claim-name', default: registry_grant_exp}
+      grantBounds: {$ref: '#/$defs/claim-name', default: registry_grant_bounds}
+      approver: {$ref: '#/$defs/claim-name', default: registry_approver}
   claim-path:
     type: string
     pattern: ^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$
@@ -1283,6 +1325,22 @@ $defs:
             minLength: 1
             maxLength: 512
             pattern: \S
+          resource:
+            description: >-
+              Optional RFC 8707 resource indicator sent as a token-request form parameter.
+              It is one governed absolute URI without a fragment or user information and
+              is transmitted exactly as configured. It names the intended resource server;
+              it does not retarget the token endpoint or replace the separate audience
+              parameter or signed client assertion audience.
+            type: string
+            format: uri
+            minLength: 3
+            maxLength: 512
+            pattern: '^[A-Za-z][A-Za-z0-9+.-]*:[A-Za-z0-9._~:/?\[\]@!$&''()*+,;=%-]+$'
+            not:
+              anyOf:
+                - pattern: '^[A-Za-z][A-Za-z0-9+.-]*://[^/?#]*@'
+                - pattern: '%($|[^0-9A-Fa-f]|[0-9A-Fa-f]($|[^0-9A-Fa-f]))'
           credentialPlacement:
             description: >-
               Selects whether the client identifier and secret travel in the Authorization
@@ -2105,6 +2163,20 @@ $defs:
             purposes, or `valueClaims` are expressed by issuing different tags rather than
             by naming individual clients.
           $ref: '#/$defs/local-id'
+      requesterClients:
+        description: >-
+          Exact verified OAuth clients allowed to exercise this profile's authenticated-grant
+          paths. Required and nonempty when any subject uses authenticated-grant.
+        type: array
+        minItems: 1
+        maxItems: 32
+        uniqueItems: true
+        items: {type: string, minLength: 1, maxLength: 128}
+      grantSourceIssuer:
+        description: >-
+          Exact trusted issuer that supplied the immutable task-grant context before token
+          exchange. Required when any subject uses authenticated-grant.
+        $ref: '#/$defs/uri'
       grants:
         description: >-
           Complete set of authorized paths this requester class has. Permissions are never
@@ -3058,10 +3130,11 @@ startup_checks:
     or shadowing name would read one verified token member as something the issuer wrote for
     another purpose.
   - >-
-    For authenticated-grant origin, verified token values at authentication.grantIdClaim and
-    grantAuthorityClaim must exist, grantAuthority must exactly equal the matched authority-profile
-    identifier, and the same entitlement must bind requirement, purpose, audience, role, selector
-    profile, and valueClaims result before selector resolution.
+    For authenticated-grant origin, the complete shared task-grant claim set must be present and
+    unexpired. The signed principal, client, resource, source issuer, purpose, authority, and
+    Evidence requirement bound must exactly match verified request context and the selected
+    profile before selector resolution. A present malformed grant cannot fall back to a standing
+    profile.
   - >-
     Required signing, audit, credential, and source dependencies are ready.
   - >-

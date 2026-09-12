@@ -94,7 +94,7 @@ enum Command {
     /// Compatibility operations over deployment artifacts.
     #[command(subcommand)]
     Artifact(ArtifactCommand),
-    /// Run the private local Registry Mint and Evidence Gateway pair.
+    /// Run the private local issuer and Evidence Gateway pair.
     Dev(dev::DevArgs),
     /// Prepare a closed request for the active local project.
     #[command(subcommand)]
@@ -620,6 +620,34 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                 }
                 .into());
             }
+            if error
+                .downcast_ref::<dev::RetiredMintDevelopment>()
+                .is_some()
+            {
+                return Err(SafeCliFailure {
+                    operational: false,
+                    code: "evidence.dev.mint-retired",
+                    artifact: "local development command".to_owned(),
+                    path: "$".to_owned(),
+                    message: "Registry Mint development flags were removed.".to_owned(),
+                    suggested_action: "Stop any retained Mint session with its matching older evidencectl, then start a fresh session with --issuer-port and the pinned local issuer.".to_owned(),
+                }
+                .into());
+            }
+            if error
+                .downcast_ref::<dev::TaskGrantAuthorityRequired>()
+                .is_some()
+            {
+                return Err(SafeCliFailure {
+                    operational: false,
+                    code: "evidence.dev.grant-authority-required",
+                    artifact: "task grant".to_owned(),
+                    path: "$".to_owned(),
+                    message: "evidencectl does not issue or forge task grants.".to_owned(),
+                    suggested_action: "Approve the task through the configured Casework authority, then exchange its signed assertion at the configured issuer.".to_owned(),
+                }
+                .into());
+            }
             safe_command(
                 Err(error),
                 "evidence.dev.failed",
@@ -780,8 +808,16 @@ mod tests {
             "project",
             "--evidence-port",
             "18080",
-            "--mint-port",
+            "--issuer-port",
             "18081",
+        ])
+        .is_ok());
+        assert!(Cli::try_parse_from([
+            "evidencectl",
+            "dev",
+            "token",
+            "local-tutorial-caller",
+            "project"
         ])
         .is_ok());
         assert!(Cli::try_parse_from(["evidencectl", "dev", "--detach"]).is_ok());

@@ -18,14 +18,14 @@ invariants:
     enforcement: Startup bundle-combination validation and explicit operator review of one atomic revision.
     negative_test: sec-unsafe-definition-combination
   - id: V1-I04
-    rule: Principals and attributes derive only from configured validated authentication sources; missing data denies.
+    rule: Principals, actor kind, and attributes derive only from configured validated authentication sources; missing data denies.
     threat: Authentication bypass through fallback claims or unsigned headers.
-    enforcement: Strict authentication profile and one configured principal claim with no fallback.
+    enforcement: Strict authentication profile, one configured principal claim, and one strict shared actor-kind claim with no fallback.
     negative_test: sec-missing-principal-no-fallback
   - id: V1-I05
-    rule: One authorization decision binds requester, optional actor, requirement revision, purpose, all role/profile/origin tuples, authority, and audience.
+    rule: One authorization decision binds requester, actor kind, optional actor identity, verified client, requirement revision, purpose, all role/profile/origin tuples, authority, and audience. A task-grant path additionally binds immutable grant id, principal, original client and resource, trusted source issuer, deadline, and exact Evidence requirement bound.
     threat: Permission splicing or confused-deputy access across partially authorized dimensions.
-    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A refusal after successful authentication follows the separate minimal denial-audit invariant.
+    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A present invalid grant cannot fall back to a standing profile. A refusal after successful authentication follows the separate minimal denial-audit invariant.
     negative_test: sec-no-entitlement-union
   - id: V1-I06
     rule: Selector profiles and values are provider-lookup inputs, never proof of authority.
@@ -35,7 +35,7 @@ invariants:
   - id: V1-I07
     rule: Caller-provided consent, approval, or grant references never create authority.
     threat: Fabricated reference escalates authority.
-    enforcement: Grant identifiers are accepted only from authenticated context and must be bound to the complete entitlement.
+    enforcement: Grant identifiers are accepted only inside the complete verified shared grant context. Agent kind, principal, client, resource, trusted source issuer, deadline, authority, purpose, and requirement bound must match the complete entitlement.
     negative_test: sec-caller-grant-reference-rejected
   - id: V1-I08
     rule: Callers cannot choose selector fields, operators, weights, thresholds, normalization, or query plans.
@@ -45,7 +45,7 @@ invariants:
   - id: V1-I09
     rule: Source calls are fixed by trusted configuration and executed only by the core.
     threat: SSRF, credential forwarding, overbroad reads, or script-directed networking.
-    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Explicit named connections share only process-local transport, admission and credential state; startup rejects differing resolved connection values and no secret-byte deduplication occurs. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
+    enforcement: Generic fixed HTTPS executor owns the closed source sequence the requirement's acquisition kind fixes, origin, method, fixed or tagged selector/prior-fact-bound path, fixed headers, authentication, governed OAuth resource indicator, TLS, projection, proxy denial, bounded source and OAuth single-flight admission, limits, and one request per configured stage. Explicit named connections share only process-local transport, admission and credential state; startup rejects differing resolved connection values and no secret-byte deduplication occurs. Rhai returns only bounded query pairs and one JSON body, validated before credentials.
     negative_test: sec-source-request-immutable
   - id: V1-I10
     rule: Provider lookup has only match, no_match, and ambiguous; Evidence never exposes or chooses candidates, while reviewed derivation may compare only declared authorized selectors with complete facts from one unique record.
@@ -183,9 +183,9 @@ invariants:
     enforcement: Bundle validation binds source authentication kind none to assuranceProfile local, a canonical loopback HTTP origin with an explicit non-zero port, no TLS trust profile, and the core executor's header-free authentication plan; production and evidence-grade reject the kind.
     negative_test: sec-local-source-none-boundary
   - id: V1-I37
-    rule: Each configured authority claim names a distinct token member, and none names a registered JWT claim; only principalClaim may name sub.
+    rule: Each configured product or shared contextual-authorization claim names a distinct token member, and none names a registered JWT claim; only principalClaim may name sub.
     threat: One verified member is read as two different authorities, or an authority is read from a member the issuer wrote for another purpose, such as a grant authority taken from the audience Evidence validates against itself.
-    enforcement: Authentication validation refuses repeated names and the registered-claim set at startup, on the resource server, so the rule holds for every configured OIDC issuer rather than only for issuers that refuse to mint such tokens.
+    enforcement: Authentication validation refuses repeated names across both claim sets and the registered-claim set at startup, on the resource server, so the rule holds for every configured OIDC issuer rather than only for issuers that refuse to mint such tokens.
     negative_test: sec-authority-claim-names-closed
   - id: V1-I38
     rule: Every selector set an authority grant can activate carries each role and profile the source path template binds.
@@ -195,7 +195,7 @@ invariants:
   - id: V1-I39
     rule: Every authorization refusal after successful authentication is durably recorded as one standalone minimal native event before the generic 403 is returned; an audit failure returns the generic 503 instead.
     threat: An authenticated caller can probe denied operations without an accountable record, or the refusal record leaks untrusted request, unmatched-authority, selector, or response-format material.
-    enforcement: The core derives requester and optional actor pseudonyms scoped by operator trust domain, requested purpose, and authenticated audience, while request-rate accounting remains principal-scoped. It constructs the closed refusal branch under its distinct registry.evidence.audit.authorization-refusal/v1 discriminator with operation, assurance profile, bundle revision, denial category and decision, timestamp and duration, durably appends it before the response, and omits every request-derived, authority, selector, response-protection, source, and evaluation field. Authentication, malformed-request, and invalid-selector failures remain operational-only.
+    enforcement: The core derives requester plus available client, grant, and actor pseudonyms scoped by operator trust domain, requested purpose, and authenticated audience, while request-rate accounting remains principal-scoped. It records actor kind and a fixed safe reason, constructs the closed refusal branch under its distinct registry.evidence.audit.authorization-refusal/v1 discriminator, durably appends it before the response, and omits every request-derived requirement, purpose, unmatched authority, selector, response-protection, source, and evaluation field. Authentication, malformed-request, and invalid-selector failures remain operational-only.
     negative_test: sec-authenticated-authorization-refusal-audited
   - id: V1-I40
     rule: A search-then-fetch acquisition is exactly one fixed search and, only after a unique schema-valid match, one fixed fetch; only the validated search FactSet may cross the stage boundary and no response or script can select transport or create a third call.
@@ -267,6 +267,12 @@ invariants:
     threat: An unauthenticated discovery response leaks source bindings, selector or adapter configuration, credentials, authorization policy, signing material, audit state, internal network information, or assertion data.
     enforcement: Evidence compilation renders the shared closed Registry Discovery profile from an explicit public allowlist and seals catalog.jsonld in the deployment package. It emits one Data Service node per exact Evidence Type and compatible binding-and-response profile, with a distinct centrally derived bindingId, so JSON-LD, RDF, and multi-filter search cannot create a cross-requirement capability pair. Startup recomputes only to reject a missing, extra, or byte-drifted artifact, then captures the packaged bytes. Capability identifiers encode compatible binding-and-response tuples, never independently combinable tags. The stable public route serves only the captured packaged bytes without authentication, source access, assertion evaluation, signing, or Evidence audit writes.
     negative_test: sec-provider-public-projection
+  - id: V1-I54
+    rule: When authentication states allowedClients or requiredScopes, admission is the explicit list and the required scope set of the verified token; audience plus static issuer-governed attributes alone never establish resource permission, and a missing scope is never inferred from tags, principal, roles, sub, or request fields.
+    threat: An issuer that returns a correctly signed token for a known resource with zero scopes while still emitting the client's static attributes lets that client reach protected Evidence operations on audience and attributes alone.
+    enforcement: Client admission runs in the platform verifier's client_id/azp semantics; the scope gate runs after signature verification and before any authority claim is read, with the same closed refusal a refused client gets.
+    negative_test: sec-admission-clients-and-scopes
+
 cross_cutting:
   holder_bound_entity_reference_prohibited:
     threat: An entity reference is a pointer only the one relying party it was scoped to can resolve. A holder-bound assertion has no such party, so disclosing one would emit an identifier nobody who receives the credential can resolve and that correlates its holder wherever it is presented.

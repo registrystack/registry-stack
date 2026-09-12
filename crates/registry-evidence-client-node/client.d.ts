@@ -82,7 +82,23 @@ export interface PrivateKeyJwtConfig {
   tokenEndpoint: string
   clientId: string
   clientKey: Readonly<Record<string, unknown>>
+  /**
+   * The audience of the client assertion (who checks the client's
+   * authentication). Defaults to the token endpoint URL. This is not the
+   * `resource` of the token request.
+   */
   audience?: string
+  /**
+   * The RFC 8707 resource indicator the token is requested for: the resource
+   * server's registered identifier, not a URL to fetch.
+   */
+  resource?: string
+  /**
+   * The scopes requested for the token, sent as one space-delimited `scope`
+   * parameter. A requested scope may narrow the client's registered
+   * permission set; it can never widen it.
+   */
+  scopes?: ReadonlyArray<string>
   assertionLifetimeSeconds?: number
   refreshMarginSeconds?: number
   requestTimeoutMs?: number

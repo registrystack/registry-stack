@@ -14,8 +14,10 @@ required:
   - bundleRevision
   - purpose
   - requesterPseudonym
+  - actorKind
   - responseProtection
   - decision
+  - reason
   - durationMilliseconds
 properties:
   schema: {const: registry.evidence.audit.request-batch/v1}
@@ -28,9 +30,12 @@ properties:
   bundleRevision: {type: string, pattern: '^sha256:[a-f0-9]{64}$'}
   purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
   requesterPseudonym: {$ref: '#/$defs/pseudonym'}
+  actorKind: {enum: [human, agent, service]}
+  clientPseudonym: {$ref: '#/$defs/pseudonym'}
   actorPseudonym: {$ref: '#/$defs/pseudonym'}
   responseProtection: {const: signed}
   decision: {enum: [authorized, released, aborted]}
+  reason: {const: authorization.allowed}
   sourceId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   adapterId: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   itemIndices: {$ref: '#/$defs/item-indices'}

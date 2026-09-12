@@ -10,14 +10,13 @@ authentication:
   kind: oidc-access-token
   issuer: https://identity.gov.example
   audiences: [registry-evidence]
+  allowedClients: [casework-agent]
   tokenTypes: [at+jwt]
   algorithms: [ES256]
   jwksUri: https://identity.gov.example/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
-  grantIdClaim: evidence_grant_id
-  grantAuthorityClaim: evidence_authority
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit:
@@ -186,6 +185,8 @@ sources:
     factSchema: schemas/birth-parents-facts.schema.yaml
 authorityProfiles:
   civil-registration-caseworker-v1:
+    requesterClients: [casework-agent]
+    grantSourceIssuer: https://casework.gov.example
     kind: statutory
     requesterTags: [civil-registration-caseworker]
     grants:

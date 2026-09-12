@@ -545,6 +545,31 @@ impl EvidenceConfig {
         validate_named_map(&self.authority_profiles, 1, 128, |profile| {
             profile.validate()
         })?;
+        let task_grant_profiles = self
+            .authority_profiles
+            .iter()
+            .map(|(_, profile)| profile)
+            .filter(|profile| !profile.requester_clients.is_empty())
+            .collect::<Vec<_>>();
+        if !task_grant_profiles.is_empty() {
+            let allowed_clients =
+                self.authentication
+                    .allowed_clients
+                    .as_ref()
+                    .ok_or(ConfigError::Invalid(
+                        "task-grant authority profiles require authentication allowedClients",
+                    ))?;
+            if task_grant_profiles.iter().any(|profile| {
+                profile
+                    .requester_clients
+                    .iter()
+                    .any(|client| !allowed_clients.contains(client))
+            }) {
+                return invalid(
+                    "task-grant requester clients must be admitted by authentication allowedClients",
+                );
+            }
+        }
         validate_len(self.requirements.len(), 1, 128, "requirements")?;
 
         let mut requirement_ids = BTreeSet::new();
@@ -1595,13 +1620,34 @@ pub struct AuthenticationConfig {
     pub principal_claim: String,
     pub requester_tags_claim: String,
     pub evidence_audience_claim: String,
-    pub grant_id_claim: String,
-    pub grant_authority_claim: String,
+    /// Shared, direct contextual-authorization claim names. Product-specific
+    /// requester, actor identity, and relying-party audience claims remain
+    /// separate because they have Evidence-specific meaning.
+    #[serde(default)]
+    pub claims: registry_platform_oidc::ClaimNames,
     /// Maximum lifetime accepted for inbound access tokens. The verifier
     /// requires `iat`, requires `exp > iat`, and applies this bound.
     pub maximum_token_lifetime_seconds: u64,
     /// Emergency denylist applied before JWKS cache selection.
     pub revoked_key_ids: Vec<String>,
+    /// Explicit machine-client admission, matched against the token's
+    /// `client_id`/`azp` the platform verifier already reads. Absent keeps
+    /// the issuer-vouched-client behavior; present requires a nonempty,
+    /// bounded, unique list and admits exactly those clients.
+    ///
+    /// Audience plus static issuer-governed attributes alone cannot establish
+    /// that the client was granted this resource's permission: an issuer may
+    /// issue a correctly signed token for a known resource with zero scopes
+    /// while still emitting the client's attributes. `required_scopes` closes
+    /// that gap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_clients: Option<Vec<String>>,
+    /// Scopes every inbound token must carry, checked against the verified
+    /// token's scope set after signature verification and before any authority
+    /// claim is read. Absent keeps the no-scope-gate behavior; present
+    /// requires a nonempty, bounded, unique list of RFC 6749 scope-tokens.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_scopes: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_claim: Option<String>,
 }
@@ -1616,10 +1662,24 @@ impl AuthenticationConfig {
             if assurance_profile != AssuranceProfile::Local {
                 return invalid("production and evidence-grade authentication requires HTTPS");
             }
-            let origin = validate_local_mint_origin(&self.issuer)?;
-            if self.jwks_uri != format!("{origin}{LOCAL_MINT_JWKS_PATH}") {
+            // The local permission is for a supervised issuer on this
+            // deployment's own loopback: a canonical numeric origin, with the
+            // JWKS served from that exact origin. It is not a permission for
+            // private-network HTTP, and a JWKS origin or port other than the
+            // issuer's is not supervised by the issuer that vouches for it.
+            let origin = validate_local_issuer_origin(&self.issuer)?;
+            if jwks_uri.scheme() != "http"
+                || jwks_uri.host_str() != Some("127.0.0.1")
+                || jwks_uri.port() != issuer.port()
+                || !jwks_uri.path().starts_with('/')
+                || jwks_uri.query().is_some()
+                || jwks_uri.fragment().is_some()
+                || !jwks_uri.username().is_empty()
+                || jwks_uri.password().is_some()
+                || self.jwks_uri != format!("{origin}{}", jwks_uri.path())
+            {
                 return invalid(
-                    "local authentication JWKS URI must use the issuer origin and Mint JWKS path",
+                    "local authentication JWKS URI must use the exact issuer origin, an absolute path, and no query or fragment",
                 );
             }
         } else {
@@ -1643,6 +1703,22 @@ impl AuthenticationConfig {
             256,
             "authentication revokedKeyIds",
         )?;
+        // Admission lists are optional, but a present list is a statement the
+        // deployment means: an empty allowlist admits nothing and an empty
+        // scope requirement gates nothing, and both are almost certainly a
+        // mis-authored key rather than a deliberate posture.
+        if let Some(clients) = &self.allowed_clients {
+            validate_unique_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
+        }
+        if let Some(scopes) = &self.required_scopes {
+            validate_unique_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
+            if scopes
+                .iter()
+                .any(|scope| !registry_platform_httputil::valid_scope_token(scope))
+            {
+                return invalid("authentication requiredScopes must be RFC 6749 scope-tokens");
+            }
+        }
         if self
             .revoked_key_ids
             .iter()
@@ -1652,24 +1728,43 @@ impl AuthenticationConfig {
         }
         // Ordered principal first, because `sub` is legitimate for that claim
         // alone and the shadowing check below reads the rest of the list.
-        let claims = [
+        self.claims.validate().map_err(|_| {
+            ConfigError::Invalid("contextual authorization claim names are invalid")
+        })?;
+        let product_claims = [
             Some(&self.principal_claim),
             Some(&self.requester_tags_claim),
             Some(&self.evidence_audience_claim),
-            Some(&self.grant_id_claim),
-            Some(&self.grant_authority_claim),
             self.actor_claim.as_ref(),
         ]
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
-        for claim in &claims {
+        for claim in &product_claims {
             validate_claim_name(claim)?;
         }
         // Two claims naming one member means the same value is read as two
         // different things: requester tags read as a principal, or a grant id
         // read as the authority that granted it.
-        if claims.iter().collect::<BTreeSet<_>>().len() != claims.len() {
+        let contextual_claims = [
+            &self.claims.actor_kind,
+            &self.claims.purpose,
+            &self.claims.grant_id,
+            &self.claims.grant_authority,
+            &self.claims.grant_source_issuer,
+            &self.claims.grant_client,
+            &self.claims.grant_resource,
+            &self.claims.grant_exp,
+            &self.claims.grant_bounds,
+            &self.claims.approver,
+        ];
+        if product_claims
+            .iter()
+            .chain(contextual_claims.iter())
+            .collect::<BTreeSet<_>>()
+            .len()
+            != product_claims.len() + contextual_claims.len()
+        {
             return invalid("authority claim names must be distinct");
         }
         // These are defined by the token itself, so reading authority out of one
@@ -1680,20 +1775,39 @@ impl AuthenticationConfig {
         // `sub` is the exception, and only for the principal. It carries the
         // principal already, so naming it there reads the same value; naming it
         // anywhere else reads the principal as something it is not.
-        if claims
+        if product_claims
             .iter()
             .any(|claim| REGISTERED_JWT_CLAIMS.contains(&claim.as_str()))
-            || claims.iter().skip(1).any(|claim| claim.as_str() == "sub")
+            || product_claims
+                .iter()
+                .skip(1)
+                .any(|claim| claim.as_str() == "sub")
         {
             return invalid("authority claim names must not shadow registered JWT claims");
         }
         Ok(())
     }
 
-    pub(crate) fn uses_local_mint_http(&self, assurance_profile: AssuranceProfile) -> bool {
-        assurance_profile == AssuranceProfile::Local
-            && validate_local_mint_origin(&self.issuer).is_ok()
-            && self.jwks_uri == format!("{}{}", self.issuer, LOCAL_MINT_JWKS_PATH)
+    pub(crate) fn uses_local_issuer_http(&self, assurance_profile: AssuranceProfile) -> bool {
+        if assurance_profile != AssuranceProfile::Local {
+            return false;
+        }
+        let Ok(issuer) = Url::parse(&self.issuer) else {
+            return false;
+        };
+        let Ok(jwks_uri) = Url::parse(&self.jwks_uri) else {
+            return false;
+        };
+        issuer.scheme() == "http"
+            && jwks_uri.scheme() == "http"
+            && validate_local_issuer_origin(&self.issuer).is_ok()
+            && jwks_uri.host_str() == Some("127.0.0.1")
+            && jwks_uri.port() == issuer.port()
+            && jwks_uri.path().starts_with('/')
+            && jwks_uri.query().is_none()
+            && jwks_uri.fragment().is_none()
+            && jwks_uri.username().is_empty()
+            && jwks_uri.password().is_none()
     }
 }
 
@@ -1711,9 +1825,7 @@ impl AuthenticationConfig {
 const REGISTERED_JWT_CLAIMS: [&str; 8] =
     ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"];
 
-const LOCAL_MINT_JWKS_PATH: &str = "/.well-known/jwks.json";
-
-fn validate_local_mint_origin(value: &str) -> Result<&str, ConfigError> {
+fn validate_local_issuer_origin(value: &str) -> Result<&str, ConfigError> {
     let port = value
         .strip_prefix("http://127.0.0.1:")
         .filter(|port| !port.is_empty() && port.bytes().all(|byte| byte.is_ascii_digit()))
@@ -2797,6 +2909,10 @@ pub enum SourceAuthentication {
         /// it is absent.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         audience: Option<String>,
+        /// RFC 8707 resource indicator sent as a token-request form parameter.
+        /// Unlike the assertion audience, this names the intended resource server.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        resource: Option<String>,
         /// Where the shared client secret travels; set only with
         /// `clientSecretRef`.
         #[serde(
@@ -2851,6 +2967,7 @@ impl SourceAuthentication {
                 client_assertion_audience,
                 scope,
                 audience,
+                resource,
                 credential_placement,
                 maximum_cache_seconds,
                 assumed_lifetime_seconds,
@@ -2903,6 +3020,9 @@ impl SourceAuthentication {
                     if audience.trim().is_empty() {
                         return invalid("OAuth audience is blank");
                     }
+                }
+                if let Some(resource) = resource {
+                    validate_oauth_resource(resource)?;
                 }
                 if let Some(assumed_lifetime_seconds) = assumed_lifetime_seconds {
                     validate_range(
@@ -3530,6 +3650,15 @@ pub enum PreparationChannelPolicy {
 pub struct AuthorityProfile {
     pub kind: AuthorityKind,
     pub requester_tags: Vec<String>,
+    /// Verified OAuth clients allowed to exercise a grant-bound authority
+    /// path. Required only when one of this profile's subjects is sourced from
+    /// an authenticated task grant.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requester_clients: Vec<String>,
+    /// Trusted issuer that supplied the immutable grant context before token
+    /// exchange. The resource server compares it exactly with the signed grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_source_issuer: Option<String>,
     pub grants: Vec<AuthorityGrant>,
 }
 
@@ -3539,9 +3668,38 @@ impl AuthorityProfile {
         if self.requester_tags.iter().any(|tag| !valid_local_id(tag)) {
             return invalid("requester tag is invalid");
         }
+        validate_unique_strings(
+            &self.requester_clients,
+            0,
+            32,
+            1,
+            128,
+            "authority requester clients",
+        )?;
         validate_len(self.grants.len(), 1, 128, "authority grants")?;
         for grant in &self.grants {
             grant.validate()?;
+        }
+        let uses_task_grant = self.grants.iter().any(|grant| {
+            grant
+                .subjects
+                .iter()
+                .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)
+        });
+        if uses_task_grant {
+            validate_len(
+                self.requester_clients.len(),
+                1,
+                32,
+                "task-grant requester clients",
+            )?;
+            let source = self
+                .grant_source_issuer
+                .as_deref()
+                .ok_or(ConfigError::Invalid(
+                    "task-grant authority profile requires grantSourceIssuer",
+                ))?;
+            validate_uri(source)?;
         }
         Ok(())
     }
@@ -4794,6 +4952,20 @@ pub(crate) fn validate_local_unauthenticated_source_origin(value: &str) -> Resul
     Ok(())
 }
 
+/// Validate an RFC 8707 resource identifier without rewriting its governed bytes.
+/// It is an identifier in a form body, not an origin Evidence will connect to.
+pub(crate) fn validate_oauth_resource(value: &str) -> Result<(), ConfigError> {
+    let invalid_resource = || {
+        ConfigError::Invalid(
+            "OAuth resource must be an absolute URI without a fragment or user information",
+        )
+    };
+    if value.len() > 512 || !registry_platform_httputil::valid_resource_uri(value) {
+        return Err(invalid_resource());
+    }
+    Ok(())
+}
+
 fn validate_source_url(value: &str, origin_only: bool) -> Result<Url, ConfigError> {
     if !value.bytes().all(is_uri_byte) {
         return invalid("source URL contains characters a URI cannot carry");
@@ -5506,6 +5678,7 @@ mod tests {
                 "clientAssertionKeyRef": "secret:file/client-key",
                 "clientAssertionAudience": "https://issuer.example/client-auth",
                 "audience": "https://resource.example",
+                "resource": "https://resource.example/records",
                 "maximumCacheSeconds": 60
             },
             "tlsTrustProfile": "private-ca"
@@ -5538,6 +5711,20 @@ mod tests {
         assert!(
             config.validate().is_err(),
             "a copied endpoint cannot retarget a named source"
+        );
+        config = before.clone();
+        if let SourceConfig::HttpJson { authentication, .. } = &mut config.sources.0[0].1 {
+            if let SourceAuthentication::Oauth2ClientCredentials { resource, .. } =
+                authentication.as_mut()
+            {
+                *resource = Some("https://other.example/records".to_owned());
+            } else {
+                panic!("expected OAuth source");
+            }
+        }
+        assert!(
+            config.validate().is_err(),
+            "a source cannot retarget its named connection's OAuth resource"
         );
         for field in ["authentication", "tlsTrustProfile", "concurrencyLimit"] {
             config = before.clone();
@@ -5699,6 +5886,9 @@ mod tests {
     ///
     /// Every acceptance fixture these tests parse declares one `http-json`
     /// source, so a test that mutates HTTP request material names the
+    ///
+    /// Every acceptance fixture these tests parse declares one `http-json`
+    /// source, so a test that mutates HTTP request material names the
     /// transport through these four helpers rather than at each call.
     fn http_base_url(config: &mut EvidenceConfig) -> &mut String {
         match &mut config.sources.0[0].1 {
@@ -5763,8 +5953,12 @@ mod tests {
         assert!(parsed.requirements[0].fixtures.is_none());
     }
 
+    /// The supervised-local issuer rule: a canonical numeric loopback origin
+    /// for the issuer, and a JWKS on that exact origin at any absolute path
+    /// without query or fragment. Local assurance only; strict profiles keep
+    /// the HTTPS requirement.
     #[test]
-    fn only_local_assurance_accepts_the_exact_loopback_mint_identity() {
+    fn only_local_assurance_accepts_a_canonical_loopback_issuer_with_same_origin_jwks() {
         let mut config = EvidenceConfig::parse_yaml(include_bytes!(
             "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
         ))
@@ -5774,7 +5968,12 @@ mod tests {
         config.authentication.jwks_uri = "http://127.0.0.1:8081/.well-known/jwks.json".to_owned();
         config
             .validate()
-            .expect("local profile accepts the supervised Mint identity");
+            .expect("local profile accepts the supervised loopback identity");
+        // The JWKS path is the issuer's to choose now, not Mint's fixed route.
+        config.authentication.jwks_uri = "http://127.0.0.1:8081/oauth2/jwks".to_owned();
+        config
+            .validate()
+            .expect("local profile accepts any same-origin absolute JWKS path");
 
         for invalid in [
             "http://localhost:8081",
@@ -5794,10 +5993,17 @@ mod tests {
             );
         }
         for invalid in [
-            "http://127.0.0.1:8081/.well-known/keys.json",
-            "http://127.0.0.1:8082/.well-known/jwks.json",
-            "http://localhost:8081/.well-known/jwks.json",
-            "https://127.0.0.1:8081/.well-known/jwks.json",
+            // A different port, host, or scheme is not the issuer's origin.
+            "http://127.0.0.1:8082/oauth2/jwks",
+            "http://localhost:8081/oauth2/jwks",
+            "https://127.0.0.1:8081/oauth2/jwks",
+            // No path stated at all, or one carrying a query, fragment, or
+            // userinfo. The root path itself is an absolute path and stays
+            // legal: the rule fixes the origin, not the route.
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8081/oauth2/jwks?cache=1",
+            "http://127.0.0.1:8081/oauth2/jwks#fragment",
+            "http://user@127.0.0.1:8081/oauth2/jwks",
         ] {
             let mut candidate = config.clone();
             candidate.authentication.jwks_uri = invalid.to_owned();
@@ -5816,6 +6022,54 @@ mod tests {
             assert!(
                 candidate.validate().is_err(),
                 "{profile:?} inherited the local HTTP exception"
+            );
+        }
+    }
+
+    /// The admission fields are optional, but a present list must be a
+    /// nonempty, bounded, unique list — and required scopes must be scope
+    /// tokens, because they are compared against verified token scopes.
+    #[test]
+    fn admission_lists_are_optional_but_present_means_nonempty_and_bounded() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config
+            .validate()
+            .expect("absent admission fields keep the existing behavior");
+
+        config.authentication.allowed_clients = Some(vec!["records-reader".to_owned()]);
+        config.authentication.required_scopes = Some(vec!["evidence:invoke".to_owned()]);
+        config.validate().expect("stated admission validates");
+
+        for clients in [
+            Vec::new(),
+            vec!["".to_owned()],
+            vec!["a".repeat(129)],
+            vec!["reader".to_owned(); 33],
+            vec!["reader".to_owned(), "reader".to_owned()],
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.allowed_clients = Some(clients.clone());
+            assert!(
+                candidate.validate().is_err(),
+                "accepted allowedClients {clients:?}"
+            );
+        }
+        for scopes in [
+            Vec::new(),
+            vec!["".to_owned()],
+            vec!["a".repeat(257)],
+            vec!["not a scope".to_owned()],
+            vec!["evidence:invoke".to_owned(); 33],
+            vec!["evidence:invoke".to_owned(), "evidence:invoke".to_owned()],
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.required_scopes = Some(scopes.clone());
+            assert!(
+                candidate.validate().is_err(),
+                "accepted requiredScopes {scopes:?}"
             );
         }
     }
@@ -6057,8 +6311,8 @@ mod tests {
     /// Mint is one possible issuer. Evidence is documented against any OIDC
     /// issuer, and no other issuer enforces Mint's rules, so the deployment with
     /// no issuer-side check is exactly the one where this is the only check.
-    /// `grantAuthorityClaim: aud` would read Evidence's own audience as the
-    /// authority that granted the request.
+    /// A grant authority claim named `aud` would read Evidence's own audience
+    /// as the authority that granted the request.
     #[test]
     fn authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims() {
         let config = EvidenceConfig::parse_yaml(include_bytes!(
@@ -6072,11 +6326,12 @@ mod tests {
         let mut duplicate = config.clone();
         duplicate
             .authentication
-            .grant_id_claim
-            .clone_from(&config.authentication.grant_authority_claim);
+            .claims
+            .grant_id
+            .clone_from(&config.authentication.claims.grant_authority);
         assert_eq!(
             duplicate.validate(),
-            invalid("authority claim names must be distinct"),
+            invalid("contextual authorization claim names are invalid"),
             "one member read as both the grant id and the granting authority"
         );
 
@@ -6089,6 +6344,15 @@ mod tests {
             "one member read as both the actor and the requester tags"
         );
 
+        let mut shared_shadows_product = config.clone();
+        shared_shadows_product.authentication.claims.purpose =
+            config.authentication.requester_tags_claim.clone();
+        assert_eq!(
+            shared_shadows_product.validate(),
+            invalid("authority claim names must be distinct"),
+            "a shared claim cannot reuse an Evidence product claim"
+        );
+
         // `cnf` is here for a different reason than the rest. The others would
         // read a member the issuer owns; `cnf` would name one the authenticator
         // refuses outright, because Version 1 validates no proof of possession
@@ -6098,10 +6362,10 @@ mod tests {
         // to explain why.
         for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"] {
             let mut candidate = config.clone();
-            candidate.authentication.grant_authority_claim = reserved.to_owned();
+            candidate.authentication.claims.grant_authority = reserved.to_owned();
             assert_eq!(
                 candidate.validate(),
-                invalid("authority claim names must not shadow registered JWT claims"),
+                invalid("contextual authorization claim names are invalid"),
                 "grant authority read from the registered claim {reserved}"
             );
         }
@@ -6117,10 +6381,10 @@ mod tests {
         // colliding with the principal and tripping distinctness instead.
         let mut authority_is_subject = config.clone();
         authority_is_subject.authentication.principal_claim = "evidence_principal".to_owned();
-        authority_is_subject.authentication.grant_authority_claim = "sub".to_owned();
+        authority_is_subject.authentication.claims.grant_authority = "sub".to_owned();
         assert_eq!(
             authority_is_subject.validate(),
-            invalid("authority claim names must not shadow registered JWT claims"),
+            invalid("contextual authorization claim names are invalid"),
             "the granting authority read from the principal member"
         );
 
@@ -6129,6 +6393,44 @@ mod tests {
         distinct
             .validate()
             .expect("distinct, unreserved claim names load");
+    }
+
+    #[test]
+    fn task_grant_profiles_bind_trusted_source_and_verified_client() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/legal-parent-relationship/evidence.yaml"
+        ))
+        .expect("task-grant fixture validates");
+
+        let mut no_profile_clients = config.clone();
+        no_profile_clients.authority_profiles.0[0]
+            .1
+            .requester_clients
+            .clear();
+        assert!(no_profile_clients.validate().is_err());
+
+        let mut no_source = config.clone();
+        no_source.authority_profiles.0[0].1.grant_source_issuer = None;
+        assert_eq!(
+            no_source.validate(),
+            invalid("task-grant authority profile requires grantSourceIssuer")
+        );
+
+        let mut no_global_admission = config.clone();
+        no_global_admission.authentication.allowed_clients = None;
+        assert_eq!(
+            no_global_admission.validate(),
+            invalid("task-grant authority profiles require authentication allowedClients")
+        );
+
+        let mut client_not_admitted = config;
+        client_not_admitted.authentication.allowed_clients = Some(vec!["other-client".to_owned()]);
+        assert_eq!(
+            client_not_admitted.validate(),
+            invalid(
+                "task-grant requester clients must be admitted by authentication allowedClients"
+            )
+        );
     }
 
     #[test]
@@ -7835,6 +8137,7 @@ mod tests {
                 client_assertion_audience: None,
                 scope: None,
                 audience: None,
+                resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
                 maximum_cache_seconds: 60,
                 assumed_lifetime_seconds: None,
@@ -7887,6 +8190,7 @@ mod tests {
                 client_assertion_audience: None,
                 scope: None,
                 audience: None,
+                resource: None,
                 credential_placement: Some(CredentialPlacement::FormBody),
                 maximum_cache_seconds: 60,
                 assumed_lifetime_seconds,
@@ -7930,6 +8234,52 @@ mod tests {
                 validator.is_valid(&instance),
                 accepted,
                 "{placement} bundle contract"
+            );
+        }
+    }
+
+    /// The resource indicator is an exact governed URI, not an outbound URL
+    /// or the client assertion audience. Invalid values fail at configuration
+    /// validation before a credential or token request can be made.
+    #[test]
+    fn oauth_resource_indicator_is_optional_and_rejects_relative_or_ambiguous_values() {
+        let validator = bundle_contract_validator();
+        for (resource, accepted) in [
+            (None, true),
+            (Some("https://api.invalid:443/records"), true),
+            (Some("https://api.invalid/records%20archive"), true),
+            (Some("https://[::1]/records"), true),
+            (Some("urn:example:records"), true),
+            (Some(""), false),
+            (Some("api.invalid/records"), false),
+            (Some("https://api.invalid/records#fragment"), false),
+            (Some("https://user@api.invalid/records"), false),
+            (Some("https://api.invalid/é"), false),
+            (Some("https://api.invalid/records with space"), false),
+            (Some("https://api.invalid/%GG"), false),
+        ] {
+            let mut authentication = serde_json::json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://issuer.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientSecretRef": "secret:file/oauth-client-secret",
+                "credentialPlacement": "form-body",
+                "maximumCacheSeconds": 60,
+            });
+            if let Some(resource) = resource {
+                authentication["resource"] = serde_json::json!(resource);
+            }
+            let parsed: SourceAuthentication = serde_json::from_value(authentication.clone())
+                .expect("the closed authentication shape deserializes");
+            assert_eq!(parsed.validate().is_ok(), accepted, "runtime: {resource:?}");
+            let mut instance = bundle_contract_instance(include_bytes!(
+                "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+            ));
+            instance["sources"]["source-a"]["authentication"] = authentication;
+            assert_eq!(
+                validator.is_valid(&instance),
+                accepted,
+                "schema: {resource:?}"
             );
         }
     }

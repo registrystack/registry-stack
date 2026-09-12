@@ -318,7 +318,7 @@ listener:
   port: 8090
 evidence:
   baseUrl: https://evidence.example.org
-mint:
+tokenClient:
   tokenEndpoint: https://mint.example.org/token
   clientId: evidence-oid4vci
   privateKeyFile: unused-in-wired-test.jwk
@@ -676,7 +676,7 @@ metricsListener:
   port: 18441
 evidence:
   baseUrl: {SUPPORT_ORIGIN}
-mint:
+tokenClient:
   tokenEndpoint: {SUPPORT_ORIGIN}/token
   clientId: evidence-oid4vci-tutorial
   privateKeyFile: delivery-client.jwk.json

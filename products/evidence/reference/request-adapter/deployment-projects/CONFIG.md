@@ -146,9 +146,11 @@ the provider contract is still being written. This does not disable any other
 runtime boundary: the bundle and runtime remain immutable, inbound
 authentication and authorization remain required, source requests remain fixed
 and bounded, signing and both audit gates remain fail-closed, and assertions
-are visibly marked `local`. Local Mint may use only the exact canonical issuer origin
-`http://127.0.0.1:<non-zero-port>` and the same origin's
-`/.well-known/jwks.json`; other authentication URLs remain HTTPS.
+are visibly marked `local`. A supervised local issuer may use only the exact
+canonical issuer origin `http://127.0.0.1:<non-zero-port>`, and its JWKS must
+be served from that exact origin at an absolute path with no query or fragment;
+other authentication URLs remain HTTPS. The route is the issuer's to choose;
+the origin is not.
 
 `production` and `evidence-grade` are deployable profiles. Every requirement
 must reference a fixture suite, and the existing complete coverage validation
@@ -171,9 +173,11 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.principalClaim` | yes | The only claim used for the principal. Its absence denies; `client_id`, `azp`, request data, and proxy headers are not fallbacks. |
 | `authentication.requesterTagsClaim` | yes | Claim containing the requester tags matched against an authority profile. |
 | `authentication.evidenceAudienceClaim` | yes | Claim containing the exact evidence audience. The public request cannot choose another audience. |
-| `authentication.grantIdClaim`, `authentication.grantAuthorityClaim` | yes | Claims used only when an `authenticated-grant` origin is selected. The authority must equal the matched authority-profile id. |
+| `authentication.claims` | no | Direct claim-name mapping for shared actor, purpose, grant id, authority, source issuer, client, resource, expiration, bounds, and approver claims. Omission uses the documented `registry_*` names. The names must be distinct from each other, Evidence product claims, and registered authentication claims. |
 | `authentication.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
 | `authentication.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
+| `authentication.allowedClients` | no | Explicit machine-client admission, matched against the verified token's `client_id`/`azp` and never `sub`. Omission keeps the issuer-vouched-client behavior. A stated list must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
+| `authentication.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
 | `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
 
 ### Audit, subject binding, rates, and signing
@@ -236,8 +240,15 @@ Every grant subject fixes `role`, `selectorProfile`, and one `valueOrigin`:
 - `authenticated-context` requires an exact field-to-verified-claim
   `valueClaims` map and rejects caller values; and
 - `authenticated-grant` requires the same exact map, rejects caller values,
-  and additionally requires the configured grant id and grant authority. The
-  authenticated authority value must equal the matched authority-profile id.
+  and additionally requires the complete shared task-grant claims. The actor
+  must be an agent. The signed principal, original client and resource, trusted
+  source issuer, authority, purpose, Evidence requirement bound, and effective
+  token/grant deadline must all match. A malformed or mismatched present grant
+  cannot fall back to a standing profile.
+
+An authority profile containing an `authenticated-grant` subject must declare
+nonempty `requesterClients` and one exact `grantSourceIssuer`. Every requester
+client must also appear in `authentication.allowedClients`.
 
 Claim paths are resolved only from the strictly verified access token. A
 caller-supplied grant reference, selector, consent reference, or approval value
@@ -457,6 +468,7 @@ sourceConnections:
       clientAssertionKeyRef: secret:file/workload-client-key
       clientAssertionAudience: https://identity.gov.example/client-auth
       audience: https://registry.gov.example
+      resource: https://registry.gov.example
       maximumCacheSeconds: 60
     concurrencyLimit: 4
     admissionTimeoutMilliseconds: 5000
@@ -466,8 +478,8 @@ sourceConnections:
 The authentication object is the complete existing union documented below:
 local `none`, Basic, static authorization, static API key, or OAuth client
 credentials using a shared secret or signed client assertion. Resource
-`audience` and `clientAssertionAudience` retain their distinct meanings. The
-logical `tlsTrustProfile` retains its additive runtime CA binding.
+`audience`, `resource`, and `clientAssertionAudience` retain their distinct
+meanings. The logical `tlsTrustProfile` retains its additive runtime CA binding.
 
 | Connection key | Required | Meaning |
 |---|---|---|
@@ -555,6 +567,7 @@ authentication:
   clientAssertionAudience: https://auth.registry.gov.example/
   scope: recordsearch
   audience: https://api.registry.gov.example/
+  resource: https://api.registry.gov.example/
   maximumCacheSeconds: 300
 ```
 
@@ -618,6 +631,14 @@ it returns a token the source will reject. It is not
 `clientAssertionAudience`: this one is a form field of the token request, that
 one is a claim inside the signed assertion, and a server may want both, neither,
 or different values for each.
+
+`resource` is the optional RFC 8707 resource indicator. It is a separate
+token-request form field naming one intended resource server as an absolute URI
+without a fragment or user information. Evidence sends the exact configured
+string and never derives it from a caller, adapter, source response, or the
+source URL. Use it when the authorization server supports resource indicators;
+the existing `audience` parameter remains available for providers that require
+it. Neither field changes where the token request is sent.
 
 RFC 6749 section 5.1 makes `expires_in` recommended rather than required, so a
 compliant provider may return only `access_token` and `token_type`. A token
@@ -1484,17 +1505,30 @@ authentication
 authentication.actorClaim
 authentication.algorithms
 authentication.algorithms[]
+authentication.allowedClients
+authentication.allowedClients[]
 authentication.audiences
 authentication.audiences[]
 authentication.evidenceAudienceClaim
-authentication.grantAuthorityClaim
-authentication.grantIdClaim
+authentication.claims
+authentication.claims.actorKind
+authentication.claims.approver
+authentication.claims.grantAuthority
+authentication.claims.grantBounds
+authentication.claims.grantClient
+authentication.claims.grantExp
+authentication.claims.grantId
+authentication.claims.grantResource
+authentication.claims.grantSourceIssuer
+authentication.claims.purpose
 authentication.issuer
 authentication.jwksUri
 authentication.kind
 authentication.maximumTokenLifetimeSeconds
 authentication.principalClaim
 authentication.requesterTagsClaim
+authentication.requiredScopes
+authentication.requiredScopes[]
 authentication.revokedKeyIds
 authentication.revokedKeyIds[]
 authentication.tokenTypes
@@ -1518,6 +1552,9 @@ authorityProfiles.*.grants[].subjects[].valueClaims
 authorityProfiles.*.grants[].subjects[].valueClaims.*
 authorityProfiles.*.grants[].subjects[].valueOrigin
 authorityProfiles.*.kind
+authorityProfiles.*.grantSourceIssuer
+authorityProfiles.*.requesterClients
+authorityProfiles.*.requesterClients[]
 authorityProfiles.*.requesterTags
 authorityProfiles.*.requesterTags[]
 holderBoundBatchMaxSize
@@ -1660,6 +1697,7 @@ sourceConnections.*.authentication.headerName
 sourceConnections.*.authentication.kind
 sourceConnections.*.authentication.maximumCacheSeconds
 sourceConnections.*.authentication.passwordRef
+sourceConnections.*.authentication.resource
 sourceConnections.*.authentication.scheme
 sourceConnections.*.authentication.scope
 sourceConnections.*.authentication.tokenEndpoint
@@ -1684,6 +1722,7 @@ sources.*.authentication.headerName
 sources.*.authentication.kind
 sources.*.authentication.maximumCacheSeconds
 sources.*.authentication.passwordRef
+sources.*.authentication.resource
 sources.*.authentication.scheme
 sources.*.authentication.scope
 sources.*.authentication.tokenEndpoint

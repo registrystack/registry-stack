@@ -99,9 +99,9 @@ OpenAPI document exactly as `source.openapi.yaml` and creates empty
 `questions/`, `derivations/`, and `fixtures/` directories. It always creates
 owner-only disposable local P-256 Evidence signing material plus distinct audit
 and subject-binding masters. The command does not select an API operation,
-invent a question, fixture, policy, production target, Mint configuration, or
+invent a question, fixture, policy, production target, issuer configuration, or
 deployable bundle. `evidencectl dev start` additionally creates session-scoped P-256
-Mint, caller, and holder keys so the local happy path needs no key ceremony.
+caller and holder keys and starts the pinned local issuer so the local happy path needs no key ceremony.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,

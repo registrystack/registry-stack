@@ -4,11 +4,13 @@ title: Normalized Evidence authority context Version 1
 description: Internal core-owned value; never accepted as an Evidence request body and never logged verbatim.
 type: object
 additionalProperties: false
-required: [authenticationProfile, principal, audience, entitlements, selectorSources]
+required: [authenticationProfile, principal, actorKind, audience, entitlements, selectorSources]
 properties:
   authenticationProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
   principal: {type: string, minLength: 1, maxLength: 512}
+  actorKind: {enum: [human, agent, service]}
   actor: {type: string, minLength: 1, maxLength: 512}
+  client: {type: string, minLength: 1, maxLength: 512}
   requesterAttributes:
     type: object
     maxProperties: 32
@@ -39,6 +41,10 @@ $defs:
       authorityProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
       authorityKind: {enum: [statutory, organizational, consent, delegated, explicit-request]}
       grantId: {type: string, minLength: 1, maxLength: 512}
+      grantSourceIssuer: {type: string, format: uri, maxLength: 512}
+      grantClient: {type: string, minLength: 1, maxLength: 512}
+      grantResource: {type: string, minLength: 1, maxLength: 512}
+      grantExpiresAt: {type: integer, minimum: 1}
       requirement: {type: string, format: uri, maxLength: 512}
       purpose: {type: string, pattern: '^[a-z][a-z0-9._:-]{0,127}$'}
       audience: {type: string, format: uri, maxLength: 512}
@@ -118,7 +124,9 @@ allOf:
 authorization_decision:
   exact_inputs:
     - principal
+    - actor kind
     - optional actor
+    - verified OAuth client
     - exact requirement revision
     - purpose
     - audience
@@ -127,10 +135,10 @@ authorization_decision:
     - complete set of role, selector profile, and value origin tuples
   matching_rule: One entitlement must cover the complete request; permissions are never unioned across entitlements.
   principal_rule: Principal derives only from the one configured validated claim; a missing claim denies with no client_id, azp, header, or request fallback.
-  grant_rule: A grant identifier is context, never authority by possession; it must already be authenticated and bound to the matched entitlement.
+  grant_rule: A grant identifier is context, never authority by possession. A present task grant is accepted only for an agent and only when its immutable principal, verified client, verified resource, trusted source issuer, authority, purpose, Evidence requirement bound, and effective token/grant deadline all match. An invalid present grant cannot fall back to a standing entitlement.
   subject_binding_rule: Permission to serialize a response is not permission to issue under a binding mode. The one matched grant must name a holder-bound path explicitly before a holder-bound assertion may be issued on it; a grant widened to permit the SD-JWT VC serialization gains no binding-mode permission from that. Both halves are checked against the same one grant, because permissions are never unioned across grants, and the single denial that follows a failure of either does not say which one failed.
   selector_claim_rule: Context-derived and grant-derived selector values resolve only through the complete configured valueClaims map over the already verified token; request-derived subjects prohibit valueClaims.
-  authenticated_grant_rule: Values from the configured grantIdClaim and grantAuthorityClaim must both exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must cover the complete request; neither value may come from the caller request.
+  authenticated_grant_rule: The complete shared grant claim set must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must cover the complete request. Selector values come only from the verified token and never the caller request.
   denial_order: Deny before source credential resolution or source access.
 privacy:
   raw_context_in_logs_audit_errors: prohibited
