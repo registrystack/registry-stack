@@ -6,6 +6,10 @@ run_dir="$quickstart_dir/.run"
 support="$quickstart_dir/support/quickstart.py"
 spatial=false; smoke=false; installed=false
 for arg in "$@"; do case "$arg" in --spatial) spatial=true;; --smoke) smoke=true;; --installed) installed=true;; *) echo 'usage: products/breg/quickstart/run.sh [--installed] [--spatial] [--smoke]' >&2; exit 2;; esac; done
+if [[ -L "$run_dir" || -e "$run_dir" ]]; then
+  printf '%s\n' "quickstart state path already exists: $run_dir. Stop its owned dev session before removing it." >&2
+  exit 2
+fi
 for cmd in docker python3; do command -v "$cmd" >/dev/null || { echo "$cmd is required." >&2; exit 2; }; done
 if [[ "$installed" == true ]]; then
   breg=$(command -v breg) || { echo 'breg is required in --installed mode.' >&2; exit 2; }
@@ -17,17 +21,31 @@ else
   cargo build --manifest-path "$repository_root/Cargo.toml" --locked -p registry-breg --features registry-breg/runtime -p registry-bregctl --bins >/dev/null
   breg="$repository_root/target/debug/breg"; bregctl="$repository_root/target/debug/bregctl"
 fi
-[[ ! -L "$run_dir" ]] || { echo 'quickstart run directory must not be a symbolic link.' >&2; exit 2; }
-rm -rf -- "$run_dir"; umask 077; mkdir -m 700 "$run_dir" "$run_dir/headers"
+umask 077
+mkdir -m 700 "$run_dir" "$run_dir/headers"
+printf '%s\n' 'registry-stack-breg-quickstart-v1' >"$run_dir/.launcher-owned"
 read -r database_port issuer_port breg_port < <(python3 "$support" ports)
 if [[ "$spatial" == true ]]; then
   python3 "$support" prepare-spatial-project --fixture "$repository_root/products/breg/acceptance/spatial-service-sites" --project "$run_dir/project"
 else
   "$bregctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
 fi
-cleanup(){ "$bregctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true; }
-trap cleanup EXIT HUP INT TERM
-"$bregctl" --format json dev start --breg-bin "$breg" --docker-bin "$(command -v docker)" --breg-port "$breg_port" --issuer-port "$issuer_port" --database-port "$database_port" "$run_dir/project" >"$run_dir/dev-report.json"
+cleanup() {
+  "$bregctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
+  if [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-quickstart-v1 ]]; then
+    rm -rf -- "$run_dir"
+  fi
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+if ! "$bregctl" --format json dev start --breg-bin "$breg" --docker-bin "$(command -v docker)" \
+  --breg-port "$breg_port" --issuer-port "$issuer_port" --database-port "$database_port" \
+  "$run_dir/project" >"$run_dir/dev-report.json"; then
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["diagnostics"][0]["message"], file=sys.stderr)' "$run_dir/dev-report.json"
+  exit 1
+fi
 printf 'http://127.0.0.1:%s\n' "$breg_port" >"$run_dir/breg-origin"
 client=operator
 "$bregctl" --format json dev token "$client" "$run_dir/project" >"$run_dir/token-report.json"

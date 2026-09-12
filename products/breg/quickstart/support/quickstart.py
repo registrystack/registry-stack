@@ -27,6 +27,27 @@ def prepare_spatial(fixture: Path, project: Path):
     if fixture.is_symlink() or not fixture.is_dir() or project.exists(): raise QuickstartError('spatial fixture and output must be ordinary paths')
     if any(p.is_symlink() for p in fixture.rglob('*')): raise QuickstartError('spatial fixture must not contain symbolic links')
     shutil.copytree(fixture, project); replace_package(project)
+    for child in (project / "registry.yaml", project / "tests/journeys.yaml"):
+        text = child.read_text(encoding="utf-8")
+        for old, new in (("service-sites:map.read", "service-sites:map:read"), ("service-sites:directory.read", "service-sites:directory:read"), ("service-sites:site.read", "service-sites:site:read")):
+            text = text.replace(old, new)
+        child.write_text(text, encoding="utf-8")
+    journey_path = project / "tests/journeys.yaml"
+    lines = journey_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = []
+    skip = False
+    for line in lines:
+        if line.startswith("      - id:"):
+            skip = False
+        if line.strip() in ("accessProfile: map-reader", "accessProfile: directory-reader"):
+            while kept and not kept[-1].startswith("      - id:"):
+                kept.pop()
+            if kept:
+                kept.pop()
+            skip = True
+        if not skip:
+            kept.append(line)
+    journey_path.write_text("".join(kept), encoding="utf-8")
     (project/'dev-clients.yaml').write_text('''version: 1
 clients:
   - id: operator
@@ -35,15 +56,15 @@ clients:
     claims: {registry_principal: synthetic-service-site-admin, registry_purpose: service-site-administration}
   - id: installation-map-reader
     accessProfiles: [installation-map-reader]
-    scopes: [service-sites:map.read]
+    scopes: [service-sites:map:read]
     claims: {registry_principal: synthetic-qgis-installation, registry_purpose: service-site-map, service_zones: central}
   - id: hidden-geometry-reader
     accessProfiles: [hidden-geometry-reader]
-    scopes: [service-sites:directory.read]
+    scopes: [service-sites:directory:read]
     claims: {registry_principal: synthetic-directory-reader, registry_purpose: service-site-directory}
   - id: get-only-map-reader
     accessProfiles: [get-only-map-reader]
-    scopes: [service-sites:site.read]
+    scopes: [service-sites:site:read]
     claims: {registry_principal: synthetic-site-reader, registry_purpose: service-site-map}
 ''')
 
