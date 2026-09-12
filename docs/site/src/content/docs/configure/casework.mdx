@@ -518,8 +518,10 @@ The command writes no secret and activates nothing: its report ends with `"activ
 Run `caseworkctl check` again, and the source description flips to `"checked"`.
 
 Connecting a source is authoring, and serving one is deployment.
-`caseworkctl dev` refuses a project that declares a source, because every source binding needs a running source system and its own reader credential, and it points you back at the `standalone-decision` template for local work.
-Package the connected project and hand it to an operator, who adds the matching source binding to the runtime file.
+Locally, `caseworkctl dev` serves a connected project only beside a running `bregctl dev` session for the registry it names: pass `--source-project tutorial-work/registry`, and the Casework session borrows that registry session's Mint as its issuer, exports each Casework client as a registry client with the same principal, and binds the source to the running registry, reconciling every five seconds.
+Without a running registry session the command stops and names the `--source-project` argument it needs, because every source binding needs a running source system and its own reader credential.
+[Review Base Registry Engine changes in Casework](../../tutorials/review-breg-changes-in-casework/) walks that local journey end to end.
+For a deployment, package the connected project and hand it to an operator, who adds the matching source binding to the runtime file.
 
 {/* Evidence: crates/registry-caseworkctl/src/source_add.rs, run(), select_request(),
     candidate_fragments(), and runtime_binding(); crates/registry-caseworkctl/src/dev/mod.rs,

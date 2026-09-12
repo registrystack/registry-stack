@@ -191,9 +191,11 @@ non-empty `kid`. It is read once, at startup, so a key rotation at the issuer is
 that secret and a restart of every serving process.
 
 Each source binding also accepts `eventType`, which defaults to `casework-lifecycle-v1`,
-`trustedRootCertificatesRef` for a private certificate authority in front of the source, and
+`trustedRootCertificatesRef` for a private certificate authority in front of the source,
 `requestTimeoutMilliseconds` and `connectTimeoutMilliseconds`, which default to 30000 and 10000,
-accept at most 300000, and are refused when the connect timeout is the larger of the two.
+accept at most 300000, and are refused when the connect timeout is the larger of the two, and
+`reconciliationIntervalMilliseconds`, how often the runtime re-reads the source for work the
+source's own notifications did not deliver, which defaults to 60000 and accepts 1000 to 3600000.
 
 :::caution[A static key set ages out of date on its own]
 A pinned document keeps accepting the keys it holds and refusing every other one, so an issuer
@@ -322,7 +324,8 @@ The audit publication worker runs once a second: it reads pending records, appen
 keyed chain, and marks them published. A failed pass makes readiness fail, logs only the stage that
 failed (`pending-read`, `record-identity`, `sink-append`, or `published-mark`) rather than the
 record, and retries; a passing run restores readiness. A maintenance pass runs every two seconds
-and a source reconciliation pass every 60 seconds per bound source. A source outage stays visible
+and a source reconciliation pass per bound source at that binding's
+`reconciliationIntervalMilliseconds`, every 60 seconds unless set. A source outage stays visible
 on the affected work-item operations rather than turning an inbox into an apparently complete empty
 page.
 

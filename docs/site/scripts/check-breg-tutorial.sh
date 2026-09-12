@@ -101,6 +101,7 @@ EXCLUDED_BREG_TUTORIALS=(
 	tutorials/derive-a-registry-from-publicschema # derives a project from the embedded PublicSchema snapshot and edits a selection file; replayable, not yet specified as a journey here
 	tutorials/query-a-spatial-registry-from-qgis  # needs QGIS on a desktop; product CI runs the spatial quickstart smoke
 	tutorials/query-breg-client                   # BReg client journey; depends on the released unified packages, like query-relay-client
+	tutorials/review-breg-changes-in-casework     # two-product journey replayed by the Registry Casework tutorial gate, which builds the BReg toolset beside the Casework one
 	tutorials/review-registry-changes             # needs psql against the quickstart database and an editor step on change-control configuration; replayable, not yet specified as a journey here
 	tutorials/send-registry-events-to-a-webhook   # needs the business demo launcher and its webhook receiver, not the generic quickstart this gate starts
 )
