@@ -2017,6 +2017,89 @@ fn change_request_target_policies_for_table(
                 }
             }
         }
+        for guard in request
+            .application
+            .preconditions
+            .targets
+            .iter()
+            .filter(|guard| guard.entity_id == target_entity.id)
+        {
+            for profile in request_entity.access_profiles.values().filter(|profile| {
+                profile.operations.contains(&Operation::SubmitRequest)
+                    || profile.operations.contains(&Operation::ReviseRequest)
+            }) {
+                policies.push(DdlPolicy {
+                    name: change_request_policy_name(
+                        &request_entity.id,
+                        &target_entity.id,
+                        &profile.id,
+                        &guard.id,
+                        "prepare-guard",
+                        PolicyCommand::Select,
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: profile.id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
+                    using_expression: Some(format!(
+                        "{} AND record_lifecycle = 'active'",
+                        change_request_guard_preparation_expression(
+                            target_entity,
+                            profile,
+                            request,
+                            guard,
+                        )
+                    )),
+                    check_expression: None,
+                });
+            }
+            for grant in request
+                .apply_grants
+                .iter()
+                .filter(|grant| grant.target_entity_id == target_entity.id)
+            {
+                let expression = change_request_guard_application_expression(
+                    target_entity,
+                    request_entity,
+                    request,
+                    guard,
+                    grant,
+                );
+                let bounded_row = format!("{expression} AND record_lifecycle = 'active'");
+                policies.push(DdlPolicy {
+                    name: change_request_policy_name(
+                        &request_entity.id,
+                        &target_entity.id,
+                        &grant.profile_id,
+                        &guard.id,
+                        "apply-guard",
+                        PolicyCommand::Select,
+                    ),
+                    command: PolicyCommand::Select,
+                    access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
+                    using_expression: Some(bounded_row.clone()),
+                    check_expression: None,
+                });
+                policies.push(DdlPolicy {
+                    name: change_request_policy_name(
+                        &request_entity.id,
+                        &target_entity.id,
+                        &grant.profile_id,
+                        &guard.id,
+                        "apply-guard-lock",
+                        PolicyCommand::Update,
+                    ),
+                    command: PolicyCommand::Update,
+                    access_profile: grant.profile_id.clone(),
+                    applies_to: ordinary_policy_role(target_entity),
+                    using_expression: Some(format!(
+                        "{bounded_row} AND record_revision = ({} ->> 'expectedRevision')::bigint",
+                        change_request_context_expression()
+                    )),
+                    check_expression: Some("false".to_owned()),
+                });
+            }
+        }
         if let Some(planner) = &request.planner {
             for (index, write) in planner
                 .writes
@@ -2223,6 +2306,46 @@ fn change_request_preparation_expression(
     .join(" AND ")
 }
 
+fn change_request_guard_preparation_expression(
+    target_entity: &CompiledEntity,
+    profile: &crate::contract::AccessProfileSource,
+    request: &crate::model::CompiledChangeRequest,
+    guard: &crate::model::CompiledChangeRequestGuardTarget,
+) -> String {
+    let context = change_request_context_expression();
+    let fields = change_request_guard_fields(request, guard);
+    let request_state_exists = format!(
+        "EXISTS (
+            SELECT 1
+              FROM registry_internal.registry_request_state AS cr_state
+             WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+               AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+               AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+               AND cr_state.state = 'draft'
+               AND cr_state.owner_reference = ({context} ->> 'actorReference')
+        )"
+    );
+    [
+        change_request_common_expression_for_binding(
+            target_entity,
+            &profile.id,
+            request,
+            &guard.id,
+            &guard.entity_id,
+            Operation::Patch,
+            &fields,
+            "preparation",
+            None,
+        ),
+        session_authority_expression(profile),
+        format!("{context} -> 'targetRowBoundaries' = '[]'::jsonb"),
+        format!("({context} ->> 'expectedRevision') IS NULL"),
+        format!("{context} ->> 'effectDigest' = 'sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'"),
+        request_state_exists,
+    ]
+    .join(" AND ")
+}
+
 fn change_request_planner_preparation_expression(
     target_entity: &CompiledEntity,
     profile: &crate::contract::AccessProfileSource,
@@ -2332,6 +2455,49 @@ fn change_request_application_expression(
     .join(" AND ")
 }
 
+fn change_request_guard_application_expression(
+    target_entity: &CompiledEntity,
+    request_entity: &CompiledEntity,
+    request: &crate::model::CompiledChangeRequest,
+    guard: &crate::model::CompiledChangeRequestGuardTarget,
+    grant: &crate::model::CompiledChangeRequestApplyGrant,
+) -> String {
+    let context = change_request_context_expression();
+    [
+        change_request_common_expression_for_binding(
+            target_entity,
+            &grant.profile_id,
+            request,
+            &guard.id,
+            &guard.entity_id,
+            Operation::Patch,
+            &change_request_guard_fields(request, guard),
+            "application",
+            None,
+        ),
+        session_authority_expression(&request_entity.access_profiles[&grant.profile_id]),
+        format!("({context} ->> 'expectedRevision') IS NOT NULL"),
+        format!(
+            "EXISTS (
+                SELECT 1
+                  FROM registry_internal.registry_request_state AS cr_state
+                  JOIN registry_internal.registry_request_proposals AS cr_proposal
+                    ON cr_proposal.request_entity_id = cr_state.request_entity_id
+                   AND cr_proposal.request_id = cr_state.request_id
+                   AND cr_proposal.proposal_version = cr_state.proposal_version
+                 WHERE cr_state.request_entity_id = ({context} ->> 'requestEntityId')
+                   AND cr_state.request_id = ({context} ->> 'requestId')::uuid
+                   AND cr_state.proposal_version = ({context} ->> 'proposalVersion')::bigint
+                   AND cr_state.state = 'approved'
+                   AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
+                   AND cr_proposal.effect_digest = ({context} ->> 'effectDigest')
+            )"
+        ),
+        change_request_target_boundary_expression(target_entity, &grant.row_boundaries),
+    ]
+    .join(" AND ")
+}
+
 fn change_request_planner_application_expression(
     target_entity: &CompiledEntity,
     request_entity: &CompiledEntity,
@@ -2434,8 +2600,33 @@ fn change_request_common_expression(
     phase: &str,
     stage: Option<&str>,
 ) -> String {
+    change_request_common_expression_for_binding(
+        target_entity,
+        profile_id,
+        request,
+        &effect.id,
+        &effect.target.entity_id,
+        effect.operation,
+        &effect_fields(effect),
+        phase,
+        stage,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn change_request_common_expression_for_binding(
+    target_entity: &CompiledEntity,
+    profile_id: &str,
+    request: &crate::model::CompiledChangeRequest,
+    binding_id: &str,
+    binding_entity_id: &str,
+    binding_operation: Operation,
+    binding_fields: &BTreeSet<String>,
+    phase: &str,
+    stage: Option<&str>,
+) -> String {
     let context = change_request_context_expression();
-    let field_plan = serde_json::to_string(&effect_fields(effect).into_iter().collect::<Vec<_>>())
+    let field_plan = serde_json::to_string(&binding_fields.iter().collect::<Vec<_>>())
         .expect("compiled field plan serializes");
     let phase_value = match stage {
         Some(stage) => serde_json::json!({"kind": phase, "stage": stage}),
@@ -2470,15 +2661,15 @@ fn change_request_common_expression(
         ),
         format!(
             "{context} ->> 'effectId' = {}",
-            quote_literal(&effect.id)
+            quote_literal(binding_id)
         ),
         format!(
             "{context} ->> 'targetEntityId' = {}",
-            quote_literal(&effect.target.entity_id)
+            quote_literal(binding_entity_id)
         ),
         format!(
             "{context} ->> 'operation' = {}",
-            quote_literal(operation_name(effect.operation))
+            quote_literal(operation_name(binding_operation))
         ),
         format!("{context} -> 'fields' = {}::jsonb", quote_literal(&field_plan)),
         format!(
@@ -2494,6 +2685,34 @@ fn change_request_common_expression(
         quote_literal(&phase_plan)
     ));
     predicates.join(" AND ")
+}
+
+fn change_request_guard_fields(
+    request: &crate::model::CompiledChangeRequest,
+    guard: &crate::model::CompiledChangeRequestGuardTarget,
+) -> BTreeSet<String> {
+    guard
+        .requires
+        .iter()
+        .map(|predicate| predicate.field.clone())
+        .chain(
+            request
+                .application
+                .preconditions
+                .evidence
+                .iter()
+                .flat_map(|evidence| evidence.subjects.values())
+                .flat_map(|subject| subject.selectors.values())
+                .filter_map(|selector| match selector {
+                    crate::model::CompiledChangeRequestSelector::TargetField { target, field }
+                        if target == &guard.id =>
+                    {
+                        Some(field.clone())
+                    }
+                    _ => None,
+                }),
+        )
+        .collect()
 }
 
 fn change_request_proposal_target_exists_expression(

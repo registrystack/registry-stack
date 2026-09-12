@@ -35,9 +35,9 @@ use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
@@ -186,7 +186,10 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     }]);
     source["entities"][2]["changeRequest"]["application"] = json!({
         "mode":"manual",
-        "preconditions":{"evidence":[{
+        "preconditions":{"targets":[{
+            "id":"placement-guard", "entity":"asset-placement", "fromField":"placement",
+            "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
+        }],"evidence":[{
             "id":"farmer-status",
             "provider":"farmer-registry",
             "requirement":"urn:example:farmer:status-v1",
@@ -194,6 +197,8 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
                 "profile":"farmer-number-v1",
                 "selectors":{"farmer-number":{
                     "source":"request_field", "field":"tenant"
+                },"placement-site":{
+                    "source":"target_field", "target":"placement-guard", "field":"site"
                 }}
             }},
             "requires":[{"output":"active", "equals":true}],
@@ -205,6 +210,13 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         "../../products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json",
     ))
     .unwrap();
+    let mut contracts: Value = serde_json::from_slice(&contracts).unwrap();
+    contracts["definitions"][0]["subjects"][0]["selector"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"type":"string", "name":"placement-site", "minimumBytes":3, "maximumBytes":77}),
+        );
     let registry = Arc::new(
         compile_project_with_assets(
             &project,
@@ -212,7 +224,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
             &[ModuleAssetSource {
                 module: None,
                 path: "evidence/farmer-contracts.json".into(),
-                bytes: contracts,
+                bytes: serde_json::to_vec(&contracts).unwrap(),
             }],
             CompileProfile::Authoring,
         )
@@ -236,7 +248,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     let (replay_service, _) = change_request_service_with_evidence_options(
         &database,
         registry.clone(),
-        identity,
+        identity.clone(),
         "evidence-change-request",
         None,
         None,
@@ -275,6 +287,118 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         |_| json!({"proposalVersion":1,"effectDigest":digest}),
     )
     .await;
+    let request_uuid = Uuid::parse_str(&request.id).unwrap();
+    let guard_row = database
+        .admin
+        .query_one(
+            "SELECT target_record_id, expected_revision
+               FROM registry_internal.registry_request_targets
+              WHERE request_entity_id = 'correction-request'
+                AND request_id = $1 AND proposal_version = 1
+                AND target_entity_id = 'asset-placement'",
+            &[&request_uuid],
+        )
+        .await
+        .unwrap();
+    let guard_id: Uuid = guard_row.get(0);
+    let guard_revision: i64 = guard_row.get(1);
+    let guard_plan = registry.entities()["correction-request"]
+        .change_request
+        .as_ref()
+        .unwrap();
+    let guard_context = json!({
+        "version":1,"phase":{"kind":"application"},
+        "requestEntityId":"correction-request","requestId":request.id,
+        "proposalVersion":1,"actorReference":"synthetic-guard-lock-actor",
+        "contractFingerprint":guard_plan.contract_fingerprint,
+        "effectDigest":digest,"activePackageRevision":PACKAGE_REVISION,
+        "selectedAccessProfile":"applier","principal":APPLIER,"purpose":"apply",
+        "effectId":"placement-guard","targetEntityId":"asset-placement",
+        "targetRecordId":guard_id.to_string(),"operation":"patch",
+        "fields":["site","tenant"],"expectedRevision":guard_revision,
+        "targetRowBoundaries":[{"field":"tenant","operator":"equals","values":[TENANT]}]
+    });
+    let applier_context = ClaimContext::for_compiled(
+        &registry,
+        "correction-request",
+        Some(APPLIER.to_owned()),
+        "applier",
+        Some("apply".to_owned()),
+        vec![RowBoundaryContext::Equals {
+            field: "tenant".to_owned(),
+            value: TENANT.to_owned(),
+        }],
+    )
+    .unwrap();
+    let guard_pool = database.runtime_config.build_pool().unwrap();
+    let mut guard_client = guard_pool.get_for_test().await.unwrap();
+    let guard_transaction = begin_record_transaction(
+        &mut guard_client,
+        RegistryLockKey::derive("evidence-change-request").unwrap(),
+        Duration::from_secs(1),
+        &identity,
+        &applier_context,
+    )
+    .await
+    .unwrap();
+    let target = &registry.entities()["asset-placement"];
+    let table = quote_sql_identifier(&target.physical_table);
+    let mut wrong_digest_context = guard_context.clone();
+    wrong_digest_context["effectDigest"] =
+        json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    guard_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.change_request_target_context', $1, true)",
+            &[&wrong_digest_context.to_string()],
+        )
+        .await
+        .unwrap();
+    let wrong_digest_row = guard_transaction
+        .transaction_for_test()
+        .query_opt(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        wrong_digest_row.is_none(),
+        "a different proposal digest cannot read or lock the guard"
+    );
+    guard_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.change_request_target_context', $1, true)",
+            &[&guard_context.to_string()],
+        )
+        .await
+        .unwrap();
+    let locked = guard_transaction
+        .transaction_for_test()
+        .query_opt(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        locked.is_some(),
+        "exact guard context can lock its target row"
+    );
+    let unauthorized_write = guard_transaction
+        .transaction_for_test()
+        .execute(
+            &format!("UPDATE registry_data.{table} SET record_revision = record_revision + 1 WHERE record_id = $1"),
+            &[&guard_id],
+        )
+        .await;
+    assert_eq!(
+        unauthorized_write.unwrap_err().code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+        "read-only guard lock context cannot write its target row"
+    );
+    guard_transaction.rollback().await.unwrap();
     let applier = claims("applier", APPLIER, Some("apply"));
     let before = get_record(
         &replay_app,
