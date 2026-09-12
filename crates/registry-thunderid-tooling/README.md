@@ -106,9 +106,6 @@ files into the child environment, and discards command output other than owned
 container IDs. Product CLIs retain their own policy, status UI, and cancellation
 flag. Neither operation removes retained files.
 
-### Citizen delegation
-
-
 ## Acquire an approved task
 
 `bregctl`, `caseworkctl`, and `evidencectl` expose the same bounded command:
