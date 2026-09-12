@@ -19,8 +19,10 @@ const docsets = {
   current: 'latest',
   released: 'v0.8.4',
   docsets: [
-    { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/' },
-    { id: 'v0.8.4', status: 'archived', availability: 'released', path: '/v/0.8.4/' },
+    { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' } } },
+    { id: 'v0.8.4', status: 'archived', availability: 'released', path: '/v/0.8.4/', products: {} },
+    { id: 'v0.29.0', status: 'archived', availability: 'candidate', path: '/v/0.29.0/', products: {} },
+    { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
   ],
 };
 const currentOnlyPath = '/products/registry-notary/opencrvs-onboarding/';
@@ -30,6 +32,7 @@ test('current docset without a base keeps current-only redirects internal', () =
 
   assert.equal(context.base, undefined);
   assert.equal(context.isArchivedBuild, false);
+  assert.equal(context.hasCasework, true);
   assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(context.isSearchExcludedBuild, true);
   assert.equal(context.currentDocsetRedirect(currentOnlyPath), currentOnlyPath);
@@ -55,11 +58,30 @@ test('archived docset redirects current-only pages to protected main', () => {
   });
 
   assert.equal(context.isArchivedBuild, true);
+  assert.equal(context.hasCasework, false);
   assert.equal(context.isHistoricalArchiveBuild, false);
   assert.equal(
     context.currentDocsetRedirect(currentOnlyPath),
     `https://docs.registrystack.org/dev${currentOnlyPath}`,
   );
+});
+
+test('v0.30 archive includes Casework while v0.29-era archives do not', () => {
+  const priorArchive = resolveDocsetBuildContext(docsets, {
+    DOCS_DOCSET: 'v0.29.0',
+    DOCS_BASE: '/v/0.29.0/',
+  });
+  const archive = resolveDocsetBuildContext(docsets, {
+    DOCS_DOCSET: 'v0.30.0',
+    DOCS_BASE: '/v/0.30.0/',
+  });
+
+  assert.equal(priorArchive.isArchivedBuild, true);
+  assert.equal(priorArchive.hasCasework, false);
+  assert.equal(archive.isArchivedBuild, true);
+  assert.equal(archive.hasCasework, true);
+  assert.equal(archive.currentDocsetRedirect('/start/casework/'),
+    'https://docs.registrystack.org/dev/start/casework/');
 });
 
 test('archived Notary redirects resolve current retirement and Evidence replacements', () => {

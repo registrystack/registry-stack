@@ -47,7 +47,7 @@ function loadDocsetsManifest() {
 }
 
 /**
- * @param {{ current: string, released: string, docsets: Array<{ id: string, status: string, availability: string, path: string }> }} docsets
+ * @param {{ current: string, released: string, docsets: Array<{ id: string, status: string, availability: string, path: string, products?: Record<string, unknown> }> }} docsets
  * @param {NodeJS.ProcessEnv} env
  */
 export function resolveDocsetBuildContext(docsets, env = process.env) {
@@ -64,6 +64,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     isArchivedBuild && !isReleasedArchiveBuild && selectedDocset.id !== docsets.released;
   const isSearchExcludedBuild =
     isHistoricalArchiveBuild || selectedDocset.availability === 'unreleased';
+  const hasCasework = Boolean(selectedDocset.products?.['registry-casework']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -81,6 +82,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     isReleasedArchiveBuild,
     isHistoricalArchiveBuild,
     isSearchExcludedBuild,
+    hasCasework,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -92,6 +94,7 @@ const {
   isArchivedBuild,
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
+  hasCasework,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -126,7 +129,7 @@ const caseworkOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
-const caseworkCurrentOnlyRoutes = [
+const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
   '/explanation/how-casework-works/',
@@ -135,6 +138,18 @@ const caseworkCurrentOnlyRoutes = [
   '/operate/casework-retention/',
   '/reference/apis/registry-casework/',
 ];
+
+/**
+ * @param {boolean} hasCasework
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function caseworkRedirects(hasCasework, currentDocsetRedirect) {
+  if (hasCasework) return {};
+  return Object.fromEntries(caseworkRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+    [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
+  ]));
+}
 
 export default defineConfig({
   site: 'https://docs.registrystack.org',
@@ -150,10 +165,7 @@ export default defineConfig({
   redirects: {
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
-    ...(isArchivedBuild ? Object.fromEntries(caseworkCurrentOnlyRoutes.flatMap((route) => [
-      [route, currentDocsetRedirect(route)],
-      [`${route.slice(0, -1)}.md`, currentDocsetRedirect(route)],
-    ])) : {}),
+    ...caseworkRedirects(hasCasework, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -290,7 +302,7 @@ export default defineConfig({
               operations: { labels: 'path', badges: true },
             },
           },
-          ...[caseworkOpenApiSchema].filter(() => !isArchivedBuild),
+          ...[caseworkOpenApiSchema].filter(() => hasCasework),
         ]),
       ],
       defaultLocale: 'root',
@@ -510,7 +522,7 @@ export default defineConfig({
             { label: 'PublicSchema wizard prompts', slug: 'reference/bregctl-publicschema-wizard' },
           ],
         },
-        ...(isArchivedBuild ? [] : [{
+        ...(hasCasework ? [{
           label: 'Registry Casework',
           collapsed: true,
           items: [
@@ -524,7 +536,7 @@ export default defineConfig({
             ...openAPISidebarGroups.slice(1, 2),
             { label: 'Client API reference', slug: 'reference/client-api' },
           ],
-        }]),
+        }] : []),
         {
           label: 'Registry Mint',
           collapsed: true,

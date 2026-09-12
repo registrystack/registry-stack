@@ -12,6 +12,17 @@ import { flattenSidebarGroups } from '../src/lib/sidebar.mjs';
 const siteRoot = resolve(import.meta.dirname, '..');
 const configSource = readFileSync(resolve(siteRoot, 'astro.config.mjs'), 'utf8');
 const fetchOpenapiSource = readFileSync(resolve(siteRoot, 'scripts/fetch-openapi.mjs'), 'utf8');
+const contextSource = configSource.match(/export function resolveDocsetBuildContext[\s\S]*?^}\n/m)?.[0];
+const redirectsSource = configSource.match(/export function caseworkRedirects[\s\S]*?^}\n/m)?.[0];
+const caseworkRoutesSource = configSource.match(/const caseworkRoutes = \[[\s\S]*?\];/)?.[0];
+assert.ok(contextSource && redirectsSource && caseworkRoutesSource,
+  'could not isolate Casework docset routing');
+const resolveDocsetBuildContext = new Function(
+  `${contextSource.replace(/^export /, '')}; return resolveDocsetBuildContext;`,
+)();
+const caseworkRedirects = new Function(
+  `${caseworkRoutesSource}; ${redirectsSource.replace(/^export /, '')}; return caseworkRedirects;`,
+)();
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
@@ -48,10 +59,10 @@ const caseworkOpenApiSchema = {
   sidebar: { label: 'API operations', collapsed: true },
 };
 const apiSchemas = new Function(
-  'isArchivedBuild',
+  'hasCasework',
   'caseworkOpenApiSchema',
   `return ${apiConfigSource};`,
-)(false, caseworkOpenApiSchema);
+)(true, caseworkOpenApiSchema);
 const generatedAPI = apiSchemas.map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
@@ -62,7 +73,7 @@ const sidebarFactory = new Function(
   'optionalGeneratedProduct',
   'openAPISidebarGroups',
   'flattenSidebarGroups',
-  'isArchivedBuild',
+  'hasCasework',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -75,8 +86,7 @@ const sidebarArguments = [
   generatedAPI,
   flattenSidebarGroups,
 ];
-const sidebar = sidebarFactory(...sidebarArguments, false);
-const archivedSidebar = sidebarFactory(...sidebarArguments, true);
+const sidebar = sidebarFactory(...sidebarArguments, true);
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -196,29 +206,43 @@ test('uses the product navigation in its published order', () => {
   ]);
 });
 
-test('keeps the unreleased Casework lane out of archived docsets', () => {
-  assert.equal(
-    archivedSidebar.some((item) => item.label === 'Registry Casework'),
-    false,
-  );
-  assert.equal(new Function(
-    'isArchivedBuild',
-    'caseworkOpenApiSchema',
-    `return ${apiConfigSource};`,
-  )(true, caseworkOpenApiSchema).length, 1);
-  assert.match(fetchOpenapiSource, /repoId === 'registry-casework' && docset\.id !== docsets\.current/);
+test('selects Casework routes, sidebar, and API from the docset product manifest', () => {
+  const docsets = {
+    current: 'latest',
+    released: 'v0.29.0',
+    docsets: [
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' } } },
+      { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
+      { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
+    ],
+  };
+  for (const [id, env, hasCasework] of [
+    ['latest', {}, true],
+    ['v0.29.0', {}, false],
+    ['v0.30.0', {}, true],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true],
+  ]) {
+    const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
+    assert.equal(context.hasCasework, hasCasework, id);
+    assert.equal(sidebarFactory(...sidebarArguments, context.hasCasework)
+      .some((item) => item.label === 'Registry Casework'), hasCasework, id);
+    assert.equal(new Function('hasCasework', 'caseworkOpenApiSchema', `return ${apiConfigSource};`)
+      (context.hasCasework, caseworkOpenApiSchema).length, hasCasework ? 2 : 1, id);
+    const redirects = caseworkRedirects(context.hasCasework, context.currentDocsetRedirect);
+    assert.equal(redirects['/operate/casework/'] !== undefined, !hasCasework, id);
+    assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
+  }
+  assert.match(fetchOpenapiSource, /repoId === 'registry-casework' && !docset\.products\[repoId\]/);
   for (const route of [
     '/start/casework/',
+    '/tutorials/first-casework/',
     '/configure/casework/',
     '/operate/casework/',
     '/reference/apis/registry-casework/',
   ]) {
     assert.match(configSource, new RegExp(`'${route}'`));
   }
-  assert.match(
-    configSource,
-    /isArchivedBuild \? Object\.fromEntries\(caseworkCurrentOnlyRoutes\.flatMap/,
-  );
+  assert.match(configSource, /\.\.\.caseworkRedirects\(hasCasework, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
