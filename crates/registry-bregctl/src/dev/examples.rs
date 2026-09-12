@@ -1607,7 +1607,7 @@ mod tests {
         })
     }
     #[test]
-    #[ignore = "requires source-built bregctl/breg/mint and Docker; creates one disposable owned dev database"]
+    #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
     fn native_create_and_apply_recover_after_process_exit_without_duplicate_revisions() {
         let temp = tempfile::Builder::new()
             .prefix("breg-example-recovery-")
@@ -1640,11 +1640,9 @@ mod tests {
         owned.succeed(&[
             "--breg-bin",
             binaries.join("breg").to_str().unwrap(),
-            "--mint-bin",
-            binaries.join("mint").to_str().unwrap(),
             "--breg-port",
             &ports[0],
-            "--mint-port",
+            "--issuer-port",
             &ports[1],
             "--database-port",
             &ports[2],

@@ -76,7 +76,7 @@ one governed surface, and each is executed by the test or script named beside it
 | `spatial-service-sites` | Bounding-box read permissions over spatial rows | `postgres_fixture_journeys.rs` in the postgres lane, and `quickstart/run.sh --spatial --smoke`, whose contract `test_quickstart.py` holds under `scripts/check-contracts.sh` |
 | `registry-record-conformance` | The HTTP record contract across every configured record profile | `postgres_record_profile_conformance.rs` in the postgres lane |
 | `household-history` | Historical households loaded and queried across effective periods | `scripts/test-historical-workflow.sh` only, which no continuous integration job selects |
-| `issuer-portability` | An authority cutover from Registry Mint to a second issuer, with the old issuer rejected | the ignored `issuer_portability.rs` test, driven by `scripts/test-issuer-portability.py` only, which no continuous integration job selects |
+| `issuer-portability` | An authority cutover from the pinned stock issuer to a second issuer, with the old issuer rejected | the ignored `issuer_portability.rs` test, driven by `scripts/test-issuer-portability.py` only, which no continuous integration job selects |
 
 The last two rows are run by local scripts alone. They are maintained
 acceptance projects with executable proof, but nothing in

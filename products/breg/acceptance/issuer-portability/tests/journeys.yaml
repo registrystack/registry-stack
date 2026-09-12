@@ -1,0 +1,15 @@
+apiVersion: registry.registrystack.org/breg-journeys/v1
+journeys:
+  - id: issuer-portability-package
+    steps:
+      - id: list-empty-registry
+        entity: record
+        accessProfile: clerk
+        claims:
+          principal: urn:institution:service-clerk
+        request:
+          operation: list
+        expect:
+          outcome: refusal
+          status: 404
+          problemCode: resource.not_found

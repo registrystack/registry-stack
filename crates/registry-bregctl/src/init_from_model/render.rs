@@ -604,8 +604,8 @@ fn dev_clients(plan: &Plan) -> String {
     let mut yaml = Yaml::default();
     yaml.comment(
         0,
-        "Local callers for `bregctl dev`. Registry Mint, the local token issuer that `dev` \
-         starts beside the registry, registers each client below and issues it short-lived \
+        "Local callers for `bregctl dev`. The stock local identity provider that `dev` \
+         starts beside the registry registers each client below and issues it short-lived \
          tokens carrying these claims. One client binds each access profile that \
          tests/journeys.yaml uses, with the claims those journeys expect, so a first start \
          runs the journeys and serves the package without another file. `dev` generates a \

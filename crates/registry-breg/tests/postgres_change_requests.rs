@@ -4347,13 +4347,13 @@ async fn real_postgres_http_change_request_apply_cancels_when_startup_timeout_dr
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires actual local issuers and PostgreSQL; run test-issuer-portability.py --with-postgres"]
-async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
+async fn stock_to_keycloak_continues_persisted_review_with_stable_principal() {
     let database = TestDatabase::create(8).await;
     let mut project = two_stage_project();
     for profile in &mut project.access_profiles {
         if !profile.required_purposes.is_empty() {
             profile.required_purposes = BTreeSet::from(["registry-administration".to_owned()]);
-            profile.required_scopes = BTreeSet::from(["registry.read".to_owned()]);
+            profile.required_scopes = BTreeSet::from(["registry:read".to_owned()]);
         }
     }
     let registry = Arc::new(
@@ -4382,7 +4382,7 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
         .expect("JWKS JSON");
         let config = registry_platform_oidc::TokenVerifierConfig::access_token_profile(
             issuer["issuer"].as_str().expect("issuer"),
-            vec!["urn:breg:issuer-portability".to_owned()],
+            vec![manifest["audience"].as_str().expect("audience").to_owned()],
             vec![serde_json::from_value(issuer["algorithm"].clone()).expect("algorithm")],
             vec![issuer["token_type"]
                 .as_str()
@@ -4406,10 +4406,11 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
             .expect("explicit issuer authority contract"),
         )
     };
-    let mint = authenticator(&manifest["mint"]);
+    let stock = authenticator(&manifest["stock"]);
     let keycloak = authenticator(&manifest["keycloak"]);
-    let mint_token =
-        Zeroizing::new(std::fs::read_to_string(root.join("mint.token")).expect("Mint token"));
+    let stock_token = Zeroizing::new(
+        std::fs::read_to_string(root.join("stock.token")).expect("stock issuer token"),
+    );
     let service_token = Zeroizing::new(
         std::fs::read_to_string(root.join("service.token")).expect("Keycloak service token"),
     );
@@ -4417,7 +4418,7 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
         std::fs::read_to_string(root.join("human.token")).expect("Keycloak human token"),
     );
     drop(app);
-    let mint_app = registry_breg::api::authenticated_router(
+    let stock_app = registry_breg::api::authenticated_router(
         change_request_service(
             &database,
             registry.clone(),
@@ -4425,16 +4426,16 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
             "two-stage-change-request",
             None,
         ),
-        mint,
+        stock,
     );
     let first = bearer_request(
-        &mint_app,
+        &stock_app,
         Method::GET,
         &format!(
             "/v1/records/correction-requests/{}?accessProfile=reviewer",
             request.id
         ),
-        &mint_token,
+        &stock_token,
         &[],
         Vec::new(),
     )
@@ -4442,19 +4443,19 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
     assert_eq!(first.status, StatusCode::OK);
     let first_approve = action(&first.body, "approve_request", Some("review"));
     let first_result = bearer_action(
-        &mint_app,
+        &stock_app,
         &first_approve,
         "issuer-first-approval",
-        &mint_token,
+        &stock_token,
         &digest,
     )
     .await;
     assert_eq!(first_result.status, StatusCode::OK);
     let first_page = bearer_request(
-        &mint_app,
+        &stock_app,
         Method::GET,
         "/v1/records/sites?accessProfile=steward&$top=1",
-        &mint_token,
+        &stock_token,
         &[],
         Vec::new(),
     )
@@ -4464,7 +4465,7 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
         .as_str()
         .expect("two sites produce a continuation")
         .to_owned();
-    drop(mint_app);
+    drop(stock_app);
     let keycloak_app = registry_breg::api::authenticated_router(
         change_request_service(
             &database,
@@ -4521,7 +4522,7 @@ async fn mint_to_keycloak_continues_persisted_review_with_stable_principal() {
             &keycloak_app,
             Method::GET,
             &uri,
-            &mint_token,
+            &stock_token,
             &[],
             Vec::new()
         )
