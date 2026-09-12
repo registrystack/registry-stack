@@ -54,6 +54,7 @@ mod report;
 mod request_retention;
 mod reviewed_migrations;
 mod safe_path;
+mod starters;
 mod test_lifecycle;
 mod webhook_lifecycle;
 
@@ -119,7 +120,8 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Create an authoring project in a new directory: a domain-neutral example,
-    /// or one derived from an embedded reference model with `--from`.
+    /// one derived from an embedded reference model with `--from`, or a shipped
+    /// starter with `--template`.
     Init(InitArgs),
     /// Validate a Base Registry Engine authoring project without opening a database.
     Check(CheckArgs),
@@ -207,6 +209,14 @@ struct InitArgs {
     /// A selection shipped with the model, by name.
     #[arg(long, value_name = "NAME", requires = "from")]
     starter: Option<String>,
+    /// Write one of the shipped starter registry projects verbatim instead
+    /// of the plain example or a project derived from `--from`.
+    #[arg(
+        long,
+        value_name = "ID",
+        conflicts_with_all = ["from", "selection", "starter"]
+    )]
+    template: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1648,9 +1658,10 @@ where
                 }
             };
         }
-        Command::Init(args) => match args.from {
-            None => init(&args.destination),
-            Some(model) => {
+        Command::Init(args) => match (args.from, args.template.as_deref()) {
+            (None, None) => init(&args.destination),
+            (None, Some(id)) => starters::run(&args.destination, id),
+            (Some(model), None) => {
                 let source = match (&args.selection, &args.starter) {
                     (Some(path), _) => init_from_model::Source::File(path),
                     (None, Some(name)) => init_from_model::Source::Starter(name),
@@ -1658,6 +1669,7 @@ where
                 };
                 init_from_model::run(&args.destination, model, source)
             }
+            (Some(_), Some(_)) => unreachable!("clap refuses --from together with --template"),
         },
         Command::Check(args) => check(&args.project, profile(args.production)).and_then(|report| {
             if args.deny_findings && !report.findings.is_empty() {
@@ -6126,6 +6138,10 @@ fn init_files() -> BTreeMap<String, Vec<u8>> {
 fn init_media_type(path: &str) -> &'static str {
     if path.ends_with(".md") {
         "text/markdown"
+    } else if path.ends_with(".json") {
+        "application/json"
+    } else if path.ends_with(".txt") {
+        "text/plain"
     } else {
         "text/yaml"
     }
@@ -10069,6 +10085,22 @@ fn write_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn init_template_conflicts_with_every_flag_that_shapes_a_derived_project() {
+        assert!(
+            Cli::try_parse_from(["bregctl", "init", "project", "--template", "seed-lots"]).is_ok()
+        );
+        for conflicting in [
+            vec!["--from", "publicschema"],
+            vec!["--from", "publicschema", "--selection", "selection.yaml"],
+            vec!["--from", "publicschema", "--starter", "household"],
+        ] {
+            let mut arguments = vec!["bregctl", "init", "project", "--template", "seed-lots"];
+            arguments.extend(conflicting);
+            assert!(Cli::try_parse_from(&arguments).is_err(), "{arguments:?}");
+        }
+    }
 
     #[test]
     fn request_retention_cleanup_accepts_config_without_request_scope() {
