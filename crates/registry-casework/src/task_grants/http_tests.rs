@@ -158,7 +158,7 @@ async fn fixture(lifetime: u64) -> Fixture {
     let store = PostgresStore::connect_migration(&config, &secrets).unwrap();
     store.migrate().await.unwrap();
     std::env::remove_var(name);
-    let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
+    let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
     let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
     store
         .activate_task_templates(&project.task_templates)
@@ -423,6 +423,8 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
     )
     .unwrap();
     assert_eq!(payload["registry_grant_exp"], approved["expiresAt"]);
+    assert_eq!(payload["scope"], "records:get");
+    assert_eq!(approved["scopes"], json!(["records:get"]));
     assert!(payload["exp"].as_u64().unwrap() - payload["iat"].as_u64().unwrap() <= 60);
     assert_eq!(payload["identity"]["person_reference"], "synthetic-person");
     assert_eq!(payload["sub"], "agent");

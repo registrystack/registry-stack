@@ -32,7 +32,7 @@ async fn template_versions_are_immutable_and_retirement_cannot_revive_existing_g
         "id":"summary", "version":"1", "label":"Prepare summary", "eligibleTeams":["team"], "eligibleProfiles":["staff"],
         "source":"source", "itemKinds":["request"], "itemStates":["claimed"],
         "agent":{"issuer":"https://issuer.test","subject":"agent"}, "client":"agent-client", "resource":"urn:test:breg",
-        "purpose":"prepare-summary", "bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},
+        "purpose":"prepare-summary","scopes":["records:get"], "bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},
         "subjects":{"person_reference":"person-reference"}, "lifetimeSeconds":900
     })).unwrap();
     store

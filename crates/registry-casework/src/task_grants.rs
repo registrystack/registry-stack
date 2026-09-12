@@ -369,7 +369,7 @@ impl TaskAuthority {
             "registry_grant_id":grant.id,"registry_grant_authority":grant.authority,"registry_grant_source_issuer":grant.source_issuer,
             "registry_grant_client":grant.template.client,"registry_grant_resource":grant.template.resource,
             "registry_purpose":grant.template.purpose,"registry_grant_exp":grant.expires_at,
-            "registry_grant_bounds":grant.template.bounds,"identity":grant.subjects});
+            "registry_grant_bounds":grant.template.bounds,"scope":grant.template.scopes.join(" "),"identity":grant.subjects});
         let header = json!({"alg":self.key.alg,"kid":self.key.kid,"typ":"JWT"});
         let input = format!(
             "{}.{}",
@@ -456,6 +456,7 @@ impl crate::CaseworkService {
                 agent: template.agent.clone(),
                 client: template.client.clone(),
                 resource: template.resource.clone(),
+                scopes: template.scopes.clone(),
                 purpose: template.purpose.clone(),
                 bounds: template.bounds.clone(),
                 subjects,
@@ -468,6 +469,7 @@ impl crate::CaseworkService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn approve_task(
         &self,
         actor: &ActorContext,
@@ -707,6 +709,7 @@ fn grant_view(stored: &StoredTaskGrant) -> TaskGrantView {
         agent: stored.grant.template.agent.clone(),
         client: stored.grant.template.client.clone(),
         resource: stored.grant.template.resource.clone(),
+        scopes: stored.grant.template.scopes.clone(),
         purpose: stored.grant.template.purpose.clone(),
         bounds: stored.grant.template.bounds.clone(),
         expires_at: stored.grant.expires_at,
@@ -719,3 +722,6 @@ mod tests;
 
 #[cfg(all(test, feature = "postgres-test"))]
 mod http_tests;
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod native_exchange_tests;
