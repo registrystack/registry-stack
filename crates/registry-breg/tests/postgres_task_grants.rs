@@ -744,3 +744,111 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
     }
     db.cleanup().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn automatic_apply_rechecks_original_task_after_human_approval() {
+    let mut project: Value = serde_json::from_str(PROJECT).unwrap();
+    project["entities"][2]["changeRequest"]["application"] = json!({"mode":"automatic"});
+    let profiles = project["accessProfiles"].as_array_mut().unwrap();
+    let apply_targets = profiles.iter().find(|p| p["id"] == "applier").unwrap()["permissions"][0]
+        ["applyTargets"]
+        .clone();
+    let reviewer = profiles.iter_mut().find(|p| p["id"] == "reviewer").unwrap();
+    reviewer["permissions"][0]["operations"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("apply_request"));
+    reviewer["permissions"][0]["applyTargets"] = apply_targets;
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_json(&serde_json::to_vec(&project).unwrap()).unwrap(),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let db = TestDatabase::create(8).await;
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let status = Arc::new(Status::default());
+    let app = app(&db, registry, identity, &idp, status.clone());
+    let steward = human(&idp, "steward", "maintain");
+    let reviewer = human(&idp, "reviewer", "review");
+    let old = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "old-site",
+        json!({"tenant":"tenant-a","name":"old"}),
+    )
+    .await;
+    let new = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "new-site",
+        json!({"tenant":"tenant-a","name":"new"}),
+    )
+    .await;
+    let target = create(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        &steward,
+        "placement",
+        json!({"tenant":"tenant-a","site":id(&old)}),
+    )
+    .await;
+    let (grant, token) = agent(&idp, &status);
+    let draft = create(&app, "/v1/records/correction-requests?accessProfile=submitter", &token,
+        "draft", json!({"tenant":"tenant-a","placement":id(&target),"proposedSite":id(&new),"reason":"synthetic correction"})).await;
+    let record = id(&draft);
+    let submit = action(
+        &get(&app, &record, "submitter", &token).await,
+        "submit_request",
+    );
+    assert_eq!(
+        perform(&app, &submit, &token, "submit").await.status,
+        StatusCode::OK
+    );
+    let approve = action(
+        &get(&app, &record, "reviewer", &reviewer).await,
+        "approve_request",
+    );
+    let before = counts(&db).await;
+    let before_calls = status.calls();
+    // The approval check succeeds; revocation then precedes the automatic apply check.
+    *status.revoke_after_check.lock().unwrap() = Some(grant.clone());
+    let refused = perform(&app, &approve, &reviewer, "automatic-refused").await;
+    assert_eq!(
+        refused.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused.body
+    );
+    assert_eq!(
+        status.calls(),
+        before_calls + 2,
+        "automatic apply must reacquire original task status"
+    );
+    assert_eq!(
+        counts(&db).await,
+        before,
+        "refused automatic apply rolls back approval and mutation together"
+    );
+    // Restore the synthetic authority response to prove the same proposal can complete.
+    *status.revoke_after_check.lock().unwrap() = None;
+    status.revoked.lock().unwrap().remove(&grant);
+    let accepted = perform(&app, &approve, &reviewer, "automatic-accepted").await;
+    assert_eq!(accepted.status, StatusCode::OK, "{}", accepted.body);
+    let after = counts(&db).await;
+    assert_eq!(
+        after[4],
+        before[4] + 1,
+        "exactly one automatic application is recorded"
+    );
+    assert_eq!(
+        after[6], before[6],
+        "the original task binding is retained unchanged"
+    );
+    db.cleanup().await;
+}
