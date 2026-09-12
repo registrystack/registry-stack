@@ -3689,7 +3689,6 @@ dependencies = [
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
- "registry-mint",
  "registry-relay-v2",
  "registry-relayctl",
  "serde",
@@ -4114,46 +4113,6 @@ dependencies = [
  "serde_yaml_ng",
  "sha2 0.11.0",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "registry-mint"
-version = "0.30.0"
-dependencies = [
- "async-trait",
- "axum",
- "axum-test",
- "base64",
- "clap",
- "ed25519-dalek",
- "getrandom 0.4.3",
- "http",
- "jsonwebtoken",
- "p256",
- "registry-evidence",
- "registry-platform-audit",
- "registry-platform-authcommon",
- "registry-platform-buildinfo",
- "registry-platform-canonical-json",
- "registry-platform-config",
- "registry-platform-crypto",
- "registry-platform-httputil",
- "registry-platform-oidc",
- "reqwest",
- "rustix 1.1.4",
- "serde",
- "serde_json",
- "serde_norway",
- "tempfile",
- "thiserror 2.0.20",
- "time",
- "tokio",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "ulid",
- "url",
- "zeroize",
 ]
 
 [[package]]

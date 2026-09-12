@@ -2,7 +2,9 @@
 
 //! Exact production-candidate handoff through the real adopter and runtime
 //! binaries. The gate is ignored in the ordinary package suite because it
-//! starts two services and requires `python3` and `openssl` on the host.
+//! starts services and requires `python3` and `openssl` on the host. The pinned
+//! stock-issuer journey lives in the Evidence client acceptance suite; this
+//! suite keeps the strict production HTTPS, signing, and audit handoff proof.
 
 use std::{
     collections::BTreeMap,
@@ -242,129 +244,6 @@ fn production_candidate_handoff_reaches_verified_assertion_and_audit() {
             .output()
             .expect("audit verifier starts"),
         "complete audit-chain verification",
-    );
-}
-
-#[test]
-#[ignore = "exact gate: starts real Mint and Evidence plus local HTTPS routing"]
-fn production_candidate_accepts_a_token_from_an_independent_real_mint() {
-    let fixture = Fixture::new();
-    let evidence = evidence_binary();
-    let mint = mint_binary();
-    fixture.stage_authoring_project();
-    fixture.stage_https_identity();
-    fixture.stage_target();
-    let _transit = fixture.start_transit();
-    let build = fixture.build(evidence);
-    let revision = bundle_revision(&build);
-    fixture.provision_target_secrets();
-    let mint_deployment = fixture.stage_mint();
-
-    assert_success(
-        Command::new(mint)
-            .args(["check", "--config"])
-            .arg(&mint_deployment.config)
-            .output()
-            .expect("Mint check starts"),
-        "real Mint deployment check",
-    );
-    assert_success(
-        evidencectl()
-            .args(["doctor", "--project"])
-            .arg(&fixture.candidate)
-            .arg("--mint-config")
-            .arg(&mint_deployment.config)
-            .output()
-            .expect("paired doctor starts"),
-        "paired Evidence and Mint doctor",
-    );
-
-    let mut https = fixture.start_https();
-    fixture.wait_for_https(&mut https);
-    let mut mint_service = fixture.start_mint(mint, &mint_deployment.config);
-    wait_for_listener(&mut mint_service, fixture.mint_port, "Mint");
-    let mut evidence_service = fixture.start_evidence(evidence);
-    fixture.wait_for_evidence(&mut evidence_service);
-
-    let public_token_endpoint = format!("https://127.0.0.1:{}/token", fixture.https_port);
-    let token_output = Command::new(mint)
-        .arg("token")
-        .arg("--url")
-        .arg(&public_token_endpoint)
-        .arg("--audience")
-        .arg(public_token_endpoint)
-        .args(["--client-id", "acceptance-client", "--key"])
-        .arg(&mint_deployment.caller_private)
-        .arg("--ca-certificate")
-        .arg(&fixture.ca)
-        .output()
-        .expect("Mint token starts");
-    assert!(
-        token_output.status.success(),
-        "Mint token failed without printing a token: {}",
-        String::from_utf8_lossy(&token_output.stderr)
-    );
-    let token = String::from_utf8(token_output.stdout).expect("Mint token stdout");
-    assert_eq!(
-        token.lines().count(),
-        1,
-        "Mint prints exactly one token line"
-    );
-    let token = token.trim();
-
-    let published_revision = published_configuration_revision(fixture.evidence_port, token);
-    let nonce = URL_SAFE_NO_PAD.encode([0x24_u8; 32]);
-    let (status, response) = post_evidence(fixture.evidence_port, token, &nonce);
-    assert_eq!(status, 200, "a real Mint token must authorize Evidence");
-    fs::write(&fixture.response, &response).expect("retain Mint-backed response");
-    fs::set_permissions(&fixture.response, fs::Permissions::from_mode(0o600))
-        .expect("protect Mint-backed response");
-    let payload = signed_payload(&response);
-    assert_eq!(payload["assuranceProfile"], "production");
-    assert_eq!(payload["configurationRevision"], published_revision);
-    assert_eq!(payload["supportedValues"][0]["providesValueFor"], CONCEPT);
-    assert_eq!(payload["supportedValues"][0]["value"], true);
-    assert!(
-        !serde_json::to_vec(&payload)
-            .expect("Mint-backed payload serializes")
-            .windows(token.len())
-            .any(|part| part == token.as_bytes()),
-        "signed payload retained the Mint access token"
-    );
-
-    fixture.write_verification_policy(&payload, &nonce, &published_revision);
-    assert_success(
-        Command::new(evidence)
-            .arg("verify")
-            .arg("--jws")
-            .arg(&fixture.response)
-            .arg("--jwks")
-            .arg(&fixture.evidence_jwks)
-            .arg("--policy")
-            .arg(&fixture.policy)
-            .output()
-            .expect("Mint-backed response verifier starts"),
-        "Mint-backed independent response verification",
-    );
-    let source_token = fs::read(&fixture.source_token).expect("source token");
-    assert_audit_contract(
-        &wait_for_audit(&fixture.audit_path),
-        &revision,
-        &fixture.evidence_signing_kid(),
-        &[source_token.as_slice(), token.as_bytes()],
-    );
-
-    stop_gracefully(&mut evidence_service, "Evidence");
-    stop_gracefully(&mut mint_service, "Mint");
-    stop_forcefully(&mut https);
-    assert_success(
-        Command::new(evidence)
-            .arg("--runtime")
-            .arg(fixture.candidate.join("runtime.yaml"))
-            .arg("verify-audit")
-            .output()
-            .expect("Mint-backed audit verifier starts"),
-        "Mint-backed complete audit-chain verification",
     );
 }
 
@@ -734,7 +613,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
             .arg("--docker-bin")
             .arg(docker)
             .args(["--evidence-port", &fixture.evidence_port.to_string()])
-            .args(["--issuer-port", &fixture.mint_port.to_string()])
+            .args(["--issuer-port", &fixture.issuer_port.to_string()])
             .args(["--ready-timeout-seconds", "20"])
             .output()
             .expect("public dev starts"),
@@ -748,7 +627,7 @@ fn public_lifecycle_keeps_local_dev_state_out_of_the_production_candidate() {
     )));
     assert!(started_stdout.contains(&format!(
         "Issuer ready at http://127.0.0.1:{}",
-        fixture.mint_port
+        fixture.issuer_port
     )));
     let dev_root = fixture.project.join(".evidence/dev");
     let local_bundle = fs::read(dev_root.join("bundle/evidence.yaml")).expect("local dev bundle");
@@ -857,11 +736,6 @@ impl Drop for DevStopGuard {
     }
 }
 
-struct MintDeployment {
-    config: PathBuf,
-    caller_private: PathBuf,
-}
-
 struct TransitServer {
     stop: Arc<AtomicBool>,
     socket: PathBuf,
@@ -902,7 +776,7 @@ struct Fixture {
     policy: PathBuf,
     https_port: u16,
     evidence_port: u16,
-    mint_port: u16,
+    issuer_port: u16,
 }
 
 impl Fixture {
@@ -938,7 +812,7 @@ impl Fixture {
             policy: root.join("verification-policy.yaml"),
             https_port: ports[0],
             evidence_port: ports[1],
-            mint_port: ports[2],
+            issuer_port: ports[2],
             temporary,
             root,
             project,
@@ -1746,8 +1620,6 @@ authentication:
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
-  grantIdClaim: evidence_grant_id
-  grantAuthorityClaim: evidence_authority
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit: {{format: keyed-jsonl, hashSecretRef: 'secret:file/audit-hmac-key', hashKeyVersion: 1, failClosed: true}}
@@ -1949,120 +1821,6 @@ authorityProfiles:
         );
     }
 
-    fn stage_mint(&self) -> MintDeployment {
-        let mint = self.root.join("mint");
-        let clients = mint.join("clients");
-        fs::create_dir_all(&clients).expect("Mint client registry");
-
-        let mint_public_keys = mint.join("public-keys");
-        fs::create_dir(&mint_public_keys).expect("Mint public key directory");
-        let generated_mint_public = mint.join("mint-public.jwk.json");
-        assert_success(
-            evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
-                .arg(mint.join("transit-key"))
-                .arg("--public-out")
-                .arg(&generated_mint_public)
-                .output()
-                .expect("Mint signing keygen starts"),
-            "independent Mint signing key generation",
-        );
-        let mint_public_jwk: Value =
-            serde_json::from_slice(&fs::read(&generated_mint_public).expect("Mint public JWK"))
-                .expect("Mint public JWK parses");
-        let mint_kid = mint_public_jwk["kid"].as_str().expect("Mint signing kid");
-        let mint_public = mint_public_keys.join(format!("{mint_kid}.jwk.json"));
-        fs::rename(&generated_mint_public, &mint_public).expect("publish Mint public JWK");
-        let audit = mint.join("audit");
-        fs::create_dir(&audit).expect("Mint audit directory");
-        fs::create_dir(mint.join("secrets")).expect("Mint secret directory");
-        fs::set_permissions(mint.join("secrets"), fs::Permissions::from_mode(0o700))
-            .expect("Mint secret directory mode");
-        fs::set_permissions(&audit, fs::Permissions::from_mode(0o700))
-            .expect("Mint audit directory mode");
-        let audit_key = mint.join("secrets/mint-audit-hmac-key");
-        let mut audit_key_file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&audit_key)
-            .expect("Mint audit key");
-        audit_key_file
-            .write_all(b"production-handoff-mint-audit-key")
-            .expect("Mint audit key contents");
-        audit_key_file.sync_all().expect("sync Mint audit key");
-        assert_eq!(
-            fs::metadata(&audit)
-                .expect("Mint audit metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700,
-        );
-        assert_eq!(
-            fs::metadata(&audit_key)
-                .expect("Mint audit key metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600,
-        );
-        let caller_public = mint.join("caller-public.jwk.json");
-        let caller_directory = mint.join("caller");
-        assert_success(
-            evidencectl()
-                .args(["keygen", "signing", "--out-dir"])
-                .arg(&caller_directory)
-                .arg("--public-out")
-                .arg(&caller_public)
-                .output()
-                .expect("Mint caller keygen starts"),
-            "independent Mint caller key generation",
-        );
-        let caller_jwk: Value =
-            serde_json::from_slice(&fs::read(&caller_public).expect("Mint caller public JWK"))
-                .expect("Mint caller public JWK parses");
-        fs::write(
-            clients.join("acceptance-client.yaml"),
-            format!(
-                "clientId: acceptance-client\nprincipal: urn:example:principals:acceptance-client\nevidenceAudience: {EVIDENCE_AUDIENCE}\nrequesterTags: [fixture-agency]\nkeys: [{}]\n",
-                serde_json::to_string(&caller_jwk).expect("caller JWK serializes")
-            ),
-        )
-        .expect("Mint client registration");
-
-        // The HTTPS process now publishes Mint's public signing key at the
-        // configured public identity. Mint itself remains on a private plain
-        // HTTP listener behind that operator-owned route.
-        fs::remove_file(&self.oidc_jwks).expect("replace external IdP JWKS for Mint path");
-        assert_success(
-            evidencectl()
-                .args(["jwks", "--out"])
-                .arg(&self.oidc_jwks)
-                .arg(&mint_public)
-                .output()
-                .expect("Mint JWKS assembly starts"),
-            "Mint public JWKS assembly",
-        );
-
-        let identity = format!("https://127.0.0.1:{}", self.https_port);
-        let config = mint.join("mint.yaml");
-        fs::write(
-            &config,
-            format!(
-                "version: 1\nissuer: {identity}\nlistener: {{address: 127.0.0.1, port: {port}}}\nsigning:\n  algorithm: ES256\n  activePublicJwkFile: public-keys/{mint_kid}.jwk.json\n  publishedPublicJwkFiles: []\n  revokedKeyIds: []\nsigner:\n  kind: transit\n  unixSocketPath: {transit_socket}\n  mount: transit\n  keyName: mint-signing\n  keyVersion: 1\n  timeoutMilliseconds: 2000\nsecretProviders:\n  file:\n    root: {secrets}\naudit:\n  path: audit/mint.jsonl\n  maximumFileBytes: 1073741824\n  hashKeyRef: secret:file/mint-audit-hmac-key\n  hashKeyVersion: 1\naccessTokens:\n  audiences: [{TOKEN_AUDIENCE}]\n  lifetimeSeconds: 300\n  claims:\n    principal: sub\n    requesterTags: evidence_tags\n    evidenceAudience: evidence_audience\n    grantId: evidence_grant_id\n    grantAuthority: evidence_authority\nclientAssertion:\n  audience: {identity}/token\n  algorithms: [ES256]\nclients:\n  directory: clients\n",
-                port = self.mint_port,
-                transit_socket = self.root.join("transit-proxy.sock").display(),
-                secrets = mint.join("secrets").display(),
-            ),
-        )
-        .expect("Mint config");
-        MintDeployment {
-            config,
-            caller_private: caller_directory.join("signing-p256-private-jwk"),
-        }
-    }
-
     fn start_https(&self) -> Child {
         Command::new("python3")
             .arg(
@@ -2073,7 +1831,6 @@ authorityProfiles:
             .env("ACCEPTANCE_TLS_CERT", &self.tls_cert)
             .env("ACCEPTANCE_TLS_KEY", &self.tls_key)
             .env("ACCEPTANCE_JWKS", &self.oidc_jwks)
-            .env("ACCEPTANCE_MINT_PORT", self.mint_port.to_string())
             .env("ACCEPTANCE_SOURCE_TOKEN", &self.source_token)
             .env("ACCEPTANCE_SOURCE_MARKER", &self.source_marker)
             .env("ACCEPTANCE_READY", &self.https_ready)
@@ -2103,18 +1860,6 @@ authorityProfiles:
             .stderr(Stdio::from(log))
             .spawn()
             .expect("Evidence service starts")
-    }
-
-    fn start_mint(&self, mint: &Path, config: &Path) -> Child {
-        let log = owner_only_log(&self.root.join("mint.log"));
-        Command::new(mint)
-            .args(["serve", "--config"])
-            .arg(config)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().expect("clone Mint log")))
-            .stderr(Stdio::from(log))
-            .spawn()
-            .expect("Mint service starts")
     }
 
     fn wait_for_evidence(&self, child: &mut Child) {
@@ -2147,6 +1892,7 @@ authorityProfiles:
                 "sub": "synthetic-caller",
                 "iat": now - 1,
                 "exp": now + 299,
+                "registry_actor_kind": "service",
                 "evidence_tags": ["fixture-agency"],
                 "evidence_audience": EVIDENCE_AUDIENCE,
             }))
@@ -2357,7 +2103,6 @@ fn transit_signature(root: &Path, key_name: &str, body: &[u8]) -> Result<Value, 
 fn transit_private_jwk(root: &Path, key_name: &str) -> Result<Value, &'static str> {
     let path = match key_name {
         "evidence-signing" => root.join("transit-evidence-key/signing-p256-private-jwk"),
-        "mint-signing" => root.join("mint/transit-key/signing-p256-private-jwk"),
         _ => return Err("unknown Transit key"),
     };
     let bytes = fs::read(path).map_err(|_| "Transit fixture key unavailable")?;
@@ -2525,13 +2270,6 @@ fn free_ports(count: usize) -> Vec<u16> {
         .iter()
         .map(|listener| listener.local_addr().expect("reserved address").port())
         .collect()
-}
-
-fn wait_for_listener(child: &mut Child, port: u16, label: &str) {
-    wait_for(Duration::from_secs(20), || {
-        assert_running(child, label);
-        TcpStream::connect(("127.0.0.1", port)).is_ok()
-    });
 }
 
 fn wait_for(timeout: Duration, mut condition: impl FnMut() -> bool) {
@@ -2797,43 +2535,6 @@ fn installed_binary(variable: &str, name: &str) -> PathBuf {
         .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
         .unwrap_or_else(|| panic!("set {variable} for this exact lifecycle gate"))
-}
-
-fn mint_binary() -> &'static Path {
-    static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY.get_or_init(|| {
-        if let Some(path) = std::env::var_os("MINT_BIN") {
-            return PathBuf::from(path);
-        }
-        let build = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()))
-            .current_dir(workspace_root())
-            .args([
-                "build",
-                "--locked",
-                "-p",
-                "registry-mint",
-                "--bin",
-                "mint",
-                "--profile",
-                &current_test_profile(),
-                "--message-format",
-                "json-render-diagnostics",
-            ])
-            .output()
-            .expect("building the Mint binary");
-        assert!(
-            build.status.success(),
-            "building the Mint binary failed: {}",
-            String::from_utf8_lossy(&build.stderr)
-        );
-        String::from_utf8_lossy(&build.stdout)
-            .lines()
-            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .filter(|message| message["reason"] == "compiler-artifact")
-            .filter_map(|message| message["executable"].as_str().map(PathBuf::from))
-            .find(|path| path.file_name().is_some_and(|name| name == "mint"))
-            .expect("Mint executable path")
-    })
 }
 
 fn workspace_root() -> PathBuf {
