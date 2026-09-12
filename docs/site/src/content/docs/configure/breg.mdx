@@ -27,7 +27,7 @@ This page shapes the records.
 Everything on these four pages runs without a database.
 Database setup, packaging, and activation belong to [Deploy a registry](../../operate/breg/), and if you have never run a registry, [Create and query your first registry](../../tutorials/first-breg/) comes first.
 
-If `bregctl` is not installed yet, the release installer places `breg`, `bregctl`, and `mint` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
+If `bregctl` is not installed yet, the release installer places `breg` and `bregctl` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
@@ -424,7 +424,7 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 
 ## Next
 
-- [Control access per profile](../breg-access/): profiles, grants, row boundaries, and the offline admission preview.
+- [Control access per profile](../breg-access/): profiles, permissions, row boundaries, and the offline admission preview.
 - [Declare change requests and actions](../breg-change-control/): reviewed changes and writes that touch several records at once.
 - [Test with journeys](../breg-journeys/): `check`, `explain`, `generate`, findings, and journeys.
 - [Modeling patterns for registries](../../explanation/registry-modeling-patterns/): how to shape entities, references, and history.
