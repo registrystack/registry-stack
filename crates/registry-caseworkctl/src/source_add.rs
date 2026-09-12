@@ -10,6 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const MAX_PROVIDER_OUTPUT: usize = 2 * 1024 * 1024;
+// Keep the generated local teaching identities within bregctl's closed v1
+// dev-client format before source add offers to write them.
+const MAX_BREG_DEV_CLIENT_SCOPES: usize = 32;
+const MAX_BREG_DEV_CLIENT_CLAIMS: usize = 32;
 
 /// The casework-reader access profile's identity: the client id, access
 /// profile id, required scope, required purpose, and principal claim name
@@ -571,6 +575,11 @@ fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAutho
         if profile["principalClaim"] != Value::String(READER_PRINCIPAL_CLAIM.to_owned()) {
             bail!("BReg access profile {id} does not authenticate its principal through {READER_PRINCIPAL_CLAIM}");
         }
+        if has_nonempty_row_boundaries(profile) {
+            bail!(
+                "BReg access profile {id} uses rowBoundaries, which local Casework reviewer client export does not support"
+            );
+        }
         let required_scopes = match profile.get("requiredScopes") {
             None | Some(Value::Null) => &[][..],
             Some(Value::Array(scopes)) => scopes.as_slice(),
@@ -616,6 +625,22 @@ fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAutho
         })
         .transpose()?;
     Ok(ReviewerAuthority { scopes, purpose })
+}
+
+fn has_nonempty_row_boundaries(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(has_nonempty_row_boundaries),
+        Value::Object(values) => values.iter().any(|(key, value)| {
+            if key == "rowBoundaries" {
+                value
+                    .as_array()
+                    .is_none_or(|boundaries| !boundaries.is_empty())
+            } else {
+                has_nonempty_row_boundaries(value)
+            }
+        }),
+        _ => false,
+    }
 }
 
 /// The BReg dev client bound to one Casework dev client: same id and scopes
@@ -676,6 +701,11 @@ fn human_dev_client(
                 }
             }
         }
+    }
+    if scopes.len() > MAX_BREG_DEV_CLIENT_SCOPES || claims.len() > MAX_BREG_DEV_CLIENT_CLAIMS {
+        bail!(
+            "Casework dev client {id} exceeds BReg local client scope or claim bounds after reviewer authority is added"
+        );
     }
     Ok(json!({
         "id": id,
@@ -1504,6 +1534,29 @@ mod tests {
     }
 
     #[test]
+    fn reviewer_authority_refuses_profiles_with_row_boundary_claims() {
+        let authored = json!({
+            "accessProfiles": [{
+                "id":"reviewer",
+                "principalClaim":"registry_principal",
+                "grants":[{
+                    "entity":"request",
+                    "rowBoundaries":[{"field":"region","claim":"allowed_regions","operator":"in"}]
+                }]
+            }]
+        });
+        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
+
+        let error = reviewer_authority(&authored, &request)
+            .err()
+            .expect("row-boundary authority must be refused");
+        let message = format!("{error:#}");
+        assert!(message.contains("reviewer"), "{message}");
+        assert!(message.contains("rowBoundaries"), "{message}");
+        assert!(!message.contains("allowed_regions"), "{message}");
+    }
+
+    #[test]
     fn human_dev_client_bails_when_existing_purpose_claim_conflicts() {
         let authority = ReviewerAuthority {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
@@ -1558,6 +1611,52 @@ mod tests {
         assert!(message.contains("staff"), "{message}");
         assert!(!message.contains("employee-123"), "{message}");
         assert!(!message.contains("other-person"), "{message}");
+    }
+
+    #[test]
+    fn human_dev_client_refuses_authority_over_breg_scope_or_claim_bounds() {
+        let authority = ReviewerAuthority {
+            scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
+            purpose: None,
+        };
+        let scopes = (0..MAX_BREG_DEV_CLIENT_SCOPES)
+            .map(|index| format!("casework:scope-{index}"))
+            .collect::<Vec<_>>();
+        let too_many_scopes = json!({
+            "id":"staff",
+            "scopes":scopes,
+            "claims":{"registry_principal":"staff-1"}
+        });
+        let error = human_dev_client(
+            &too_many_scopes,
+            "staff",
+            "registry_principal",
+            Some(&authority),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("scope or claim bounds"));
+
+        let mut claims = serde_json::Map::new();
+        for index in 0..MAX_BREG_DEV_CLIENT_CLAIMS - 1 {
+            claims.insert(format!("claim_{index}"), json!(format!("value-{index}")));
+        }
+        claims.insert("employee_id".to_owned(), json!("employee-123"));
+        let too_many_claims = json!({
+            "id":"supervisor",
+            "scopes":["casework:supervisor"],
+            "claims":claims
+        });
+        let error = human_dev_client(
+            &too_many_claims,
+            "supervisor",
+            "employee_id",
+            Some(&ReviewerAuthority {
+                scopes: BTreeSet::new(),
+                purpose: None,
+            }),
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("scope or claim bounds"));
     }
 
     #[test]

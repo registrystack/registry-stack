@@ -113,6 +113,16 @@ class SourceNeutralityTests(unittest.TestCase):
 
             source.write_text(
                 source.read_text(encoding="utf-8")
+                + 'const IS_AGRICULTURAL: bool = id == "agricultural-holdings";\n',
+                encoding="utf-8",
+            )
+            violations = CHECKER.find_violations(root)
+            self.assertTrue(any("holdings" in item for item in violations), violations)
+
+            source.write_text(
+                source.read_text(encoding="utf-8").replace(
+                    'const IS_AGRICULTURAL: bool = id == "agricultural-holdings";\n', ""
+                )
                 + 'const ERROR: &str = "init.holdings.failed";\n',
                 encoding="utf-8",
             )
