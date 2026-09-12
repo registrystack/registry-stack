@@ -344,6 +344,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         allow_breg_access: false,
         scopes: vec![scope],
         claims,
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     };

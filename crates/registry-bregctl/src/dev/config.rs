@@ -38,12 +38,24 @@ pub(super) struct Client {
     pub allow_breg_access: bool,
     pub scopes: Vec<String>,
     pub claims: BTreeMap<String, Value>,
+    /// Exact schema-test steps that use this claim variant. Runtime requests
+    /// still select an authored access profile; this field only disambiguates
+    /// credentials for maintained local journeys.
+    #[serde(default)]
+    pub test_bindings: Vec<TestBinding>,
     pub client_id_file: Option<PathBuf>,
     pub assertion_key_file: Option<PathBuf>,
 }
 
 fn is_false(value: &bool) -> bool {
     !value
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct TestBinding {
+    pub journey_id: String,
+    pub step_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -76,9 +88,11 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         bail!("local clients v1 requires 1..32 explicit clients and at most 100 seed records");
     }
     let mut ids = BTreeSet::new();
-    let mut profiles = BTreeSet::new();
+    let mut profile_defaults = BTreeSet::new();
+    let mut test_bindings = BTreeSet::new();
     let mut outputs = BTreeSet::new();
     for client in &clients.clients {
+        let mut client_profiles = BTreeSet::new();
         if client.id == "issuer"
             || !identifier(&client.id)
             || !ids.insert(&client.id)
@@ -87,8 +101,24 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             bail!("local clients need unique bounded IDs and explicit scopes");
         }
         for profile in &client.access_profiles {
-            if !identifier(profile) || !profiles.insert(profile) {
-                bail!("each local access profile must bind to exactly one teaching client");
+            if !identifier(profile) || !client_profiles.insert(profile) {
+                bail!(
+                    "local access profile bindings must be unique bounded identifiers per client"
+                );
+            }
+            if client.test_bindings.is_empty() && !profile_defaults.insert(profile) {
+                bail!("a shared local access profile needs at most one default client; use exact testBindings for claim variants");
+            }
+        }
+        if client.test_bindings.len() > 100 {
+            bail!("one local client may bind at most 100 schema-test steps");
+        }
+        for binding in &client.test_bindings {
+            if !identifier(&binding.journey_id)
+                || !identifier(&binding.step_id)
+                || !test_bindings.insert(binding.clone())
+            {
+                bail!("testBindings need unique exact bounded journeyId and stepId pairs");
             }
         }
         if client.scopes.len() > 32
@@ -241,11 +271,24 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     }
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new())?;
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "BREG local development CA");
+    ca_params.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
     let ca_key = rcgen::KeyPair::generate()?;
     let ca = ca_params.self_signed(&ca_key)?;
     let server_key = rcgen::KeyPair::generate()?;
-    let server = rcgen::CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])?
-        .signed_by(&server_key, &ca, &ca_key)?;
+    let mut server_params =
+        rcgen::CertificateParams::new(vec!["localhost".into(), "127.0.0.1".into()])?;
+    server_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "BREG local PostgreSQL");
+    server_params.use_authority_key_identifier_extension = true;
+    server_params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    let server = server_params.signed_by(&server_key, &ca, &ca_key)?;
     private::create(
         &root.join("tls/ca.pem"),
         pem("CERTIFICATE", ca.der()).as_bytes(),
@@ -393,7 +436,7 @@ pub(super) fn runtime(
         }),
         &json!({
             "apiVersion":"registry.registrystack.org/breg-runtime/v1alpha1","kind":"BRegRuntimeConfig",
-            "listener":{"bind":format!("127.0.0.1:{}",state.breg_port)},
+            "listener":{"bind":format!("127.0.0.1:{}",state.breg_port),"publicOrigin":state.breg_origin()},
             "identity":{"environment":"local","instanceId":state.instance_id,"databaseId":DATABASE_ID,"databaseInitializationEnvironment":"local"},
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},

@@ -63,7 +63,7 @@ if [[ "$spatial" == true ]]; then
 import json,os,shutil,sys
 source=json.load(open(sys.argv[1]))['headerFile']; shutil.copyfile(source,sys.argv[2]); os.chmod(sys.argv[2],0o600)
 PY
-  python3 "$support" spatial-smoke --root "$run_dir" --seed "$repository_root/products/breg/acceptance/spatial-service-sites/fixtures/qgis-service-sites.jsonl"
+  python3 "$support" spatial-smoke --root "$run_dir" --seed "$repository_root/products/breg/acceptance/spatial-service-sites/fixtures/seed-service-sites.jsonl"
 else
   id=$(python3 "$support" request --root "$run_dir" --action create --code QS-001 --label 'Quickstart record')
   python3 "$support" request --root "$run_dir" --action get --record-id "$id" >/dev/null

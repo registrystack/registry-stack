@@ -45,6 +45,8 @@ const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
 const IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const SPATIAL_IMAGE: &str =
+    "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
@@ -74,6 +76,8 @@ enum DevAction {
     /// containers plus its Base Registry Engine (BReg) child. The database runs
     /// the pinned image
     /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// or, when the compiled schema requires PostGIS,
+    /// postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
     /// started service have 45 seconds to answer as ready. A start that passes
@@ -201,6 +205,9 @@ struct State {
     #[serde(default)]
     issuer_image: Option<String>,
     database_port: u16,
+    /// Fixed at first start from the compiled schema; retained with the database.
+    #[serde(default)]
+    requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
     #[serde(default)]
     webhook_port: Option<u16>,
@@ -262,6 +269,13 @@ struct CredentialOutput {
 impl State {
     fn root(&self) -> PathBuf {
         self.project.join(".breg/dev")
+    }
+    fn database_image(&self) -> &'static str {
+        if self.requires_postgis {
+            SPATIAL_IMAGE
+        } else {
+            IMAGE
+        }
     }
     fn container_name(&self) -> String {
         format!("breg-dev-{}", self.owner)
@@ -563,6 +577,7 @@ fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
 fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
     let journeys: Value = serde_norway::from_slice(journeys)
         .context("tests/journeys.yaml must parse before local development starts")?;
+    let mut used = BTreeSet::new();
     for journey in journeys["journeys"]
         .as_array()
         .context("journeys must contain an array")?
@@ -571,23 +586,104 @@ fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
             .as_array()
             .context("journey steps must be an array")?
         {
+            let journey_id = journey["id"].as_str().context("journey requires an id")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
             let profile = step["accessProfile"]
                 .as_str()
                 .context("journey step requires an access profile")?;
-            if !clients
-                .clients
-                .iter()
-                .any(|client| client.access_profiles.iter().any(|p| p == profile))
+            if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
+                used.insert((journey_id.to_owned(), step_id.to_owned()));
+                let _ = client;
+                continue;
+            }
+            if step["claims"]
+                .as_object()
+                .is_some_and(|claims| claims.is_empty())
             {
+                continue;
+            }
+            let client = journey_client(clients, journey_id, step_id, profile)?;
+            if !client.test_bindings.is_empty() {
+                used.insert((journey_id.to_owned(), step_id.to_owned()));
+            }
+        }
+    }
+    for client in &clients.clients {
+        for binding in &client.test_bindings {
+            if !used.contains(&(binding.journey_id.clone(), binding.step_id.clone())) {
                 bail!(
-                    "journey step {} of {} uses access profile {profile}, which no client in the clients file binds; add a client with that profile and the claims the step expects before first start",
-                    step["id"].as_str().unwrap_or("?"),
-                    journey["id"].as_str().unwrap_or("?")
+                    "client {} testBindings names unknown or profile-mismatched journey step {}/{}",
+                    client.id,
+                    binding.journey_id,
+                    binding.step_id
                 );
             }
         }
     }
     Ok(())
+}
+
+fn journey_client<'a>(
+    clients: &'a Clients,
+    journey_id: &str,
+    step_id: &str,
+    profile: &str,
+) -> Result<&'a config::Client> {
+    let candidates = clients
+        .clients
+        .iter()
+        .filter(|client| client.access_profiles.iter().any(|value| value == profile))
+        .collect::<Vec<_>>();
+    let exact = candidates
+        .iter()
+        .copied()
+        .filter(|client| {
+            client
+                .test_bindings
+                .iter()
+                .any(|binding| binding.journey_id == journey_id && binding.step_id == step_id)
+        })
+        .collect::<Vec<_>>();
+    if let [client] = exact.as_slice() {
+        return Ok(*client);
+    }
+    let defaults = candidates
+        .iter()
+        .copied()
+        .filter(|client| client.test_bindings.is_empty())
+        .collect::<Vec<_>>();
+    if exact.is_empty() {
+        if let [client] = defaults.as_slice() {
+            return Ok(*client);
+        }
+    }
+    bail!(
+        "journey step {step_id} of {journey_id} needs one unambiguous local client for access profile {profile}; add one default client or one exact testBindings entry"
+    )
+}
+
+fn exact_journey_client<'a>(
+    clients: &'a Clients,
+    journey_id: &str,
+    step_id: &str,
+    profile: &str,
+) -> Result<Option<&'a config::Client>> {
+    let exact = clients
+        .clients
+        .iter()
+        .filter(|client| client.access_profiles.iter().any(|value| value == profile))
+        .filter(|client| {
+            client
+                .test_bindings
+                .iter()
+                .any(|binding| binding.journey_id == journey_id && binding.step_id == step_id)
+        })
+        .collect::<Vec<_>>();
+    match exact.as_slice() {
+        [] => Ok(None),
+        [client] => Ok(Some(*client)),
+        _ => bail!("journey step {step_id} of {journey_id} has ambiguous exact testBindings"),
+    }
 }
 
 struct CapturedSource {
@@ -749,6 +845,7 @@ fn start(args: StartArgs) -> Result<Value> {
                 .database_port
                 .or(previous.map(|s| s.database_port))
                 .unwrap_or(55432),
+            requires_postgis: compiled.ddl().requires_postgis,
             webhook_port: None,
             clients_file,
             source_digest: digest,
@@ -1821,7 +1918,7 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
         .context("Docker returned no exact container")?;
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != IMAGE
+        || container["Config"]["Image"] != state.database_image()
         || state
             .container_id
             .as_ref()
@@ -1853,7 +1950,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 root.join("database/postgres.env")
                     .to_str()
                     .context("dev path must be UTF-8")?,
-                IMAGE,
+                state.database_image(),
             ],
             None,
         )?;
@@ -2007,6 +2104,9 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             ] {
                 statements.push_str(&format!("CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
             }
+            if state.requires_postgis {
+                statements.push_str(&spatial_prerequisites_sql());
+            }
             sql(docker, state, database, statements.as_bytes(), None)?;
         }
         state.database_ready = true;
@@ -2014,6 +2114,24 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
     }
     Ok(())
 }
+/// Same role boundary as the runtime spatial prerequisite contract: the
+/// migration role may SET the no-login bbox owner; runtime is never a member.
+fn spatial_prerequisites_sql() -> String {
+    let bbox_role = format!("{RUNTIME_ROLE}__spatial_bbox");
+    format!(
+        "CREATE SCHEMA IF NOT EXISTS registry_spatial_ext; \
+         REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC; \
+         CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext; \
+         GRANT USAGE ON SCHEMA registry_spatial_ext TO {MIGRATION_ROLE}, {RUNTIME_ROLE}; \
+         DO $breg_spatial$ BEGIN \
+         IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{bbox_role}') THEN \
+         CREATE ROLE {bbox_role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
+         END IF; END; $breg_spatial$; \
+         GRANT {bbox_role} TO {MIGRATION_ROLE} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE; \
+         GRANT USAGE ON SCHEMA registry_spatial_ext TO {bbox_role};"
+    )
+}
+
 fn sql(
     docker: &Path,
     state: &State,
@@ -2193,6 +2311,9 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     ] {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
+    if state.requires_postgis {
+        initialization.push_str(&spatial_prerequisites_sql());
+    }
     sql(
         docker,
         state,
@@ -2216,12 +2337,21 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             let profile = step["accessProfile"]
                 .as_str()
                 .context("journey step requires an access profile")?;
-            let client = clients
-                .clients
-                .iter()
-                .find(|client| client.access_profiles.iter().any(|p| p == profile))
-                .context("every schema-test profile needs an explicit local client binding")?;
-            bindings.push(json!({"journeyId":journey["id"],"stepId":step["id"],"credential":{"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)}}));
+            let journey_id = journey["id"].as_str().context("journey requires an id")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
+            let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
+            let credential = if let Some(client) = explicit {
+                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+            } else if step["claims"]
+                .as_object()
+                .is_some_and(|claims| claims.is_empty())
+            {
+                json!({"type":"anonymous"})
+            } else {
+                let client = journey_client(clients, journey_id, step_id, profile)?;
+                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+            };
+            bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
         }
     }
     let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});

@@ -33,7 +33,11 @@ original ports and clients-file location. Conflicting ports are refused.
 
 The database runs the pinned image
 `postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
-so an operator can check exactly what the supervisor pulls. Each supervised
+or `postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6`
+when the compiled schema requires PostGIS. The selection is retained with the
+owned database. Spatial setup grants the migration role permission to SET the
+no-login bbox owner; the runtime role never receives that membership.
+Each supervised
 prerequisite command may run for 120 seconds. The owned database and BReg have
 45 seconds each to answer readiness, and ThunderID discovery has a 120-second wait. A start
 that passes a deadline fails, stops what it acquired and keeps its owner-only
@@ -129,8 +133,12 @@ deployments must bind their own destinations and signing keys.
 
 The clients file is ordinary YAML with a closed versioned format. It declares
 local issuer registrations; it does not add or infer BReg access profiles.
-Every protected profile used by `tests/journeys.yaml` needs exactly one client
-binding with scopes and claims matching the authored journey.
+Every protected journey step without an exact binding needs one default client
+for its profile whose scopes and claims match the ordinary step. A maintained refusal step may
+use another client for the same profile by naming that exact step with
+`testBindings`. The closed binding contains both `journeyId` and `stepId`; stale,
+profile-mismatched, duplicate, or ambiguous bindings are refused before any
+service starts.
 
 Set `accessProfiles: []` for a machine client that carries only scopes or
 claims for another product, such as Casework. The empty list gives that client
@@ -159,6 +167,16 @@ clients:
       registry_principal: generic-registry-reader
       registry_purpose: registry-reporting
       registry_record_status: active
+  - id: reader-for-lifecycle-test
+    accessProfiles: [record-reader]
+    scopes: [registry:generic:read]
+    claims:
+      registry_principal: generic-registry-reader
+      registry_purpose: registry-reporting
+      registry_record_status: active
+    testBindings:
+      - journeyId: record-lifecycle
+        stepId: read-record-within-the-claim
   - id: source
     accessProfiles: [evidence-source]
     scopes: [registry:evidence:lookup]

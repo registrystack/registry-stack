@@ -35,6 +35,7 @@ seed: []
         issuer_port: 8095,
         issuer_image: None,
         database_port: 55448,
+        requires_postgis: false,
         webhook_port: None,
         clients_file: project.join("clients.yaml"),
         source_digest: "a".repeat(64),
@@ -313,6 +314,148 @@ seed:
         format!("{error:#}").contains("bound client and access profile"),
         "{error:#}"
     );
+}
+
+#[test]
+fn clients_allow_only_explicit_unambiguous_shared_profile_variants() {
+    let bytes = r#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+  - id: operator-without-purpose
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator}
+    testBindings:
+      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}
+"#;
+    let parsed = config::clients(bytes.as_bytes()).expect("one default plus an exact test variant");
+    assert_eq!(
+        parsed.clients[1].test_bindings[0].step_id,
+        "without-purpose-is-concealed"
+    );
+
+    let duplicate = bytes.replace(
+        "      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}\n",
+        "",
+    );
+    assert!(config::clients(duplicate.as_bytes())
+        .unwrap_err()
+        .to_string()
+        .contains("at most one default"));
+
+    let duplicate_binding = format!("{bytes}  - id: another-variant\n    accessProfiles: [operator]\n    scopes: [registry:records:write]\n    claims: {{registry_principal: operator}}\n    testBindings:\n      - {{journeyId: record-lifecycle, stepId: without-purpose-is-concealed}}\n");
+    assert!(config::clients(duplicate_binding.as_bytes())
+        .unwrap_err()
+        .to_string()
+        .contains("unique exact"));
+}
+
+#[test]
+fn journey_bindings_select_exact_claim_variant_and_reject_stale_entries() {
+    let client_bytes = br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+  - id: operator-without-purpose
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator}
+    testBindings:
+      - {journeyId: record-lifecycle, stepId: without-purpose-is-concealed}
+"#;
+    let clients = config::clients(client_bytes).unwrap();
+    assert_eq!(
+        journey_client(
+            &clients,
+            "record-lifecycle",
+            "without-purpose-is-concealed",
+            "operator"
+        )
+        .unwrap()
+        .id,
+        "operator-without-purpose"
+    );
+    assert_eq!(
+        journey_client(&clients, "record-lifecycle", "create-record", "operator")
+            .unwrap()
+            .id,
+        "operator"
+    );
+    let journeys = br#"journeys:
+  - id: record-lifecycle
+    steps:
+      - id: create-record
+        accessProfile: operator
+        claims: {principal: operator, purpose: administration}
+"#;
+    assert!(bind_journey_profiles(journeys, &clients)
+        .unwrap_err()
+        .to_string()
+        .contains("unknown or profile-mismatched"));
+}
+
+#[test]
+fn anonymous_journey_steps_need_no_issuer_client() {
+    let clients = config::clients(
+        br#"version: 1
+clients:
+  - id: operator
+    accessProfiles: [operator]
+    scopes: [registry:records:write]
+    claims: {registry_principal: operator, registry_purpose: administration}
+"#,
+    )
+    .unwrap();
+    let journeys = br#"journeys:
+  - id: public-read
+    steps:
+      - id: list-public
+        accessProfile: public-reader
+        claims: {}
+"#;
+    bind_journey_profiles(journeys, &clients).unwrap();
+}
+
+#[test]
+fn explicit_binding_precedes_empty_claims_and_rejects_profile_mismatch() {
+    let clients = config::clients(
+        br#"version: 1
+clients:
+  - id: authenticated-public-reader
+    accessProfiles: [public-reader]
+    scopes: [registry:records:read]
+    claims: {registry_principal: reader}
+    testBindings:
+      - {journeyId: public-read, stepId: list-public}
+"#,
+    )
+    .unwrap();
+    let exact = exact_journey_client(&clients, "public-read", "list-public", "public-reader")
+        .unwrap()
+        .expect("the explicit binding wins even when authored claims are empty");
+    assert_eq!(exact.id, "authenticated-public-reader");
+    let journey = r#"journeys:
+  - id: public-read
+    steps:
+      - id: list-public
+        accessProfile: public-reader
+        claims: {}
+"#;
+    bind_journey_profiles(journey.as_bytes(), &clients).unwrap();
+
+    let mismatched = journey.replace(
+        "accessProfile: public-reader",
+        "accessProfile: other-reader",
+    );
+    assert!(bind_journey_profiles(mismatched.as_bytes(), &clients)
+        .unwrap_err()
+        .to_string()
+        .contains("unknown or profile-mismatched"));
 }
 
 #[test]
@@ -601,6 +744,24 @@ fn database_roles_have_independent_passwords_and_hmac_files_are_secret_safe() {
     }
 }
 
+#[test]
+fn generated_postgres_leaf_verifies_against_its_distinct_ca() {
+    let (_temp, state, clients, files) = fixture();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let output = match Command::new("openssl")
+        .arg("verify")
+        .arg("-CAfile")
+        .arg(state.root().join("tls/ca.pem"))
+        .arg(state.root().join("tls/server.pem"))
+        .output()
+    {
+        Ok(output) => output,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("run openssl verify: {error}"),
+    };
+    assert!(output.status.success(), "generated TLS chain must verify");
+}
+
 /// The pinned image and the two deadlines are facts an operator checks before
 /// a first start. Hold the owning document, the command's own help text and
 /// the supervisor's constants equal so they cannot drift apart.
@@ -626,6 +787,7 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
         .to_string();
     for fact in [
         IMAGE.to_owned(),
+        SPATIAL_IMAGE.to_owned(),
         format!("{} seconds", CHILD_DEADLINE.as_secs()),
         format!("{} seconds", READY_DEADLINE.as_secs()),
     ] {
@@ -1026,6 +1188,7 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         issuer_port: 8095,
         issuer_image: None,
         database_port: 55448,
+        requires_postgis: false,
         webhook_port: None,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: captured.digest,
@@ -1719,4 +1882,16 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
     let mut arbitrary = args.to_vec();
     arbitrary.extend(["--purpose", "invented"]);
     assert!(<crate::Cli as clap::Parser>::try_parse_from(arbitrary).is_err());
+}
+
+#[test]
+fn retained_database_selection_preserves_spatial_and_legacy_sessions() {
+    let (_temporary, mut state, _clients, _files) = fixture();
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy.as_object_mut().unwrap().remove("requiresPostgis");
+    let restored: State = serde_json::from_value(legacy).unwrap();
+    assert_eq!(restored.database_image(), IMAGE);
+    state.requires_postgis = true;
+    let restored: State = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
+    assert_eq!(restored.database_image(), SPATIAL_IMAGE);
 }
