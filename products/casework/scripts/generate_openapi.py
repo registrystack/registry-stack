@@ -13,6 +13,13 @@ from pathlib import Path
 
 
 ROUTES = {
+    "/.well-known/jwks.json",
+    "/v1/task-grants/{grant_id}/assertion",
+    "/v1/task-grants/{grant_id}/status",
+    "/v1/work-items/{item_id}/task-grants",
+    "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke",
+    "/v1/work-items/{item_id}/task-templates",
+
     "/health",
     "/ready",
     "/v1/casework",
@@ -83,6 +90,19 @@ DTO_MARKERS = {
     "HostedHistoryPage",
 }
 SCHEMA_STRUCTS = {
+    "crates/registry-casework-core/src/task_grant.rs": {
+        "TaskTemplate": "TaskTemplate",
+        "TaskTemplatePreview": "TaskTemplatePreview",
+        "TaskTemplatePreviews": "TaskTemplatePreviews",
+        "TaskPermission": "TaskPermission",
+        "TaskApprovalRequest": "TaskApprovalRequest",
+        "TaskGrantView": "TaskGrantView",
+        "TaskGrantList": "TaskGrantList",
+        "TaskGrantRevocation": "TaskGrantRevocation",
+        "TaskAssertionResponse": "TaskAssertionResponse",
+        "TaskGrantStatus": "TaskGrantStatus",
+        "TaskGrantStatusDetails": "TaskGrantStatusDetails",
+    },
     "crates/registry-casework-core/src/model.rs": {
         "IssuerPrincipal": "IssuerPrincipal",
         "DirectoryMember": "DirectoryMember",
@@ -176,6 +196,14 @@ SCHEMA_STRUCTS = {
     },
 }
 OPERATION_IDS = {
+    ("GET", "/.well-known/jwks.json"): "getTaskAuthorityKeys",
+    ("GET", "/v1/work-items/{item_id}/task-templates"): "previewTaskTemplates",
+    ("GET", "/v1/work-items/{item_id}/task-grants"): "listTaskGrants",
+    ("POST", "/v1/work-items/{item_id}/task-grants"): "approveTaskGrant",
+    ("POST", "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke"): "revokeTaskGrant",
+    ("POST", "/v1/task-grants/{grant_id}/assertion"): "getTaskAssertion",
+    ("GET", "/v1/task-grants/{grant_id}/status"): "getTaskGrantStatus",
+
     ("POST", "/events/sources/{source_id}"): "acceptSourceEvent",
     ("GET", "/health"): "health",
     ("GET", "/ready"): "readiness",
@@ -742,7 +770,7 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "MutationResponse": obj({"item": ref("WorkItem"), "attempt": nullable(ref("AttemptStatus"))}, ["item"]),
         "HistoryEntry": obj(
-            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "assigned", "delegated", "caseload_moved", "clock_reminder", "clock_step_applied", "clock_recomputed", "released", "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed", "attempt_settled", "superseded", "completed"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
+            {"eventId": uuid, "itemId": uuid, "itemRevision": integer, "kind": {"type": "string", "enum": ["observed", "opened", "claimed", "assigned", "delegated", "caseload_moved", "clock_reminder", "clock_step_applied", "clock_recomputed", "released", "draft_saved", "attempt_reserved", "attempt_uncertain", "action_completed", "attempt_settled", "superseded", "completed", "task_approved", "task_revoked", "task_invalidated"]}, "occurredAt": instant, "actor": nullable(ref("IssuerPrincipal")), "profileId": text, "detail": {}},
             ["eventId", "itemId", "itemRevision", "kind", "occurredAt", "profileId", "detail"],
         ),
         "HistoryPage": obj({"items": array(ref("HistoryEntry")), "nextCursor": nullable(text), "status": {"const": "complete"}}, ["items", "status"]),
@@ -1142,6 +1170,8 @@ def schemas(problem_entries: list[dict]) -> dict:
         ),
         "Problem": obj({"type": {"type": "string", "format": "uri"}, "title": text, "status": {"type": "integer"}, "detail": text, "code": {"type": "string", "enum": [entry["code"] for entry in problem_entries]}, "traceId": text}, ["type", "title", "status", "detail", "code", "traceId"]),
     }
+    result.update(task_schemas())
+    result["CaseworkProject"]["properties"]["taskTemplates"] = {"type":"array", "maxItems":64, "items":ref("TaskTemplate")}
     result.update(
         {
             problem_component_name(entry["code"]): problem_variant_schema(entry)
@@ -1149,6 +1179,35 @@ def schemas(problem_entries: list[dict]) -> dict:
         }
     )
     return result
+
+
+def task_schemas() -> dict:
+    text = {"type":"string", "minLength":1, "maxLength":512}
+    number = {"type":"integer", "minimum":0}
+    uuid = {"type":"string", "format":"uuid"}
+    subjects = {"type":"object", "maxProperties":32, "additionalProperties":{"type":["string","integer","boolean"]}}
+    permission = obj({"collection":text, "operations":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":text}}, ["collection","operations"])
+    common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds")}
+    preview = {"id":text, "version":text, "label":text, **common, "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
+    template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting_applicant","waiting_application"]}}}
+    template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
+    view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "expiresAt":number, "invalidated":{"type":"boolean"}}
+    details = {"grantId":uuid, "authority":text, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
+    return {
+        "TaskTemplate":obj(template,list(template)),
+        "TaskTemplatePreview":obj(preview,list(preview)),
+        "TaskTemplatePreviews":obj({"itemRevision":number,"templates":array(ref("TaskTemplatePreview"))},["itemRevision","templates"]),
+        "TaskPermission":permission,
+        "TaskGrantBounds":{"oneOf":[obj({"type":{"const":"evidence"},"requirement":text},["type","requirement"]), obj({"type":{"const":"breg"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("TaskPermission")}},["type","permissions"])]},
+        "TaskApprovalRequest":obj({"templateId":text,"templateVersion":text},["templateId","templateVersion"]),
+        "TaskGrantView":obj(view,list(view)),
+        "TaskGrantList":obj({"grants":{"type":"array","maxItems":128,"items":ref("TaskGrantView")}},["grants"]),
+        "TaskGrantRevocation":obj({"id":uuid,"invalidated":{"type":"boolean"}},["id","invalidated"]),
+        "TaskAssertionResponse":obj({"assertion":{"type":"string","description":"Sensitive short-lived credential. Do not log or persist."},"expiresAt":number,"grantExpiresAt":number},["assertion","expiresAt","grantExpiresAt"]),
+        "TaskGrantStatusDetails":obj(details,list(details)),
+        "TaskGrantStatus":obj({"active":{"type":"boolean"},"grant":ref("TaskGrantStatusDetails")},["active"]),
+        "TaskAuthorityJwks":obj({"keys":{"type":"array","items":{"type":"object"}}},["keys"]),
+    }
 
 
 def parameter(name: str, where: str, description: str, schema: dict | None = None, required: bool = True) -> dict:
@@ -1491,6 +1550,18 @@ def document(contract: dict) -> dict:
             {"type": "object", "properties": {"items": {"maxItems": 1}}},
         ]
     }
+    grant_id = parameter("grant_id", "path", "Immutable task grant identifier.", {"type":"string","format":"uuid"})
+    paths.update({
+        "/.well-known/jwks.json":{"get":{"summary":"Task authority public verification keys", "security":[], "parameters":[TRACEPARENT], "responses":{"200":response("TaskAuthorityJwks")}}},
+        "/v1/work-items/{item_id}/task-templates":{"get":operation("Preview eligible task authorization", "TaskTemplatePreviews", source=True, parameters=[ITEM_ID], description="Current holder and Directory eligibility are checked. Subjects come from the caller's current disclosed source read. Preview grants no authority; approval recomputes it.")},
+        "/v1/work-items/{item_id}/task-grants":{"get":operation("List task grant metadata", "TaskGrantList", source=True, parameters=[ITEM_ID], description="Metadata includes immutable bounds, deadline, and recorded invalidation. It contains no stored selectors and does not establish current usability."), "post":operation("Approve an immutable task grant", "TaskGrantView", source=True, mutation=True, body="TaskApprovalRequest", parameters=[ITEM_ID], description="Only a configured template id and version are accepted. Current holder, team, profile, source disclosure and proposal are rechecked. Reusing the same idempotency key returns the original grant without extending its deadline; changed bounds conflict.")},
+        "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke":{"post":operation("Revoke a task grant", "TaskGrantRevocation", source=True, parameters=[ITEM_ID,grant_id])},
+        "/v1/task-grants/{grant_id}/assertion":{"post":operation("Issue a short-lived task assertion", "TaskAssertionResponse", parameters=[grant_id], description="Requires a bootstrap agent token with casework:grants:assert, exact single Casework audience, and the registered agent principal/client. Profile headers and grant-bearing tokens are refused. Fresh eligibility and source checks precede issuance; assertion lifetime is at most 60 seconds and never exceeds the original grant deadline.")},
+        "/v1/task-grants/{grant_id}/status":{"get":operation("Check current resource-bound task authority", "TaskGrantStatus", parameters=[grant_id], description="Requires a service token with casework:grants:status and the registered client for the grant resource. Returns fresh status after Directory and source checks. Consumers must compare every bound and enforce expiresAt. An unavailable check grants no authority.")},
+    })
+    for path in ["/v1/task-grants/{grant_id}/assertion", "/v1/task-grants/{grant_id}/status"]:
+        for operation_value in paths[path].values():
+            operation_value["parameters"] = [p for p in operation_value["parameters"] if p.get("name") != "registry-casework-profile"]
     apply_operation_contract(paths, contract, catalog)
     apply_hosted_validation_headers(paths)
     result = {
@@ -1809,6 +1880,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "calendars",
         "clocks",
         "inbox",
+        "taskTemplates",
     }:
         raise ValueError("OpenAPI authored CaseworkProject shape drifted from Rust")
     if set(openapi_schemas["Description"]["properties"]) != {

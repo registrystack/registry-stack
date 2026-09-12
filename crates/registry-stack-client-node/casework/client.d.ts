@@ -21,6 +21,29 @@ export type PageStatus = 'complete' | 'budget_exhausted' | 'source_unavailable'
 export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'attempt_settled' | 'superseded' | 'completed'
 
 export interface IssuerPrincipal { issuer: string; subject: string }
+export type TaskGrantBounds = { type: 'evidence'; requirement: string } | { type: 'breg'; permissions: ReadonlyArray<TaskPermission> }
+export interface TaskPermission { collection: string; operations: ReadonlyArray<string> }
+export interface TaskApprovalRequest { templateId: string; templateVersion: string }
+export interface TaskTemplatePreview {
+  id: string; version: string; label: string; agent: IssuerPrincipal; client: string; resource: string; purpose: string
+  bounds: TaskGrantBounds; subjects: { readonly [key: string]: Exclude<JsonScalar, null> }; lifetimeSeconds: SafeInteger
+}
+export interface TaskTemplatePreviews { itemRevision: SafeInteger; templates: ReadonlyArray<TaskTemplatePreview> }
+/** Grant metadata deliberately excludes stored subject values. */
+export interface TaskGrantView {
+  id: string; templateId: string; templateVersion: string; agent: IssuerPrincipal; client: string; resource: string; purpose: string
+  bounds: TaskGrantBounds; expiresAt: SafeInteger; invalidated: boolean
+}
+export interface TaskGrantList { grants: ReadonlyArray<TaskGrantView> }
+export interface TaskGrantRevocation { id: string; invalidated: boolean }
+/** A short-lived credential. Do not persist or log the assertion. */
+export interface TaskAssertionResponse { assertion: string; expiresAt: SafeInteger; grantExpiresAt: SafeInteger }
+export interface TaskGrantStatusDetails {
+  grantId: string; authority: string; sourceIssuer: string; principal: string; client: string; resource: string; purpose: string
+  bounds: TaskGrantBounds; subjects: { readonly [key: string]: Exclude<JsonScalar, null> }; expiresAt: SafeInteger
+}
+export interface TaskGrantStatus { active: boolean; grant?: TaskGrantStatusDetails }
+
 export interface DirectoryMember { issuer: string; subject: string; displayName?: string | null }
 export interface SubjectRef { sourceId: string; kind: string; id: string }
 export interface SourceBinding {
@@ -411,6 +434,12 @@ export class CaseworkClient {
   listWorkItems(token: string, profile: string, sourceProfile: string, query: ListWorkItemsQuery): Promise<CaseworkOutcome<WorkItemPage>>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: NextWorkItemQuery | null): Promise<CaseworkOutcome<WorkItemPage>>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<WorkItem>>
+  previewTaskTemplates(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<TaskTemplatePreviews>>
+  listTaskGrants(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<TaskGrantList>>
+  approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest): Promise<CaseworkOutcome<TaskGrantView>>
+  revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
+  taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome<TaskAssertionResponse>>
+  taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome<TaskGrantStatus>>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   releaseWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   getDraft(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome<DraftResponse>>

@@ -7,12 +7,12 @@ use registry_casework::RuntimeConfig;
 
 fn session(project: &Path) -> State {
     State {
-        version: 1,
+        version: 2,
         project: project.to_path_buf(),
         owner: uuid::Uuid::new_v4().to_string(),
         status: Status::Stopped,
         casework_port: 8092,
-        mint_port: 8093,
+        issuer_port: 8093,
         database_port: 55433,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: String::new(),
@@ -199,7 +199,7 @@ fn clients_file_refuses_duplicate_and_non_rfc6749_scopes() {
 }
 
 #[test]
-fn clients_file_refuses_invalid_and_mint_reserved_claim_names() {
+fn clients_file_refuses_invalid_and_reserved_claim_names() {
     let invalid_name = STANDALONE_DEV_CLIENTS.replace(
         "registry_actor_kind: human",
         r"'registry\actor_kind': human",
@@ -504,7 +504,7 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
     assert!(matches!(
         config.authentication.oidc.jwks_source,
         registry_casework::OidcJwksSource::Static { ref document_ref }
-            if document_ref == "secret:file/mint-jwks"
+            if document_ref == "secret:file/issuer-jwks"
     ));
     assert_eq!(
         config.listener.tls_termination,
@@ -537,7 +537,7 @@ fn generated_operator_config_loads_through_the_runtime_contract() {
         Some("secret:file/database-root.pem")
     );
     assert!(config.sources.is_empty());
-    assert_eq!(config.authentication.oidc.issuer, state.mint_origin());
+    assert_eq!(config.authentication.oidc.issuer, state.issuer_origin());
     assert_eq!(config.authentication.oidc.audience, state.audience());
 }
 
@@ -1361,17 +1361,17 @@ fn ports_must_be_three_distinct_loopback_ports() {
 #[test]
 fn start_ports_fall_back_to_named_environment_variables() {
     let casework_var = "CASEWORKCTL_DEV_CASEWORK_PORT";
-    let mint_var = "CASEWORKCTL_DEV_MINT_PORT";
+    let issuer_var = "CASEWORKCTL_DEV_ISSUER_PORT";
     let database_var = "CASEWORKCTL_DEV_DATABASE_PORT";
     std::env::set_var(casework_var, "19092");
-    std::env::set_var(mint_var, "19093");
+    std::env::set_var(issuer_var, "19093");
     std::env::set_var(database_var, "19099");
 
     let parsed =
         crate::Cli::try_parse_from(["caseworkctl", "dev", "start", "/tmp/casework-project"])
             .unwrap();
     std::env::remove_var(casework_var);
-    std::env::remove_var(mint_var);
+    std::env::remove_var(issuer_var);
     std::env::remove_var(database_var);
 
     let crate::Command::Dev(dev_args) = parsed.command else {
@@ -1385,7 +1385,7 @@ fn start_ports_fall_back_to_named_environment_variables() {
         panic!("expected dev start");
     };
     assert_eq!(start.casework_port, Some(19092));
-    assert_eq!(start.mint_port, Some(19093));
+    assert_eq!(start.issuer_port, Some(19093));
     assert_eq!(start.database_port, Some(19099));
 }
 
@@ -1531,10 +1531,9 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
         project: project.clone(),
         clients_file: Some(replacement.clone()),
         casework_port: None,
-        mint_port: None,
+        issuer_port: None,
         database_port: None,
         casework_bin: Some(project.join("missing-casework")),
-        mint_bin: None,
         docker_bin: None,
         source_project: Vec::new(),
         bregctl_bin: None,
@@ -1593,10 +1592,9 @@ fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
             project: project.clone(),
             clients_file: Some(replacement),
             casework_port: None,
-            mint_port: None,
+            issuer_port: None,
             database_port: None,
             casework_bin: None,
-            mint_bin: None,
             docker_bin: None,
             source_project: Vec::new(),
             bregctl_bin: None,
@@ -1722,7 +1720,10 @@ fn the_report_names_every_local_credential_without_a_secret() {
     state.directory_teams = 1;
     let report = state.report();
     assert_eq!(report["caseworkUrl"], "http://127.0.0.1:8092");
-    assert_eq!(report["tokenEndpoint"], "http://127.0.0.1:8093/token");
+    assert_eq!(
+        report["tokenEndpoint"],
+        "http://127.0.0.1:8093/oauth2/token"
+    );
     assert_eq!(report["audience"], state.audience());
     assert_eq!(report["directory"]["teams"], 1);
     assert_eq!(report["directory"]["revision"], 1);
@@ -3396,7 +3397,6 @@ fn service_cleanup_joins_every_log_pump() {
     });
     let mut children = Children {
         casework: Some(Service::from_guard(child, vec![pump]).unwrap()),
-        mint: None,
     };
     let deadline = Instant::now() + Duration::from_secs(2);
     while !children.exited().unwrap() && Instant::now() < deadline {
@@ -3406,4 +3406,28 @@ fn service_cleanup_joins_every_log_pump() {
 
     children.stop().unwrap();
     assert!(joined.load(Ordering::Relaxed));
+}
+
+#[test]
+fn legacy_issuer_state_and_unsafe_token_clients_are_refused_without_effects() {
+    let root = tempfile::tempdir().unwrap();
+    let project = standalone(root.path());
+    let state = session(&project);
+    private::directory(&project.join(".casework")).unwrap();
+    private::directory(&state.root()).unwrap();
+    let mut legacy = serde_json::to_value(&state).unwrap();
+    legacy["version"] = json!(1);
+    let bytes = serde_json::to_vec(&legacy).unwrap();
+    private::create(&state.root().join("state.json"), &bytes).unwrap();
+    assert!(read_state(&state.root())
+        .unwrap_err()
+        .to_string()
+        .contains("uses Mint"));
+    assert_eq!(fs::read(state.root().join("state.json")).unwrap(), bytes);
+    for id in ["../staff", "/staff", "", "staff/header"] {
+        assert!(fresh_token(&project, id)
+            .unwrap_err()
+            .to_string()
+            .contains("bounded local client"));
+    }
 }

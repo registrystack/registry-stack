@@ -13,6 +13,7 @@ pub mod schema;
 mod service;
 mod source_retention;
 mod store;
+mod task_grants;
 
 pub(crate) use clocks::{reconcile_clock_observation, ResolvedClockPolicy};
 

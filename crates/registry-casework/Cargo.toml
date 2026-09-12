@@ -23,6 +23,8 @@ workspace = true
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+base64.workspace = true
+registry-platform-crypto.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 clap.workspace = true
 deadpool-postgres.workspace = true
@@ -56,6 +58,9 @@ uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
 
 [dev-dependencies]
+registry-breg = { workspace = true, features = ["postgres-test"] }
+registry-thunderid-tooling.workspace = true
+reqwest.workspace = true
 jsonschema.workspace = true
 registry-casework-client.workspace = true
 registry-platform-testing = { workspace = true, features = ["test-utils"] }
@@ -101,4 +106,9 @@ required-features = ["postgres-test"]
 [[test]]
 name = "inbox_ordering_postgres"
 path = "tests/inbox_ordering_postgres.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "task_grant_invalidation"
+path = "tests/task_grant_invalidation.rs"
 required-features = ["postgres-test"]
