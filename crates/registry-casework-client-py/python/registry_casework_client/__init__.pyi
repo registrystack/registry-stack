@@ -1,4 +1,4 @@
-from typing import Generic, Literal, TypeAlias, TypedDict, TypeVar
+from typing import Generic, Literal, NotRequired, TypeAlias, TypedDict, TypeVar
 
 JsonScalar: TypeAlias = str | int | float | bool | None
 JsonValue: TypeAlias = JsonScalar | list["JsonValue"] | dict[str, "JsonValue"]
@@ -32,6 +32,9 @@ class BregTaskBounds(TypedDict):
     type: Literal["breg"]
     permissions: list[TaskPermission]
 TaskGrantBounds: TypeAlias = EvidenceTaskBounds | BregTaskBounds
+class EvidenceRequesterContext(TypedDict):
+    requesterTags: list[str]
+    audience: str
 class TaskApprovalRequest(TypedDict):
     templateId: str
     templateVersion: str
@@ -43,6 +46,7 @@ class TaskTemplatePreview(TypedDict):
     client: str
     resource: str
     scopes: list[str]
+    evidenceContext: NotRequired[EvidenceRequesterContext]
     purpose: str
     bounds: TaskGrantBounds
     subjects: dict[str, str | int | bool]
@@ -58,6 +62,7 @@ class TaskGrantView(TypedDict):
     client: str
     resource: str
     scopes: list[str]
+    evidenceContext: NotRequired[EvidenceRequesterContext]
     purpose: str
     bounds: TaskGrantBounds
     expiresAt: int

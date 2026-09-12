@@ -5,8 +5,8 @@ const http=require('node:http');
 const {CaseworkClient}=require('../client');
 const item='00000000-0000-4000-8000-000000000001';
 const grant='00000000-0000-4000-8000-000000000002';
-const preview={id:'verify-status',version:'1',label:'Verify status',agent:{issuer:'https://issuer.example',subject:'agent-one'},client:'agent-client',resource:'urn:evidence',scopes:['evidence:invoke'],purpose:'verify-status',bounds:{type:'evidence',requirement:'status'},subjects:{person_reference:'synthetic-reference'},lifetimeSeconds:900};
-const view={id:grant,templateId:preview.id,templateVersion:preview.version,agent:preview.agent,client:preview.client,resource:preview.resource,scopes:preview.scopes,purpose:preview.purpose,bounds:preview.bounds,expiresAt:2000000900,invalidated:false};
+const preview={id:'verify-status',version:'1',label:'Verify status',agent:{issuer:'https://issuer.example',subject:'agent-one'},client:'agent-client',resource:'urn:evidence',scopes:['evidence:invoke'],evidenceContext:{requesterTags:['licensing-authority'],audience:'urn:licensing:review'},purpose:'verify-status',bounds:{type:'evidence',requirement:'status'},subjects:{person_reference:'synthetic-reference'},lifetimeSeconds:900};
+const view={id:grant,templateId:preview.id,templateVersion:preview.version,agent:preview.agent,client:preview.client,resource:preview.resource,scopes:preview.scopes,evidenceContext:preview.evidenceContext,purpose:preview.purpose,bounds:preview.bounds,expiresAt:2000000900,invalidated:false};
 test('task grants preserve preview, approval revision/key and token-only machine calls',async(t)=>{
  const requests=[];
  const server=http.createServer((req,res)=>{let body='';req.on('data',b=>body+=b);req.on('end',()=>{requests.push({path:req.url,method:req.method,headers:req.headers,body});let value;
