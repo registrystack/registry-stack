@@ -61,6 +61,12 @@
         "readerProfile": {
           "type": "string"
         },
+        "reconciliationIntervalMilliseconds": {
+          "default": 60000,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
         "requestTimeoutMilliseconds": {
           "default": 30000,
           "format": "uint64",

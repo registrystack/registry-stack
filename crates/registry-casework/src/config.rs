@@ -594,6 +594,7 @@ impl RuntimeConfig {
         if self.sources.keys().any(String::is_empty) || configured_sources != declared_sources {
             return Err(RuntimeConfigError::InvalidSourceBindings);
         }
+        self.validate_source_bindings()?;
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
             return Err(RuntimeConfigError::PlaintextDatabase);
@@ -655,6 +656,21 @@ impl RuntimeConfig {
             if !enabled {
                 return Err(RuntimeConfigError::SecretProviderRequired { path });
             }
+        }
+        Ok(())
+    }
+
+    /// Refuse a bound source whose timeouts or reconciliation interval fall
+    /// outside the adapter's accepted range. This runs at configuration load,
+    /// before secrets are resolved or any adapter is built, so an operator
+    /// sees the refusal without the runtime ever starting.
+    fn validate_source_bindings(&self) -> Result<(), RuntimeConfigError> {
+        for (source_id, binding) in &self.sources {
+            registry_casework_breg::validate_binding_input(binding).map_err(|_| {
+                RuntimeConfigError::InvalidSourceBinding {
+                    path: format!("sources.{source_id}"),
+                }
+            })?;
         }
         Ok(())
     }
@@ -1096,6 +1112,26 @@ sources:
     }
 
     #[test]
+    fn an_out_of_range_source_binding_interval_is_refused_at_load() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["sources"]["professional"]["reconciliationIntervalMilliseconds"] =
+            serde_json::json!(999);
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        assert!(matches!(
+            &error,
+            RuntimeConfigError::InvalidSourceBinding { path }
+                if path == "sources.professional"
+        ));
+        assert_eq!(error.path(), "sources.professional");
+    }
+
+    #[test]
     fn environment_secret_references_require_the_explicit_provider() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
@@ -1267,6 +1303,8 @@ pub enum RuntimeConfigError {
     InvalidAuditReference,
     #[error("sources must exactly match the source ids declared by package.root/casework.yaml")]
     InvalidSourceBindings,
+    #[error("{path} is not a valid Casework source binding")]
+    InvalidSourceBinding { path: String },
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
@@ -1285,7 +1323,9 @@ impl RuntimeConfigError {
             Self::RelativeRuntimePath | Self::Read(_) => "/",
             Self::Parse { path, .. } => path,
             Self::InvalidSecretProviders => "secretProviders",
-            Self::InvalidSecretReference { path } | Self::SecretProviderRequired { path } => path,
+            Self::InvalidSecretReference { path }
+            | Self::SecretProviderRequired { path }
+            | Self::InvalidSourceBinding { path } => path,
             Self::RemovedPrincipalClaim => "authentication.oidc.principalClaim",
             Self::InvalidOidc | Self::Oidc => "authentication.oidc",
             Self::OidcJwksSecret(_) => "authentication.oidc.jwksSource.documentRef",

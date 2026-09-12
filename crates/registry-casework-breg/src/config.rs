@@ -32,6 +32,9 @@ const DEFAULT_EVENT_TYPE: &str = "casework-lifecycle-v1";
 const DEFAULT_REQUEST_TIMEOUT_MILLISECONDS: u64 = 30_000;
 const DEFAULT_CONNECT_TIMEOUT_MILLISECONDS: u64 = 10_000;
 const MAXIMUM_TIMEOUT_MILLISECONDS: u64 = 300_000;
+const DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS: u64 = 60_000;
+const MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS: u64 = 1_000;
+const MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS: u64 = 3_600_000;
 const MAXIMUM_DESCRIPTION_BYTES: usize = 8 * 1024 * 1024;
 
 type ValidatedDescription = (
@@ -63,6 +66,8 @@ pub struct BregBinding {
     pub request_timeout_milliseconds: u64,
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout_milliseconds: u64,
+    #[serde(default = "default_reconciliation_interval")]
+    pub reconciliation_interval_milliseconds: u64,
 }
 
 impl fmt::Debug for BregBinding {
@@ -172,11 +177,23 @@ fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
         || binding.connect_timeout_milliseconds == 0
         || binding.request_timeout_milliseconds > MAXIMUM_TIMEOUT_MILLISECONDS
         || binding.connect_timeout_milliseconds > binding.request_timeout_milliseconds
+        || binding.reconciliation_interval_milliseconds
+            < MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
+        || binding.reconciliation_interval_milliseconds
+            > MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
         || !valid_event_source(&binding.event_source)
     {
         return Err(SourceAdapterError::Invalid);
     }
     Ok(())
+}
+
+/// Validate one authored binding's scalar and bound fields with the same
+/// rules `build_adapter` applies, without resolving secrets or connecting to
+/// BReg. A runtime loads its configuration long before it builds adapters, so
+/// an out-of-range binding is refused at load time through this entry point.
+pub fn validate_binding_input(binding: &BregBinding) -> Result<(), SourceAdapterError> {
+    validate_binding(binding)
 }
 
 fn valid_scalar(value: &str, maximum: usize) -> bool {
@@ -493,6 +510,9 @@ const fn default_request_timeout() -> u64 {
 const fn default_connect_timeout() -> u64 {
     DEFAULT_CONNECT_TIMEOUT_MILLISECONDS
 }
+const fn default_reconciliation_interval() -> u64 {
+    DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS
+}
 
 #[cfg(test)]
 mod tests {
@@ -536,7 +556,88 @@ mod tests {
             trusted_root_certificates_ref: None,
             request_timeout_milliseconds: 30_000,
             connect_timeout_milliseconds: 10_000,
+            reconciliation_interval_milliseconds: DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS,
         }
+    }
+
+    fn minimal_binding_json() -> Value {
+        json!({
+            "baseUrl": "https://registry.example",
+            "readerProfile": "casework-reader",
+            "tokenEndpoint": "https://issuer.example/token",
+            "clientIdRef": "secret:file/client-id",
+            "clientAssertionKeyRef": "secret:file/client-key.jwk",
+            "webhookSecretRef": "secret:file/webhook",
+            "eventSource": "urn:registrystack:registry:package:instance:pilot"
+        })
+    }
+
+    #[test]
+    fn reconciliation_interval_defaults_when_absent() {
+        let binding: BregBinding = serde_json::from_value(minimal_binding_json()).unwrap();
+        assert_eq!(
+            binding.reconciliation_interval_milliseconds,
+            DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS
+        );
+    }
+
+    #[test]
+    fn reconciliation_interval_parses_an_explicit_value() {
+        let mut value = minimal_binding_json();
+        value["reconciliationIntervalMilliseconds"] = json!(120_000);
+        let binding: BregBinding = serde_json::from_value(value).unwrap();
+        assert_eq!(binding.reconciliation_interval_milliseconds, 120_000);
+    }
+
+    #[test]
+    fn reconciliation_interval_bounds_are_enforced() {
+        for accepted in [
+            MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS,
+            DEFAULT_RECONCILIATION_INTERVAL_MILLISECONDS,
+            MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS,
+        ] {
+            let mut candidate = binding();
+            candidate.reconciliation_interval_milliseconds = accepted;
+            assert!(validate_binding(&candidate).is_ok());
+        }
+        for refused in [
+            0,
+            MINIMUM_RECONCILIATION_INTERVAL_MILLISECONDS - 1,
+            MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS + 1,
+        ] {
+            let mut candidate = binding();
+            candidate.reconciliation_interval_milliseconds = refused;
+            assert!(validate_binding(&candidate).is_err());
+        }
+    }
+
+    #[test]
+    fn validate_binding_input_agrees_with_validate_binding() {
+        let mut candidate = binding();
+        assert!(validate_binding_input(&candidate).is_ok());
+        candidate.reconciliation_interval_milliseconds = 0;
+        assert!(validate_binding_input(&candidate).is_err());
+    }
+
+    #[test]
+    fn debug_output_never_discloses_secret_bearing_fields() {
+        let binding = binding();
+        let rendered = format!("{binding:?}");
+        for secret in [
+            binding.base_url.as_str(),
+            binding.token_endpoint.as_str(),
+            binding.client_id_ref.as_str(),
+            binding.client_assertion_key_ref.as_str(),
+            binding.webhook_secret_ref.as_str(),
+        ] {
+            assert!(
+                !rendered.contains(secret),
+                "debug output leaked a secret-bearing field: {rendered}"
+            );
+        }
+        assert!(rendered.contains(&binding.reader_profile));
+        assert!(rendered.contains(&binding.event_source));
+        assert!(rendered.contains(&binding.event_type));
     }
 
     #[test]

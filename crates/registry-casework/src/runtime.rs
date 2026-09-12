@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use clap::{Arg, Command};
+use registry_casework_breg::BregBinding;
 use registry_casework_core::{CaseworkProject, SourceAdapter};
 use registry_platform_audit::{AuditEnvelope, AuditProfile, ChainState, JsonlFileSink};
 use registry_platform_config::{SecretProvider, SecretResolver};
@@ -173,14 +174,15 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             }
         }
     }));
-    let source_ids = config.sources.keys().cloned().collect::<Vec<_>>();
-    for source_id in source_ids {
+    for (source_id, binding) in &config.sources {
         let reconciliation = service.clone();
+        let source_id = source_id.clone();
+        let interval_duration = reconciliation_interval(binding);
         workers.push(supervise(
             "source reconciliation",
             worker_stopped.clone(),
             async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(60));
+                let mut interval = tokio::time::interval(interval_duration);
                 loop {
                     interval.tick().await;
                     if let Err(error) = reconciliation.reconcile_source(&source_id).await {
@@ -222,6 +224,12 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         worker.abort();
     }
     served
+}
+
+/// The interval between reconciliation passes for one bound source, taken
+/// directly from its operator-configured binding.
+fn reconciliation_interval(binding: &BregBinding) -> Duration {
+    Duration::from_millis(binding.reconciliation_interval_milliseconds)
 }
 
 /// Serve until a supervised background loop stops. The listener never stops on
@@ -814,6 +822,35 @@ mod tests {
         assert_eq!(
             AuditPublicationState::from_verified_tail(Some(&legacy_tail)).unconfirmed,
             None
+        );
+    }
+
+    fn breg_binding(reconciliation_interval_milliseconds: u64) -> BregBinding {
+        BregBinding {
+            base_url: "https://registry.example.test".into(),
+            reader_profile: "casework-reader".into(),
+            token_endpoint: "https://identity.example.test/token".into(),
+            client_id_ref: "secret:file/client-id".into(),
+            client_assertion_key_ref: "secret:file/client-key".into(),
+            webhook_secret_ref: "secret:file/webhook".into(),
+            event_source: "urn:registrystack:registry:professional:instance:pilot".into(),
+            event_type: "casework-lifecycle-v1".into(),
+            trusted_root_certificates_ref: None,
+            request_timeout_milliseconds: 30_000,
+            connect_timeout_milliseconds: 10_000,
+            reconciliation_interval_milliseconds,
+        }
+    }
+
+    #[test]
+    fn reconciliation_interval_uses_the_bindings_configured_milliseconds() {
+        assert_eq!(
+            reconciliation_interval(&breg_binding(60_000)),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            reconciliation_interval(&breg_binding(120_000)),
+            Duration::from_millis(120_000)
         );
     }
 }
