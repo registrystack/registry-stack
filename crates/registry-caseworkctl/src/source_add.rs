@@ -71,6 +71,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let binding_path = project
         .join("sources")
         .join(format!("{}.breg-runtime.yaml", args.source_id));
+    require_distinct_output_paths(&description_path, &binding_path)?;
     let binding = runtime_binding(&args.source_id);
     let mut breg_authoring_changes = changes.as_array().cloned().unwrap_or_default();
     if let Value::Array(dev_clients_changes) = &dev_clients_plan.changes {
@@ -122,6 +123,13 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let final_check = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check after apply", &final_check)?;
     Ok(report)
+}
+
+fn require_distinct_output_paths(description_path: &Path, binding_path: &Path) -> Result<()> {
+    if description_path == binding_path {
+        bail!("source description path must not be the BReg runtime binding path");
+    }
+    Ok(())
 }
 
 /// Prepare the fixed launcher-binding directory without following an authored
@@ -1278,6 +1286,24 @@ mod tests {
         let error = configured_source_description_path(&project, "professional-register")
             .expect_err("a source import cannot traverse a symlink");
         assert!(format!("{error:#}").contains("must not contain symlinks"));
+    }
+
+    #[test]
+    fn source_apply_refuses_description_and_binding_path_collision() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        set_source_description(&project, "sources/professional-register.breg-runtime.yaml");
+        let project = fs::canonicalize(project).unwrap();
+        let description =
+            configured_source_description_path(&project, "professional-register").unwrap();
+        let binding = project.join("sources/professional-register.breg-runtime.yaml");
+
+        let error = require_distinct_output_paths(&description, &binding)
+            .expect_err("source outputs must not alias each other");
+
+        assert!(format!("{error:#}").contains("must not be the BReg runtime binding path"));
+        assert!(!binding.exists());
     }
 
     #[test]

@@ -518,9 +518,16 @@ fn read_error(error: BaseRegistryClientError) -> SourceAdapterError {
     }
 }
 
-fn initial_refusal(status: u16, execution: PreparedExecution) -> Option<SourceAdapterError> {
+fn initial_refusal(
+    status: u16,
+    code: BRegProblemCode,
+    execution: PreparedExecution,
+) -> Option<SourceAdapterError> {
     if execution != PreparedExecution::Initial {
         return None;
+    }
+    if code == BRegProblemCode::IdempotencyConflict {
+        return Some(SourceAdapterError::RequestRejected);
     }
     Some(match status {
         400 | 422 => SourceAdapterError::RequestRejected,
@@ -976,8 +983,8 @@ impl SourceAdapter for BregAdapter {
                 // Only the maintained client's validated problem response from
                 // the actual POST proves a refusal. A protocol failure carrying
                 // a 4xx status is not equivalent evidence.
-                BaseRegistryClientError::Problem { status, .. } => {
-                    initial_refusal(status, input.execution)
+                BaseRegistryClientError::Problem { status, code, .. } => {
+                    initial_refusal(status, code, input.execution)
                         .unwrap_or(SourceAdapterError::Uncertain)
                 }
                 _ => SourceAdapterError::Uncertain,
@@ -1123,12 +1130,46 @@ mod tests {
         ] {
             for status in statuses {
                 assert_eq!(
-                    initial_refusal(*status, PreparedExecution::Initial),
+                    initial_refusal(
+                        *status,
+                        BRegProblemCode::MutationConflict,
+                        PreparedExecution::Initial,
+                    ),
                     Some(expected)
                 );
-                assert_eq!(initial_refusal(*status, PreparedExecution::Recovery), None);
+                assert_eq!(
+                    initial_refusal(
+                        *status,
+                        BRegProblemCode::MutationConflict,
+                        PreparedExecution::Recovery,
+                    ),
+                    None
+                );
             }
         }
-        assert_eq!(initial_refusal(500, PreparedExecution::Initial), None);
+        assert_eq!(
+            initial_refusal(
+                500,
+                BRegProblemCode::ServiceUnavailable,
+                PreparedExecution::Initial,
+            ),
+            None
+        );
+        assert_eq!(
+            initial_refusal(
+                409,
+                BRegProblemCode::IdempotencyConflict,
+                PreparedExecution::Initial,
+            ),
+            Some(SourceAdapterError::RequestRejected)
+        );
+        assert_eq!(
+            initial_refusal(
+                409,
+                BRegProblemCode::IdempotencyConflict,
+                PreparedExecution::Recovery,
+            ),
+            None
+        );
     }
 }
