@@ -140,3 +140,18 @@ void client.previewClockRecompute(token, 'administrator', { clockId: 'review-dea
 void client.applyClockRecompute(token, 'administrator', 'apply-preview', { previewId: item.itemId })
 
 void client.updateDirectoryTeam(token, 'administrator', 'review-team', 4, 'team-update', { staff: [namedOfficer], supervisors: [cover], servedQueues: ['review'] })
+
+void client.previewTaskTemplates(token, profile, sourceProfile, item.itemId).then(result => {
+  const revision: number = result.value.itemRevision
+  const lifetime: number | undefined = result.value.templates[0]?.lifetimeSeconds
+  void revision; void lifetime
+})
+void client.listTaskGrants(token, profile, sourceProfile, item.itemId)
+void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1' })
+void client.revokeTaskGrant(token, profile, sourceProfile, item.itemId, item.itemId)
+void client.taskAssertion(token, item.itemId)
+void client.taskGrantStatus(token, item.itemId)
+// @ts-expect-error Policy bounds must come from the governed template.
+void client.approveTaskGrant(token, profile, sourceProfile, item.itemId, 7, 'task-key', { templateId: 'verify-status', templateVersion: '1', resource: 'urn:forged' })
+// @ts-expect-error Agent assertion calls do not accept human profiles.
+void client.taskAssertion(token, profile, sourceProfile, item.itemId)

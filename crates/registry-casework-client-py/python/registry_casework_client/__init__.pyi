@@ -22,6 +22,69 @@ class IssuerPrincipal(TypedDict):
     issuer: str
     subject: str
 
+class TaskPermission(TypedDict):
+    collection: str
+    operations: list[str]
+class EvidenceTaskBounds(TypedDict):
+    type: Literal["evidence"]
+    requirement: str
+class BregTaskBounds(TypedDict):
+    type: Literal["breg"]
+    permissions: list[TaskPermission]
+TaskGrantBounds: TypeAlias = EvidenceTaskBounds | BregTaskBounds
+class TaskApprovalRequest(TypedDict):
+    templateId: str
+    templateVersion: str
+class TaskTemplatePreview(TypedDict):
+    id: str
+    version: str
+    label: str
+    agent: IssuerPrincipal
+    client: str
+    resource: str
+    purpose: str
+    bounds: TaskGrantBounds
+    subjects: dict[str, str | int | bool]
+    lifetimeSeconds: int
+class TaskTemplatePreviews(TypedDict):
+    itemRevision: int
+    templates: list[TaskTemplatePreview]
+class TaskGrantView(TypedDict):
+    id: str
+    templateId: str
+    templateVersion: str
+    agent: IssuerPrincipal
+    client: str
+    resource: str
+    purpose: str
+    bounds: TaskGrantBounds
+    expiresAt: int
+    invalidated: bool
+class TaskGrantList(TypedDict):
+    grants: list[TaskGrantView]
+class TaskGrantRevocation(TypedDict):
+    id: str
+    invalidated: bool
+class TaskAssertionResponse(TypedDict):
+    assertion: str
+    expiresAt: int
+    grantExpiresAt: int
+class TaskGrantStatusDetails(TypedDict):
+    grantId: str
+    authority: str
+    sourceIssuer: str
+    principal: str
+    client: str
+    resource: str
+    purpose: str
+    bounds: TaskGrantBounds
+    subjects: dict[str, str | int | bool]
+    expiresAt: int
+class _TaskGrantStatusOptional(TypedDict, total=False):
+    grant: TaskGrantStatusDetails
+class TaskGrantStatus(_TaskGrantStatusOptional):
+    active: bool
+
 class _DirectoryMemberOptional(TypedDict, total=False):
     displayName: str | None
 
@@ -734,6 +797,12 @@ class CaseworkClient:
     def list_work_items(self, token: str, profile: str, source_profile: str, query: ListWorkItemsQuery) -> Complete[WorkItemPage]: ...
     def next_work_item(self, token: str, profile: str, source_profile: str, query: NextWorkItemQuery | None = None) -> Complete[WorkItemPage]: ...
     def get_work_item(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[WorkItem]: ...
+    def preview_task_templates(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[TaskTemplatePreviews]: ...
+    def list_task_grants(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[TaskGrantList]: ...
+    def approve_task_grant(self, token: str, profile: str, source_profile: str, item_id: str, expected_revision: int, idempotency_key: str, approval: TaskApprovalRequest) -> Complete[TaskGrantView]: ...
+    def revoke_task_grant(self, token: str, profile: str, source_profile: str, item_id: str, grant_id: str) -> Complete[TaskGrantRevocation]: ...
+    def task_assertion(self, token: str, grant_id: str) -> Complete[TaskAssertionResponse]: ...
+    def task_grant_status(self, token: str, grant_id: str) -> Complete[TaskGrantStatus]: ...
     def claim_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def release_work_item(self, token: str, profile: str, source_profile: str, action: CaseworkAction, idempotency_key: str) -> Complete[MutationResponse]: ...
     def get_draft(self, token: str, profile: str, source_profile: str, item_id: str) -> Complete[DraftResponse]: ...

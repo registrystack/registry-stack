@@ -73,7 +73,9 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     require_absent_or_exact_json(&description_path, &description)?;
     require_absent_or_exact(&binding_path, binding.as_bytes())?;
     if fs::read(&registry_yaml).context("re-reading BReg registry.yaml before apply")? != bytes {
-        bail!("BReg registry.yaml changed after preview; no files were written, retry source add against its current revision");
+        bail!(
+            "BReg registry.yaml changed after preview; no files were written, retry source add against its current revision"
+        );
     }
     fs::create_dir_all(description_path.parent().expect("source file has parent"))
         .context("creating Casework source directory")?;
@@ -348,7 +350,7 @@ fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value)
         json!({
             "id":"casework-reader", "default":false, "principalClaim":"registry_principal",
             "requiredScopes":["casework:source-reader"], "requiredPurposes":["casework-sync"],
-            "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
+            "permissions":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
         }),
     )
 }
@@ -434,9 +436,22 @@ fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
         end
     };
     let block = if events.is_some() {
-        format!("{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!(
+            "{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n",
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2)
+        )
     } else {
-        format!("{}events:\n{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!(
+            "{}events:\n{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n",
+            " ".repeat(field_indent),
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2),
+            " ".repeat(field_indent + 2)
+        )
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
@@ -455,7 +470,9 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
                 && !lines[*index].trim_start().starts_with('#')
         })
         .unwrap_or(lines.len());
-    let block = format!("  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let block = format!(
+        "  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n"
+    );
     Ok(insert_at_line(&lines, end, &block))
 }
 
@@ -489,7 +506,9 @@ fn source_description(
 }
 
 fn runtime_binding(source_id: &str) -> String {
-    format!("# Candidate BReg operator binding. Review and merge into the launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8100\n    path: /events/sources/{source_id}\n    networkProfile: loopbackDevelopmentHttp\n    dnsFamily: ipv4Only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\n")
+    format!(
+        "# Candidate BReg operator binding. Review and merge into the launcher-owned runtime config.\neventDestinations:\n  casework:\n    origin: http://localhost:8100\n    path: /events/sources/{source_id}\n    networkProfile: loopbackDevelopmentHttp\n    dnsFamily: ipv4Only\n    allowedPrivateCidrs: []\n    hmacSha256KeyRef: secret:file/breg-casework-webhook\n    classificationCeiling: restricted\n    deliveryCeilings:\n      attemptTimeoutMilliseconds: 5000\n      maximumAttempts: 5\n"
+    )
 }
 
 fn verify_candidate(binary: &Path, registry: &Path, proposed: &str) -> Result<Value> {
@@ -624,11 +643,11 @@ mod tests {
             "request_lifecycle"
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["operations"],
+            root["accessProfiles"][0]["permissions"][0]["operations"],
             json!(["get", "list"])
         );
         assert_eq!(
-            root["accessProfiles"][0]["grants"][0]["readableRequestFields"],
+            root["accessProfiles"][0]["permissions"][0]["readableRequestFields"],
             json!(["review_state"])
         );
         apply_breg_candidate(&mut root, "request", &[]).unwrap();
@@ -666,7 +685,7 @@ mod tests {
         .unwrap();
         assert!(rendered.contains("# keep authored context"));
         assert_eq!(
-            expected["accessProfiles"][0]["grants"][0]["readableFields"],
+            expected["accessProfiles"][0]["permissions"][0]["readableFields"],
             json!(["record", "region"])
         );
         assert_eq!(
@@ -682,7 +701,7 @@ mod tests {
 
     #[test]
     fn candidate_refuses_conflicting_existing_grant() {
-        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","grants":[]}]});
+        let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[{"id":"casework-reader","permissions":[]}]});
         assert!(apply_breg_candidate(&mut root, "request", &[]).is_err());
     }
 

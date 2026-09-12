@@ -799,6 +799,65 @@ impl SourceAdapter for BregAdapter {
         })
     }
 
+    async fn read_task_context(
+        &self,
+        subject: &SubjectRef,
+        fields: &[String],
+        caller: Option<(&str, EphemeralCredential<'_>)>,
+    ) -> Result<TaskSubjectContext, SourceAdapterError> {
+        if fields.is_empty()
+            || fields.len() > 32
+            || fields.iter().any(|field| {
+                !self
+                    .config
+                    .routing_metadata
+                    .fields
+                    .iter()
+                    .any(|descriptor| descriptor.field == *field)
+            })
+        {
+            return Err(SourceAdapterError::Denied);
+        }
+        let record = if let Some((profile, credential)) = caller {
+            let client = self.caller(credential)?;
+            self.read(&client, subject, profile).await?.0
+        } else {
+            self.read(&self.reader, subject, &self.config.reader_profile)
+                .await?
+                .0
+        };
+        let request = Self::request(&record)?;
+        if matches!(
+            request.breg_state(),
+            BRegRequestState::Draft
+                | BRegRequestState::Rejected
+                | BRegRequestState::Applied
+                | BRegRequestState::Canceled
+        ) {
+            return Err(SourceAdapterError::Denied);
+        }
+        let mut values = BTreeMap::new();
+        for field in fields {
+            let descriptor = self
+                .config
+                .routing_metadata
+                .fields
+                .iter()
+                .find(|descriptor| descriptor.field == *field)
+                .ok_or(SourceAdapterError::Denied)?;
+            let value = record
+                .data
+                .domain_data
+                .get(&descriptor.api_name)
+                .ok_or(SourceAdapterError::Denied)?;
+            values.insert(field.clone(), value.clone());
+        }
+        Ok(TaskSubjectContext {
+            binding: self.binding(&record, &request)?,
+            values,
+        })
+    }
+
     async fn read_for_caller(
         &self,
         subject: &SubjectRef,

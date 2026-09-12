@@ -584,6 +584,11 @@ fn semantic_diagnostic_location(error: &ConfigError) -> (&'static str, String, &
         );
     }
     let (artifact, path, action) = match error {
+        ConfigError::TaskTemplate => (
+            "casework_project",
+            "casework.yaml:/taskTemplates",
+            "Use unique task templates with eligible teams and human profiles, valid source fields, exact bounds, and a lifetime of at most 900 seconds.",
+        ),
         ConfigError::Envelope => (
             "casework_project",
             "casework.yaml:/apiVersion",

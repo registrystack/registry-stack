@@ -18,8 +18,8 @@ use std::{
 use zeroize::Zeroizing;
 
 /// The identity claim a Casework human profile must carry, and the value the
-/// generated operator configuration requires. Mint copies these verbatim from
-/// the clients file into every token it issues for that client.
+/// generated operator configuration requires. Only explicitly declared local
+/// teaching fixtures may carry a human marker on a machine-issued token.
 pub(super) const HUMAN_CLAIM: &str = "registry_actor_kind";
 pub(super) const HUMAN_VALUE: &str = "human";
 const RESERVED_ACCESS_TOKEN_CLAIMS: [&str; 9] = [
@@ -71,8 +71,7 @@ pub(super) fn identifier(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
-// Keep these predicates aligned with registry-mint's client authorization contract:
-// `dev` writes these scopes and claims into Mint registrations before requesting tokens.
+// Apply OAuth scope-token syntax before rendering exact issuer permissions.
 fn valid_scope_token(value: &str) -> bool {
     !value.is_empty()
         && value.bytes().all(|byte| {
@@ -320,10 +319,10 @@ pub(super) fn bind<'a>(clients: &'a Clients, project: &CaseworkProject) -> Resul
     Ok(bound)
 }
 
-/// The Mint principal a local client speaks as. It is a local teaching
+/// The native issuer principal a local client speaks as. It is a local teaching
 /// identity, never a deployment identity.
 pub(super) fn principal(client_id: &str) -> String {
-    format!("urn:casework:dev:{client_id}")
+    registry_thunderid_tooling::local::agent_id("casework-local", client_id)
 }
 
 pub(super) fn hex_lower(bytes: &[u8]) -> String {
@@ -367,49 +366,42 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         "credentials",
         "secrets",
         "tls",
-        "mint",
+        "issuer",
         "logs",
         "audit",
         "database",
     ] {
         private::directory(&root.join(directory))?;
     }
-    private::directory(&root.join("mint/clients"))?;
-    private::directory(&root.join("mint/audit"))?;
-    let mint_public = keypair(&root.join("credentials/issuer"))?;
-    let mint_public_filename = format!(
-        "{}.jwk.json",
-        mint_public["kid"]
-            .as_str()
-            .context("generated issuer key ID missing")?
-    );
-    private::create(
-        &root.join("credentials/issuer").join(&mint_public_filename),
-        &serde_json::to_vec(&mint_public)?,
-    )?;
+    let mut local_clients = Vec::new();
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
         let public = keypair(&directory)?;
         private::create(&directory.join("client-id"), client.id.as_bytes())?;
-        write_yaml(
-            &root
-                .join("mint/clients")
-                .join(format!("{}.yaml", client.id)),
-            &json!({
-                "clientId":client.id,"principal":principal(&client.id),
-                "authorization":{"scopes":client.scopes,"claims":client.claims},"keys":[public]
-            }),
-        )?;
+        local_clients.push(registry_thunderid_tooling::local::LocalClient {
+            client_id: client.id.clone(),
+            public_jwks: serde_json::to_string(&json!({"keys":[public]}))?,
+            claims: client.claims.clone(),
+            scopes: client.scopes.clone(),
+            allow_human_fixture: true,
+        });
     }
-    for filename in ["casework-audit-key", "mint-audit-key"] {
-        private::create(
-            &root.join("secrets").join(filename),
-            hex_secret()?.as_bytes(),
-        )?;
-    }
+    // Stable teaching subjects are qualified by the exact local issuer URL.
+    // The container label separately binds the randomly owned dev session.
+    let description = registry_thunderid_tooling::local::local_description(
+        registry_thunderid_tooling::description::SessionIdentity {
+            label: format!("casework-dev-{}", state.owner),
+            id: "casework-local".into(),
+        },
+        state.issuer_port,
+        root.join("issuer"),
+        state.audience(),
+        local_clients,
+    )?;
+    registry_thunderid_tooling::render::render(&description)?;
     private::create(
-        &root.join("secrets/mint-jwks"),
-        &serde_json::to_vec(&json!({"keys":[mint_public]}))?,
+        &root.join("secrets/casework-audit-key"),
+        hex_secret()?.as_bytes(),
     )?;
     let password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
     private::create(
@@ -471,27 +463,6 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    let final_root = state.root();
-    let mint_origin = state.mint_origin();
-    write_yaml(
-        &root.join("mint/mint.yaml"),
-        &json!({
-            "version":1,"validationMode":"supervised-local-development","issuer":mint_origin,
-            "listener":{"address":"127.0.0.1","port":state.mint_port},
-            "signing":{"algorithm":"ES256","activePublicJwkFile":final_root.join("credentials/issuer").join(mint_public_filename),"publishedPublicJwkFiles":[],"revokedKeyIds":[]},
-            "signer":{"kind":"local-jwk","privateKeyRef":"secret:file/assertion-key.jwk"},
-            "secretProviders":{"file":{"root":final_root.join("credentials/issuer")}},
-            "audit":{"path":"audit/mint.jsonl","maximumFileBytes":10485760,"hashKeyRef":"secret:file/mint-audit-key","hashKeyVersion":1},
-            "accessTokens":{"audiences":[state.audience()],"lifetimeSeconds":300},
-            "clientAssertion":{"audience":format!("{mint_origin}/token"),"maximumLifetimeSeconds":120,"algorithms":["ES256"]},
-            "clients":{"directory":"clients"}
-        }),
-    )?;
-    // One secret root serves Mint signing and audit; no cross-directory secret references.
-    private::create(
-        &root.join("credentials/issuer/mint-audit-key"),
-        &private::read(&root.join("secrets/mint-audit-key"), 128)?,
-    )?;
     write_yaml(&root.join("operator.yaml"), &operator(state))?;
     Ok(())
 }
@@ -519,13 +490,13 @@ pub(super) fn operator(state: &State) -> Value {
             "trustedRootCertificateRef": "secret:file/database-root.pem"
         },
         "authentication": {"oidc": {
-            "issuer": state.mint_origin(),
+            "issuer": state.issuer_origin(),
             "audience": state.audience(),
-            // Mint emits one space-delimited `scope` claim.
+            // The local issuer emits one space-delimited scope claim.
             "scopeClaim": "scope",
             // The local issuer's keys are generated beside this file, so the
             // runtime reads them directly instead of racing discovery.
-            "jwksSource": {"kind": "static", "documentRef": "secret:file/mint-jwks"},
+            "jwksSource": {"kind": "static", "documentRef": "secret:file/issuer-jwks"},
             "humanIdentity": {"claim": HUMAN_CLAIM, "value": HUMAN_VALUE}
         }},
         "audit": {

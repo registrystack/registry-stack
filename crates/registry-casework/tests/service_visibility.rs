@@ -693,6 +693,7 @@ async fn fixture_with_source(source: MockSource, inbox: InboxPolicy) -> Fixture 
 
 fn project(inbox: InboxPolicy) -> CaseworkProject {
     CaseworkProject {
+        task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.into(),
         kind: CASEWORK_KIND.into(),
         casework: CaseworkIdentity {

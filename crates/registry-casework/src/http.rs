@@ -57,6 +57,21 @@ pub fn router(state: HttpState) -> Router {
             .route("/health", get(health))
             .route("/ready", get(ready))
             .route("/v1/casework", get(description))
+            .route("/.well-known/jwks.json", get(task_jwks))
+            .route(
+                "/v1/work-items/{item_id}/task-templates",
+                get(preview_task_templates),
+            )
+            .route(
+                "/v1/work-items/{item_id}/task-grants",
+                get(list_task_grants).post(approve_task_grant),
+            )
+            .route(
+                "/v1/work-items/{item_id}/task-grants/{grant_id}/revoke",
+                post(revoke_task_grant),
+            )
+            .route("/v1/task-grants/{grant_id}/assertion", post(task_assertion))
+            .route("/v1/task-grants/{grant_id}/status", get(task_status))
             .route("/v1/hosted-items", post(create_hosted_item))
             .route("/v1/hosted-items/terminal", get(hosted_terminal_items))
             .route("/v1/hosted-items/{item_id}", get(get_hosted_item))
@@ -1116,6 +1131,128 @@ async fn source_event(
         .await
         .map_err(HttpError::from_source_event)?;
     Ok(StatusCode::ACCEPTED)
+}
+
+async fn task_jwks(State(state): State<HttpState>) -> Result<Json<serde_json::Value>, HttpError> {
+    Ok(Json(state.service.task_jwks()?))
+}
+async fn preview_task_templates(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item): Path<Uuid>,
+) -> Result<Json<registry_casework_core::TaskTemplatePreviews>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .preview_tasks(&actor, item, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+async fn approve_task_grant(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item): Path<Uuid>,
+    Json(request): Json<registry_casework_core::TaskApprovalRequest>,
+) -> Result<Json<registry_casework_core::TaskGrantView>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .approve_task(
+                &actor,
+                item,
+                if_match(&headers)?,
+                source_profile(&headers)?,
+                idempotency_key(&headers)?,
+                token,
+                request,
+            )
+            .await?,
+    ))
+}
+async fn list_task_grants(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(item): Path<Uuid>,
+) -> Result<Json<registry_casework_core::TaskGrantList>, HttpError> {
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .list_tasks(&actor, item, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+async fn revoke_task_grant(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path((item, grant)): Path<(Uuid, Uuid)>,
+    body: Bytes,
+) -> Result<Json<registry_casework_core::TaskGrantRevocation>, HttpError> {
+    if !body.is_empty() {
+        return Err(HttpError::Invalid);
+    }
+    let (actor, token) = authenticate(&state, &headers).await?;
+    Ok(Json(
+        state
+            .service
+            .revoke_task(&actor, item, grant, source_profile(&headers)?, token)
+            .await?,
+    ))
+}
+async fn task_client(
+    state: &HttpState,
+    headers: &HeaderMap,
+    scope: &str,
+    kind: registry_platform_oidc::ActorKind,
+) -> Result<registry_platform_oidc::VerifiedToken, HttpError> {
+    if headers.contains_key(CASEWORK_PROFILE_HEADER) || headers.contains_key(SOURCE_PROFILE_HEADER)
+    {
+        return Err(HttpError::AuthenticationRefused);
+    }
+    let raw = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .ok_or(HttpError::AuthenticationRefused)?;
+    let token = parse_bearer_token(raw).map_err(|_| HttpError::AuthenticationRefused)?;
+    state
+        .authenticator
+        .authenticate_task_client(token, scope, kind)
+        .await
+        .map_err(|_| HttpError::AuthenticationRefused)
+}
+async fn task_assertion(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(grant): Path<Uuid>,
+    body: Bytes,
+) -> Result<Json<registry_casework_core::TaskAssertionResponse>, HttpError> {
+    if !body.is_empty() {
+        return Err(HttpError::Invalid);
+    }
+    let client = task_client(
+        &state,
+        &headers,
+        "casework:grants:assert",
+        registry_platform_oidc::ActorKind::Agent,
+    )
+    .await?;
+    Ok(Json(state.service.task_assertion(grant, &client).await?))
+}
+async fn task_status(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Path(grant): Path<Uuid>,
+) -> Result<Json<registry_casework_core::TaskGrantStatus>, HttpError> {
+    let client = task_client(
+        &state,
+        &headers,
+        "casework:grants:status",
+        registry_platform_oidc::ActorKind::Service,
+    )
+    .await?;
+    Ok(Json(state.service.task_status(grant, &client).await?))
 }
 
 async fn authenticate<'a>(

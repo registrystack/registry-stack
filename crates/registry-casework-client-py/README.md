@@ -31,3 +31,11 @@ details, and original attempt identifiers. Callers can therefore handle cursor
 or idempotency expiry explicitly; the binding does not retry or replace a key.
 
 This crate is private and does not publish a standalone Python distribution.
+
+Task delegation uses the current human profile for template previews, grant
+approval, listing, and revocation. Approval accepts only the template ID and
+version, with the item revision and a caller-owned idempotency key. The preview
+contains the exact destination, purpose, authority bounds, derived subjects,
+and lifetime; the grant list omits stored subjects. Agent assertion and grant
+status calls take only a bearer token and grant ID, without human or source
+profile headers. Neither binding retains credentials or retries a mutation.

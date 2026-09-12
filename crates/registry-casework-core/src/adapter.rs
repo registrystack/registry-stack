@@ -230,6 +230,18 @@ pub trait SourceAdapter: Send + Sync {
         credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError>;
 
+    /// Read only governed task fields from one exact source subject. `None`
+    /// selects the adapter's service reader for later grant validity checks.
+    /// A caller read always uses that caller's ephemeral source credential.
+    async fn read_task_context(
+        &self,
+        _subject: &SubjectRef,
+        _fields: &[String],
+        _caller: Option<(&str, EphemeralCredential<'_>)>,
+    ) -> Result<crate::TaskSubjectContext, SourceAdapterError> {
+        Err(SourceAdapterError::Denied)
+    }
+
     /// Freshly read, compare the displayed binding, promote the native action,
     /// and return an inert exact-attempt capsule. This performs no source write.
     async fn prepare_action(

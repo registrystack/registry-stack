@@ -39,6 +39,42 @@ impl CaseworkAuthenticator {
         }
     }
 
+    pub(crate) async fn authenticate_task_client(
+        &self,
+        token: &str,
+        scope: &str,
+        kind: registry_platform_oidc::ActorKind,
+    ) -> Result<registry_platform_oidc::VerifiedToken, AuthenticationError> {
+        validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
+        let verified = self
+            .verifier
+            .verify(token)
+            .await
+            .map_err(|_| AuthenticationError::Refused)?;
+        if !matches!(
+            verified.claims.aud.as_ref(),
+            Some(registry_platform_oidc::Audience::One(_))
+        ) && !matches!(verified.claims.aud.as_ref(), Some(registry_platform_oidc::Audience::Many(values)) if values.len() == 1)
+            || verified.claims.extra.contains_key("act")
+            || !verified.scopes.iter().any(|value| value == scope)
+            || verified.matched_client_id().ok().flatten().is_none()
+            || registry_platform_oidc::actor_kind(
+                &verified.claims,
+                &registry_platform_oidc::ClaimNames::default(),
+            )
+            .ok()
+                != Some(kind)
+            || verified
+                .claims
+                .extra
+                .keys()
+                .any(|key| key.starts_with("registry_grant_"))
+        {
+            return Err(AuthenticationError::Refused);
+        }
+        Ok(verified)
+    }
+
     pub async fn authenticate(
         &self,
         token: &str,

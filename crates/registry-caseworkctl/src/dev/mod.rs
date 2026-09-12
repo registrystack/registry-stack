@@ -98,7 +98,7 @@ enum DevAction {
     /// Start or reuse the project's retained local database and services.
     ///
     /// A resident supervisor owns this project's PostgreSQL container plus its
-    /// local Registry Mint and Casework children. The database runs the pinned
+    /// local pinned issuer container and Casework child. The database runs the pinned
     /// image
     /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
     /// which the supervisor pulls on the first start. Each supervised
@@ -111,6 +111,16 @@ enum DevAction {
     Stop(StopArgs),
     /// Print the bounded retained runtime journal.
     Events(EventsArgs),
+    /// Write a fresh bearer header for a registered local teaching client.
+    Token(TokenArgs),
+}
+
+#[derive(Debug, Args)]
+struct TokenArgs {
+    #[arg(value_name = "CLIENT")]
+    client: String,
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -125,16 +135,14 @@ struct StartArgs {
     /// Casework loopback port on first start (default 8092; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_CASEWORK_PORT")]
     casework_port: Option<u16>,
-    /// Local Mint loopback port on first start (default 8093; retained for restarts).
-    #[arg(long, env = "CASEWORKCTL_DEV_MINT_PORT")]
-    mint_port: Option<u16>,
+    /// Local issuer loopback port on first start (default 8093; retained for restarts).
+    #[arg(long, env = "CASEWORKCTL_DEV_ISSUER_PORT")]
+    issuer_port: Option<u16>,
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
     #[arg(long, hide = true, env = "CASEWORK_BIN")]
     casework_bin: Option<PathBuf>,
-    #[arg(long, hide = true)]
-    mint_bin: Option<PathBuf>,
     #[arg(long, hide = true)]
     docker_bin: Option<PathBuf>,
 }
@@ -165,8 +173,6 @@ pub struct SupervisorArgs {
     #[arg(long)]
     casework_bin: PathBuf,
     #[arg(long)]
-    mint_bin: PathBuf,
-    #[arg(long)]
     docker_bin: PathBuf,
 }
 
@@ -187,7 +193,7 @@ struct State {
     owner: String,
     status: Status,
     casework_port: u16,
-    mint_port: u16,
+    issuer_port: u16,
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
@@ -268,8 +274,8 @@ impl State {
     fn casework_origin(&self) -> String {
         format!("http://127.0.0.1:{}", self.casework_port)
     }
-    fn mint_origin(&self) -> String {
-        format!("http://127.0.0.1:{}", self.mint_port)
+    fn issuer_origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.issuer_port)
     }
     fn audience(&self) -> String {
         format!("urn:casework:dev:{}", self.owner)
@@ -290,7 +296,8 @@ impl State {
         let root = self.root();
         json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":root.join("state.json"),"operatorConfig":root.join("operator.yaml"),
-            "caseworkUrl":self.casework_origin(),"tokenEndpoint":format!("{}/token",self.mint_origin()),
+            "caseworkUrl":self.casework_origin(),"tokenEndpoint":format!("{}/oauth2/token",self.issuer_origin()),
+            "issuer":self.issuer_origin(),"clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "audience":self.audience(),"journal":root.join("logs/casework.log"),
             "clients":self.clients.iter().map(|client|json!({"id":client.id,"profile":client.profile,"role":client.role,
                 "clientIdFile":root.join("credentials").join(&client.id).join("client-id"),
@@ -303,9 +310,36 @@ pub(crate) fn run(args: DevArgs) -> Result<Value> {
     match args.action {
         Some(DevAction::Stop(args)) => stop(&args.project, args.remove, args.docker_bin.as_deref()),
         Some(DevAction::Events(args)) => events(&args.project),
+        Some(DevAction::Token(args)) => fresh_token(&args.project, &args.client),
         Some(DevAction::Start(args)) => start(args),
         None => start(args.start),
     }
+}
+
+fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
+    if !config::identifier(client) {
+        bail!("a registered bounded local client ID is required");
+    }
+    let project = project(project_path)?;
+    private::check(&project.join(".casework"), true)?;
+    let root = project.join(".casework/dev");
+    let state = read_state(&root)?;
+    if !matches!(state.status, Status::Ready)
+        || !control(&root, "status").is_ok_and(|status| status == "ready")
+    {
+        bail!("the local development session must be ready before requesting a token");
+    }
+    token(&state, client, &AtomicBool::new(false))?;
+    let credential = Zeroizing::new(private::read(
+        &root.join("secrets").join(format!("{client}-token")),
+        65536,
+    )?);
+    let mut header = Zeroizing::new(b"Authorization: Bearer ".to_vec());
+    header.extend_from_slice(&credential);
+    header.push(b'\n');
+    let output = root.join("secrets").join(format!("{client}.header"));
+    private::replace(&output, &header)?;
+    Ok(json!({"ok":true,"command":"dev token","headerFile":output}))
 }
 
 fn project(path: &Path) -> Result<PathBuf> {
@@ -351,11 +385,16 @@ fn clients_file(
 
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let state: State = serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)
-        .map_err(|_| {
-            anyhow::anyhow!("retained dev state is invalid; preserve it for inspection")
-        })?;
-    if state.version != 1
+    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
+    let shape: Value = serde_json::from_slice(&bytes)
+        .context("retained dev state is invalid; preserve it for inspection")?;
+    if shape["version"] == 1 || shape.get("mint_port").is_some() || shape.get("mintPort").is_some()
+    {
+        bail!("this retained session uses Mint; stop it with the matching older CLI and keep its state, then create a separate project directory for the current issuer");
+    }
+    let state: State = serde_json::from_value(shape)
+        .context("retained dev state is invalid; preserve it for inspection")?;
+    if state.version != 2
         || state.root() != root
         || uuid::Uuid::parse_str(&state.owner).is_err()
         || state.directory_revision < 0
@@ -366,15 +405,15 @@ fn read_state(root: &Path) -> Result<State> {
     {
         bail!("retained dev state ownership is invalid; no resources were changed");
     }
-    ports(state.casework_port, state.mint_port, state.database_port)?;
+    ports(state.casework_port, state.issuer_port, state.database_port)?;
     Ok(state)
 }
 
-fn ports(casework: u16, mint: u16, database: u16) -> Result<()> {
+fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
     if casework == 0
-        || mint == 0
+        || issuer == 0
         || database == 0
-        || BTreeSet::from([casework, mint, database]).len() != 3
+        || BTreeSet::from([casework, issuer, database]).len() != 3
     {
         bail!("three distinct nonzero loopback ports are required");
     }
@@ -495,7 +534,7 @@ fn start(args: StartArgs) -> Result<Value> {
         Some(state)
             if digest != state.source_digest
                 || args.casework_port.is_some_and(|p| p != state.casework_port)
-                || args.mint_port.is_some_and(|p| p != state.mint_port)
+                || args.issuer_port.is_some_and(|p| p != state.issuer_port)
                 || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
             let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
@@ -526,7 +565,7 @@ fn start(args: StartArgs) -> Result<Value> {
     } else {
         let previous = previous.as_ref();
         let state = State {
-            version: 1,
+            version: 2,
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -534,9 +573,9 @@ fn start(args: StartArgs) -> Result<Value> {
                 .casework_port
                 .or(previous.map(|s| s.casework_port))
                 .unwrap_or(8092),
-            mint_port: args
-                .mint_port
-                .or(previous.map(|s| s.mint_port))
+            issuer_port: args
+                .issuer_port
+                .or(previous.map(|s| s.issuer_port))
                 .unwrap_or(8093),
             database_port: args
                 .database_port
@@ -555,26 +594,24 @@ fn start(args: StartArgs) -> Result<Value> {
             binaries: BTreeMap::new(),
             failure: None,
         };
-        ports(state.casework_port, state.mint_port, state.database_port)?;
-        for port in [state.casework_port, state.mint_port, state.database_port] {
+        ports(state.casework_port, state.issuer_port, state.database_port)?;
+        for port in [state.casework_port, state.issuer_port, state.database_port] {
             probe(port)?;
         }
         initialize(&root, &state, &clients)?;
         read_state(&root)?
     };
     let casework = executable("casework", args.casework_bin.as_deref())?;
-    let mint = executable("mint", args.mint_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
-    // launches the supervisor: a casework or mint from another release has to
+    // launches the supervisor: a casework from another release has to
     // be named here, while the terminal that asked for the start is reading.
     state.binaries = BTreeMap::from([
         ("casework".into(), binary(&root, &casework)?),
-        ("mint".into(), binary(&root, &mint)?),
         ("docker".into(), binary(&root, &docker)?),
     ]);
     matching_versions(&state.binaries)?;
-    for port in [state.casework_port, state.mint_port] {
+    for port in [state.casework_port, state.issuer_port] {
         probe(port)?;
     }
     // Verify the container before accepting a retained database port.
@@ -609,8 +646,6 @@ fn start(args: StartArgs) -> Result<Value> {
         .arg(&root)
         .arg("--casework-bin")
         .arg(casework)
-        .arg("--mint-bin")
-        .arg(mint)
         .arg("--docker-bin")
         .arg(docker)
         .stdin(Stdio::null())
@@ -723,11 +758,12 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if service_ports_must_be_free(&state.status) {
-        for port in [state.casework_port, state.mint_port] {
+        for port in [state.casework_port, state.issuer_port] {
             probe(port)?;
         }
     }
     let docker = executable("docker", docker_bin)?;
+    stop_issuer(&docker, &state)?;
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
     // inspection (and the stop it guards) when nothing is listed under this name.
@@ -1064,19 +1100,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         ensure_active(&terminate)?;
         database(&args.docker_bin, &mut state, &terminate)?;
         ensure_active(&terminate)?;
-        children.mint = Some(service(
-            &args.mint_bin,
-            &["serve", "--config"],
-            &root.join("mint/mint.yaml"),
-            &[],
-            &root,
-            "mint",
-        )?);
-        ready(
-            &format!("{}/ready", state.mint_origin()),
-            children.mint.as_ref().context("Mint child missing")?,
-            &terminate,
-        )?;
+        issuer(&args.docker_bin, &state, &terminate)?;
         ensure_active(&terminate)?;
         // Migrations are idempotent and guarded by an advisory lock. Run them
         // on every start so a retained database is upgraded with the binaries
@@ -1113,8 +1137,8 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         )?;
         // A client token lives 300 seconds, which the child and readiness
         // deadlines of a slow first start can exhaust before the seed runs.
-        // Mint the seeding tokens once Casework is ready, not before it.
-        tokens(&args.mint_bin, &state, &clients, &terminate)?;
+        // Issue seeding tokens after Casework is ready.
+        tokens(&state, &clients, &terminate)?;
         ensure_active(&terminate)?;
         seed(&mut state, &clients, &terminate)?;
         ensure_active(&terminate)?;
@@ -1161,10 +1185,12 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         Ok(stop_stream)
     })();
     let child_cleanup = children.stop();
+    let issuer_cleanup = stop_issuer(&args.docker_bin, &state);
     let database_cleanup = stop_database(&args.docker_bin, &state);
     let socket_cleanup = remove_socket(&root);
     if result.is_err()
         || child_cleanup.is_err()
+        || issuer_cleanup.is_err()
         || database_cleanup.is_err()
         || socket_cleanup.is_err()
     {
@@ -1174,6 +1200,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         state.failure = [
             result.as_ref().err(),
             child_cleanup.as_ref().err(),
+            issuer_cleanup.as_ref().err(),
             database_cleanup.as_ref().err(),
             socket_cleanup.as_ref().err(),
         ]
@@ -1184,6 +1211,7 @@ fn run_supervisor_inner(args: SupervisorArgs) -> Result<()> {
         state.save()?;
         result?;
         child_cleanup?;
+        issuer_cleanup?;
         database_cleanup?;
         socket_cleanup?;
         unreachable!("a failed cleanup returned its error");
@@ -1220,11 +1248,10 @@ fn read_control_command(stream: &mut impl Read) -> Result<Vec<u8>> {
 #[derive(Default)]
 struct Children {
     casework: Option<Service>,
-    mint: Option<Service>,
 }
 impl Children {
     fn exited(&self) -> Result<bool> {
-        for service in [&self.casework, &self.mint].into_iter().flatten() {
+        for service in [&self.casework].into_iter().flatten() {
             if service.guard_exit()?.is_some() {
                 return Ok(true);
             }
@@ -1233,7 +1260,7 @@ impl Children {
     }
     fn stop(&mut self) -> Result<()> {
         let mut error = None;
-        for owned in [&mut self.casework, &mut self.mint] {
+        for owned in [&mut self.casework] {
             if let Some(mut service) = owned.take() {
                 if let Err(cause) = service.stop() {
                     error = Some(cause);
@@ -1653,14 +1680,14 @@ fn reported_version(binary: &Binary) -> Option<&str> {
     binary.version.split_whitespace().nth(1)
 }
 
-/// Refuse a session whose casework or mint comes from another release. The
-/// three executables share a configuration contract, a token shape and a
+/// Refuse a session whose casework comes from another release. The
+/// two executables share a configuration contract, a token shape and a
 /// schema, so an older casework beside this caseworkctl fails deep inside a
 /// supervised phase, where the cause reads as an unrelated refusal about the
 /// database. Docker belongs to no release of this stack and is never compared.
 fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
     let own = registry_platform_buildinfo::DISPLAY_VERSION;
-    for name in ["casework", "mint"] {
+    for name in ["casework"] {
         let Some(prerequisite) = binaries.get(name) else {
             continue;
         };
@@ -1669,7 +1696,7 @@ fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
         };
         if reported != own {
             bail!(
-                "the installed {name} at {} reports version {reported}, and this caseworkctl reports version {own}. A local session runs casework, mint and caseworkctl together, so install all three from the same release, or put the matching build first on PATH",
+                "the installed {name} at {} reports version {reported}, and this caseworkctl reports version {own}. A local session runs casework and caseworkctl together, so install both from the same release, or put the matching build first on PATH",
                 prerequisite.path.display()
             );
         }
@@ -2917,10 +2944,43 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
-fn tokens(mint: &Path, state: &State, clients: &Clients, terminate: &AtomicBool) -> Result<()> {
-    issue_tokens(state, clients, terminate, |id| {
-        token(mint, state, id, terminate)
-    })
+fn issuer(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
+    let state_root = state.root().join("issuer");
+    let session = registry_thunderid_tooling::container::Session {
+        label: &format!("casework-dev-{}", state.owner),
+        id: "casework-local",
+        port: state.issuer_port,
+        state_root: &state_root,
+        image: &pin.image,
+    };
+    let jwks = registry_thunderid_tooling::local::start(&session, docker, &mut || {
+        terminate.load(Ordering::Relaxed)
+    })?;
+    private::replace(
+        &state.root().join("secrets/issuer-jwks"),
+        &serde_json::to_vec(&jwks)?,
+    )
+}
+
+fn stop_issuer(docker: &Path, state: &State) -> Result<()> {
+    let state_root = state.root().join("issuer");
+    if !state_root.join("session.json").exists() {
+        return Ok(());
+    }
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
+    let session = registry_thunderid_tooling::container::Session {
+        label: &format!("casework-dev-{}", state.owner),
+        id: "casework-local",
+        port: state.issuer_port,
+        state_root: &state_root,
+        image: &pin.image,
+    };
+    registry_thunderid_tooling::local::stop(&session, docker).map_err(Into::into)
+}
+
+fn tokens(state: &State, clients: &Clients, terminate: &AtomicBool) -> Result<()> {
+    issue_tokens(state, clients, terminate, |id| token(state, id, terminate))
 }
 
 fn issue_tokens(
@@ -2949,34 +3009,49 @@ fn issue_tokens(
     issue(&administrator.id)
 }
 
-fn token(mint: &Path, state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
+fn token(state: &State, id: &str, terminate: &AtomicBool) -> Result<()> {
+    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+    ensure_active(terminate)?;
     let root = state.root();
-    let bytes = Zeroizing::new(command_cancellable(
-        Command::new(mint)
-            .arg("token")
-            .arg("--url")
-            .arg(format!("{}/token", state.mint_origin()))
-            .arg("--client-id")
-            .arg(id)
-            .arg("--key")
-            .arg(root.join("credentials").join(id).join("assertion-key.jwk")),
-        &root,
-        "token",
-        None,
-        terminate,
-    )?);
-    let value = std::str::from_utf8(&bytes)
-        .context("Mint token output must be ASCII")?
-        .trim();
-    if value.len() > 65536
-        || value.split('.').count() != 3
-        || value.chars().any(char::is_whitespace)
-    {
-        bail!("Mint returned an invalid compact token");
-    }
+    let clients: Clients =
+        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    let client = clients
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .context("the local client is not registered")?;
+    let bytes = private::read(
+        &root.join("credentials").join(id).join("assertion-key.jwk"),
+        4096,
+    )?;
+    let text = Zeroizing::new(
+        String::from_utf8(bytes.to_vec()).context("the retained client key is unreadable")?,
+    );
+    let key = registry_platform_crypto::PrivateJwk::parse(&text)
+        .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
+    let provider = PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(
+            format!("{}/oauth2/token", state.issuer_origin()).parse()?,
+            id,
+            key,
+        )
+        .with_audience(state.issuer_origin())
+        .with_resource(state.audience())
+        .with_scopes(client.scopes.clone()),
+    )?;
+    let value = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(provider.bearer_token())?;
+    ensure_active(terminate)?;
+    let header = value.authorization_header_value();
+    let token = header
+        .to_str()?
+        .strip_prefix("Bearer ")
+        .context("the issued credential is not bearer")?;
     private::replace(
         &root.join("secrets").join(format!("{id}-token")),
-        value.as_bytes(),
+        token.as_bytes(),
     )
 }
 
@@ -3156,7 +3231,7 @@ fn seed(state: &mut State, clients: &Clients, terminate: &AtomicBool) -> Result<
         Ok(body)
     };
     let mut directory = read_directory(&token)?;
-    let issuer = state.mint_origin();
+    let issuer = state.issuer_origin();
     let principals: BTreeMap<&str, &str> = state
         .clients
         .iter()

@@ -305,7 +305,21 @@ pub struct RuntimeConfig {
     pub authentication: AuthenticationConfig,
     pub audit: AuditConfig,
     #[serde(default)]
+    pub task_authority: Option<TaskAuthorityConfig>,
+    #[serde(default)]
     pub sources: BTreeMap<String, registry_casework_breg::BregBinding>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskAuthorityConfig {
+    pub id: String,
+    pub issuer: String,
+    pub exchange_audience: String,
+    pub signing_key_ref: String,
+    /// Service client IDs mapped to their one protected resource audience.
+    pub status_clients: BTreeMap<String, String>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -418,6 +432,8 @@ impl std::fmt::Debug for DatabaseConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OidcConfig {
+    #[serde(default)]
+    pub allowed_clients: Vec<String>,
     pub issuer: String,
     pub audience: String,
     #[serde(default)]
@@ -585,6 +601,32 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
+        if let Some(authority) = &self.task_authority {
+            if authority.id.is_empty()
+                || authority.id.len() > 128
+                || !registry_platform_httputil::valid_resource_uri(&authority.issuer)
+                || !registry_platform_httputil::valid_resource_uri(&authority.exchange_audience)
+                || self.authentication.oidc.allowed_clients.is_empty()
+                || authority.status_clients.len() > 64
+                || authority.status_clients.iter().any(|(client, resource)| {
+                    !self.authentication.oidc.allowed_clients.contains(client)
+                        || !registry_platform_httputil::valid_resource_uri(resource)
+                })
+                || project.task_templates.iter().any(|template| {
+                    template.agent.issuer != self.authentication.oidc.issuer
+                        || !self
+                            .authentication
+                            .oidc
+                            .allowed_clients
+                            .contains(&template.client)
+                        || !registry_platform_httputil::valid_resource_uri(&template.resource)
+                })
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+        } else if !project.task_templates.is_empty() {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
         }
@@ -694,7 +736,8 @@ impl RuntimeConfig {
             vec![Algorithm::RS256, Algorithm::ES256],
             vec!["at+jwt".to_owned(), "JWT".to_owned()],
         )
-        .with_scope_claim(self.authentication.oidc.scope_claim.clone());
+        .with_scope_claim(self.authentication.oidc.scope_claim.clone())
+        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone());
         Ok((verifier, std::sync::Arc::new(fetcher)))
     }
 }

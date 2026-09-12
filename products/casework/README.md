@@ -5,6 +5,7 @@ for small human decisions requested by another service. It supports two
 standalone deployment profiles: a hosted decision needs no registry source,
 while the original checkpoint connects one governed Base Registry Engine
 change-request source. A project may configure either surface or both.
+Source-backed holders can also [approve bounded agent tasks](TASK_GRANTS.md).
 
 ## Standalone hosted decisions
 

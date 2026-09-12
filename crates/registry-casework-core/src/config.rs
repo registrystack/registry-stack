@@ -75,6 +75,8 @@ pub struct CaseworkProject {
     pub clocks: Vec<ClockPolicy>,
     #[serde(default)]
     pub inbox: InboxPolicy,
+    #[serde(default)]
+    pub task_templates: Vec<crate::TaskTemplate>,
 }
 
 impl CaseworkProject {
@@ -102,6 +104,21 @@ impl CaseworkProject {
         }
         if self.casework.id.is_empty() || self.casework.version.is_empty() {
             return Err(ConfigError::Identifier);
+        }
+        if self.task_templates.len() > 64
+            || self
+                .task_templates
+                .iter()
+                .map(|template| &template.id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.task_templates.len()
+            || self
+                .task_templates
+                .iter()
+                .any(|template| template.check(self).is_err())
+        {
+            return Err(ConfigError::TaskTemplate);
         }
         let queues: BTreeSet<_> = self.queues.iter().map(|queue| queue.id.clone()).collect();
         if queues.len() != self.queues.len()
@@ -481,6 +498,8 @@ impl InboxPolicy {
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum ConfigError {
+    #[error("the governed task template is invalid or repeated")]
+    TaskTemplate,
     #[error("the Casework project envelope is invalid")]
     Envelope,
     #[error("a Casework identifier is invalid")]
@@ -561,6 +580,7 @@ mod tests {
 
     fn project() -> CaseworkProject {
         CaseworkProject {
+            task_templates: Vec::new(),
             api_version: CASEWORK_API_VERSION.to_owned(),
             kind: CASEWORK_KIND.to_owned(),
             casework: CaseworkIdentity {

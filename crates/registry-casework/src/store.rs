@@ -42,7 +42,7 @@ const SYNC_CLAIM_INDEXES_MIGRATION: &str =
     include_str!("../migrations/0013_sync_claim_indexes.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 13] = [
+const MIGRATIONS: [(i64, &str); 14] = [
     (1, MIGRATION),
     (2, HOSTED_MIGRATION),
     (3, ASSIGNMENT_MIGRATION),
@@ -56,6 +56,7 @@ const MIGRATIONS: [(i64, &str); 13] = [
     (11, SOURCE_RECONCILIATION_PROGRESS_MIGRATION),
     (12, ABSENCE_CURSORS_MIGRATION),
     (13, SYNC_CLAIM_INDEXES_MIGRATION),
+    (14, include_str!("../migrations/0014_task_grants.sql")),
 ];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
@@ -3486,6 +3487,9 @@ fn history_kind_name(value: HistoryKind) -> &'static str {
         HistoryKind::CaseloadMoved => "caseload_moved",
         HistoryKind::Released => "released",
         HistoryKind::DraftSaved => "draft_saved",
+        HistoryKind::TaskApproved => "task_approved",
+        HistoryKind::TaskRevoked => "task_revoked",
+        HistoryKind::TaskInvalidated => "task_invalidated",
         HistoryKind::AttemptReserved => "attempt_reserved",
         HistoryKind::AttemptUncertain => "attempt_uncertain",
         HistoryKind::ActionCompleted => "action_completed",
@@ -3507,6 +3511,9 @@ fn parse_history(value: &str) -> Result<HistoryKind, StoreError> {
         "caseload_moved" => Ok(HistoryKind::CaseloadMoved),
         "released" => Ok(HistoryKind::Released),
         "draft_saved" => Ok(HistoryKind::DraftSaved),
+        "task_approved" => Ok(HistoryKind::TaskApproved),
+        "task_revoked" => Ok(HistoryKind::TaskRevoked),
+        "task_invalidated" => Ok(HistoryKind::TaskInvalidated),
         "attempt_reserved" => Ok(HistoryKind::AttemptReserved),
         "attempt_uncertain" => Ok(HistoryKind::AttemptUncertain),
         "action_completed" => Ok(HistoryKind::ActionCompleted),
