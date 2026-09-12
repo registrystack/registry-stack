@@ -103,6 +103,27 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         )
         self.assertFalse(result["dry_run"])
 
+    def test_bootstrap_identity_survives_cleanup_until_operator_removal(self) -> None:
+        for apply in (False, True):
+            for has_candidate in (False, True):
+                with self.subTest(apply=apply, has_candidate=has_candidate):
+                    versions = [version(1, "2026-07-01T00:00:00Z", ["bootstrap"])]
+                    if has_candidate:
+                        versions.append(version(2, "2026-07-01T00:00:00Z", ["candidate-old"]))
+                    client = FakeClient({"casework-candidate": versions})
+                    result = self.module.cleanup(
+                        client, packages=["casework-candidate"],
+                        server_now=self.now, apply=apply,
+                    )
+                    self.assertEqual(
+                        [2] if has_candidate else [],
+                        [item["version_id"] for item in result["actions"]],
+                    )
+                    self.assertEqual(
+                        [("casework-candidate", 2)] if apply and has_candidate else [],
+                        client.deleted,
+                    )
+
     def test_undeletable_high_download_version_is_recorded_and_run_continues(
         self,
     ) -> None:
@@ -293,14 +314,10 @@ class CleanupReleaseCandidatesTest(unittest.TestCase):
         self.assertIn("breg-candidate", self.module.CANDIDATE_PACKAGES)
         self.module.assert_candidate_package("breg-candidate")
 
-    def test_casework_remains_publicly_denylisted_before_candidate_onboarding(self) -> None:
+    def test_casework_candidate_is_allowlisted_after_package_bootstrap(self) -> None:
         self.assertIn("casework", self.module.PUBLIC_PACKAGES)
-        self.assertNotIn("casework-candidate", self.module.CANDIDATE_PACKAGES)
-        with self.assertRaisesRegex(
-            self.module.CleanupError,
-            "package is not in the exact candidate allowlist",
-        ):
-            self.module.assert_candidate_package("casework-candidate")
+        self.assertIn("casework-candidate", self.module.CANDIDATE_PACKAGES)
+        self.module.assert_candidate_package("casework-candidate")
 
     def test_malformed_or_future_timestamp_fails_without_deleting(self) -> None:
         for timestamp in ("not-a-date", "2026-07-25T12:00:01Z"):
