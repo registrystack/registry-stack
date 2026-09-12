@@ -31,10 +31,31 @@ pub struct TaskTemplate {
     pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
+    /// Evidence-only requester context signed into the authority assertion.
+    /// BREG derives neither requester admission nor relying-party audience
+    /// from these fields and therefore forbids the block entirely.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_context: Option<EvidenceRequesterContext>,
     /// Exact token identity keys mapped to governed source logical fields.
     /// Values are extracted from the approving caller's disclosed source read.
     pub subjects: BTreeMap<String, String>,
     pub lifetime_seconds: u64,
+}
+
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvidenceRequesterContext {
+    pub requester_tags: Vec<String>,
+    pub audience: String,
+}
+
+impl fmt::Debug for EvidenceRequesterContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EvidenceRequesterContext")
+            .field("requester_tags", &"<redacted>")
+            .field("audience", &"<redacted>")
+            .finish()
+    }
 }
 
 impl fmt::Debug for TaskTemplate {
@@ -156,7 +177,12 @@ impl TaskTemplate {
         {
             return Err(TaskGrantError::Policy);
         }
-        self.bounds.check()
+        self.bounds.check()?;
+        match (&self.bounds, &self.evidence_context) {
+            (TaskGrantBounds::Evidence { .. }, Some(context)) => context.check(),
+            (TaskGrantBounds::Breg { .. }, None) => Ok(()),
+            _ => Err(TaskGrantError::Policy),
+        }
     }
 
     pub fn disclosed_subjects(
@@ -178,6 +204,31 @@ impl TaskTemplate {
             })
             .collect()
     }
+}
+
+impl EvidenceRequesterContext {
+    fn check(&self) -> Result<(), TaskGrantError> {
+        if !unique(&self.requester_tags, 32)
+            || self
+                .requester_tags
+                .iter()
+                .any(|tag| !valid_evidence_tag(tag))
+            || !registry_platform_httputil::valid_resource_uri(&self.audience)
+        {
+            return Err(TaskGrantError::Policy);
+        }
+        Ok(())
+    }
+}
+
+fn valid_evidence_tag(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 128
+        && matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes[1..].iter().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_' | b'-')
+        })
 }
 
 /// Ephemeral exact values from one source read. Never serialized as a work-item view.
@@ -332,6 +383,55 @@ mod tests {
         let bounds: TaskGrantBounds = serde_json::from_value(serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get","create"]}]})).unwrap();
         assert!(bounds.check().is_ok());
     }
+
+    #[test]
+    fn evidence_templates_require_closed_requester_context_and_breg_forbids_it() {
+        let project: CaseworkProject = serde_json::from_value(serde_json::json!({
+            "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
+            "casework": {"id":"tasks", "version":"1"},
+            "accessProfiles":[{"id":"staff", "principalClaim":"sub", "requiredScopes":["casework:staff"], "role":"staff"}],
+            "queues":[{"id":"review", "label":"Review"}],
+            "sources":[{"id":"source", "adapter":"test", "description":"Test source", "requests":[{"entity":"request", "queue":"review"}]}]
+        }))
+        .unwrap();
+        let mut template: TaskTemplate = serde_json::from_value(serde_json::json!({
+            "id":"evidence-check", "version":"1", "label":"Check evidence",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates":["claimed"],
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"evidence-task-agent", "resource":"urn:test:evidence",
+            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
+            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
+            "evidenceContext":{"requesterTags":["fixture-agency"], "audience":"https://relying.test/procedure"},
+            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
+        }))
+        .unwrap();
+        assert!(template.check(&project).is_ok());
+        let context_debug = format!("{:?}", template.evidence_context.as_ref().unwrap());
+        assert!(!context_debug.contains("fixture-agency"));
+        assert!(!context_debug.contains("relying.test"));
+
+        let context = template.evidence_context.take();
+        assert!(template.check(&project).is_err());
+        template.evidence_context = context;
+        template.bounds = serde_json::from_value(serde_json::json!({
+            "type":"breg", "permissions":[{"collection":"records", "operations":["get"]}]
+        }))
+        .unwrap();
+        assert!(template.check(&project).is_err());
+
+        template.bounds = serde_json::from_value(serde_json::json!({
+            "type":"evidence", "requirement":"urn:test:requirement:adult"
+        }))
+        .unwrap();
+        template.evidence_context.as_mut().unwrap().requester_tags = vec![];
+        assert!(template.check(&project).is_err());
+        template.evidence_context.as_mut().unwrap().requester_tags = vec!["Fixture-Agency".into()];
+        assert!(template.check(&project).is_err());
+        template.evidence_context.as_mut().unwrap().requester_tags = vec!["fixture-agency".into()];
+        template.evidence_context.as_mut().unwrap().audience = "relative-audience".into();
+        assert!(template.check(&project).is_err());
+    }
 }
 
 /// The exact authorization a human can approve after a current disclosed read.
@@ -347,6 +447,8 @@ pub struct TaskTemplatePreview {
     pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_context: Option<EvidenceRequesterContext>,
     pub subjects: BTreeMap<String, Value>,
     pub lifetime_seconds: u64,
 }
@@ -372,6 +474,8 @@ pub struct TaskGrantView {
     pub scopes: Vec<String>,
     pub purpose: String,
     pub bounds: TaskGrantBounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_context: Option<EvidenceRequesterContext>,
     pub expires_at: u64,
     pub invalidated: bool,
 }

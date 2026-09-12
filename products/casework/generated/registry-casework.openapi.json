@@ -1436,6 +1436,34 @@
         ],
         "type": "object"
       },
+      "EvidenceRequesterContext": {
+        "additionalProperties": false,
+        "properties": {
+          "audience": {
+            "format": "uri",
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "requesterTags": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9._-]*$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "requesterTags",
+          "audience"
+        ],
+        "type": "object"
+      },
       "HistoryEntry": {
         "additionalProperties": false,
         "properties": {
@@ -4192,6 +4220,9 @@
             "minLength": 1,
             "type": "string"
           },
+          "evidenceContext": {
+            "$ref": "#/components/schemas/EvidenceRequesterContext"
+          },
           "expiresAt": {
             "minimum": 0,
             "type": "integer"
@@ -4307,6 +4338,9 @@
             },
             "type": "array"
           },
+          "evidenceContext": {
+            "$ref": "#/components/schemas/EvidenceRequesterContext"
+          },
           "id": {
             "maxLength": 512,
             "minLength": 1,
@@ -4416,6 +4450,9 @@
             "maxLength": 512,
             "minLength": 1,
             "type": "string"
+          },
+          "evidenceContext": {
+            "$ref": "#/components/schemas/EvidenceRequesterContext"
           },
           "id": {
             "maxLength": 512,

@@ -364,12 +364,16 @@ impl TaskAuthority {
             now.checked_add(registry_casework_core::TASK_ASSERTION_LIFETIME_SECONDS)
                 .ok_or(StoreError::Invalid)?,
         );
-        let payload = json!({"iss":self.config.issuer,"sub":grant.template.agent.subject,"aud":self.config.exchange_audience,
+        let mut payload = json!({"iss":self.config.issuer,"sub":grant.template.agent.subject,"aud":self.config.exchange_audience,
             "iat":now,"nbf":now,"exp":expires,"jti":Uuid::new_v4(),"registry_actor_kind":"agent",
             "registry_grant_id":grant.id,"registry_grant_authority":grant.authority,"registry_grant_source_issuer":grant.source_issuer,
             "registry_grant_client":grant.template.client,"registry_grant_resource":grant.template.resource,
             "registry_purpose":grant.template.purpose,"registry_grant_exp":grant.expires_at,
             "registry_grant_bounds":grant.template.bounds,"scope":grant.template.scopes.join(" "),"identity":grant.subjects});
+        if let Some(context) = &grant.template.evidence_context {
+            payload["evidence_tags"] = json!(context.requester_tags);
+            payload["evidence_audience"] = json!(context.audience);
+        }
         let header = json!({"alg":self.key.alg,"kid":self.key.kid,"typ":"JWT"});
         let input = format!(
             "{}.{}",
@@ -459,6 +463,7 @@ impl crate::CaseworkService {
                 scopes: template.scopes.clone(),
                 purpose: template.purpose.clone(),
                 bounds: template.bounds.clone(),
+                evidence_context: template.evidence_context.clone(),
                 subjects,
                 lifetime_seconds: template.lifetime_seconds,
             });
@@ -712,8 +717,91 @@ fn grant_view(stored: &StoredTaskGrant) -> TaskGrantView {
         scopes: stored.grant.template.scopes.clone(),
         purpose: stored.grant.template.purpose.clone(),
         bounds: stored.grant.template.bounds.clone(),
+        evidence_context: stored.grant.template.evidence_context.clone(),
         expires_at: stored.grant.expires_at,
         invalidated: stored.invalidated,
+    }
+}
+
+#[cfg(test)]
+mod evidence_assertion_tests {
+    use super::*;
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    use registry_casework_core::{IssuerPrincipal, SubjectRef};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn evidence_requester_context_is_signed_as_two_explicit_claims() {
+        let mut key = registry_platform_crypto::generate_private_jwk(
+            registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
+        )
+        .unwrap();
+        key.alg = Some("RS256".into());
+        key.kid = Some("task-authority-key".into());
+        let authority = TaskAuthority {
+            config: crate::TaskAuthorityConfig {
+                id: "casework".into(),
+                issuer: "https://casework.test".into(),
+                exchange_audience: "https://issuer.test".into(),
+                signing_key_ref: "secret:unused".into(),
+                status_clients: BTreeMap::new(),
+            },
+            key,
+        };
+        let template: TaskTemplate = serde_json::from_value(json!({
+            "id":"evidence-check", "version":"1", "label":"Check evidence",
+            "eligibleTeams":["team"], "eligibleProfiles":["staff"], "source":"source",
+            "itemKinds":["request"], "itemStates":["claimed"],
+            "agent":{"issuer":"https://issuer.test", "subject":"agent"},
+            "client":"evidence-task-agent", "resource":"urn:test:evidence",
+            "scopes":["evidence:invoke"], "purpose":"fixture-eligibility",
+            "bounds":{"type":"evidence", "requirement":"urn:test:requirement:adult"},
+            "evidenceContext":{"requesterTags":["fixture-agency", "benefits"], "audience":"https://relying.test/procedure"},
+            "subjects":{"given_name":"given-name"}, "lifetimeSeconds":900
+        }))
+        .unwrap();
+        let grant = TaskGrant {
+            id: Uuid::new_v4(),
+            item_id: Uuid::new_v4(),
+            template,
+            authority: "statutory-caseworker-v1".into(),
+            source_issuer: "https://casework.test".into(),
+            approver: IssuerPrincipal {
+                issuer: "https://issuer.test".into(),
+                subject: "officer".into(),
+            },
+            approver_profile: "staff".into(),
+            source_subject: SubjectRef {
+                source_id: "source".into(),
+                kind: "request".into(),
+                id: "request-1".into(),
+            },
+            proposal: TaskProposalIdentity {
+                version: "1".into(),
+                integrity: None,
+                generation: "1".into(),
+            },
+            subjects: BTreeMap::from([("given_name".into(), json!("Amina"))]),
+            approved_at: 100,
+            expires_at: 1_000,
+        };
+        let response = authority.assertion(&grant, 200).unwrap();
+        let encoded = response
+            .assertion
+            .split('.')
+            .nth(1)
+            .expect("the assertion has a payload");
+        let payload: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).unwrap())
+            .expect("the assertion payload is JSON");
+        assert_eq!(
+            payload["evidence_tags"],
+            json!(["fixture-agency", "benefits"])
+        );
+        assert_eq!(
+            payload["evidence_audience"],
+            "https://relying.test/procedure"
+        );
+        assert!(payload.get("evidence_context").is_none());
     }
 }
 

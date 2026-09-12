@@ -1188,19 +1188,21 @@ def task_schemas() -> dict:
     subjects = {"type":"object", "maxProperties":32, "additionalProperties":{"type":["string","integer","boolean"]}}
     permission = obj({"collection":text, "operations":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":text}}, ["collection","operations"])
     common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "scopes":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[\x21\x23-\x29\x2b-\x5b\x5d-\x7e]+$"}}, "purpose":text, "bounds":ref("TaskGrantBounds")}
-    preview = {"id":text, "version":text, "label":text, **common, "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
+    evidence_context = obj({"requesterTags":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[a-z][a-z0-9._-]*$"}}, "audience":{"type":"string","format":"uri","minLength":1,"maxLength":4096}}, ["requesterTags","audience"])
+    preview = {"id":text, "version":text, "label":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
     template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting_applicant","waiting_application"]}}}
     template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
-    view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "expiresAt":number, "invalidated":{"type":"boolean"}}
+    view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "expiresAt":number, "invalidated":{"type":"boolean"}}
     details = {"grantId":uuid, "authority":text, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
     return {
-        "TaskTemplate":obj(template,list(template)),
-        "TaskTemplatePreview":obj(preview,list(preview)),
+        "EvidenceRequesterContext":evidence_context,
+        "TaskTemplate":obj(template,[name for name in template if name != "evidenceContext"]),
+        "TaskTemplatePreview":obj(preview,[name for name in preview if name != "evidenceContext"]),
         "TaskTemplatePreviews":obj({"itemRevision":number,"templates":array(ref("TaskTemplatePreview"))},["itemRevision","templates"]),
         "TaskPermission":permission,
         "TaskGrantBounds":{"oneOf":[obj({"type":{"const":"evidence"},"requirement":text},["type","requirement"]), obj({"type":{"const":"breg"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("TaskPermission")}},["type","permissions"])]},
         "TaskApprovalRequest":obj({"templateId":text,"templateVersion":text},["templateId","templateVersion"]),
-        "TaskGrantView":obj(view,list(view)),
+        "TaskGrantView":obj(view,[name for name in view if name != "evidenceContext"]),
         "TaskGrantList":obj({"grants":{"type":"array","maxItems":128,"items":ref("TaskGrantView")}},["grants"]),
         "TaskGrantRevocation":obj({"id":uuid,"invalidated":{"type":"boolean"}},["id","invalidated"]),
         "TaskAssertionResponse":obj({"assertion":{"type":"string","description":"Sensitive short-lived credential. Do not log or persist."},"expiresAt":number,"grantExpiresAt":number},["assertion","expiresAt","grantExpiresAt"]),
