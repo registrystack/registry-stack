@@ -112,8 +112,6 @@ pub struct PrepareArgs {
     #[arg(long, hide = true)]
     evidence_bin: Option<PathBuf>,
 
-    #[arg(long, hide = true)]
-    mint_bin: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Deserialize, Serialize)]
@@ -489,9 +487,6 @@ fn progressive_curl_config(
 }
 
 fn prepare_local(args: PrepareArgs) -> Result<ExitCode> {
-    if args.mint_bin.is_some() {
-        bail!("--mint-bin was removed with the local Registry Mint lifecycle; the ready dev session owns its pinned issuer")
-    }
     validate_request_name(&args.name)?;
     let ready = dev::load_ready_state(&args.project)?;
     let (question, subjects) = validate_closed_inputs(&ready, &args)?;
@@ -1127,7 +1122,6 @@ mod tests {
             format: PreparedResponseFormat::SignedJws,
             project: PathBuf::from("."),
             evidence_bin: None,
-            mint_bin: None,
         }
     }
 

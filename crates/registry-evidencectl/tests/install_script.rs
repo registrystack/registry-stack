@@ -11,7 +11,7 @@ use tempfile::TempDir;
 
 const TEST_VERSION: &str = "v9.8.7";
 const TEST_DEV_VERSION: &str = "v9.8.7-dev.12345.2";
-const BINARIES: [&str; 4] = ["evidence", "evidencectl", "mint", "evidence-oid4vci"];
+const BINARIES: [&str; 3] = ["evidence", "evidencectl", "evidence-oid4vci"];
 
 #[cfg(unix)]
 #[test]
@@ -69,7 +69,6 @@ fn installer_help_describes_the_toolset_and_verification_contract() {
     for expected in [
         "evidence runtime",
         "evidencectl adopter",
-        "mint token issuer",
         "evidence-oid4vci wallet delivery",
         "curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash",
         "SHA256SUMS",
@@ -302,7 +301,7 @@ fn missing_checksum_entry_refuses_the_whole_install() {
 fn checksum_failure_preserves_the_existing_toolset() {
     let fixture = InstallerFixture::new();
     fixture.preinstall_previous_toolset();
-    fixture.corrupt_release_asset("mint");
+    fixture.corrupt_release_asset("evidence-oid4vci");
     let output = fixture.run();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
