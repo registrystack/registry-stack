@@ -493,6 +493,13 @@ records an `attempt_settled` history event with the attempt, binding reference,
 operation, outcome, reason, and decider, and no actor, in the same transaction
 as the state change. The command makes no BReg call.
 
+A validated refusal from the first BReg action attempt keeps its source class.
+Invalid action input returns `request.source-rejected`; a missing bound record
+returns `source.record-missing`; and a refused reviewer binding returns
+`source.reviewer-not-authorized`. A stale action remains
+`work-item.not-offered`. Each problem uses a static detail and returns the item
+to its holder without leaving an uncertain attempt.
+
 The HTTP contract is generated deterministically from the Rust-owned problem
 catalog and per-operation response table. The generator also checks the exact
 router inventory, header constants, request extraction shape, success statuses,

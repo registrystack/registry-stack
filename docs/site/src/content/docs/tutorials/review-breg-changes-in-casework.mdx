@@ -820,7 +820,8 @@ If it fails, the registry session is stopped: start it again with the command fr
 | A decision returns `428` with code `precondition.required` | The `If-Match` header is missing. Take the `ifMatch` value from the `actions` entry for the operation you want in the claim response. |
 | A claim or decision returns `412` with code `precondition.failed` | The item moved. Re-read it, take the `ifMatch` value from the `actions` entry for the operation you want, and send it again. |
 | An inbox read or a claim returns `409` | The item is synchronizing with the registry, or another caller holds it. Read the inbox again a few seconds later; its `actions` array shows what remains open to you. |
-| A decision returns `502` with code `source.bad-gateway` | The registry refused or could not answer the promoted action. Check that the registry session is `ready`, and send the decision body exactly as the claim response shaped it, with no extra fields. |
+| A decision returns `422` with code `request.source-rejected` | The registry refused the promoted action body. Fix the decision request before trying again; re-reading the inbox does not fix this refusal. |
+| A decision returns `502` with code `source.bad-gateway` | The registry answered outside its registered contract. Check that the registry session is `ready`; if it is, inspect the Casework journal for the invalid response class. |
 | You opened a fresh terminal | Run the `casework_url`, `token_endpoint`, and `credentials` assignments from [Start Casework](#start-casework) again. The header file and `tutorial-work` directory are still there. |
 
 ## Next

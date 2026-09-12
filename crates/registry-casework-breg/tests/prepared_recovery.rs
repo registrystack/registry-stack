@@ -239,31 +239,106 @@ async fn current_authentication_refusal_during_recovery_does_not_prove_the_origi
     );
 }
 
-#[tokio::test]
-async fn canonical_problem_from_the_initial_post_is_a_definitive_refusal() {
+async fn execute_initial_problem(
+    status: u16,
+    code: &str,
+) -> Result<SourceReceipt, SourceAdapterError> {
     let server = MockServer::start().await;
     let (source, actor, prepared) = prepare_for_recovery(&server).await;
     mount_recovery_metadata(&server, json_response(metadata())).await;
+    let problem_type = format!(
+        "https://id.registrystack.org/problems/registry-breg/{}",
+        code.replace('.', "/")
+    );
+    let (title, detail) = match status {
+        400 => ("Bad Request", "The request is invalid."),
+        401 => (
+            "Unauthorized",
+            "The bearer credential is missing or refused.",
+        ),
+        404 => ("Not Found", "The requested resource was not found."),
+        409 => ("Conflict", "The mutation conflicts with current state."),
+        412 => ("Precondition Failed", "The mutation precondition failed."),
+        422 => (
+            "Unprocessable Entity",
+            "A declared rule refused this action.",
+        ),
+        _ => panic!("unsupported fixture status {status}"),
+    };
+    let mut problem = json!({
+        "type": problem_type,
+        "title": title,
+        "status": status,
+        "detail": detail,
+        "code": code,
+        "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+    });
+    if status == 422 {
+        problem["refusalCode"] = json!("policy.refused");
+    }
     Mock::given(method("POST"))
         .and(path(format!("/v1/records/companies/{ID}/actions/apply")))
-        .respond_with(ResponseTemplate::new(400)
-            .set_body_raw(serde_json::to_vec(&json!({"type":"https://id.registrystack.org/problems/registry-breg/request/invalid","title":"Bad Request","status":400,"detail":"The request is invalid.","code":"request.invalid","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"})).unwrap(), "application/problem+json")
-            .insert_header("cache-control", "no-store")
-            .insert_header("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"))
-        .expect(1).mount(&server).await;
+        .respond_with(
+            ResponseTemplate::new(status)
+                .set_body_raw(
+                    serde_json::to_vec(&problem).unwrap(),
+                    "application/problem+json",
+                )
+                .insert_header("cache-control", "no-store")
+                .insert_header(
+                    "traceparent",
+                    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+                ),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    source
+        .execute_prepared(ExecutePreparedRequest {
+            prepared: &prepared,
+            execution: PreparedExecution::Initial,
+            actor: &actor,
+            source_profile_id: "reviewer",
+            idempotency_key: "casework-attempt-1",
+            credential: EphemeralCredential::new("refreshed-human-token"),
+        })
+        .await
+}
+
+#[tokio::test]
+async fn initial_invalid_input_problems_are_request_rejections() {
+    for (status, code) in [(400, "request.invalid"), (422, "action.refused")] {
+        assert_eq!(
+            execute_initial_problem(status, code).await,
+            Err(SourceAdapterError::RequestRejected)
+        );
+    }
+}
+
+#[tokio::test]
+async fn initial_missing_record_problem_preserves_the_missing_record_class() {
     assert_eq!(
-        source
-            .execute_prepared(ExecutePreparedRequest {
-                prepared: &prepared,
-                execution: PreparedExecution::Initial,
-                actor: &actor,
-                source_profile_id: "reviewer",
-                idempotency_key: "casework-attempt-1",
-                credential: EphemeralCredential::new("refreshed-human-token"),
-            })
-            .await,
-        Err(SourceAdapterError::DefinitiveRefusal)
+        execute_initial_problem(404, "resource.not_found").await,
+        Err(SourceAdapterError::RecordMissing)
     );
+}
+
+#[tokio::test]
+async fn initial_authentication_problem_preserves_the_reviewer_binding_class() {
+    assert_eq!(
+        execute_initial_problem(401, "authentication.refused").await,
+        Err(SourceAdapterError::ReviewerNotAuthorized)
+    );
+}
+
+#[tokio::test]
+async fn initial_conflict_problems_remain_action_not_offered() {
+    for (status, code) in [(409, "mutation.conflict"), (412, "precondition.failed")] {
+        assert_eq!(
+            execute_initial_problem(status, code).await,
+            Err(SourceAdapterError::ActionNotOffered)
+        );
+    }
 }
 
 #[tokio::test]
@@ -278,7 +353,16 @@ async fn malformed_four_xx_from_actual_post_remains_uncertain() {
         .mount(&server)
         .await;
     assert_eq!(
-        execute_recovery(&source, &actor, &prepared).await,
+        source
+            .execute_prepared(ExecutePreparedRequest {
+                prepared: &prepared,
+                execution: PreparedExecution::Initial,
+                actor: &actor,
+                source_profile_id: "reviewer",
+                idempotency_key: "casework-attempt-1",
+                credential: EphemeralCredential::new("refreshed-human-token"),
+            })
+            .await,
         Err(SourceAdapterError::Uncertain)
     );
 }
@@ -291,7 +375,13 @@ async fn metadata_refusal_cannot_masquerade_as_a_definitive_post_refusal() {
     let error = execute_recovery(&source, &actor, &prepared)
         .await
         .unwrap_err();
-    assert_ne!(error, SourceAdapterError::DefinitiveRefusal);
+    assert!(!matches!(
+        error,
+        SourceAdapterError::RequestRejected
+            | SourceAdapterError::RecordMissing
+            | SourceAdapterError::ReviewerNotAuthorized
+            | SourceAdapterError::ActionNotOffered
+    ));
     assert_eq!(
         server
             .received_requests()

@@ -2382,6 +2382,7 @@
               "request.method-not-allowed",
               "request.not-found",
               "request.reason-unsupported",
+              "request.source-rejected",
               "request.unprocessable",
               "request.unsupported-media-type",
               "runtime.failure",
@@ -2390,6 +2391,8 @@
               "source-profile.required",
               "source.bad-gateway",
               "source.not-found",
+              "source.record-missing",
+              "source.reviewer-not-authorized",
               "source.signature-invalid",
               "work-item.already-claimed",
               "work-item.not-holder",
@@ -2969,6 +2972,33 @@
           }
         ]
       },
+      "ProblemRequestSourceRejected": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "request.source-rejected"
+              },
+              "detail": {
+                "const": "The source refused the request body. Fix the request before trying again."
+              },
+              "status": {
+                "const": 422
+              },
+              "title": {
+                "const": "Source rejected request"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/request/source-rejected"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
       "ProblemRequestUnprocessable": {
         "allOf": [
           {
@@ -3179,6 +3209,60 @@
               },
               "type": {
                 "const": "https://id.registrystack.org/problems/registry-casework/source-profile/required"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemSourceRecordMissing": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source.record-missing"
+              },
+              "detail": {
+                "const": "The bound source record is no longer at the registered location."
+              },
+              "status": {
+                "const": 404
+              },
+              "title": {
+                "const": "Source record missing"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source/record-missing"
+              }
+            },
+            "type": "object"
+          }
+        ]
+      },
+      "ProblemSourceReviewerNotAuthorized": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Problem"
+          },
+          {
+            "properties": {
+              "code": {
+                "const": "source.reviewer-not-authorized"
+              },
+              "detail": {
+                "const": "The source refused the reviewer binding. Check the selected source profile and credential."
+              },
+              "status": {
+                "const": 403
+              },
+              "title": {
+                "const": "Source reviewer not authorized"
+              },
+              "type": {
+                "const": "https://id.registrystack.org/problems/registry-casework/source/reviewer-not-authorized"
               }
             },
             "type": "object"
@@ -13296,12 +13380,15 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemProfileNotHuman"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceReviewerNotAuthorized"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: profile.not-authorized, profile.not-human",
+            "description": "Problem response: profile.not-authorized, profile.not-human, source.reviewer-not-authorized",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13312,11 +13399,18 @@
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/ProblemSourceRecordMissing"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProblemWorkItemNotVisible"
+                    }
+                  ]
                 }
               }
             },
-            "description": "Problem response: work-item.not-visible",
+            "description": "Problem response: source.record-missing, work-item.not-visible",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
@@ -13434,13 +13528,16 @@
                       "$ref": "#/components/schemas/ProblemRequestReasonUnsupported"
                     },
                     {
+                      "$ref": "#/components/schemas/ProblemRequestSourceRejected"
+                    },
+                    {
                       "$ref": "#/components/schemas/ProblemRequestUnprocessable"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: request.reason-unsupported, request.unprocessable",
+            "description": "Problem response: request.reason-unsupported, request.source-rejected, request.unprocessable",
             "headers": {
               "traceparent": {
                 "$ref": "#/components/headers/TraceparentHeader"
