@@ -43,7 +43,7 @@ program itself retained.
 %%{init: {"sequence": {"mirrorActors": false}}}%%
 sequenceDiagram
     participant A as Your application
-    participant M as Registry Mint
+    participant M as Local issuer
     participant E as Evidence
 
     A->>M: Signed client assertion
@@ -166,7 +166,7 @@ Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipp
 ```
 
 Back in the first terminal, compile the question and the access policy into a fresh generation, and
-start Evidence and Registry Mint:
+start Evidence and the pinned local issuer:
 
 ```sh
 evidencectl dev start .
@@ -174,7 +174,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 `evidencectl dev` reports ready without reaching the source, so a stopped source mock surfaces only

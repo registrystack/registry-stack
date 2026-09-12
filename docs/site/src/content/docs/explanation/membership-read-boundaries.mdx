@@ -24,14 +24,14 @@ right to read it follows from an affiliation that changes over time. When the re
 authorized principal directly, an ordinary `rowBoundaries` claim comparison is the simpler
 mechanism and stays available.
 
-## What the grant declares
+## What the permission declares
 
 A facility stores `organization`, a reference to an `organization` entity. A separate `membership`
 entity stores an `organization` reference, a string `principal`, and a Boolean `active`. The
 boundary joins them inside the facility's read grant:
 
 ```yaml
-grants:
+permissions:
   - entity: facility
     rowBoundaries: []
     operations: [get, list, lookup, snapshot, revisions]
@@ -54,7 +54,7 @@ declared fields are authorization inputs, not an additional readable-field grant
 
 Every listed membership boundary and every ordinary `rowBoundaries` predicate must hold. Declare
 `rowBoundaries` explicitly even when membership is the only row restriction; `rowBoundaries: []`
-adds no direct claim predicate and leaves the membership checks in force. A grant carries at most
+adds no direct claim predicate and leaves the membership checks in force. A permission carries at most
 eight boundaries, reported as `access.membership.limit`. Configure the identity claim from a trusted
 issuer, and never accept a caller-submitted principal as authority.
 
@@ -66,12 +66,12 @@ The refusals keep a membership boundary from being read as broader authority tha
 | --- | --- |
 | An anonymous profile, or one without a verified `principalClaim` | `access.membership.authentication` |
 | Writes, actions, reviewed changes, or request lifecycle grants | `access.membership.read_only` |
-| A spatial bbox grant, which uses a separate database authority role | `access.membership.spatial_unsupported` |
+| A spatial bbox permission, which uses a separate database authority role | `access.membership.spatial_unsupported` |
 | A membership entity with a change-request lifecycle | `access.membership.request_unsupported` |
 | More than eight boundaries on one grant | `access.membership.limit` |
 
 A membership-bounded grant supports get, lookup, list, snapshot, and revisions, plus counts when it
-sets `allowCount`. It can protect the root of a relationship read path, and a target grant that
+sets `allowCount`. It can protect the root of a relationship read path, and a target permission that
 would reach the same entity through a separate root is rejected rather than silently bypassing the
 rule. A membership source stays a leaf entity: no boundaries of its own, no change-request
 lifecycle, and no incoming relationship read paths, which is what keeps row-security policies from
@@ -110,9 +110,9 @@ row-level-security bypass.
 ## Next
 
 - [Control access per profile](../../configure/breg-access/) to author the profile, its scopes, and
-  the grant the boundary sits in.
+  the permission the boundary sits in.
 - [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
-  grant key a fragment names.
+  permission key a fragment names.
 - [Modeling patterns for registries](../registry-modeling-patterns/) for the record structures a
   membership model joins.
 - [Current membership access](https://github.com/registrystack/registry-stack/blob/main/products/breg/membership-access.md)
