@@ -13,6 +13,6 @@ journeys:
         request:
           operation: list
         expect:
-          outcome: refusal
-          status: 404
-          problemCode: resource.not_found
+          outcome: success
+          status: 200
+          count: 0
