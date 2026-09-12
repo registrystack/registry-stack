@@ -318,13 +318,22 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
         });
         if client.token_exchange.is_some() {
             let config = &mut document["inboundAuthConfig"][0]["config"];
+            let mut exchange_attributes = crate::description::GRANT_ATTRIBUTES
+                .iter()
+                .map(|attribute| (*attribute).to_owned())
+                .collect::<Vec<_>>();
+            for attribute in &client.token_attributes {
+                if !exchange_attributes.contains(attribute) {
+                    exchange_attributes.push(attribute.clone());
+                }
+            }
             config["grantTypes"] = json!([
                 "client_credentials",
                 "urn:ietf:params:oauth:grant-type:token-exchange"
             ]);
             config["token"]["accessToken"]["userConfig"] = json!({
                 "validityPeriod": client.access_token_lifetime_seconds,
-                "attributes": crate::description::GRANT_ATTRIBUTES,
+                "attributes": exchange_attributes,
             });
         }
         write_owner_only(
@@ -558,7 +567,11 @@ mod tests {
         );
         assert_eq!(
             config["token"]["accessToken"]["userConfig"]["attributes"],
-            json!(GRANT_ATTRIBUTES)
+            json!(GRANT_ATTRIBUTES
+                .iter()
+                .copied()
+                .chain(["synthetic_tag"])
+                .collect::<Vec<_>>())
         );
         assert_eq!(
             config["token"]["accessToken"]["clientConfig"]["attributes"],
