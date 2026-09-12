@@ -518,6 +518,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
             {
+                "casework",
                 "developer-tools",
                 "discovery",
                 "evidence",
@@ -1162,17 +1163,14 @@ class CiChangesTest(unittest.TestCase):
         self.assertFalse(outputs["docs_archives"])
 
     def test_evidence_code_and_product_contracts_select_its_shards_and_drift_gate(self) -> None:
-        # A path inside the runtime crate seeds that crate alone. registry-mint
-        # dev-depends on registry-evidence so its compatibility test proves
-        # Evidence accepts a minted token. The Discovery client also drives a
-        # real Evidence router. Changing Evidence must therefore run both test
-        # consumers.
+        # A runtime change reaches the real Evidence router consumers, including
+        # the Casework institutional exchange acceptance through its dev dependency.
         outputs = classify(self.workspace, ("crates/registry-evidence/src/source.rs",))
         self.assertTrue(outputs["evidence_contracts"])
         self.assertIn("registry-evidence", outputs["rust_packages"])
         self.assertEqual(
             {entry["name"] for entry in outputs["rust_matrix"]["include"]},
-            {"developer-tools", "discovery", "evidence", "mint"},
+            {"casework", "developer-tools", "discovery", "evidence"},
         )
 
         # A products/evidence path belongs to no crate directory, so it seeds
