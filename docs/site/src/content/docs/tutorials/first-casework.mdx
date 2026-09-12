@@ -152,8 +152,7 @@ Ask the local issuer for a token as the `requester` client. The command writes a
 file that `curl` can send:
 
 ```sh
-umask 077
-caseworkctl dev token tutorial-work/casework requester
+caseworkctl dev token requester tutorial-work/casework
 ```
 
 `caseworkctl dev token` requests a fresh token through the registered client and reports the private
@@ -162,7 +161,7 @@ header-file path. The token carries the `casework:request` scope and lasts five 
 :::caution[Header files hold live tokens]
 `$headers/requester.header` and the other header files written later each hold a bearer token
 that acts as that client until it expires.
-`umask 077` makes them readable only by your user.
+The development lifecycle makes them readable only by your user.
 Keep them out of version control, screenshots, and support messages.
 :::
 
@@ -228,7 +227,7 @@ own request later.
 Request a second token, this time as the `staff` client:
 
 ```sh
-caseworkctl dev token tutorial-work/casework staff
+caseworkctl dev token staff tutorial-work/casework
 ```
 
 List the [work items](../../reference/glossary/#work-item) the Staff client's teams serve:
@@ -331,7 +330,7 @@ Renew the Staff token before you act, so time spent reading the inbox cannot tur
 an authentication refusal:
 
 ```sh
-caseworkctl dev token tutorial-work/casework staff
+caseworkctl dev token staff tutorial-work/casework
 ```
 
 Take the identifier and the offered `ifMatch` value from the inbox rather than typing them:
@@ -412,7 +411,7 @@ new `ifMatch`: claiming an item is what opens deciding it.
 Renew the Staff token again before the two decision attempts:
 
 ```sh
-caseworkctl dev token tutorial-work/casework staff
+caseworkctl dev token staff tutorial-work/casework
 ```
 
 Try to confirm the renewal with the `ifMatch` value the inbox offered before the claim:
@@ -498,7 +497,7 @@ Renew the Requester token before reading its own
 [terminal feed](../../reference/glossary/#terminal-feed):
 
 ```sh
-caseworkctl dev token tutorial-work/casework requester
+caseworkctl dev token requester tutorial-work/casework
 ```
 
 Read the feed:
@@ -551,7 +550,7 @@ A Supervisor resolves the opaque handle to a person, one decision at a time.
 Request a Supervisor token:
 
 ```sh
-caseworkctl dev token tutorial-work/casework supervisor
+caseworkctl dev token supervisor tutorial-work/casework
 ```
 
 Read the [accountability record](../../reference/glossary/#accountability-record) for the decision
@@ -608,7 +607,7 @@ Renew the Requester token so the first refusal proves the profile boundary rathe
 expiry:
 
 ```sh
-caseworkctl dev token tutorial-work/casework requester
+caseworkctl dev token requester tutorial-work/casework
 ```
 
 Ask for the Staff inbox with the Requester token:
@@ -632,7 +631,7 @@ The Requester profile carries no authority over the queue, whatever it asks for.
 Renew the Staff token, then ask for the same inbox while selecting the `supervisor` profile:
 
 ```sh
-caseworkctl dev token tutorial-work/casework staff
+caseworkctl dev token staff tutorial-work/casework
 ```
 
 ```sh
@@ -717,7 +716,7 @@ All of it came from the YAML in `tutorial-work/casework`.
 ### Renew an expired token
 
 A local token lasts five minutes.
-Run `caseworkctl dev token tutorial-work/casework <client>` again; it replaces that client's header file.
+Run `caseworkctl dev token <client> tutorial-work/casework` again; it replaces that client's header file.
 If it fails, the runtime is stopped: start it again with the command from
 [Start Casework](#start-casework), then renew.
 

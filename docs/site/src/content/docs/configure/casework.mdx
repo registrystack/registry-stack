@@ -484,7 +484,10 @@ caseworkctl source add ./tutorial-work/project \
 ```
 
 `source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a register whose selected request is not staged or not manually applied.
-Without `--apply` it previews: it reports the two changes it would make to the BReg project, `/entities/scope-correction/events/casework-lifecycle-v1` and `/accessProfiles/casework-reader`, prints both candidate fragments, and reports `status: preview` and `activation: not_performed`.
+Without `--apply` it previews the six places it would update in the BReg project: the lifecycle
+event, the `casework-reader` access profile, its local reader client, and the three Casework clients.
+The report includes the exact candidate fragments, `status: preview`, and
+`activation: not_performed`.
 Read the patch before you take the next step.
 
 ```sh
@@ -502,7 +505,11 @@ The command writes no secret and activates nothing: its report says `activation:
 Run `caseworkctl check` again, and the source description changes to `checked`.
 
 Connecting a source is authoring, and serving one is deployment.
-Locally, `caseworkctl dev` serves a connected project only beside a running `bregctl dev` session for the registry it names: pass `--source-project tutorial-work/registry`, and the Casework session borrows that registry session's Mint as its issuer, exports each Casework client as a registry client with the same principal, and binds the source to the running registry, reconciling every five seconds.
+Locally, `caseworkctl dev start` serves a connected project only beside a running
+`bregctl dev start` session for the registry it names. Pass
+`--source-project tutorial-work/registry`; the Casework session reuses that registry session's
+stock issuer, exports each Casework client as a registry client with the same principal, and binds
+the source to the running registry, reconciling every five seconds.
 Without a running registry session the command stops and names the `--source-project` argument it needs, because every source binding needs a running source system and its own reader credential.
 [Review Base Registry Engine changes in Casework](../../tutorials/review-breg-changes-in-casework/) walks that local journey end to end.
 For a deployment, package the connected project and hand it to an operator, who adds the matching source binding to the runtime file.

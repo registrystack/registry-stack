@@ -21,9 +21,8 @@
 # released bytes, then replays each registered tutorial's own shell fences from
 # an empty reader directory, the way a reader starts after installing the
 # binaries. The Base Registry Engine binaries are part of the toolset because
-# the two-product page runs a registry beside Casework, and because
-# `caseworkctl dev` drives `bregctl` from PATH to borrow that registry's local
-# session. What CI runs is what a reader copies.
+# the two-product page runs a registry beside Casework. What CI runs is what a
+# reader copies.
 #
 # Usage:
 #   scripts/check-casework-tutorial.sh              replay every registered tutorial
@@ -70,7 +69,7 @@
 #   CASEWORK_TUTORIAL_CARGO_PROFILE            ci (default) or release
 #   CASEWORK_TUTORIAL_DOCS_ROOT                docs content directory override (tests)
 #
-# CASEWORKCTL_DEV_CASEWORK_PORT, CASEWORKCTL_DEV_MINT_PORT and
+# CASEWORKCTL_DEV_CASEWORK_PORT, CASEWORKCTL_DEV_ISSUER_PORT and
 # CASEWORKCTL_DEV_DATABASE_PORT are deliberately not set here. The tutorial's
 # own commands pass no port flags, so leaving the three unset replays the
 # default ports a reader gets. They reach `caseworkctl dev` through the
@@ -229,9 +228,9 @@ load_spec() {
 	tutorials/review-breg-changes-in-casework)
 		# The page opens with two install one-liners, which this gate replaces
 		# with the toolset under test. It starts a registry with `bregctl dev`
-		# and then Casework with `caseworkctl dev --source-project`, which
-		# borrows the registry session's issuer, so the registry has to be
-		# running first and both sessions are stopped at the end.
+		# and then Casework through the bounded --source-project bridge, so
+		# the registry has to be running first and both sessions are stopped
+		# at the end.
 		SPEC_STEPS=(
 			"run:Create the two projects"
 			"run:Connect the registry to Casework"
@@ -298,8 +297,8 @@ SHIM_DIR="$WORK_ROOT/bin"
 # and on the two-product page `bregctl dev` beside it, running with a database
 # container behind each, and deleting the work root alone would orphan those
 # containers. Stopping with --remove is idempotent, so a journey that already
-# stopped its own sessions costs nothing here. Casework sessions stop first,
-# because each one borrows the issuer of the registry session beside it.
+# stopped its own sessions costs nothing here. Casework sessions stop first so
+# they no longer reconcile against a registry that is stopping.
 # Returns non-zero when a session was left behind, which is what keeps its
 # project under the work root for a second attempt.
 stop_dev_sessions() {
@@ -391,11 +390,10 @@ prepare_toolset() {
 
 	# The tutorials call the binaries by name, `caseworkctl dev` resolves
 	# `casework` and `bregctl` from PATH, and `bregctl dev` resolves
-	# `breg` the same way, so serve all five from a shim dir.
+	# `breg` the same way, so serve all four from a shim directory.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$CASEWORK_BIN" "$SHIM_DIR/casework"
 	ln -s "$CASEWORKCTL_BIN" "$SHIM_DIR/caseworkctl"
-	ln -s "$SHIM_DIR/mint"
 	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
 	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
 }

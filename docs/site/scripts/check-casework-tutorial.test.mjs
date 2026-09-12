@@ -144,10 +144,9 @@ test('the registered journey runs every profile the page teaches', async () => {
   }
 });
 
-// The two-product journey has to start the registry before Casework, because
-// `caseworkctl dev` borrows the registry session's issuer, and it has to stop
-// both at the end: a replay that stopped only one would hold a database
-// container after the gate exits.
+// The two-product journey has to start the registry before Casework can bind
+// and reconcile its source, and it has to stop both at the end: a replay that
+// stopped only one would hold a database container after the gate exits.
 test('the two-product journey starts the registry first and stops both sessions', async () => {
   const steps = extractBashArray(await reviewSpec(), 'SPEC_STEPS').map((step) =>
     step.replaceAll('"', ''),
@@ -199,7 +198,7 @@ async function runPrepareToolset() {
   const binDir = join(root, 'supplied');
   const shimDir = join(root, 'bin');
   await mkdir(binDir);
-  const names = ['casework', 'caseworkctl', 'mint', 'breg', 'bregctl'];
+  const names = ['casework', 'caseworkctl', 'breg', 'bregctl'];
   for (const name of names) {
     await writeFile(join(binDir, name), '#!/usr/bin/env bash\nexit 0\n', { mode: 0o755 });
   }
@@ -219,7 +218,7 @@ async function runPrepareToolset() {
   try {
     const result = await runShell(
       `CASEWORK_BIN='${join(binDir, 'casework')}' CASEWORKCTL_BIN='${join(binDir, 'caseworkctl')}' ` +
-        `MINT_BIN='${join(binDir, 'mint')}' BREG_BIN='${join(binDir, 'breg')}' ` +
+        `BREG_BIN='${join(binDir, 'breg')}' ` +
         `BREGCTL_BIN='${join(binDir, 'bregctl')}' bash ${harness}`,
     );
     return { ...result, names };
@@ -229,8 +228,7 @@ async function runPrepareToolset() {
 }
 
 // The two-product page calls `bregctl` and `breg` by name beside the Casework
-// binaries, and `caseworkctl dev` drives `bregctl` from PATH to borrow the
-// registry session, so the shim directory has to serve all five.
+// binaries, so the shim directory has to serve all four.
 test('the toolset serves the Base Registry Engine binaries beside the Casework ones', async () => {
   const { code, output, names } = await runPrepareToolset();
   assert.equal(code, 0, output);
@@ -291,8 +289,8 @@ async function runStopDevSessions({ stateFiles, stub }) {
 // page `bregctl dev` beside it, running with a database container behind each,
 // and deleting the work root alone would orphan those containers. The outer
 // cleanup stops every session the replay started, with the toolset under test,
-// and reclaims the containers and volumes. Casework sessions stop first,
-// because each one borrows the issuer of the registry session beside it.
+// and reclaims the containers and volumes. Casework sessions stop first so
+// they no longer reconcile against a registry that is stopping.
 test('the cleanup stops every local development session the replay started', async () => {
   const { code, output, readerDir, calls } = await runStopDevSessions({
     stateFiles: [
@@ -418,7 +416,7 @@ test('the gate sets none of the development port overrides', async () => {
   const source = await readFile(gate, 'utf8');
   for (const name of [
     'CASEWORKCTL_DEV_CASEWORK_PORT',
-    'CASEWORKCTL_DEV_MINT_PORT',
+    'CASEWORKCTL_DEV_ISSUER_PORT',
     'CASEWORKCTL_DEV_DATABASE_PORT',
   ]) {
     assert.doesNotMatch(source, new RegExp(`^[^#\\n]*${name}=`, 'mu'), `${name} must stay unset`);
