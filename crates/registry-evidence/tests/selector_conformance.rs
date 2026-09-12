@@ -965,6 +965,13 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
 async fn task_grant_context_is_bound_before_selector_or_source_access() {
     let service = prepare_service(false).await;
     let request = grant_request(None);
+    assert_authorization_error(
+        &service,
+        &access_token(json!({})),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
     let subject = json!({
         "given_name": "Adaeze",
         "family_name": "Okafor",
