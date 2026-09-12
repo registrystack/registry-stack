@@ -3,6 +3,7 @@
 //! Set the two disposable database variables named by the ignore reason, then run
 //! `cargo test --locked -p registry-casework --features postgres-test --lib
 //! approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes -- --ignored`.
+use super::native_resource as resource;
 use super::*;
 use async_trait::async_trait;
 use axum::{
@@ -28,8 +29,6 @@ use wiremock::{
     matchers::{method, path},
     Mock, MockServer, ResponseTemplate,
 };
-#[path = "native_resource.rs"]
-mod resource;
 const CASEWORK_RESOURCE: &str = "urn:casework:native-task";
 const BREG_RESOURCE: &str = "urn:breg:task-test";
 const EVIDENCE_RESOURCE: &str = "urn:registry:evidence:fixture";

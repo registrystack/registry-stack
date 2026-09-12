@@ -813,3 +813,9 @@ mod http_tests;
 
 #[cfg(all(test, feature = "postgres-test"))]
 mod native_exchange_tests;
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod local_session_tests;
+
+#[cfg(all(test, feature = "postgres-test"))]
+mod native_resource;

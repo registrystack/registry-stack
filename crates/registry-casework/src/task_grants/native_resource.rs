@@ -191,6 +191,27 @@ pub(super) fn app(
     jwks: serde_json::Value,
     status: Arc<dyn TaskGrantStatusChecker>,
 ) -> Router {
+    app_with_clients(
+        db,
+        registry,
+        identity,
+        issuer,
+        jwks,
+        status,
+        vec!["task-agent".into(), "seed-client".into()],
+    )
+}
+/// The local-session proof admits its explicitly rendered service and human clients.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn app_with_clients(
+    db: &TestDatabase,
+    registry: Arc<CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    issuer: &str,
+    jwks: Value,
+    status: Arc<dyn TaskGrantStatusChecker>,
+    clients: Vec<String>,
+) -> Router {
     let pool = db.runtime_config.build_pool().unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap();
@@ -228,7 +249,7 @@ pub(super) fn app(
         vec!["at+jwt".into()],
     )
     .with_scope_claim("scope")
-    .with_allowed_clients(vec!["task-agent".into(), "seed-client".into()]);
+    .with_allowed_clients(clients);
     let auth = RegistryAuthenticator::new(
         &registry,
         verifier,
@@ -320,7 +341,12 @@ pub(super) async fn create(
         json!({"data":data}),
     )
     .await;
-    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    assert_eq!(
+        r.status,
+        StatusCode::CREATED,
+        "fixture operation {key}: {}",
+        r.body
+    );
     r
 }
 pub(super) fn id(response: &Response) -> String {
