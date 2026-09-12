@@ -465,6 +465,8 @@ async fn evidence_fetches_keys_from_a_real_supervised_local_mint() {
             evidence_audience_claim: EVIDENCE_AUDIENCE_CLAIM.to_owned(),
             grant_id_claim: GRANT_ID_CLAIM.to_owned(),
             grant_authority_claim: GRANT_AUTHORITY_CLAIM.to_owned(),
+            allowed_clients: None,
+            required_scopes: None,
             actor_claim: None,
         };
         Authenticator::from_config(&authentication, AssuranceProfile::Local)

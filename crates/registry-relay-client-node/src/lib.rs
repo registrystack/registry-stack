@@ -216,6 +216,30 @@ fn optional_string(
     }
 }
 
+/// An optional member that, when present, must be an array of strings. The
+/// values' own grammar is the provider's to check; this holds only the shape.
+fn optional_string_array(
+    object: &Map<String, Value>,
+    field: &str,
+    kind: &'static str,
+    message: &'static str,
+) -> Result<Option<Vec<String>>> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| binding_error(kind, message))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Some(_) => Err(binding_error(kind, message)),
+    }
+}
+
 fn bounded_safe_integer(
     value: &Value,
     minimum: i64,
@@ -291,6 +315,8 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
             "clientId",
             "clientKey",
             "audience",
+            "resource",
+            "scopes",
             "assertionLifetimeSeconds",
             "refreshMarginSeconds",
             "requestTimeoutMilliseconds",
@@ -346,6 +372,22 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
         "authorization.privateKeyJwt.audience must be a string",
     )? {
         config = config.with_audience(value);
+    }
+    if let Some(value) = optional_string(
+        object,
+        "resource",
+        "configuration",
+        "authorization.privateKeyJwt.resource must be a string",
+    )? {
+        config = config.with_resource(value);
+    }
+    if let Some(values) = optional_string_array(
+        object,
+        "scopes",
+        "configuration",
+        "authorization.privateKeyJwt.scopes must be an array of strings",
+    )? {
+        config = config.with_scopes(values);
     }
     if let Some(value) = optional_i64(
         object,
