@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -17,6 +19,23 @@ SCRIPT = ROOT / "release/scripts/rehearse-release"
 
 class ReleaseRehearsalTest(unittest.TestCase):
     def test_advisory_bootstrap_cannot_qualify_as_normal_rehearsal(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        for directory in ("release/docker", "release/security"):
+            shutil.copytree(ROOT / directory, root / directory)
+        for relative in (
+            "release/scripts/release_candidate.py",
+            "release/scripts/build-release-binaries.sh",
+            "release/scripts/build-release-image.sh",
+            "release/scripts/cleanup-release-candidates.py",
+            "products/relay-v2/security/advisory-baseline.json",
+        ):
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / relative, destination)
+        baseline = root / "release/security/casework-advisory-baseline.json"
+        baseline.unlink(missing_ok=True)
         document = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         jobs = document["jobs"]
         bootstrap = next(
@@ -37,18 +56,26 @@ class ReleaseRehearsalTest(unittest.TestCase):
         for advisory, code in (("false", 1), ("true", 0), ("invalid", 2)):
             with self.subTest(advisory=advisory):
                 result = subprocess.run(
-                    ["bash", "-c", bootstrap["run"]], cwd=ROOT,
+                    ["bash", "-c", bootstrap["run"]], cwd=root,
                     env={**env, "REHEARSAL_ADVISORY_EVIDENCE": advisory},
                     capture_output=True, text=True,
                 )
                 self.assertEqual(code, result.returncode, result.stderr)
         result = subprocess.run(
-            ["bash", "-c", strict["run"]], cwd=ROOT,
+            ["bash", "-c", strict["run"]], cwd=root,
             env={**env, "REHEARSAL_ADVISORY_EVIDENCE": "true"},
             capture_output=True, text=True,
         )
         self.assertNotEqual(0, result.returncode)
         self.assertIn("casework advisory baseline is missing", result.stderr)
+        baseline.write_text(
+            json.dumps({"version": 4, "service": "casework"}), encoding="utf-8"
+        )
+        result = subprocess.run(
+            ["bash", "-c", strict["run"]], cwd=root, env=env,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
 
     def test_workflow_is_manual_read_only_and_ubuntu_bounded(self) -> None:
         text = WORKFLOW.read_text(encoding="utf-8")

@@ -880,16 +880,28 @@ class ReleaseCandidateTest(TestCase):
                 )
 
     def test_image_onboarding_at_0_30_0_requires_reviewed_casework_baseline(self) -> None:
+        root = self.onboarding_repository()
+        shutil.copy2(
+            ROOT / "release/docker/Dockerfile.casework",
+            root / "release/docker/Dockerfile.casework",
+        )
         with self.assertRaisesRegex(
             self.module.CandidateError,
             "casework advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(ROOT, "0.30.0")
+            self.module.check_image_onboarding(root, "0.30.0")
         self.assertEqual(
             self.module._candidate_image_names("0.30.0"),
             self.module.check_image_onboarding(
-                ROOT, "0.30.0", allow_missing_baseline=True
+                root, "0.30.0", allow_missing_baseline=True
             ),
+        )
+        (root / "release/security/casework-advisory-baseline.json").write_text(
+            json.dumps({"version": 4, "service": "casework"}), encoding="utf-8"
+        )
+        self.assertEqual(
+            self.module._candidate_image_names("0.30.0"),
+            self.module.check_image_onboarding(root, "0.30.0"),
         )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
