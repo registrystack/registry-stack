@@ -158,6 +158,13 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let bytes =
         crate::read_bounded_source_file(&state.clients_file, "dev.clients", "clients", MAX_BYTES)
             .map_err(|_| anyhow::anyhow!("clients file is missing or unsafe"))?;
+    let clients = config::clients(&bytes)?;
+    let client_scopes: Vec<&String> = clients
+        .clients
+        .iter()
+        .find(|client| client.id == "source")
+        .map(|client| client.scopes.iter().collect())
+        .unwrap_or_default();
     let captured = capture(&project, &bytes)?;
     if captured.digest != state.source_digest {
         bail!("authored inputs differ from the retained session; restore the recorded inputs before preparing a source. Arbitrary changes require the reviewed package lifecycle");
@@ -166,7 +173,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     let compiled = crate::compile(&project, crate::ProfileArg::Production, "prepare-source")
         .map_err(|_| anyhow::anyhow!("project no longer compiles"))?;
     let mut report = json!({"ok":true,"command":"dev prepare-source","project":project,"status":"inspect","recoveredPriorApply":recovered,
-        "entities":inventory(&docs,&compiled),"bregUrl":state.breg_origin(),"tokenEndpoint":format!("{}/token",state.mint_origin()),"audience":state.audience()});
+        "entities":inventory(&docs,&compiled),"bregUrl":state.breg_origin(),"issuer":state.issuer_origin(),"tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),"clientAssertionAudience":state.issuer_origin(),"resource":state.audience(),"scopes":client_scopes,"audience":state.audience()});
     let Some(entity_id) = &args.entity else {
         if args.apply
             || args.selector_field.is_some()
@@ -324,7 +331,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
     }
     registry["accessProfiles"].as_array_mut().context("access profiles missing")?.push(json!({
         "id":args.access_profile,"principalClaim":"registry_principal","requiredScopes":[scope],"requiredPurposes":["evidence-source-read"],
-        "grants":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
+        "permissions":[{"entity":entity_id,"operations":["lookup"],"readableFields":grant_fields,
             "lookups":[{"selector":args.selector_profile,"valueOrigin":"request"}],"rowBoundaries":row_boundaries}]}));
     let sequence = state
         .sequence
@@ -410,6 +417,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
             ("selectorProfile", json!(args.selector_profile)),
             ("accessProfile", json!(args.access_profile)),
             ("client", json!(args.client)),
+            ("preparedClientScopes", json!(&client.scopes)),
             ("readableFields", json!(args.readable_fields)),
             ("rowScope", row_scope),
             ("packageSequence", json!(sequence)),
@@ -522,11 +530,10 @@ fn finish(original: &State, transition: &Transition) -> Result<()> {
         fs::rename(staging, &credential)?;
         File::open(root.join("credentials"))?.sync_all()?;
     }
-    let public: Value =
-        serde_json::from_slice(&private::read(&credential.join("public.jwk"), MAX_BYTES)?)?;
-    private::replace(&root.join("mint/clients").join(format!("{}.yaml",transition.client.id)),serde_norway::to_string(&json!({
-        "clientId":transition.client.id,"principal":format!("urn:breg:dev:{}",transition.client.id),
-        "authorization":{"scopes":transition.client.scopes,"claims":transition.client.claims},"keys":[public]}))?.as_bytes())?;
+    // The reviewed successor adds a native machine agent, role, and resource
+    // permission for this lookup-only client. Publish the whole derived issuer
+    // description so the next owned restart bootstraps the registration.
+    config::refresh_issuer_registration(original, &transition.clients)?;
     for (path, bytes) in &transition.replacements {
         // Authoring files are ordinary project files, not private state. The
         // source capture checked their safety; no unrelated file is replaced.
@@ -689,13 +696,17 @@ mod tests {
                 .remove("accessProfiles")
                 .unwrap();
             let mut operator = profiles.as_array_mut().unwrap().remove(0);
-            let mut grants = operator.as_object_mut().unwrap().remove("grants").unwrap();
-            let mut grant = grants.as_array_mut().unwrap().remove(0);
-            grant.as_object_mut().unwrap().remove("entity");
+            let mut permissions = operator
+                .as_object_mut()
+                .unwrap()
+                .remove("permissions")
+                .unwrap();
+            let mut permission = permissions.as_array_mut().unwrap().remove(0);
+            permission.as_object_mut().unwrap().remove("entity");
             operator
                 .as_object_mut()
                 .unwrap()
-                .extend(grant.as_object().unwrap().clone());
+                .extend(permission.as_object().unwrap().clone());
             let module = json!({"id":"local-authority","version":"1","extendEntities":[{"entity":"record","accessProfiles":[operator]}]});
             let module_bytes = serde_norway::to_string(&module).unwrap().into_bytes();
             let parsed = registry_breg::contract::parse_module_yaml(&module_bytes).unwrap();
@@ -793,6 +804,12 @@ mod tests {
         let preview = run(args(&state)).unwrap();
         assert_eq!(preview["packageSequence"], 2);
         assert_eq!(
+            preview["preparedClientScopes"],
+            json!(["registry:source-reader:lookup"])
+        );
+        assert_eq!(preview["resource"], preview["audience"]);
+        assert_eq!(preview["clientAssertionAudience"], preview["issuer"]);
+        assert_eq!(
             preview["changeSet"]["migrationPlan"]["statements"],
             json!([])
         );
@@ -815,6 +832,36 @@ mod tests {
         selected.apply = true;
         let applied = run(selected).unwrap();
         assert_eq!(applied["status"], "prepared");
+        assert_eq!(
+            applied["preparedClientScopes"],
+            preview["preparedClientScopes"]
+        );
+        let agents = root.join("issuer/registry-schema/agents");
+        let registrations: Vec<Value> = fs::read_dir(&agents)
+            .unwrap()
+            .map(|entry| {
+                let entry = entry.unwrap();
+                serde_norway::from_slice(&private::read(&entry.path(), MAX_BYTES).unwrap()).unwrap()
+            })
+            .collect();
+        let source = registrations
+            .iter()
+            .find(|agent| agent["inboundAuthConfig"][0]["config"]["clientId"] == "source-reader")
+            .expect("the prepared source has a native machine registration");
+        assert_eq!(source["attributes"]["registry_principal"], "source-reader");
+        assert!(!root.join("mint/clients/source-reader.yaml").exists());
+        let roles = root.join("issuer/resources/roles");
+        let grants: Vec<Value> = fs::read_dir(roles)
+            .unwrap()
+            .map(|entry| {
+                serde_norway::from_slice(&private::read(&entry.unwrap().path(), MAX_BYTES).unwrap())
+                    .unwrap()
+            })
+            .collect();
+        assert!(grants
+            .iter()
+            .any(|role| role["permissions"][0]["permissions"]
+                == json!(["registry:source-reader:lookup"])));
         let prepared: Value = serde_norway::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(prepared["accessProfiles"].as_array().unwrap().len(), 1);
         assert_eq!(prepared["accessProfiles"][0]["id"], "source-reader");
@@ -852,9 +899,7 @@ mod tests {
         )
         .unwrap();
         let operator_path = root.join("credentials/operator/assertion-key.jwk");
-        let issuer_path = root.join("credentials/issuer/assertion-key.jwk");
         let operator = private::read(&operator_path, MAX_BYTES).unwrap();
-        let issuer = private::read(&issuer_path, MAX_BYTES).unwrap();
         let originals = BTreeMap::from([
             (
                 state.project.join("registry.yaml"),
@@ -873,7 +918,6 @@ mod tests {
         assert_eq!(pending.seeded, state.seeded);
         assert!(!pending.activated);
         assert_eq!(private::read(&operator_path, MAX_BYTES).unwrap(), operator);
-        assert_eq!(private::read(&issuer_path, MAX_BYTES).unwrap(), issuer);
         let key_path = root.join("credentials/source-reader/assertion-key.jwk");
         let key = private::read(&key_path, MAX_BYTES).unwrap();
         let mut selected = args(&state);
@@ -1071,7 +1115,7 @@ mod tests {
             let root = state.root();
             let path = state.project.join("registry.yaml");
             let mut model: Value = serde_norway::from_slice(&fs::read(&path).unwrap()).unwrap();
-            model["accessProfiles"][0]["grants"][0]["rowBoundaries"] =
+            model["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
                 json!([{"field":field,"claim":"existing_row","operator":operator}]);
             let model = serde_norway::to_string(&model).unwrap().into_bytes();
             fs::write(&path, &model).unwrap();
@@ -1122,9 +1166,9 @@ mod tests {
         target["id"] = json!("organization");
         target["route"] = json!("organizations");
         model["entities"].as_array_mut().unwrap().push(target);
-        let mut target_grant = model["accessProfiles"][0]["grants"][0].clone();
+        let mut target_grant = model["accessProfiles"][0]["permissions"][0].clone();
         target_grant["entity"] = json!("organization");
-        model["accessProfiles"][0]["grants"]
+        model["accessProfiles"][0]["permissions"]
             .as_array_mut()
             .unwrap()
             .push(target_grant);
@@ -1134,7 +1178,7 @@ mod tests {
             .unwrap()
             .push(json!({"kind":"unique","fields":["organization"]}));
         for key in ["readableFields", "writableFields"] {
-            model["accessProfiles"][0]["grants"][0][key]
+            model["accessProfiles"][0]["permissions"][0][key]
                 .as_array_mut()
                 .unwrap()
                 .push(json!("organization"));

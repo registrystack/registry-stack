@@ -986,7 +986,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       "accessProfiles":[{
         "id":"historian","default":true,"principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "grants":[{
+        "permissions":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note","member-count"],
           "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdictions","operator":"in"}]
@@ -994,7 +994,7 @@ fn compiled_registry_for_temporal_type(temporal_type: &str) -> registry_breg::Co
       },{
         "id":"archivist","principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-        "grants":[{
+        "permissions":[{
           "entity":"membership","operations":["snapshot"],"readableFields":["household-code","jurisdiction","valid-from","valid-to","case-note"],
           "filterableFields":["household-code"],"sortableFields":["household-code"],"allowCount":true,
           "rowBoundaries": []

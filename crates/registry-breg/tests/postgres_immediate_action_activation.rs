@@ -960,7 +960,7 @@ fn variant_for(registry: &CompiledRegistry) -> Variant {
         .actions()
         .actions
         .first()
-        .and_then(|action| action.grants.first())
+        .and_then(|action| action.permissions.first())
         .and_then(|grant| grant.required_scopes.iter().next())
         .map(String::as_str)
     {
@@ -1008,7 +1008,7 @@ fn project_bytes(variant: Variant, sequence: u64) -> Vec<u8> {
                   "principalClaim":"registry_principal",
                   "requiredScopes":["{scope}"],
                   "requiredPurposes":["contact-registration"],
-                  "grants":[{{
+                  "permissions":[{{
                     "action":"register-household-contact",
                     "operations":["invoke"],
                     "targets":[

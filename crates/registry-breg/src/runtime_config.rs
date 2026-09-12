@@ -2,7 +2,7 @@
 //! Strict deployment-only runtime configuration for Base Registry Engine.
 
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fmt, fs,
     io::Read,
     net::{IpAddr, SocketAddr},
@@ -24,8 +24,8 @@ use registry_platform_httputil::destination::{
     MAX_DESTINATION_ORIGIN_URL_BYTES, MAX_DESTINATION_PRIVATE_CIDRS, MAX_DESTINATION_TARGET_BYTES,
 };
 use registry_platform_oidc::{
-    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
-    TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, ClaimNames, JwksFetcher, JwksFetcherConfig,
+    OidcDiscoveryConfig, TokenVerifierConfig,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -379,6 +379,7 @@ pub struct RuntimeConfig {
     attachment_verification: crate::attachment_verification::AttachmentVerificationConfig,
     package: PackageConfig,
     authentication: AuthenticationConfig,
+    task_grant_status: Vec<crate::task_grant::TaskGrantStatusConfig>,
     audit: AuditConfig,
     cursor: CursorConfig,
     event_destinations: EventDestinationConfigs,
@@ -433,6 +434,7 @@ impl RuntimeConfig {
             attachment_verification,
             package,
             authentication,
+            task_grant_status: raw.task_grant_status,
             audit,
             cursor,
             event_destinations,
@@ -441,6 +443,30 @@ impl RuntimeConfig {
             operational_timeouts,
             metrics_listener,
         })
+    }
+
+    pub fn activate_task_status(
+        &self,
+        compiled: &CompiledRegistry,
+    ) -> Result<Arc<crate::task_grant::TaskGrantStatusRegistry>> {
+        let status = crate::task_grant::TaskGrantStatusRegistry::activate(
+            &self.task_grant_status,
+            &self.authentication.oidc.audience,
+            &self.secret_resolver()?,
+        )
+        .map_err(|_| RuntimeConfigError::InvalidBinding)?;
+        for profile in compiled
+            .entities()
+            .values()
+            .flat_map(|entity| entity.access_profiles.values())
+        {
+            if let Some(grant) = &profile.task_grant {
+                if !status.contains(&grant.authority, &grant.source_issuer) {
+                    return Err(RuntimeConfigError::InvalidBinding);
+                }
+            }
+        }
+        Ok(Arc::new(status))
     }
 
     pub fn activate_evidence(
@@ -1597,6 +1623,8 @@ impl fmt::Debug for JwksCacheConfig {
 pub struct AuthorityClaimsConfig {
     principal: String,
     purpose: Option<String>,
+    contextual: ClaimNames,
+    trusted_actors: BTreeMap<String, String>,
 }
 
 impl AuthorityClaimsConfig {
@@ -1614,14 +1642,33 @@ impl AuthorityClaimsConfig {
                 return Err(RuntimeConfigError::InvalidOidc);
             }
         }
+        let contextual = raw.contextual.map(ClaimNames::from).unwrap_or_default();
+        contextual
+            .validate()
+            .map_err(|_| RuntimeConfigError::InvalidOidc)?;
+        if raw.trusted_actors.len() > MAX_LIST_ITEMS
+            || raw.trusted_actors.iter().any(|(client, actor)| {
+                client.is_empty()
+                    || client.len() > MAX_LIST_VALUE_BYTES
+                    || actor.is_empty()
+                    || actor.len() > MAX_LIST_VALUE_BYTES
+                    || client.chars().any(char::is_whitespace)
+                    || actor.chars().any(char::is_whitespace)
+            })
+        {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
         Ok(Self {
             principal: raw.principal,
             purpose: raw.purpose,
+            contextual,
+            trusted_actors: raw.trusted_actors,
         })
     }
 
     fn to_platform_config(&self) -> AuthorityClaimConfig {
         AuthorityClaimConfig::new(self.principal.clone(), self.purpose.clone())
+            .with_contextual_claims(self.contextual.clone(), self.trusted_actors.clone())
     }
 }
 
@@ -1631,6 +1678,8 @@ impl fmt::Debug for AuthorityClaimsConfig {
             .debug_struct("AuthorityClaimsConfig")
             .field("principal", &"<redacted>")
             .field("purpose", &self.purpose.as_ref().map(|_| "<redacted>"))
+            .field("contextual", &self.contextual)
+            .field("trusted_actor_clients", &self.trusted_actors.keys())
             .finish()
     }
 }
@@ -1805,6 +1854,8 @@ struct RawRuntimeConfig {
     attachment_verification: crate::attachment_verification::RawAttachmentVerificationConfig,
     package: RawPackageConfig,
     authentication: RawAuthenticationConfig,
+    #[serde(default)]
+    task_grant_status: Vec<crate::task_grant::TaskGrantStatusConfig>,
     audit: RawAuditConfig,
     cursor: RawCursorConfig,
     #[serde(default)]
@@ -2008,6 +2059,43 @@ struct RawAuthorityClaimsConfig {
     principal: String,
     #[serde(default)]
     purpose: Option<String>,
+    #[serde(default)]
+    contextual: Option<RawContextualClaimNames>,
+    #[serde(default)]
+    trusted_actors: BTreeMap<String, String>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct RawContextualClaimNames {
+    actor_kind: String,
+    purpose: String,
+    grant_id: String,
+    grant_authority: String,
+    grant_source_issuer: String,
+    grant_client: String,
+    grant_resource: String,
+    grant_exp: String,
+    grant_bounds: String,
+    approver: String,
+}
+
+impl From<RawContextualClaimNames> for ClaimNames {
+    fn from(value: RawContextualClaimNames) -> Self {
+        Self {
+            actor_kind: value.actor_kind,
+            purpose: value.purpose,
+            grant_id: value.grant_id,
+            grant_authority: value.grant_authority,
+            grant_source_issuer: value.grant_source_issuer,
+            grant_client: value.grant_client,
+            grant_resource: value.grant_resource,
+            grant_exp: value.grant_exp,
+            grant_bounds: value.grant_bounds,
+            approver: value.approver,
+        }
+    }
 }
 
 #[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]

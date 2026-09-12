@@ -59,7 +59,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: case
         rowBoundaries: []
         operations: [get, list]
@@ -70,7 +70,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - entity: case
         operations: [get, list]
         readableFields: [label, jurisdiction]

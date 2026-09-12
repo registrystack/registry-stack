@@ -413,7 +413,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "public-organization",
           "operations": [
@@ -454,7 +454,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "public-organization",
           "operations": [
@@ -569,7 +569,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "public-organization",
           "operations": [

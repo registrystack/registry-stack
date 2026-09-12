@@ -5643,9 +5643,9 @@ bregctl project lock .
 ## Run it on your machine
 
 `bregctl dev` starts this project as a working registry on loopback: PostgreSQL
-in Docker, Registry Mint issuing tokens to the clients in `dev-clients.yaml`,
-and Base Registry Engine serving the package it builds and tests from these
-files. It needs Docker and the installed `breg` and `mint` binaries.
+and the pinned ThunderID issuer in Docker, and Base Registry Engine serving the
+package it builds and tests from these files. It needs Docker and the installed
+`breg` binary; client registrations come from `dev-clients.yaml`.
 
 ```sh
 bregctl dev
@@ -5794,7 +5794,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:generic:operate]
     requiredPurposes: [registry-operations]
-    grants:
+    permissions:
       - entity: record-group
         rowBoundaries: []
         operations: [create, get, list]
@@ -5822,7 +5822,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:generic:read]
     requiredPurposes: [registry-reporting]
-    grants:
+    permissions:
       - entity: record
         operations: [get, list]
         readableFields: [code, label, group, status]
@@ -5846,7 +5846,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:evidence:lookup]
     requiredPurposes: [evidence-source-read]
-    grants:
+    permissions:
       - entity: record
         rowBoundaries: []
         operations: [lookup]
@@ -5973,7 +5973,7 @@ eventDestinations: {}
 "#;
 
 const INIT_DEV_CLIENTS: &[u8] =
-    br#"# Local callers for `bregctl dev`. Registry Mint, the local token issuer that
+    br#"# Local callers for `bregctl dev`. The owned ThunderID issuer that
 # `dev` starts beside the registry, registers each client below and issues it
 # short-lived tokens carrying these claims. One client binds each access profile
 # that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
@@ -6973,7 +6973,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                     "method": "POST",
                     "preconditions": request_action_preconditions(action.operation.access_operation()),
                 })).collect::<Vec<_>>(),
-                "reviewGrants": request.review_grants.iter().map(|grant| json!({
+                "reviewPermissions": request.review_permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "stage": grant.stage,
                     "targetEntity": grant.target_entity_id,
@@ -6982,12 +6982,12 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                         .collect::<Vec<_>>(),
                     "rowBoundaries": grant.row_boundaries,
                 })).collect::<Vec<_>>(),
-                "applyGrants": request.apply_grants.iter().map(|grant| json!({
+                "applyPermissions": request.apply_permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "targetEntity": grant.target_entity_id,
                     "rowBoundaries": grant.row_boundaries,
                 })).collect::<Vec<_>>(),
-                "presenceGrants": request.presence_grants.iter().map(|grant| json!({
+                "presencePermissions": request.presence_permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "targetEntity": grant.target_entity_id,
                     "requestRowBoundaries": grant.request_row_boundaries,
@@ -7023,7 +7023,7 @@ fn explain_change_requests(compiled: &CompiledRegistry) -> serde_json::Result<Va
                 "route": entity.route,
                 "requiredFor": control.required_for.iter().map(|operation| operation_wire_name(*operation)).collect::<Vec<_>>(),
                 "eligibleRequestTypes": eligible,
-                "directWriteRestriction": "controlled operations are absent from ordinary grants and require compiled apply_request context",
+                "directWriteRestriction": "controlled operations are absent from ordinary permissions and require compiled apply_request context",
             }))
         })
         .collect::<Vec<_>>();
@@ -7230,7 +7230,7 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     })
                     .map(|input| input.api_name.as_str())
                     .collect::<BTreeSet<_>>(),
-                "grants": action.grants.iter().map(|grant| json!({
+                "permissions": action.permissions.iter().map(|grant| json!({
                     "profile": grant.profile_id,
                     "default": grant.default,
                     "anonymous": grant.anonymous,
@@ -11406,7 +11406,7 @@ accessProfiles:
   - id: operator
     principalClaim: registry_principal
     requiredPurposes: [operations]
-    grants:
+    permissions:
       - entity: record
         rowBoundaries: []
         operations: [create, get, list, patch]

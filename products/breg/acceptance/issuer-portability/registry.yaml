@@ -21,7 +21,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [registry-administration]
-    grants:
+    permissions:
       - entity: record
         operations: [get]
         readableFields: [label]

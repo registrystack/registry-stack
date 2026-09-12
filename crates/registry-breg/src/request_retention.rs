@@ -1239,6 +1239,20 @@ async fn erase_request_detail_in_transaction(
         .filter(|entity| entity.change_request.is_some())
         .ok_or(RequestRetentionError::Unavailable)?;
 
+    // Task selectors are proposal detail and must disappear in the same
+    // maintenance transaction as the frozen proposal payload.
+    transaction
+        .execute(
+            "DELETE FROM registry_internal.registry_request_task_authority
+         WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3",
+            &[
+                &scope.request_entity_id,
+                &scope.request_id,
+                &scope.proposal_version,
+            ],
+        )
+        .await
+        .map_err(map_retention_error)?;
     let proposal_snapshots = transaction
         .execute(
             "UPDATE registry_internal.registry_request_proposals
@@ -1646,7 +1660,7 @@ fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
         })
         .collect::<BTreeSet<_>>();
     if let Some(request) = &entity.change_request {
-        for grant in &request.presence_grants {
+        for grant in &request.presence_permissions {
             fields.extend(
                 grant
                     .request_row_boundaries

@@ -341,6 +341,22 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
     assert_eq!(public_item["request"]["proposalVersion"], 1);
     assert_effect_digests_withheld(public_item);
 
+    // Seed protected task metadata through the migration authority after the
+    // ordinary journey. This proof concerns erasure, not grant admission.
+    let (migration, migration_task) = database.connect_migration().await;
+    let retained_request_id = Uuid::parse_str(&request.id).unwrap();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_request_task_authority
+         (request_entity_id, request_id, proposal_version, binding)
+         VALUES ('correction-request', $1, 1, $2)",
+            &[
+                &retained_request_id,
+                &json!({"subjects":{"person_reference":"private-task-selector"}}),
+            ],
+        )
+        .await
+        .expect("protected task detail seeds");
     let retention = RequestRetentionOperatorService::new_for_test(
         registry.as_ref().clone(),
         identity,
@@ -361,6 +377,20 @@ async fn erased_terminal_request_get_keeps_metadata_and_scopes_result_links_to_t
         .await
         .expect("terminal request detail erases through the verified operator boundary");
 
+    assert_eq!(
+        migration
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_request_task_authority
+         WHERE request_entity_id = 'correction-request' AND request_id = $1",
+                &[&retained_request_id],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        0,
+        "proposal erasure removes task selectors"
+    );
+    migration_task.abort();
     let erased = get_record(
         &app,
         &format!(
@@ -1082,7 +1112,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[
             {
               "id":"operator","default":true,"principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"site",
                 "operations":["create","get","list"],
                 "readableFields":["tenant","name"],
@@ -1110,7 +1140,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"request-only","principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -1119,7 +1149,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"public-request","anonymous":true,
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["get","list"],
                 "readableFields":["tenant","placement","proposed-site","reason"],
@@ -1128,7 +1158,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             },
             {
               "id":"snapshot-reader","principalClaim":"registry_principal",
-              "grants":[{
+              "permissions":[{
                 "entity":"correction-request",
                 "operations":["snapshot"],
                 "readableFields":["tenant","placement","proposed-site","reason"],

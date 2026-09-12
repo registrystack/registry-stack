@@ -148,7 +148,7 @@ pub fn authority_inventory(
         }
     }
     for action in &registry.actions().actions {
-        for grant in &action.grants {
+        for grant in &action.permissions {
             inventory.profile(
                 grant.anonymous,
                 grant.principal_claim.as_deref(),

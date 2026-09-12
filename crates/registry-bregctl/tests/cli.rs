@@ -73,7 +73,7 @@ accessProfiles:
     default: true
     principalClaim: sub
     requiredScopes: [registry.read]
-    grants:
+    permissions:
       - entity: record
         rowBoundaries: []
         operations: [get, list]
@@ -465,7 +465,7 @@ fn access_review_example_explains_simulates_and_refuses_footguns_without_live_da
         "../../../products/breg/examples/access-review/registry.yaml"
     ))
     .unwrap();
-    source["accessProfiles"][0]["grants"][0]["rowBoundaries"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = serde_json::json!([]);
     fs::write(
         project.path().join("registry.yaml"),
         serde_json::to_vec(&source).unwrap(),
@@ -742,7 +742,7 @@ accessProfiles:
     principalClaim: private_claim_name
     requiredScopes: [registry:contact:register]
     requiredPurposes: [contact-registration]
-    grants:
+    permissions:
       - action: register-household-contact
         operations: [invoke]
         targets:
@@ -754,7 +754,7 @@ accessProfiles:
     principalClaim: other_private_claim
     requiredScopes: [registry:contact:audit]
     requiredPurposes: [contact-audit]
-    grants:
+    permissions:
       - action: register-household-contact
         operations: [invoke]
         targets:
@@ -1761,7 +1761,7 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: "registry_principal\n  error  forged.code  forged"
-    grants:
+    permissions:
       - entity: record
         operations: [get]
         readableFields: [code]
@@ -2782,7 +2782,7 @@ fn explain_access_includes_action_only_grants_and_target_reach() {
         .all(|entity| entity["profiles"].as_array().unwrap().is_empty()));
     let action = &explanation["actions"]["actions"][0];
     assert_eq!(action["id"], "register-household-contact");
-    let registrar = action["grants"]
+    let registrar = action["permissions"]
         .as_array()
         .unwrap()
         .iter()
@@ -2858,9 +2858,9 @@ fn explain_actions_reports_compiled_effects_conditions_results_and_grants() {
         .iter()
         .any(|target| target["conditionRequired"] == true
             && target["source"]["input"]["apiName"] == "householdId"));
-    assert!(action["grants"]
+    assert!(action["permissions"]
         .as_array()
-        .expect("grants are listed")
+        .expect("permissions are listed")
         .iter()
         .any(|grant| grant["profile"] == "contact-registrar"
             && grant["results"]
@@ -2964,7 +2964,7 @@ fn explain_change_requests_reports_compiled_effects_actions_and_controlled_write
     );
     assert_eq!(
         explanation["controlledWrites"][0]["directWriteRestriction"],
-        "controlled operations are absent from ordinary grants and require compiled apply_request context"
+        "controlled operations are absent from ordinary permissions and require compiled apply_request context"
     );
     assert_eq!(
         explanation["controlledWrites"][0]["eligibleRequestTypes"],
@@ -3007,7 +3007,7 @@ entities:
 accessProfiles:
   - id: reader
     principalClaim: principal
-    grants:
+    permissions:
       - entity: typed-record
         rowBoundaries: []
         operations: [list]
@@ -3077,7 +3077,7 @@ accessProfiles:
   - id: map-reader
     default: true
     principalClaim: principal
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]
@@ -3086,7 +3086,7 @@ accessProfiles:
           bbox: {maximumLongitudeSpanDegrees: 0.5, maximumLatitudeSpanDegrees: 0.25}
   - id: geometry-reader
     principalClaim: principal
-    grants:
+    permissions:
       - {entity: service-site, operations: [get, list], readableFields: [location], rowBoundaries: []}
 "#,
     );

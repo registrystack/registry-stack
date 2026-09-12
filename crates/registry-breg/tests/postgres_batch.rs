@@ -611,7 +611,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["case-management","case-review"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["create","get","patch","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
@@ -620,7 +620,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"batch-creator","principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["create","batch"],
               "readableFields":["jurisdiction","label","locked","quantity"],
               "writableFields":["jurisdiction","label","secret","quantity"],
@@ -629,7 +629,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"operator-minimal","principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget","operations":["create","patch","batch"],
               "readableFields":["label"],
               "writableFields":["jurisdiction","label","secret","quantity"],

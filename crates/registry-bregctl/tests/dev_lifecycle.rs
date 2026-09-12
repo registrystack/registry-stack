@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Installed-binary proof. Opt in after building breg, mint and bregctl; Docker
+//! Installed-binary proof. Opt in after building breg and bregctl; Docker
 //! must be available. This creates and removes only its own synthetic database.
 
+use base64::Engine as _;
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -166,16 +167,19 @@ fn poll_report(mut read: impl FnMut() -> Value, ready: impl Fn(&Value) -> bool) 
 }
 
 #[test]
-#[ignore = "requires matching installed breg/mint binaries and Docker; runs a retained local database"]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
 fn installed_dev_receives_retries_replays_and_retains_authored_events() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    // The issuer bind-mounts this workspace into Docker. Keep the synthetic
+    // state beside the built binary instead of the host's possibly unshared
+    // platform TMPDIR (for example macOS /private/var/folders).
     let temporary = tempfile::Builder::new()
         .prefix("breg-native-events-test-")
-        .tempdir()
+        .tempdir_in(binary.parent().unwrap())
         .unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let parent = fs::canonicalize(temporary.keep()).unwrap();
     let project = parent.join("registry");
-    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let session = Session {
         project: project.clone(),
         path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
@@ -232,7 +236,7 @@ seed:
     data: {code: synthetic-event-seed, label: Synthetic event seed, status: active}
 "#,
     );
-    let [database_port, breg_port, mint_port] = free_ports();
+    let [database_port, breg_port, issuer_port] = free_ports();
     let first = session.report(session.dev(&[
         "start",
         "--clients-file",
@@ -241,8 +245,8 @@ seed:
         &database_port.to_string(),
         "--breg-port",
         &breg_port.to_string(),
-        "--mint-port",
-        &mint_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
     ]));
     assert_eq!(first["status"], "ready");
     let dev = project.join(".breg/dev");
@@ -250,7 +254,7 @@ seed:
     let state: Value = serde_json::from_slice(&fs::read(&state_file).unwrap()).unwrap();
     let webhook_port = u16::try_from(state["webhookPort"].as_u64().unwrap()).unwrap();
     assert_ne!(webhook_port, 0);
-    assert!(![database_port, breg_port, mint_port].contains(&webhook_port));
+    assert!(![database_port, breg_port, issuer_port].contains(&webhook_port));
     let receiver_address = std::net::SocketAddr::from(([127, 0, 0, 1], webhook_port));
     assert!(std::net::TcpStream::connect(receiver_address).is_ok());
     let runtime_file = dev.join("runtime.yaml");
@@ -525,18 +529,18 @@ seed:
 }
 
 #[test]
-#[ignore = "requires matching installed breg/mint binaries and Docker; runs a retained local database"]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
 fn installed_dev_preserves_edits_and_recovers_failed_start_without_reseeding() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     let temporary = tempfile::Builder::new()
         .prefix("breg-native-dev-test-")
-        .tempdir()
+        .tempdir_in(binary.parent().unwrap())
         .unwrap();
     fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
     let parent = fs::canonicalize(temporary.keep()).unwrap();
     let project = parent.join("registry");
-    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
     // Only the binaries built beside bregctl serve this session: an installed
-    // breg or mint from an earlier package format must not be reachable, and
+    // breg from an earlier package format must not be reachable, and
     // Docker must be named explicitly rather than found.
     let session = Session {
         project: project.clone(),
@@ -585,7 +589,7 @@ seed:
     );
     // A service that exits before readiness causes owned child/container
     // cleanup. The same persisted keys and database can then start normally.
-    let [database_port, breg_port, mint_port] = free_ports();
+    let [database_port, breg_port, issuer_port] = free_ports();
     let origin = format!("http://127.0.0.1:{breg_port}");
     let failed = session.dev(&[
         "start",
@@ -595,9 +599,9 @@ seed:
         &database_port.to_string(),
         "--breg-port",
         &breg_port.to_string(),
-        "--mint-port",
-        &mint_port.to_string(),
-        "--mint-bin",
+        "--issuer-port",
+        &issuer_port.to_string(),
+        "--breg-bin",
         "/usr/bin/false",
     ]);
     assert!(!failed.status.success());
@@ -629,8 +633,8 @@ seed:
         &database_port.to_string(),
         "--breg-port",
         &breg_port.to_string(),
-        "--mint-port",
-        &mint_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
         "--breg-bin",
         shim.to_str().unwrap(),
     ]);
@@ -648,6 +652,50 @@ seed:
     let first = session.start();
     assert_eq!(first["status"], "ready");
     assert_eq!(first["bregUrl"], origin);
+    // Public source handoff copies only the selected private pair and reports
+    // the exact OAuth request parameters a separate Evidence process needs.
+    let handoff = parent.join("source-credentials");
+    fs::create_dir(&handoff).unwrap();
+    fs::set_permissions(&handoff, fs::Permissions::from_mode(0o700)).unwrap();
+    let client_id = handoff.join("client-id");
+    let assertion_key = handoff.join("assertion-key.jwk");
+    let exported_client = session.success(&[
+        "dev",
+        "export-client",
+        project.to_str().unwrap(),
+        "--client",
+        "source",
+        "--client-id-file",
+        client_id.to_str().unwrap(),
+        "--assertion-key-file",
+        assertion_key.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        exported_client["issuer"],
+        format!("http://127.0.0.1:{issuer_port}")
+    );
+    assert_eq!(exported_client["tokenEndpoint"], first["tokenEndpoint"]);
+    assert_eq!(
+        exported_client["clientAssertionAudience"],
+        exported_client["issuer"]
+    );
+    assert_eq!(exported_client["resource"], first["audience"]);
+    assert_eq!(
+        exported_client["scopes"],
+        json!(["registry:evidence:lookup"])
+    );
+    assert_eq!(fs::read(&client_id).unwrap(), b"source");
+    assert_eq!(
+        fs::read(&assertion_key).unwrap(),
+        fs::read(project.join(".breg/dev/credentials/source/assertion-key.jwk")).unwrap()
+    );
+    assert_eq!(
+        fs::metadata(&assertion_key).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!serde_json::to_string(&exported_client)
+        .unwrap()
+        .contains("\"d\":"));
     // A client token lives 300 seconds, less than the worst case a first
     // start may spend on its child and readiness deadlines before it seeds.
     // Every token must therefore be minted after the rehearsal, the built
@@ -977,14 +1025,6 @@ seed:
         "--runtime-config",
         project.join(".breg/dev/runtime.yaml").to_str().unwrap(),
     ]);
-    assert!(Command::new("mint")
-        .env("PATH", &session.path)
-        .args(["verify-audit", "--config"])
-        .arg(project.join(".breg/dev/mint/mint.yaml"))
-        .output()
-        .unwrap()
-        .status
-        .success());
     session.remove();
     assert_eq!(
         docker_line(&[
@@ -1060,6 +1100,150 @@ seed:
     session.remove();
     // The test owns this synthetic workspace and removes it only after all
     // checks and exact container-ownership verification succeeded.
+    std::mem::forget(session);
+    fs::remove_dir_all(parent).unwrap();
+}
+
+#[test]
+#[ignore = "requires matching installed breg/bregctl binaries and Docker; runs a retained local database"]
+fn installed_dev_prepares_a_native_source_successor_with_retained_records() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::Builder::new()
+        .prefix("breg-native-source-test-")
+        .tempdir_in(binary.parent().unwrap())
+        .unwrap();
+    fs::set_permissions(temporary.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let parent = fs::canonicalize(temporary.keep()).unwrap();
+    let project = parent.join("registry");
+    let session = Session {
+        project: project.clone(),
+        path: std::env::join_paths([binary.parent().unwrap()]).unwrap(),
+        docker: installed("docker"),
+    };
+    session.success(&["init", project.to_str().unwrap()]);
+    let client_file = project.join("dev-clients.yaml");
+    let mut clients = fs::read(&client_file).unwrap();
+    clients.extend_from_slice(
+        br#"
+seed:
+  - id: source-successor-seed
+    client: operator
+    entity: record
+    accessProfile: operator
+    data: {code: synthetic-source-successor, label: Synthetic source successor, status: active}
+"#,
+    );
+    write(&client_file, &clients);
+    let [database_port, breg_port, issuer_port] = free_ports();
+    let first = session.report(session.dev(&[
+        "start",
+        "--database-port",
+        &database_port.to_string(),
+        "--breg-port",
+        &breg_port.to_string(),
+        "--issuer-port",
+        &issuer_port.to_string(),
+    ]));
+    assert_eq!(first["status"], "ready");
+    assert_eq!(first["packageSequence"], 1);
+    session.stop();
+
+    let source_args = [
+        "dev",
+        "prepare-source",
+        project.to_str().unwrap(),
+        "--entity",
+        "record",
+        "--selector-field",
+        "code",
+        "--readable-fields",
+        "status",
+        "--all-records",
+        "--client",
+        "source-reader",
+        "--access-profile",
+        "source-reader",
+        "--selector-profile",
+        "by-code-source-reader",
+    ];
+    let preview = session.success(&source_args);
+    assert_eq!(preview["status"], "preview");
+    assert_eq!(preview["packageSequence"], 2);
+    let mut apply = source_args.to_vec();
+    apply.push("--apply");
+    let prepared = session.success(&apply);
+    assert_eq!(prepared["status"], "prepared");
+    let restarted = session.start();
+    assert_eq!(restarted["status"], "ready");
+    assert_eq!(restarted["packageSequence"], 2);
+    assert_ne!(restarted["packageRevision"], first["packageRevision"]);
+
+    let token = fs::read_to_string(project.join(".breg/dev/secrets/source-reader-token")).unwrap();
+    let payload = token.split('.').nth(1).expect("issued JWT payload");
+    let claims: Value = serde_json::from_slice(
+        &base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(payload)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(claims["scope"], "registry:source-reader:lookup");
+    assert_eq!(claims["registry_principal"], "source-reader");
+
+    let export = parent.join("source-export");
+    session.success(&[
+        "generate",
+        "evidence-source",
+        project.to_str().unwrap(),
+        "--access-profile",
+        "source-reader",
+        "--entity",
+        "record",
+        "--selector",
+        "by-code-source-reader",
+        "--fields",
+        "status",
+        "--source-id",
+        "source-reader",
+        "--connection",
+        "registry",
+        "--output",
+        export.to_str().unwrap(),
+    ]);
+    let source: Value =
+        serde_norway::from_slice(&fs::read(export.join("sources/source-reader.yaml")).unwrap())
+            .unwrap();
+    let request = &source["request"];
+    let select = request["projection"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|pointer| pointer.as_str().unwrap().rsplit('/').next().unwrap())
+        .collect::<Vec<_>>()
+        .join(",");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let mut request_builder = client
+            .post(format!("http://127.0.0.1:{breg_port}{}", request["path"].as_str().unwrap()))
+            .bearer_auth(&token)
+            .query(&[("accessProfile", "source-reader"), ("$select", select.as_str())])
+            .json(&json!({"selector":"by-code-source-reader","values":{"code":"synthetic-source-successor"}}));
+        for header in request["fixedHeaders"].as_array().unwrap() {
+            request_builder = request_builder.header(
+                header["name"].as_str().unwrap(),
+                header["value"].as_str().unwrap(),
+            );
+        }
+        let response = request_builder.send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let found: Value = response.json().await.unwrap();
+        assert_eq!(found["data"]["domainData"]["code"], "synthetic-source-successor");
+        assert_eq!(found["data"]["domainData"]["status"], "active");
+    });
+    session.stop();
     std::mem::forget(session);
     fs::remove_dir_all(parent).unwrap();
 }

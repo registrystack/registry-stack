@@ -175,3 +175,15 @@ their stored content type. A retained older value may carry a content type the
 current policy no longer accepts. The response is bounded by both the slot
 capacity and the client's `maxResponseBytes`, so raise `maxResponseBytes` when a
 slot may hold more than the default bound.
+
+## Explicit OAuth token exchange
+
+`breg.PrivateKeyJwt` wraps the shared Rust OAuth provider. Construct it with the
+same `PrivateKeyJwtConfig` used by client authorization. Call
+`await provider.exchange(subjectToken)` to exchange a short-lived signed task
+assertion for an access token. Set `resource` and `scopes` explicitly. Every
+exchange authenticates the client afresh and bypasses the ordinary service
+cache; `await provider.bearerToken()` uses that separate client-credentials
+cache. Neither method logs or persists the returned credential. The application
+must protect it and pass it explicitly to a resource client. The resource server
+still validates the signed authority and bounds.

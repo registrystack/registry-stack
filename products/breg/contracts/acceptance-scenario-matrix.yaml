@@ -85,7 +85,7 @@ scenarios:
     state: enforced
     domain: asset-registration-actions
     fixture: fixtures/asset-registration-actions
-    doneWhen: "Configured create-only immediate action journeys run through the authenticated PostgreSQL fixture runner without CRUD grants."
+    doneWhen: "Configured create-only immediate action journeys run through the authenticated PostgreSQL fixture runner without CRUD permissions."
     evidence: [{path: crates/registry-breg/tests/postgres_immediate_action_examples.rs, name: asset_registration_action_example_runs_through_authenticated_postgres_fixture_runner}]
   - id: BREG-J19
     state: enforced

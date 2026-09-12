@@ -26,7 +26,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [case.rename]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - action: rename-case
         operations: [invoke]
         targets:
@@ -37,7 +37,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [case.supervise]
     requiredPurposes: [case-management]
-    grants:
+    permissions:
       - action: rename-case
         operations: [invoke]
         targets: [{entity: case, rowBoundaries: []}]

@@ -342,7 +342,7 @@ async fn review_snapshots_require_current_target_authority() {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["grants"][1]["reviewStages"][0]["targets"][0]["rowBoundaries"] =
+    reviewer["permissions"][1]["reviewStages"][0]["targets"][0]["rowBoundaries"] =
         json!([{"field":"person-reference","claim":"person_reference","operator":"equals"}]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());

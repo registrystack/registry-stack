@@ -713,7 +713,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "default":true,
             "principalClaim":"registry_principal",
             "requiredPurposes":["operations"],
-            "grants":[{
+            "permissions":[{
               "entity":"membership",
               "operations":["create","get","list","patch"],
               "readableFields":["person","household","valid-from","valid-to"],

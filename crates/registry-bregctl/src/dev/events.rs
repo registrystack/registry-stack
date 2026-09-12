@@ -553,7 +553,7 @@ mod tests {
         if trigger == EventTrigger::RequestLifecycle {
             project["accessProfiles"] = json!([{
                 "id":"operator", "default":true, "principalClaim":"registry_principal",
-                "grants":[{
+                "permissions":[{
                     "entity":"record", "operations":["create", "get", "list", "patch", "submit_request", "approve_request", "apply_request"],
                     "readableFields":["label", "target", "proposed-label"],
                     "writableFields":["label", "target", "proposed-label"], "rowBoundaries":[],

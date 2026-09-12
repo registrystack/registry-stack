@@ -17,7 +17,7 @@ use crate::{
     GeneratedArtifact,
 };
 
-/// Technical choices only. Questions, grants, targets and credentials stay with
+/// Technical choices only. Questions, permissions, targets and credentials stay with
 /// the Evidence project and its operator.
 pub struct EvidenceSourceOptions {
     pub access_profile: String,
@@ -146,7 +146,7 @@ pub fn supports_scalar_fact(kind: &FieldTypeSource) -> bool {
 }
 
 /// Whether a compiled field type fits the canonical Evidence selector schema.
-/// Exact source export still validates identity grants, names and total bounds.
+/// Exact source export still validates identity permissions, names and total bounds.
 pub fn supports_selector_field(kind: &FieldTypeSource) -> bool {
     selector_schema(kind).is_ok()
 }

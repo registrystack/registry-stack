@@ -188,7 +188,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household:operate]
     requiredPurposes: [household-administration]
-    grants:
+    permissions:
       - {entity: person, operations: [get, list, patch], readableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], writableFields: [person-code, legal-name, family-name, date-of-birth, person-sex, residency-status, preferred-language], filterableFields: [person-code, person-sex, residency-status], sortableFields: [person-code], rowBoundaries: []}
       - entity: household
         rowBoundaries: []
@@ -214,7 +214,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:submit]
     requiredPurposes: [household-contact-registration]
-    grants:
+    permissions:
       - entity: register-household-contact-request
         rowBoundaries: []
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
@@ -225,7 +225,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:review]
     requiredPurposes: [household-contact-review]
-    grants:
+    permissions:
       - entity: register-household-contact-request
         rowBoundaries: []
         operations: [get, list, approve_request, reject_request, request_revision]
@@ -240,7 +240,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:supervise]
     requiredPurposes: [household-contact-review]
-    grants:
+    permissions:
       - entity: register-household-contact-request
         rowBoundaries: []
         operations: [get, approve_request, reject_request, request_revision]
@@ -255,7 +255,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household-contact:apply]
     requiredPurposes: [household-contact-apply]
-    grants:
+    permissions:
       - entity: register-household-contact-request
         rowBoundaries: []
         operations: [get, apply_request]
@@ -268,7 +268,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:household:view]
     requiredPurposes: [household-view]
-    grants:
+    permissions:
       - entity: household
         operations: [get, lookup]
         readableFields: [household-code, local-household-number, household-name, administrative-area, household-type]

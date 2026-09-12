@@ -339,9 +339,13 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
         entity["fields"].append({"id": "operator-note", "type": "string", "maxLength": 64,
                                  "classification": "internal"})
         operator_profile = next(profile for profile in authored["accessProfiles"] if profile["id"] == "operator")
-        grant = next(grant for grant in operator_profile["grants"] if grant["entity"] == "record")
-        for permission in ["readableFields", "writableFields"]:
-            grant[permission].append("operator-note")
+        permission = next(
+            permission
+            for permission in operator_profile["permissions"]
+            if permission["entity"] == "record"
+        )
+        for field_list in ["readableFields", "writableFields"]:
+            permission[field_list].append("operator-note")
         (registry / "registry.yaml").write_text(yaml.safe_dump(authored, sort_keys=False))
     else:
         command("bregctl", "init", registry)

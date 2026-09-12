@@ -1,12 +1,12 @@
 {
   "$defs": {
-    "AccessGrantSource": {
+    "AccessPermissionSource": {
       "anyOf": [
         {
-          "$ref": "#/$defs/EntityAccessGrantSourceSchema"
+          "$ref": "#/$defs/EntityAccessPermissionSourceSchema"
         },
         {
-          "$ref": "#/$defs/ActionAccessGrantSourceSchema"
+          "$ref": "#/$defs/ActionAccessPermissionSourceSchema"
         }
       ]
     },
@@ -43,7 +43,7 @@
       },
       "type": "object"
     },
-    "ActionAccessGrantSourceSchema": {
+    "ActionAccessPermissionSourceSchema": {
       "additionalProperties": false,
       "properties": {
         "action": {
@@ -67,7 +67,7 @@
         "targets": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ActionTargetGrantSource"
+            "$ref": "#/$defs/ActionTargetPermissionSource"
           },
           "type": "array"
         }
@@ -563,7 +563,7 @@
       ],
       "type": "object"
     },
-    "ActionTargetGrantSource": {
+    "ActionTargetPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "entity": {
@@ -619,7 +619,15 @@
       },
       "type": "object"
     },
-    "ApplyTargetGrantSource": {
+    "ActorKindSource": {
+      "enum": [
+        "human",
+        "agent",
+        "service"
+      ],
+      "type": "string"
+    },
+    "ApplyTargetPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "entity": {
@@ -1771,7 +1779,7 @@
       ],
       "type": "object"
     },
-    "EntityAccessGrantSourceSchema": {
+    "EntityAccessPermissionSourceSchema": {
       "additionalProperties": false,
       "properties": {
         "allowCount": {
@@ -1785,7 +1793,7 @@
         "applyTargets": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ApplyTargetGrantSource"
+            "$ref": "#/$defs/ApplyTargetPermissionSource"
           },
           "type": "array"
         },
@@ -1803,7 +1811,7 @@
         "lookups": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/LookupGrantSource"
+            "$ref": "#/$defs/LookupPermissionSource"
           },
           "type": "array"
         },
@@ -1824,7 +1832,7 @@
         "readPaths": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ReadPathGrantSource"
+            "$ref": "#/$defs/ReadPathPermissionSource"
           },
           "type": "array"
         },
@@ -1847,7 +1855,7 @@
         "requestPresence": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/RequestPresenceGrantSource"
+            "$ref": "#/$defs/RequestPresencePermissionSource"
           },
           "type": "array"
         },
@@ -1865,7 +1873,7 @@
         "reviewStages": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ReviewStageGrantSource"
+            "$ref": "#/$defs/ReviewStagePermissionSource"
           },
           "type": "array"
         },
@@ -1890,7 +1898,7 @@
         "spatialQueries": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SpatialQueryGrantSource"
+              "$ref": "#/$defs/SpatialQueryPermissionSource"
             },
             {
               "type": "null"
@@ -2381,7 +2389,7 @@
       ],
       "type": "object"
     },
-    "LookupGrantSource": {
+    "LookupPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "claimMapping": {
@@ -3131,6 +3139,16 @@
     "ProjectAccessProfileSource": {
       "additionalProperties": false,
       "properties": {
+        "actorKind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorKindSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "anonymous": {
           "default": false,
           "type": "boolean"
@@ -3139,15 +3157,15 @@
           "default": false,
           "type": "boolean"
         },
-        "grants": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/AccessGrantSource"
-          },
-          "type": "array"
-        },
         "id": {
           "type": "string"
+        },
+        "permissions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/AccessPermissionSource"
+          },
+          "type": "array"
         },
         "principalClaim": {
           "default": null,
@@ -3155,6 +3173,13 @@
             "string",
             "null"
           ]
+        },
+        "requesterClients": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
         },
         "requiredPurposes": {
           "default": [],
@@ -3173,6 +3198,16 @@
           },
           "type": "array",
           "uniqueItems": true
+        },
+        "taskGrant": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskGrantSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -3180,7 +3215,7 @@
       ],
       "type": "object"
     },
-    "ReadPathGrantSource": {
+    "ReadPathPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "allowCount": {
@@ -3339,7 +3374,7 @@
       ],
       "type": "string"
     },
-    "RequestPresenceGrantSource": {
+    "RequestPresencePermissionSource": {
       "additionalProperties": false,
       "properties": {
         "requestType": {
@@ -3368,7 +3403,7 @@
         }
       ]
     },
-    "ReviewStageGrantSource": {
+    "ReviewStagePermissionSource": {
       "additionalProperties": false,
       "properties": {
         "stage": {
@@ -3377,7 +3412,7 @@
         "targets": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ReviewStageTargetGrantSource"
+            "$ref": "#/$defs/ReviewStageTargetPermissionSource"
           },
           "type": "array"
         }
@@ -3387,7 +3422,7 @@
       ],
       "type": "object"
     },
-    "ReviewStageTargetGrantSource": {
+    "ReviewStageTargetPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "entity": {
@@ -3460,7 +3495,7 @@
       ],
       "type": "object"
     },
-    "SpatialBboxGrantSource": {
+    "SpatialBboxPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "maximumLatitudeSpanDegrees": {
@@ -3476,13 +3511,13 @@
       ],
       "type": "object"
     },
-    "SpatialQueryGrantSource": {
+    "SpatialQueryPermissionSource": {
       "additionalProperties": false,
       "properties": {
         "bbox": {
           "anyOf": [
             {
-              "$ref": "#/$defs/SpatialBboxGrantSource"
+              "$ref": "#/$defs/SpatialBboxPermissionSource"
             },
             {
               "type": "null"
@@ -3612,6 +3647,22 @@
         "classification",
         "maxBytes",
         "schema"
+      ],
+      "type": "object"
+    },
+    "TaskGrantSource": {
+      "additionalProperties": false,
+      "properties": {
+        "authority": {
+          "type": "string"
+        },
+        "sourceIssuer": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "authority",
+        "sourceIssuer"
       ],
       "type": "object"
     },

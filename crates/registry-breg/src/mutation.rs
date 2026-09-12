@@ -1086,6 +1086,7 @@ pub struct MutationCoordinator {
     attachment_verification: crate::attachment_verification::AttachmentVerification,
     audit_profile: AuditProfile,
     event_destinations: Option<Arc<ActivatedEventDestinationRegistry>>,
+    task_status: Option<Arc<dyn crate::task_grant::TaskGrantStatusChecker>>,
 }
 
 impl MutationCoordinator {
@@ -1115,7 +1116,42 @@ impl MutationCoordinator {
             attachment_verification: Default::default(),
             audit_profile,
             event_destinations,
+            task_status: None,
         }
+    }
+
+    pub fn with_task_status(
+        mut self,
+        checker: Arc<dyn crate::task_grant::TaskGrantStatusChecker>,
+    ) -> Self {
+        self.task_status = Some(checker);
+        self
+    }
+
+    async fn check_task_authority(
+        &self,
+        binding: &crate::task_grant::TaskGrantBinding,
+    ) -> Result<(), MutationError> {
+        if !binding.is_current() {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let checker = self
+            .task_status
+            .as_ref()
+            .ok_or(MutationError::Unavailable)?;
+        // Bound all implementations, including injected adapters. The exact
+        // proposal remains locked through this check and the following commit.
+        tokio::time::timeout(Duration::from_secs(5), checker.check(binding))
+            .await
+            .map_err(|_| MutationError::Unavailable)?
+            .map_err(|error| match error {
+                crate::task_grant::TaskGrantError::Refused => MutationError::PreconditionFailed,
+                _ => MutationError::Unavailable,
+            })?;
+        if !binding.is_current() {
+            return Err(MutationError::PreconditionFailed);
+        }
+        Ok(())
     }
 
     pub(crate) fn with_attachment_storage(
@@ -1220,6 +1256,9 @@ impl MutationCoordinator {
                 .is_none_or(|expected| expected.as_bytes().ct_eq(etag.as_bytes()).unwrap_u8() != 1)
             {
                 return Err(MutationError::PreconditionFailed);
+            }
+            if let Some(grant) = request.claims.task_grant() {
+                self.check_task_authority(grant).await?;
             }
             crate::attachment_store::stage_external(
                 tx,
@@ -1609,6 +1648,12 @@ impl MutationCoordinator {
             });
         }
 
+        if let Some(grant) = request.claims.task_grant() {
+            if request.plan.entity.change_request.is_none() {
+                return Err(MutationError::PreconditionFailed);
+            }
+            self.check_task_authority(grant).await?;
+        }
         fault.fail_at(MutationFaultPoint::BeforeCurrentRow)?;
         let current = apply_current_row(
             transaction.transaction(),

@@ -91,7 +91,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:read]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: record
         operations: [get, list]
         readableFields: [code, label, district, owner]
@@ -102,7 +102,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:edit-own]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: record
         operations: [get, patch]
         readableFields: [code, label, district, owner]
@@ -114,7 +114,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:supervise]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: record
         operations: [get, list, patch]
         readableFields: [code, label, district, owner]
@@ -129,7 +129,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:audit]
     requiredPurposes: [record-audit]
-    grants:
+    permissions:
       - entity: record
         operations: [get, revisions]
         readableFields: [code, label, district]
@@ -140,7 +140,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:register]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - action: register-record
         operations: [invoke]
         targets:
@@ -154,7 +154,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [correction:submit]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: label-correction
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
         readableFields: [record, label, district]
@@ -166,7 +166,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [correction:review]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: label-correction
         operations: [get, approve_request, reject_request, request_revision]
         readableFields: [record, label, district]
@@ -183,7 +183,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [correction:final-approve]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: label-correction
         operations: [get, approve_request, reject_request, request_revision]
         readableFields: [record, label, district]
@@ -200,7 +200,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [correction:apply]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: label-correction
         operations: [get, apply_request]
         readableFields: [record, label, district]

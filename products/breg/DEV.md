@@ -1,10 +1,12 @@
 # Native local BReg lifecycle
 
 `bregctl dev` starts an existing, explicitly authored local registry using the
-installed `breg` and `mint` binaries and Docker PostgreSQL. It needs no checkout,
-Python launcher, shell script or OpenSSL installation. Mint is a local issuer
-chosen by this development tool; an operated BReg runtime remains an independent
-OAuth resource server.
+installed `breg` binary, a source-pinned ThunderID image, and Docker PostgreSQL.
+It needs no checkout, Python launcher, shell script or OpenSSL installation.
+ThunderID is a local issuer chosen by this development tool; an operated BReg
+runtime remains an independent OAuth resource server. This candidate cannot
+start a retained Mint-backed v1 dev session. Keep its matching Mint-era tools
+and data until a verified migration is available.
 
 Prepare the project with `bregctl init ./registry`. The generated package
 already declares `package.environment: local` and `package.sequence: 1`, and the
@@ -23,32 +25,33 @@ The project path defaults to the current directory, as it does for every other
 `bregctl` command. A first start reads `dev-clients.yaml` inside the project;
 `--clients-file` names another clients file instead. `dev` and `dev start` both
 detach a resident supervisor. They return only after
-PostgreSQL, Mint, schema-test rehearsal, package activation, BReg readiness and
-explicit seed creation succeed. Default loopback ports are BReg `8090`, Mint
+PostgreSQL, ThunderID, schema-test rehearsal, package activation, BReg readiness and
+explicit seed creation succeed. Default loopback ports are BReg `8090`, issuer
 `8091` and PostgreSQL `55432`. Override them on the first start with
-`--breg-port`, `--mint-port` and `--database-port`. A restart retains the
+`--breg-port`, `--issuer-port` and `--database-port`. A restart retains the
 original ports and clients-file location. Conflicting ports are refused.
 
 The database runs the pinned image
 `postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675`,
 so an operator can check exactly what the supervisor pulls. Each supervised
-prerequisite command may run for 120 seconds, and the owned database and each
-started service have 45 seconds to answer as ready. A start that passes a
-deadline fails, stops what it acquired and keeps its owner-only diagnostics.
+prerequisite command may run for 120 seconds. The owned database and BReg have
+45 seconds each to answer readiness, and ThunderID discovery has a 120-second wait. A start
+that passes a deadline fails, stops what it acquired and keeps its owner-only
+diagnostics.
 
 Before it inspects the owned container or launches the supervisor, a start runs
-each resolved `breg`, `mint` and `docker` with `--version` and records what they
-answer. `breg` and `mint` ship in the same release as `bregctl` and share a
-package format, a token shape and a schema, so a `breg` or `mint` reporting
-another version than this `bregctl` is refused by name: the refusal gives the
-file that answered, the version it reported and the version `bregctl` reports.
+each resolved `breg` and `docker` with `--version` and records what they
+answer. `breg` ships in the same release as `bregctl`, so a `breg` reporting
+another version is refused by name: the refusal gives the file that answered,
+the version it reported and the version `bregctl` reports.
 Without that comparison the mismatch surfaces much later as a refused package or
 an unready database, which reads as a fault in the authored project. Docker
 belongs to no release of this stack and is never compared, and a prerequisite
 that reports no version at all still serves the session. No flag skips the
-comparison: install `breg`, `mint` and `bregctl` from the same release, or put
-the matching build first on `PATH`. `--breg-bin` and `--mint-bin` choose which
-file is resolved, and the resolved file is the one compared.
+comparison: install `breg` and `bregctl` from the same release, or put the
+matching build first on `PATH`. `--breg-bin` chooses which file is resolved,
+and that file is compared. `--mint-bin` and `--mint-port` are refused by this
+candidate; they belong to the earlier Mint-based dev interface.
 
 `dev stop` keeps everything it created: the owned container, its named data
 volume, records, audit history, keys, credentials and the built package. Add
@@ -65,9 +68,9 @@ Create a fresh project at package sequence 1 for a separate empty experiment.
 
 Use `--format json` to consume the status, URLs, audience, package revision,
 runtime configuration and private credential file references. Keys and access
-tokens never appear in these reports. Tokens expire; the installed `mint token`
-command can obtain a fresh token using a reported client ID file, key file and
-token endpoint. Redirect that command's output to an owner-only file.
+tokens never appear in these reports. Use `bregctl dev export-client` to obtain
+the client ID, assertion key, issuer and token endpoint handoff; an OAuth client
+can obtain a fresh token with those fixed values. Keep token output owner-only.
 
 ## Observe local events
 
@@ -241,7 +244,7 @@ reviewed package lifecycle.
 
 The private `.breg/dev` directory records a random ownership identifier, exact
 Docker container ID, ports, captured authored closure, package revision, seed
-checkpoints and, for each resolved `breg`, `mint` and `docker` prerequisite, the
+checkpoints and, for each resolved `breg` and `docker` prerequisite, the
 fully resolved path of the file that ran and the version it reported. It
 contains generated configurations, separate database roles, local TLS material,
 credentials and bounded private diagnostic logs. The first start writes a
@@ -256,13 +259,14 @@ identifiable and reclaimable once the container is gone.
 | --- | --- |
 | First start | Capture the authored closure, prepare private identities, create the owned database, run normal schema-test/package/apply/verify commands, then seed through authenticated HTTP. |
 | Already running | Return the existing ready session and credential references. |
-| Stop, including repeated stop | Gracefully stop owned BReg and Mint children and stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
+| Stop, including repeated stop | Gracefully stop owned BReg and ThunderID, then stop the owned PostgreSQL container. Keep records, keys, package, seed checkpoints and audit history. |
 | Stop where no start ever ran | Refuse and name the absent session. Nothing is created, changed or removed, so a mistyped project path cannot read as a stopped session. |
 | Start after stop | Reuse the same container, database, and existing credentials. Preserve record edits; activate the explicitly prepared source successor when present. Obtain fresh short-lived tokens. |
 | Stop with `--remove`, including a repeated one | Stop as above, then remove the owned container and its named data volume, tolerating whatever an earlier reclamation already took. Discard records, audit history, event receipts and seed checkpoints. Keep keys, credentials, ports, clients and the built package. |
 | Start after `--remove` | At sequence 1, create an empty container and volume, activate the initial package, and replay authored seeds. A retained successor refuses before Docker because its predecessor records were removed; use a fresh project at sequence 1 for an empty experiment. |
 | Seed request committed before checkpoint | Replay the same permanent BReg idempotency reservation. The original create result is returned without creating or overwriting a record. |
-| `breg` or `mint` from another release | Refuse before the owned container is inspected and before the supervisor launches, naming the file that answered, the version it reported and the version `bregctl` reports. Nothing is created, changed or removed. |
+| `breg` from another release | Refuse before the owned container is inspected and before the supervisor launches, naming the file that answered, the version it reported and the version `bregctl` reports. Nothing is created, changed or removed. |
+| Retained Mint-based v1 state | Refuse before v2 parsing or state mutation. Keep the matching Mint-era tools and data; this candidate has no retained issuer migration command. |
 | Partial start failure | Stop acquired service children and the owned container; retain private diagnostics and completed phases. Retry the same command after correcting the prerequisite. The separate schema-test database may be recreated for a failed rehearsal. |
 | Missing or mismatched owned container | Refuse. Never silently initialize an empty replacement or stop another container. |
 | Unreachable supervisor with an occupied service port | Refuse. Never signal a stored PID that could belong to another process. Inspect the process owning the port before recovery. |
@@ -306,7 +310,7 @@ its code, the path it names, and its message, bounded to one sentence. The
 retained report log holds every later diagnostic. A refused journey step is
 reported as `test.step.failed` at `journeys[<i>].steps[<j>]`, carrying the
 fixture's own refusal sentence. A refused logical reference names its class:
-a field the entity does not declare, a field the access profile grant does
+a field the entity does not declare, a field the access profile permission does
 not make writable, a request body with no field, a step identifier that is
 not stable, a step naming both an entity and an action or neither, or a
 capture no earlier step declares. None of those sentences carries an authored

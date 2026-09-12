@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Authored local teaching identities and generated private service bindings.
 
-use super::{private, State, DATABASE_ID, MIGRATION_ROLE, RUNTIME_ROLE};
+use super::{private, State, DATABASE_ID, MAX_BYTES, MIGRATION_ROLE, RUNTIME_ROLE};
 use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use p256::ecdsa::SigningKey;
@@ -156,41 +156,27 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         "credentials",
         "secrets",
         "tls",
-        "mint",
+        "issuer",
         "logs",
         "empty-package",
         "database",
     ] {
         private::directory(&root.join(directory))?;
     }
-    private::directory(&root.join("mint/clients"))?;
-    private::directory(&root.join("mint/audit"))?;
-    let mint_public = keypair(&root.join("credentials/issuer"))?;
-    let mint_public_filename = format!(
-        "{}.jwk.json",
-        mint_public["kid"]
-            .as_str()
-            .context("generated issuer key ID missing")?
-    );
-    private::create(
-        &root.join("credentials/issuer").join(&mint_public_filename),
-        &serde_json::to_vec(&mint_public)?,
-    )?;
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
-        let public = keypair(&directory)?;
+        keypair(&directory)?;
         private::create(&directory.join("client-id"), client.id.as_bytes())?;
-        write_yaml(
-            &root
-                .join("mint/clients")
-                .join(format!("{}.yaml", client.id)),
-            &json!({
-                "clientId":client.id,"principal":format!("urn:breg:dev:{}",client.id),
-                "authorization":{"scopes":client.scopes,"claims":client.claims},"keys":[public]
-            }),
-        )?;
     }
-    for filename in ["audit-key", "cursor-key", "mint-audit-key"] {
+    // The dev session's issuer is the pinned upstream ThunderID container,
+    // rendered and provisioned through the shared tooling crate from these
+    // same authored declarations. BREG keeps its database, seeding, retained
+    // state, private outputs, and ownership behavior; only the token issuer
+    // changes hands.
+    let description = issuer_description(state, clients, root)?;
+    registry_thunderid_tooling::render::render(&description)
+        .map_err(|error| anyhow::anyhow!("the dev issuer registration was refused: {error}"))?;
+    for filename in ["audit-key", "cursor-key"] {
         let mut bytes = Zeroizing::new([0u8; 32]);
         getrandom::fill(bytes.as_mut()).context("cannot generate local secret")?;
         let encoded = Zeroizing::new(URL_SAFE_NO_PAD.encode(bytes.as_ref()));
@@ -199,10 +185,6 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     if state.webhook_port.is_some() {
         webhook_secret(root)?;
     }
-    private::create(
-        &root.join("secrets/mint-jwks"),
-        &serde_json::to_vec(&json!({"keys":[mint_public]}))?,
-    )?;
     let password = Zeroizing::new(uuid::Uuid::new_v4().simple().to_string());
     private::create(
         &root.join("database/postgres.env"),
@@ -268,27 +250,6 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
     private::create(&root.join("trust-anchor.json"), b"{}")?;
-    let final_root = state.root();
-    let mint_origin = state.mint_origin();
-    write_yaml(
-        &root.join("mint/mint.yaml"),
-        &json!({
-            "version":1,"validationMode":"supervised-local-development","issuer":mint_origin,
-            "listener":{"address":"127.0.0.1","port":state.mint_port},
-            "signing":{"algorithm":"ES256","activePublicJwkFile":final_root.join("credentials/issuer").join(mint_public_filename),"publishedPublicJwkFiles":[],"revokedKeyIds":[]},
-            "signer":{"kind":"local-jwk","privateKeyRef":"secret:file/assertion-key.jwk"},
-            "secretProviders":{"file":{"root":final_root.join("credentials/issuer")}},
-            "audit":{"path":"audit/mint.jsonl","maximumFileBytes":10485760,"hashKeyRef":"secret:file/mint-audit-key","hashKeyVersion":1},
-            "accessTokens":{"audiences":[state.audience()],"lifetimeSeconds":300},
-            "clientAssertion":{"audience":format!("{mint_origin}/token"),"maximumLifetimeSeconds":120,"algorithms":["ES256"]},
-            "clients":{"directory":"clients"}
-        }),
-    )?;
-    // One secret root serves Mint signing and audit; no cross-directory secret references.
-    private::create(
-        &root.join("credentials/issuer/mint-audit-key"),
-        &private::read(&root.join("secrets/mint-audit-key"), 64)?,
-    )?;
     runtime(
         root,
         state,
@@ -297,6 +258,105 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         true,
     )?;
     Ok(())
+}
+
+/// The dev session's issuer description: one resource server whose
+/// identifier is BREG's exact access-token audience, one role per authored
+/// client carrying that client's scopes, and one machine agent per client
+/// whose static attributes are the authored claims. Derived from the
+/// reviewed client declarations only; nothing here reads the registry
+/// project's business model.
+pub(super) fn issuer_description(
+    state: &State,
+    clients: &Clients,
+    root: &Path,
+) -> Result<registry_thunderid_tooling::description::IssuerDescription> {
+    use registry_thunderid_tooling::{
+        description::SessionIdentity,
+        local::{local_description, LocalClient},
+    };
+    let local_clients = clients
+        .clients
+        .iter()
+        .map(|client| {
+            let claims = client
+                .claims
+                .iter()
+                .map(|(name, value)| {
+                    let value = value.as_str().with_context(|| {
+                        format!("claim {name:?} must be a string to ride a machine token")
+                    })?;
+                    Ok((name.clone(), value.to_owned()))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?;
+            let directory = root.join("credentials").join(&client.id);
+            let public: Value =
+                serde_json::from_slice(&private::read(&directory.join("public.jwk"), 4096)?)?;
+            Ok(LocalClient {
+                client_id: client.id.clone(),
+                public_jwks: serde_json::to_string(&json!({"keys":[public]}))?,
+                claims,
+                scopes: client.scopes.clone(),
+                allow_human_fixture: false,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    local_description(
+        SessionIdentity {
+            label: format!("breg-dev-{}", state.instance_id),
+            id: state.instance_id.clone(),
+        },
+        state.issuer_port,
+        root.join("issuer"),
+        state.audience(),
+        local_clients,
+    )
+    .map_err(Into::into)
+}
+
+/// Re-render an explicitly prepared, stopped-session successor in a separate
+/// private tree, then publish only this session's native issuer documents.
+/// The owning source-transition journal makes an interrupted publication
+/// repeatable. Existing client keys and unrelated issuer database state stay
+/// untouched.
+pub(super) fn refresh_issuer_registration(state: &State, clients: &Clients) -> Result<()> {
+    fn publish_tree(source: &Path, destination: &Path) -> Result<()> {
+        private::directory(destination)?;
+        for entry in fs::read_dir(source)? {
+            let entry = entry?;
+            let source = entry.path();
+            let destination = destination.join(entry.file_name());
+            if entry.file_type()?.is_dir() {
+                publish_tree(&source, &destination)?;
+            } else {
+                let bytes = private::read(&source, MAX_BYTES)?;
+                private::replace(&destination, &bytes)?;
+            }
+        }
+        Ok(())
+    }
+
+    let root = state.root();
+    let staging = root.join(format!(".issuer-render-{}", uuid::Uuid::new_v4()));
+    private::directory(&staging)?;
+    let result: Result<()> = (|| {
+        let mut description = issuer_description(state, clients, &root)?;
+        description.state_root = staging.clone();
+        registry_thunderid_tooling::render::render(&description).map_err(|error| {
+            anyhow::anyhow!("the successor issuer registration was refused: {error}")
+        })?;
+        private::validate_tree(&staging)?;
+        for directory in ["resources", "registry-schema"] {
+            publish_tree(
+                &staging.join(directory),
+                &root.join("issuer").join(directory),
+            )?;
+        }
+        Ok(())
+    })();
+    let cleanup = fs::remove_dir_all(&staging);
+    result?;
+    cleanup.context("cannot remove the private issuer rendering stage")
 }
 
 pub(super) fn runtime(
@@ -328,7 +388,7 @@ pub(super) fn runtime(
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
-            "authentication":{"oidc":{"issuer":state.mint_origin(),"audience":state.audience(),"allowedAlgorithm":"ES256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().map(|c|&c.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/mint-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().map(|c|&c.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )

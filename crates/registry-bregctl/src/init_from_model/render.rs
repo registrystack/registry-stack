@@ -420,7 +420,7 @@ fn registry(plan: &Plan) -> String {
         &format!("requiredScopes: [{}]", scalar(&operate_scope(plan))),
     );
     yaml.line(2, "requiredPurposes: [registry-operations]");
-    yaml.line(2, "grants:");
+    yaml.line(2, "permissions:");
     for entity in &plan.entities {
         let all: Vec<&str> = entity.all_fields().map(|field| field.id.as_str()).collect();
         let filterable: Vec<&str> = entity
@@ -452,7 +452,7 @@ fn registry(plan: &Plan) -> String {
             &format!("requiredScopes: [{}]", scalar(&read_scope(plan))),
         );
         yaml.line(2, "requiredPurposes: [registry-reporting]");
-        yaml.line(2, "grants:");
+        yaml.line(2, "permissions:");
         for entity in readers {
             let readable: Vec<&str> = entity
                 .all_fields()
@@ -1933,7 +1933,7 @@ mod tests {
         let profiles = registry["accessProfiles"].as_array().expect("profiles");
         assert_eq!(profiles[0]["id"], OPERATOR_PROFILE);
         assert_eq!(profiles[1]["id"], READER_PROFILE);
-        let reader_person = &profiles[1]["grants"][0];
+        let reader_person = &profiles[1]["permissions"][0];
         assert_eq!(reader_person["entity"], "person");
         let readable = reader_person["readableFields"]
             .as_array()
