@@ -404,6 +404,10 @@ version = "1.1.0"
                 "crates/registry-breg-client-node",
                 "@registrystack/breg-client-native",
             ),
+            (
+                "crates/registry-casework-client-node",
+                "@registrystack/casework-client-native",
+            ),
         ):
             client_root = self.root / relative_root
             write_json(
@@ -702,6 +706,8 @@ class RegistryReleasePlanTest(unittest.TestCase):
             "crates/registry-discovery-client-py/pyproject.toml",
             "crates/registry-evidence-client-node/package.json",
             "crates/registry-evidence-client-node/index.js",
+            "crates/registry-casework-client-node/package.json",
+            "crates/registry-casework-client-node/index.js",
             "crates/registry-relay-client-py/pyproject.toml",
             "products/manifest/fuzz/Cargo.lock",
             "products/platform/fuzz/Cargo.lock",
@@ -777,7 +783,7 @@ version = "1.0.0"
         )
 
     def test_prepare_rejects_stale_loader_diagnostics_with_current_guards(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework"):
             with self.subTest(client=client):
                 loader = self.repo.root / f"crates/registry-{client}-client-node/index.js"
                 write(
@@ -808,7 +814,7 @@ version = "1.0.0"
         self.assertIn("expected-version diagnostics", result.stderr)
 
     def test_prepare_accepts_the_maintained_generated_loaders(self) -> None:
-        for client in ("discovery", "evidence", "relay", "breg"):
+        for client in ("discovery", "evidence", "relay", "breg", "casework"):
             relative_root = Path(f"crates/registry-{client}-client-node")
             package = json.loads((ROOT / relative_root / "package.json").read_text())
             loader = (ROOT / relative_root / "index.js").read_text()

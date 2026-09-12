@@ -51,13 +51,22 @@ jobs:
 
       - name: Check complete release image onboarding
         env:
+          REHEARSAL_ADVISORY_EVIDENCE: ${{ inputs.advisory_evidence }}
           REHEARSAL_VERSION: ${{ inputs.version }}
         shell: bash
         run: |
           set -euo pipefail
-          python3 release/scripts/release_candidate.py check-image-onboarding \
-            --version "${REHEARSAL_VERSION}" \
+          onboarding=(
+            python3 release/scripts/release_candidate.py check-image-onboarding
+            --version "${REHEARSAL_VERSION}"
             --root .
+          )
+          case "${REHEARSAL_ADVISORY_EVIDENCE}" in
+            true) onboarding+=(--allow-missing-baseline) ;;
+            false) ;;
+            *) echo "advisory_evidence must be a typed boolean" >&2; exit 2 ;;
+          esac
+          "${onboarding[@]}"
 
   rehearse:
     name: Exercise future-tag release paths on Ubuntu
@@ -76,6 +85,14 @@ jobs:
         run: >-
           git fetch --no-tags --force origin
           refs/heads/main:refs/remotes/origin/main
+
+      - name: Require reviewed image baselines for release rehearsal
+        env:
+          REHEARSAL_VERSION: ${{ inputs.version }}
+        run: >-
+          python3 release/scripts/release_candidate.py check-image-onboarding
+          --version "${REHEARSAL_VERSION}"
+          --root .
 
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

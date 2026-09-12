@@ -745,13 +745,19 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         ),
     ),
     (
-        "Strict rehearsal image onboarding boundary",
+        "Advisory-only rehearsal image onboarding bootstrap boundary",
         ".github/workflows/release-rehearsal.yml",
         (
             "validate:\n    name: Validate release image onboarding before builds",
             "name: Check complete release image onboarding",
+            "REHEARSAL_ADVISORY_EVIDENCE: ${{ inputs.advisory_evidence }}",
             "release_candidate.py check-image-onboarding",
+            'case "${REHEARSAL_ADVISORY_EVIDENCE}" in',
+            "true) onboarding+=(--allow-missing-baseline) ;;",
+            "false) ;;",
+            "advisory_evidence must be a typed boolean",
             "needs: validate",
+            "name: Require reviewed image baselines for release rehearsal",
         ),
     ),
     (
@@ -854,7 +860,7 @@ REQUIRED_RELEASE_SECURITY_GATES = (
         "Candidate cleanup exact package allowlist",
         "release/scripts/cleanup-release-candidates.py",
         (
-            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist only after its private package identity is bootstrapped.\n    "breg-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
+            'CANDIDATE_PACKAGES = (\n    # Listing an absent package fails closed, so a candidate name joins this\n    # allowlist only after its private package identity is bootstrapped.\n    "breg-candidate",\n    "casework-candidate",\n    "discovery-candidate",\n    "evidence-candidate",\n    "mint-candidate",\n    "relay-candidate",\n)',
             'PUBLIC_PACKAGES = (\n    # Retired public names stay denylisted so cleanup can never delete history.',
             '    "discovery",\n',
             '    "evidence",\n',
@@ -1065,11 +1071,6 @@ FORBIDDEN_RELEASE_SECURITY_GATES = (
         "Candidate cleanup cannot select branch-controlled workflow code or write refs",
         ".github/workflows/release-candidate-cleanup.yml",
         ("workflow_dispatch:", "contents: write", "git push", "git update-ref"),
-    ),
-    (
-        "Release rehearsal cannot allow a missing advisory baseline",
-        ".github/workflows/release-rehearsal.yml",
-        ("--allow-missing-baseline",),
     ),
     (
         "Native benchmark cannot write or qualify as release rehearsal",
