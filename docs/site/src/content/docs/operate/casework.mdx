@@ -395,7 +395,7 @@ no source review or application authority.
 `caseworkctl doctor` opens every live dependency the runtime opens, without binding a listener:
 
 ```sh
-caseworkctl --format json doctor --runtime-config /etc/registry-casework/runtime.yaml
+caseworkctl doctor --runtime-config /etc/registry-casework/runtime.yaml
 ```
 
 It checks the configuration, the exact imported source descriptions, each source connection and its
@@ -404,7 +404,7 @@ one that refuses and names it. Its secret preflight resolves the audit reference
 anything, and a reference that cannot resolve is reported by name with the rule it broke. Directory
 readiness requires a team serving every queue the package declares, and a gap is reported as an
 instruction to complete the queue assignments as an Administrator. A run that reaches the end
-prints a JSON report naming each check and each source it contacted.
+prints a report naming each check and each source it contacted.
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, doctor(), load_runtime(),
     and check_source_descriptions();

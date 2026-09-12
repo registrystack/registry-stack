@@ -24,8 +24,8 @@ caseworkctl --version
 ```
 
 Replace `| bash` with `| less` to read the installer before you run it on a host you operate.
-`caseworkctl` prints human-readable results by default. Pass `--format json` for a JSON report on
-standard output. A refused command exits nonzero and reports a diagnostic in the selected format.
+`caseworkctl` prints results for a person by default and reports refusals on standard error.
+Use `--format json` only when another tool needs to consume its report.
 
 {/* Evidence: crates/registry-casework/install.sh;
     crates/registry-caseworkctl/src/lib.rs, Command and run(). */}
@@ -36,29 +36,10 @@ standard output. A refused command exits nonzero and reports a diagnostic in the
 The `standalone-decision` template declares a policy with no source: Casework stores the work, presents it, and records the decision itself.
 
 ```sh
-caseworkctl --format json init ./decisions --template standalone-decision
+caseworkctl init ./decisions --template standalone-decision
 ```
 
-```json
-{
-  "command": "init",
-  "created": [
-    "casework.yaml",
-    "runtime.example.yaml",
-    "dev-clients.yaml",
-    "fixtures/standalone-decision.yaml",
-    "sources/",
-    ".casework/schemas/runtime.schema.json",
-    ".vscode/settings.json"
-  ],
-  "next": [
-    "Run caseworkctl check and test, then caseworkctl dev to start a local Casework runtime, its database and its token issuer, with the directory in dev-clients.yaml already seeded."
-  ],
-  "ok": true,
-  "project": "./decisions",
-  "template": "standalone-decision"
-}
-```
+`init` lists the files it created and the commands to run next.
 
 `init` refuses a destination that already exists; it never overwrites a project.
 Point it at a new directory, or edit the project you already have.
@@ -382,11 +363,11 @@ Five commands read the project and touch no network and no database, so run them
 | `package` | What exactly would an operator receive? |
 
 `caseworkctl check` validates the project and prints the effective policy, including the values you did not write.
-For the standalone project it reports `"mode": "standalone"`, the resolved hosted kind with its schema and retention, and the inbox defaults.
+For the standalone project it reports standalone mode, the resolved hosted kind with its schema and retention, and the inbox defaults.
 For a project that declares a source it reports the request entity, the fallback queue, the routing rule count, and the state of the imported source description, which reads `pending_source_add` before you connect the source and `checked` after.
 
 ```sh
-caseworkctl --format json check ./decisions
+caseworkctl check ./decisions
 ```
 
 `caseworkctl explain` answers a narrower question: what the runtime enforces, with the defaults resolved and the authoring noise gone.
@@ -395,6 +376,7 @@ Against a source-backed project it reports each calendar, each clock in full, an
 Read it when you want to confirm that what you wrote is what a team will experience.
 
 `caseworkctl simulate` runs one case at one instant.
+The fixture below belongs to the [complete regional-review example](https://github.com/registrystack/registry-stack/tree/6a3bff6efcc89e0d53d0bc37ebcbe7cd62dc0c0d/products/casework/examples/multi-stage-routing-clocks), which also supplies the matching policy, source descriptions, and holiday-set revision.
 A simulation fixture names the source, the subject with its activity, stage, and projected fields, the moment `now`, the holiday revisions in force, and what you expect:
 
 ```yaml
@@ -421,9 +403,11 @@ expect:
   eligibleSteps: []
 ```
 
+If you have saved that complete example as `./regional-review`, run:
+
 ```sh
-caseworkctl simulate ./licence-casework \
-  --fixture ./licence-casework/simulations/friday-review.yaml
+caseworkctl simulate ./regional-review \
+  --fixture ./regional-review/simulations/friday-review.yaml
 ```
 
 The report names the rule that matched and the sentence behind it, the calendar and holiday revision used, the due instant in UTC, the due state, and the reminders and steps eligible at that moment.
@@ -431,20 +415,20 @@ That is how you prove a five-working-day deadline entered on a Friday lands wher
 A simulation fixture is not a test fixture: pass a `test` fixture to `simulate` and the command refuses and names the six members a simulation accepts, `id`, `source`, `holidayRevisions`, `subject`, `now`, and `expect`.
 
 `caseworkctl test` runs the fixtures the project carries under `fixtures/`, which assert the queue and the available outcomes for a case without a source.
-It prints one entry per fixture with `"status": "passed"` or the failure, so it belongs in the same loop as `check`.
+It reports each fixture as passed or failed, so it belongs in the same loop as `check`.
 
 ```sh
-caseworkctl --format json test ./decisions
+caseworkctl test ./decisions
 ```
 
 `caseworkctl package` writes the reviewed policy and the exact imported source descriptions into a new directory, which is the [policy package](../../reference/glossary/#policy-package) an operator serves.
 
 ```sh
-caseworkctl --format json package ./decisions --output ./decisions-package
+caseworkctl package ./decisions --output ./decisions-package
 ```
 
 The output is a directory, not an archive: `casework.yaml`, every source description the policy names, and `casework.package.json`, a manifest carrying a `policyDigest` over the sorted list of path, sha256, and byte count for each file.
-The report repeats the digest and states `"secretsIncluded": false` and `"runtimeConfigurationIncluded": false`, because the runtime file and its secrets stay outside the package and outside review.
+The report repeats the digest and states `secretsIncluded: false` and `runtimeConfigurationIncluded: false`, because the runtime file and its secrets stay outside the package and outside review.
 Packaging refuses an existing output directory, so each candidate lands in its own new directory.
 
 :::caution[A packaged policy is verified by byte, not by intent]
@@ -495,16 +479,16 @@ When the register carries no entity by that name, the connection refuses. Check 
 against BReg's compiled metadata before retrying.
 
 ```sh
-caseworkctl --format json source add ./tutorial-work/project \
+caseworkctl source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-register
 ```
 
 `source add` drives your own `bregctl` of the same Registry Stack version, requires it on `PATH` or named with `--bregctl-bin`, runs its public `check` and `explain change-requests`, and refuses a register whose selected request is not staged or not manually applied.
-Without `--apply` it previews: it reports the two changes it would make to the BReg project, `/entities/scope-correction/events/casework-lifecycle-v1` and `/accessProfiles/casework-reader`, prints both candidate fragments, and ends with `"status": "preview"` and `"activation": "not_performed"`.
+Without `--apply` it previews: it reports the two changes it would make to the BReg project, `/entities/scope-correction/events/casework-lifecycle-v1` and `/accessProfiles/casework-reader`, prints both candidate fragments, and reports `status: preview` and `activation: not_performed`.
 Read the patch before you take the next step.
 
 ```sh
-caseworkctl --format json source add ./tutorial-work/project \
+caseworkctl source add ./tutorial-work/project \
   --project ./licence-casework --source-id professional-register --apply
 ```
 
@@ -514,8 +498,8 @@ caseworkctl --format json source add ./tutorial-work/project \
 
 Applying writes two owner-only files into the Casework project's `sources/` directory: `professional-register.json`, the imported description that pins the entity, its fields, its review stages, and its application mode, and `professional-register.breg-runtime.yaml`, a candidate BReg runtime binding.
 The binding declares an event destination pointing at the Casework receiver, with an HMAC key reference of `secret:file/breg-casework-webhook` that you provision on the BReg side.
-The command writes no secret and activates nothing: its report ends with `"activation": "not_performed"` and asks you to review the binding, provision its secret, and let each product's normal launcher path activate it.
-Run `caseworkctl check` again, and the source description flips to `"checked"`.
+The command writes no secret and activates nothing: its report says `activation: not_performed` and asks you to review the binding, provision its secret, and let each product's normal launcher path activate it.
+Run `caseworkctl check` again, and the source description changes to `checked`.
 
 Connecting a source is authoring, and serving one is deployment.
 Locally, `caseworkctl dev` serves a connected project only beside a running `bregctl dev` session for the registry it names: pass `--source-project tutorial-work/registry`, and the Casework session borrows that registry session's Mint as its issuer, exports each Casework client as a registry client with the same principal, and binds the source to the running registry, reconciling every five seconds.
