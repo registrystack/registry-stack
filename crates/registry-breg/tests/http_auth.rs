@@ -63,6 +63,7 @@ entities:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
       - {id: secret, type: string, required: true, maxLength: 100, classification: restricted}
       - {id: jurisdiction, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
 accessProfiles:
   - id: public
     default: true
@@ -379,21 +380,22 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         )
         .await;
     assert_eq!(delegated.status(), StatusCode::OK);
-    let requests = harness.records.requests.lock().unwrap();
-    let context = &requests[0].context;
-    let task_grant = context.task_grant().expect("task grant is retained");
-    assert_eq!(
-        task_grant.subjects(),
-        &BTreeMap::from([(
-            "tenant_claim".to_owned(),
-            json!("tenant-from-approved-identity"),
-        )])
-    );
-    assert_eq!(
-        context.row_boundaries()[0].values(),
-        &BTreeSet::from(["tenant-from-approved-identity".to_owned()])
-    );
-    drop(requests);
+    {
+        let requests = harness.records.requests.lock().unwrap();
+        let context = &requests[0].context;
+        let task_grant = context.task_grant().expect("task grant is retained");
+        assert_eq!(
+            task_grant.subjects(),
+            &BTreeMap::from([(
+                "tenant_claim".to_owned(),
+                json!("tenant-from-approved-identity"),
+            )])
+        );
+        assert_eq!(
+            context.row_boundaries()[0].values(),
+            &BTreeSet::from(["tenant-from-approved-identity".to_owned()])
+        );
+    }
 
     let standing = harness
         .send(
@@ -452,8 +454,8 @@ async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
 #[test]
 fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
     let direct = CONTEXTUAL_PROJECT.replace(
-        "operations: [get], readableFields: [label]",
-        "operations: [create, get], readableFields: [label], writableFields: [label]",
+        "operations: [get]\n        readableFields: [label]\n        rowBoundaries:",
+        "operations: [create, get]\n        readableFields: [label]\n        writableFields: [label]\n        rowBoundaries:",
     );
     let project = parse_project_yaml(direct.as_bytes()).expect("direct mutation project parses");
     let failure = compile_project(&project, &[], CompileProfile::Authoring)

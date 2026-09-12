@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::*;
+use crate::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use crate::compiler::{compile_project, CompileProfile};
 use crate::contract::parse_project_yaml;
 use crate::cursor::CursorCodec;
-use crate::auth::{AuthorityClaimConfig, RegistryAuthenticator};
 use crate::model::{CompiledAction, CompiledRegistry};
 use crate::postgres::{
     ConnectionConfig, ExpectedRegistryIdentity, PoolBounds, PostgresRecordMutationService,
     RegistryLockKey,
 };
-use std::time::{Duration, Instant};
-use zeroize::Zeroizing;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
+use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -85,10 +85,7 @@ async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_actio
             JwksFetcherConfig::defaults(),
             FetchUrlPolicy::dev(),
         )),
-        AuthorityClaimConfig::new(
-            "registry_principal",
-            Some("registry_purpose".to_owned()),
-        ),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned())),
     )
     .expect("action verifier config is valid");
     let now = std::time::SystemTime::now()
@@ -112,7 +109,10 @@ async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_actio
         "identity": {"tenant": "tenant-a"},
         "scope": "case.rename"
     }));
-    let claims = auth.authenticate(&token).await.expect("signed task token verifies");
+    let claims = auth
+        .authenticate(&token)
+        .await
+        .expect("signed task token verifies");
     let service = service_for(registry.clone(), true);
     let route = &registry.actions().routes[0];
     assert!(authorize_action(&service, route, &claims, &QueryOptions::default()).is_none());

@@ -31,7 +31,7 @@ async fn status(State(state): State<StateData>, headers: HeaderMap) -> Json<Valu
     Json(state.response.lock().unwrap().clone())
 }
 fn binding() -> TaskGrantBinding {
-    serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"authority":"casework","sourceIssuer":"https://casework.test","principal":"agent","client":"agent-client","resource":"urn:breg:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get","patch"]}]},"subjects":{"person_reference":"synthetic-person","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
+    serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"authority":"casework","sourceIssuer":"https://casework.test","principal":"agent","client":"agent-client","resource":"urn:breg:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get","patch"]}]},"subjects":{"subject_reference":"synthetic-subject","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
 }
 
 #[tokio::test]
@@ -93,9 +93,9 @@ async fn each_mutating_attempt_reads_fresh_status_and_compares_every_immutable_b
         changed[field] = match field {
             "grantId" => serde_json::json!(Uuid::new_v4().to_string()),
             "bounds" => {
-                serde_json::json!({"type":"breg","permissions":[{"collection":"people","operations":["get"]}]})
+                serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get"]}]})
             }
-            "subjects" => serde_json::json!({"person_reference":"other-person","active":true}),
+            "subjects" => serde_json::json!({"subject_reference":"other-subject","active":true}),
             "expiresAt" => serde_json::json!(binding.expires_at + 1),
             _ => serde_json::json!("different"),
         };
@@ -132,11 +132,11 @@ fn binding_debug_and_scalar_validation_preserve_privacy_and_exact_subjects() {
     assert!(grant.validate().is_ok());
     for value in [
         Value::Null,
-        serde_json::json!(["person"]),
-        serde_json::json!({"id":"person"}),
+        serde_json::json!(["subject"]),
+        serde_json::json!({"id":"subject"}),
         serde_json::json!(1.5),
     ] {
-        grant.subjects.insert("person_reference".into(), value);
+        grant.subjects.insert("subject_reference".into(), value);
         assert_eq!(grant.validate(), Err(TaskGrantError::Refused));
     }
 }
