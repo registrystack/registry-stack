@@ -471,7 +471,7 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
         })
         .unwrap_or(lines.len());
     let block = format!(
-        "  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n"
+        "  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    permissions:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n"
     );
     Ok(insert_at_line(&lines, end, &block))
 }
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn narrow_yaml_patch_preserves_comments() {
-        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    grants: []\n";
+        let input = "# useful\nentities:\n  - id: request\n    route: requests\naccessProfiles:\n  - id: reader\n    # keep this\n    permissions: []\n";
         let mut expected: Value = serde_norway::from_str(input).unwrap();
         apply_breg_candidate(&mut expected, "request", &[]).unwrap();
         let patched =
