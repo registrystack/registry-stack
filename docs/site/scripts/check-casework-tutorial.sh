@@ -17,7 +17,7 @@
 # deliberately does not do.
 #
 # This gate builds the toolset from the checked-out source unless CASEWORK_BIN,
-# CASEWORKCTL_BIN, MINT_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
+# CASEWORKCTL_BIN, BREG_BIN and BREGCTL_BIN select exact candidate or
 # released bytes, then replays each registered tutorial's own shell fences from
 # an empty reader directory, the way a reader starts after installing the
 # binaries. The Base Registry Engine binaries are part of the toolset because
@@ -65,7 +65,7 @@
 # is exactly when the journey is worth walking again.
 #
 # Configuration:
-#   CASEWORK_BIN / CASEWORKCTL_BIN / MINT_BIN  run these exact binaries instead
+#   CASEWORK_BIN / CASEWORKCTL_BIN             run these exact binaries instead
 #   BREG_BIN / BREGCTL_BIN                     of building from source
 #   CASEWORK_TUTORIAL_CARGO_PROFILE            ci (default) or release
 #   CASEWORK_TUTORIAL_DOCS_ROOT                docs content directory override (tests)
@@ -360,23 +360,21 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${MINT_BIN:-}" ||
-		-z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
+	if [[ -z "${CASEWORK_BIN:-}" || -z "${CASEWORKCTL_BIN:-}" || -z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
-			-p registry-casework -p registry-caseworkctl -p registry-mint \
+			-p registry-casework -p registry-caseworkctl \
 			-p registry-breg --features registry-breg/runtime \
 			-p registry-bregctl --bins)
 		CASEWORK_BIN="$TARGET_DIR/$profile_dir/casework"
 		CASEWORKCTL_BIN="$TARGET_DIR/$profile_dir/caseworkctl"
-		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 		BREG_BIN="$TARGET_DIR/$profile_dir/breg"
 		BREGCTL_BIN="$TARGET_DIR/$profile_dir/bregctl"
 	fi
 	local bin
-	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$MINT_BIN" "$BREG_BIN" "$BREGCTL_BIN"; do
+	for bin in "$CASEWORK_BIN" "$CASEWORKCTL_BIN" "$BREG_BIN" "$BREGCTL_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -392,12 +390,12 @@ prepare_toolset() {
 	done
 
 	# The tutorials call the binaries by name, `caseworkctl dev` resolves
-	# `casework`, `mint` and `bregctl` from PATH, and `bregctl dev` resolves
-	# `breg` and `mint` the same way, so serve all five from a shim dir.
+	# `casework` and `bregctl` from PATH, and `bregctl dev` resolves
+	# `breg` the same way, so serve all five from a shim dir.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$CASEWORK_BIN" "$SHIM_DIR/casework"
 	ln -s "$CASEWORKCTL_BIN" "$SHIM_DIR/caseworkctl"
-	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
+	ln -s "$SHIM_DIR/mint"
 	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
 	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
 }

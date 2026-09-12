@@ -7,7 +7,6 @@ source_repos:
   - registry-stack
   - registry-relay
   - registry-evidence
-  - registry-mint
   - solmara-lab
 last_reviewed: "2026-08-21"
 doc_type: explanation
@@ -63,9 +62,6 @@ beside them. A separate adopter demo sits outside the production trust boundary:
 - Evidence Gateway: a minimum-disclosure assertion service. It answers one bounded, predefined
   question about one subject with a signed assertion carrying the answer and not the record.
 - Registry Platform: the shared security primitives that the runtime services build on.
-- Registry Mint: a supporting service, not a pattern of its own. It issues the short-lived
-  access tokens a resource server such as Evidence Gateway verifies, for a deployment with no
-  identity provider. The dependency runs one way: Evidence Gateway does not depend on Registry Mint.
 - Solmara Lab: a separate adopter demo, running on synthetic data and demo configuration.
   Treat Solmara Lab as out of scope for production trust. Its demo and template integrations
   are integration examples, not a production freshness or replay-protection profile, and a
@@ -84,8 +80,8 @@ auditing separately.
 {/* SVG diagram. Every boundary label is restated in the sections that follow. */}
 <figure>
   <img src="../../images/registry-trust-boundaries.svg"
-       alt="The Registry Stack trust boundaries in one map. One request path runs from Registry Mint,
-            which issues a short-lived access token, to the caller, to Evidence Gateway, and then to
+       alt="The Registry Stack trust boundaries in one map. One request path runs from a caller with an
+            access token to Evidence Gateway, and then to
             Evidence Gateway's configured authoritative source, which it reaches over a fixed HTTP
             request or a read-only SQLite extract. Registry Relay has a separate
             protected-read path to its own sources. The dashed rule above Evidence Gateway marks
@@ -105,10 +101,8 @@ auditing separately.
             and no network hop. Lookup collapses to match, no match, or ambiguous, and raw responses
             are never logged. Evidence
             Gateway and Registry Relay keep separate sources, credentials, authorization decisions, and
-            audit trails. Registry Mint to Evidence Gateway
-            runs one way: Evidence Gateway verifies the token as an ordinary resource server that knows
-            Registry Mint only as an issuer URL and a key set, and a deployment with an identity
-            provider does not run Registry Mint at all. Relay's separate path to its source is a local
+            audit trails. Evidence Gateway verifies tokens against its configured issuer URL and key
+            set. Relay's separate path to its source is a local
             read-only SQLite file opened in place, with no origin, credential, or outbound request of
             any kind. A separate lane runs operator to key file to Evidence Gateway to public JWKS to
             verifier, where private material reaches the process only by secret reference to an
@@ -239,91 +233,6 @@ deployment description that treats Relay authorization as Evidence Gateway autho
      a registry data tier. The transport opens one local file."; Relay re-derives its whole
      compiled contract and serves the fixed route set from it, crates/registry-relay-v2/src/package.rs
      and router() in crates/registry-relay-v2/src/server.rs. */}
-
-**Registry Mint to Evidence Gateway.** Registry Mint issues access tokens; Evidence Gateway verifies them as
-an ordinary resource server. The dependency runs one way, and Evidence Gateway's only knowledge of
-Registry Mint is an issuer URL and a key set: it reads every claim by the name in its own
-`authentication` block, so any issuer writing those claims serves equally well. Registry
-Mint's tests drive Evidence Gateway's authenticator, and Evidence Gateway does not depend on Registry Mint.
-What a reviewer checks depends on which of the two shapes the deployment runs:
-
-- **With Registry Mint.** The client registry becomes part of the trust boundary. Registry
-  Mint verifies the registered client's selected authentication method, a signed assertion
-  against only that client's public keys by default, or an explicitly enabled secret against
-  only that standard client's fingerprints, then writes the authority from the registry and
-  never from the request. Secret credentials must be Mint-generated, unique per managed
-  installation, delivered outside configuration, and treated as lower assurance because a
-  native client can expose them to its operator. The
-  consequence is that whoever can write a registration file into `clients.directory` can mint
-  a token carrying any requester tags, and the running process re-reads that directory on
-  `SIGHUP` without a restart. Treat the registry directory as sensitive as the signing key.
-  Registry Mint serves plain HTTP behind operator-terminated TLS, while Evidence Gateway requires an
-  HTTPS issuer and key set with no loopback exception, so the TLS terminator is load-bearing.
-- **Without Registry Mint.** A deployment that already has an identity provider does not run
-  Registry Mint at all; Evidence Gateway points at the provider's issuer and JWKS directly. Tag
-  issuance, client lifecycle, and revocation move entirely to that provider, and Evidence Gateway's
-  residual exposure is its trust in one issuer's key set.
-
-Both shapes share one property worth stating plainly: Evidence Gateway has no token revocation. A
-minted or issued token is accepted until it expires, which is why token lifetime is bounded
-short. If the issuer's key set becomes unreachable, an already-retrieved key set keeps being
-accepted for a bounded allowance and then every request is rejected with the same closed `401`
-a bad token receives, with the reason recorded only in the deployment's own log.
-
-**Operator to signing key material, and consumer to the published key set.** Private signing
-material is core-owned and stays out of bundle values, Rhai, logs, audit, and errors
-(`V1-I23`). Local development resolves a private JWK through the file secret provider, which
-accepts only a regular, owner-only, non-symlink, single-hard-link file of the expected mode and
-size. Production and evidence-grade deployments instead sign through a workload-local
-Vault/OpenBao Transit proxy over a Unix socket, so the process receives no provider token or
-exportable private key.
-The operator governs one active ES256/P-256 public JWK whose `kid` is its RFC 7638
-thumbprint, and retains each previous public key in the published JWKS for at least the maximum assertion
-validity plus allowed clock skew. Signing is mandatory and fail-closed: a missing or failed
-signer returns a safe transient failure and never falls back to unsigned output (`V1-I22`).
-
-On the consumer's side, the published JWKS is discovery, not a trust anchor. A verifier obtains
-the provider identity and key-set location through governed configuration, pins that trust,
-allowlists the expected algorithm, and resolves `kid` only within the trusted set; it never
-follows a key URL supplied inside a message. Strict verification compares the response against
-independently retained expectations, the expected nonce, the expected unordered set of unique
-role-bound subject bindings, and the expected concept identifiers, forms, and cardinalities,
-and reports one generic policy mismatch so verification is not itself an oracle (`V1-I31`).
-A valid signature authenticates the provider and the payload; it does not assert legal-signature
-status or that the underlying source fact is true (`V1-I24`).
-
-**Relay to its registry source.** Registry Relay owns its own source boundary, and in this
-version that boundary is a local file rather than a network edge. A Relay deployment binds one
-or more SQLite files by path in its runtime file, opens each with `SQLITE_OPEN_READ_ONLY`,
-observes only the SQL views in it, and executes only the statements the compiler produced from
-the reviewed contract. Four properties hold it:
-
-- The runtime rejects a symlinked database, a non-regular file, and a database carrying a `-wal`
-  or `-journal` sidecar, so it never binds a database another process is mid-write on, and never
-  follows a path an attacker redirected.
-- A `snapshot` source must be immutable to this process, either on a read-only filesystem or
-  with no write bits, and is pinned by content digest plus device, inode, length, mode, and
-  modification and change times. A `live-read-only` source is pinned by device and inode. A
-  replaced or altered file is refused rather than read.
-- A SQLite authorizer callback gates every caller-supplied statement as defense in depth behind
-  the compiler, and positional SQL parameters are refused outright: only the named parameters the
-  contract declared are accepted, bound by pre-resolved ordinal.
-- Failures are categorical. The SQLite error type carries a kind and no value, so a source
-  problem cannot leak a row, a path, or a statement into a response.
-
-{/* Evidence: crates/registry-platform-sqlite/src/schema.rs:131-133 and src/statement.rs:494-496
-     (open flags); src/capture.rs:11 (SNAPSHOT_SIDECARS), :34-38 (symlink refusal), :42-45
-     (read-only filesystem or non-writable mode), :285-296 (same_file: dev/ino/len/mode/mtime/ctime),
-     :305-309 (same_live_file: dev+ino); src/statement.rs:800-851 (positional parameters
-     rejected), :918-930 (named parameters bound by ordinal);
-     crates/registry-relay-v2/src/source_observation.rs (views-only observation).
-
-     TODO[evidence]: the authorizer is deliberately uninstalled around two internal fixed-SQL
-     windows (crates/registry-platform-sqlite/src/statement.rs:960-970 and :1026-1054) and
-     open_for_schema never installs it, so the claim above is scoped to caller-supplied
-     statements and must not be widened to "always installed". Separately, no test in
-     registry-platform-sqlite exercises a real SQL VIEW or TRIGGER object, so the views-only
-     restriction is proven by the observation filter and not by an end-to-end view fixture. */}
 
 ## Assets protected by the design
 

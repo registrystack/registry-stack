@@ -21,8 +21,8 @@ certification or compatibility with a wallet product.
 
 ## When to use evidence-oid4vci
 
-`evidence-oid4vci` is a supporting service, not a product pattern of its own, in the same sense
-Registry Mint is. It exposes Evidence Gateway credentials over OID4VCI 1.0 Final, the
+`evidence-oid4vci` is a supporting service, not a product pattern of its own. It exposes Evidence
+Gateway credentials over OID4VCI 1.0 Final, the
 wallet-facing protocol Evidence Gateway deliberately refuses to speak.
 
 Evidence Gateway signs every credential. The adapter holds no Evidence Gateway signing key and
@@ -104,7 +104,7 @@ You need:
 
 - A complete Evidence Gateway deployment with at least one requirement declared `holder-bound`,
   permitted for the SD-JWT VC batch format at bundle and grant scope.
-- A Registry Mint deployment, or another token issuer, that can grant `evidence-oid4vci` its own
+- An OAuth token issuer that can grant `evidence-oid4vci` its own
   access token to Evidence Gateway through the `private_key_jwt` client assertion flow, and this
   service's own private JWK for that assertion.
 - A published `https` origin for the credential issuer identifier this service will serve. A
@@ -226,8 +226,8 @@ evidence-oid4vci check --config /etc/evidence-oid4vci/oid4vci.yaml
 `check` does everything `serve` does except bind a socket: it loads and validates the
 configuration document and the token client key, then exits.
 An old `mint:` block fails with an instruction to use `tokenClient:`.
-When retaining Registry Mint as the token issuer, leave `resource` or `scopes` out if that
-installation does not accept those OAuth request parameters. `check`, `inspect`, and `serve` accept
+Configure `resource` and `scopes` to match the issuer's registered client and Evidence Gateway
+authorization profile. `check`, `inspect`, and `serve` accept
 `EVIDENCE_OID4VCI_CONFIG` in place of `--config`.
 
 Inspect the metadata derived from the validated configuration and authenticated Evidence
@@ -424,7 +424,5 @@ proofs, holder keys, credentials, selectors, subject identifiers, raw issuers, o
 
 ## Next
 
-- [Configure Registry Mint](../mint/) if you retain Mint to issue the access tokens used for
-  Evidence Gateway and the adapter's `POST /offers` endpoint.
 - [Configure Evidence Gateway](../evidence/) for the deployment this service requests credentials
   from.

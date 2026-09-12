@@ -29,8 +29,7 @@ on your machine.
 - **HTTPS in front of it.** The process trusts no host or forwarded header; your reverse proxy or
   ingress terminates TLS, and generated links use the public origin you configure.
 - **A token issuer.** BReg verifies bearer tokens from one OpenID Connect issuer and issues none.
-  Your identity provider fills this role, or [Registry Mint](../../configure/mint/) does when you
-  have none.
+  Configure a compatible OAuth issuer for this role.
 - **A signer who is not the author.** A production package is published only after an external
   signer produces a detached Ed25519 signature over it, and the runtime accepts a package only when
   enough of the keys in its trust anchor have signed. Who holds those keys, and how they sign, is
@@ -61,9 +60,8 @@ with no database open, so an author can work on a laptop until the project is re
 ## How it ships
 
 Each release publishes the `breg` runtime and the `bregctl` authoring tool as reproducible
-binaries, with an installer that verifies them against the release checksums and installs them, and
-the Registry Mint token issuer beside them, together or not at all. Keep the pair on one release:
-both compute the schema fingerprint that a test receipt binds. Each release also publishes a
+binaries, with an installer that verifies them against the release checksums and installs them
+together or not at all. Each release also publishes a
 container image built on a distroless base with no shell,
 running as a non-root user, that holds the runtime binary and nothing else; configuration, package,
 trust anchor, and secrets mount read-only into it.

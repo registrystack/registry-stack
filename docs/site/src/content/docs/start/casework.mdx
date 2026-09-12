@@ -74,11 +74,12 @@ caseworkctl init tutorial-work/casework --template standalone-decision
 caseworkctl dev tutorial-work/casework
 ```
 
-The installer verifies the release `SHA256SUMS` before it installs `casework`, `caseworkctl`, and
-`mint` into `~/.local/bin`. The `standalone-decision` template writes a project that declares one
+The installer verifies the release `SHA256SUMS` before it installs `casework` and `caseworkctl`
+into `~/.local/bin`. The `standalone-decision` template writes a project that declares one
 decision kind and needs no registry behind it. `caseworkctl dev` starts PostgreSQL in a container,
-starts Registry Mint and `casework` against it, seeds the directory, and prints a report carrying a
-ready status, the service URL, the token endpoint, and one credential directory per local client.
+starts the maintained stock identity provider and `casework`, seeds the directory, and prints a
+report carrying a ready status, the service URL, the token endpoint, and one credential directory
+per local client.
 
 [Decide your first work item](../../tutorials/first-casework/) takes it from there: submit one
 decision as a Requester, claim and decide it as Staff, and read the outcome back from the terminal
@@ -114,8 +115,7 @@ system.
 
 Casework serves an API and renders no interface of its own. A browser never calls it directly: a
 staff host calls Casework server to server on a private network, which is why the API enables no
-CORS. It issues no tokens and stores no users, so identity stays with your OpenID Connect provider,
-or with [Registry Mint](../../configure/mint/) when you have none.
+CORS. It issues no tokens and stores no users, so identity stays with your OpenID Connect provider.
 
 {/* Evidence: crates/registry-casework/src/http.rs, router and security_headers;
     crates/registry-casework/src/auth.rs, CaseworkAuthenticator; products/casework/README.md. */}

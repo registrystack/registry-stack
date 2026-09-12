@@ -19,10 +19,10 @@ test('pinned docsets expose CLI navigation only when they contain its index', as
   // A catalog that predates a binary contains no page for it, so the binary
   // takes no seat and the navigation stays true to what the docset publishes.
   await writeFile(index, page('CLI reference'));
-  await writeFile(resolve(root, 'mint.mdx'), page('mint command reference'));
+  await writeFile(resolve(root, 'evidence.mdx'), page('evidence command reference'));
   assert.deepEqual(
     cliReferenceSidebar(index)[0].items.map((item) => item.slug),
-    ['reference/cli', 'reference/cli/mint'],
+    ['reference/cli', 'reference/cli/evidence'],
   );
 
   await writeFile(index, draftPage('CLI reference'));

@@ -32,7 +32,6 @@ export const expectedBinaries = [
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
-  'mint',
   'relay',
   'relayctl',
 ];
@@ -52,10 +51,7 @@ const groups = [
   { title: 'Registry Casework', binaries: ['casework', 'caseworkctl'] },
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
-  {
-    title: 'Supporting Evidence services',
-    binaries: ['mint', 'evidence-oid4vci'],
-  },
+  { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
 ];
 
 function exactKeys(value, expected, label) {

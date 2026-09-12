@@ -17,7 +17,7 @@
 # a human reader once already.
 #
 # This gate builds the Evidence toolset from the checked-out source unless
-# EVIDENCE_BIN, EVIDENCECTL_BIN, EVIDENCE_OID4VCI_BIN and MINT_BIN select exact
+# EVIDENCE_BIN, EVIDENCECTL_BIN, and EVIDENCE_OID4VCI_BIN select exact
 # candidate or released bytes, then replays each registered tutorial's own
 # shell fences in its own reader directory. Every tutorial creates the files it
 # needs from its documented commands, so what CI runs is what a reader copies.
@@ -83,7 +83,7 @@
 #
 # Configuration:
 #   EVIDENCE_BIN / EVIDENCECTL_BIN /      run these exact binaries instead of
-#   EVIDENCE_OID4VCI_BIN / MINT_BIN       building from source
+#   EVIDENCE_OID4VCI_BIN                  building from source
 #   EVIDENCE_OID4VCI_INTEROP_TEST_BIN     run this prebuilt sanitized flow test
 #   REGISTRY_CLIENT_PY_WHEEL              import the client package out of this
 #                                         assembled wheel
@@ -138,10 +138,8 @@ EXCLUDED_EVIDENCE_TUTORIALS=(
 	send-registry-events-to-a-webhook                # Base Registry Engine journey; needs the demo launcher's webhook receiver, verified in reader mode outside the Evidence runner
 	build-a-breg-production-candidate                # Base Registry Engine journey; needs a PostgreSQL container and a local signing key, verified in reader mode outside the Evidence runner
 	query-breg-client                                # BReg client journey; depends on the released unified packages, like query-relay-client
-	query-a-spatial-registry-from-qgis               # Base Registry Engine spatial journey; product CI runs the spatial smoke, while QGIS needs a desktop reader run
 	integrate-evidence-candidate-with-docker-compose # drift-checked by evidence-production-build-docs.test.mjs; needs Docker Compose
 	issue-a-birth-certificate-vc-from-opencrvs       # needs the public OpenCRVS Farajaland demo; live and opt-in, not replayed in CI
-	issue-evidence-access-tokens-with-registry-mint  # drift-checked by evidence-production-build-docs.test.mjs; needs a Registry Mint deployment
 	issue-immunization-evidence-from-dhis2           # needs the public DHIS2 demo; live and opt-in, not replayed in CI
 	manage-evidence-verifier-trust                   # how-to against the reader's own deployment; no fixed scenario this gate can replay
 	move-evidence-to-production-signing              # drift-checked by evidence-production-build-docs.test.mjs; needs a Transit signer
@@ -315,12 +313,12 @@ load_spec() {
 			"run:Register the first local application"
 			"run:Start the protected service"
 			"run:Make an allowed request"
-			"run:Add an application without restarting"
+			"run:Add an application for the next generation"
 			"run:Use the application assigned the policy"
 			"run:Try a question the application was not granted"
 			"run:Revoke an application|1"
 			"run-fails:Revoke an application|2"
-			"run:Inspect the final audit operation"
+			"run:Revoke an application|3"
 			"run:Clean up"
 		)
 		# This tutorial teaches refusal, so the refusals are what must hold.
@@ -547,21 +545,20 @@ SHIM_DIR="$WORK_ROOT/bin"
 
 prepare_toolset() {
 	if [[ -z "${EVIDENCE_BIN:-}" || -z "${EVIDENCECTL_BIN:-}" || \
-		-z "${EVIDENCE_OID4VCI_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
+		-z "${EVIDENCE_OID4VCI_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
 			-p registry-evidence -p registry-evidencectl \
-			-p registry-evidence-oid4vci -p registry-mint)
+			-p registry-evidence-oid4vci)
 		EVIDENCE_BIN="$TARGET_DIR/$profile_dir/evidence"
 		EVIDENCECTL_BIN="$TARGET_DIR/$profile_dir/evidencectl"
 		EVIDENCE_OID4VCI_BIN="$TARGET_DIR/$profile_dir/evidence-oid4vci"
-		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 	fi
 	export EVIDENCE_OID4VCI_BIN
 	local bin
-	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN" "$EVIDENCE_OID4VCI_BIN" "$MINT_BIN"; do
+	for bin in "$EVIDENCE_BIN" "$EVIDENCECTL_BIN" "$EVIDENCE_OID4VCI_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -581,7 +578,6 @@ prepare_toolset() {
 	ln -s "$EVIDENCE_BIN" "$SHIM_DIR/evidence"
 	ln -s "$EVIDENCECTL_BIN" "$SHIM_DIR/evidencectl"
 	ln -s "$EVIDENCE_OID4VCI_BIN" "$SHIM_DIR/evidence-oid4vci"
-	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
 # The unified client package, unpacked once for whichever tutorials import it.

@@ -31,22 +31,19 @@ Everything you keep goes into one directory, `tutorial-work`.
 />
 
 {/* Evidence: crates/registry-caseworkctl/src/project.rs, init();
-    crates/registry-caseworkctl/src/dev/mod.rs, start();
-    crates/registry-mint/src/main.rs. */}
+    crates/registry-caseworkctl/src/dev/mod.rs, start(). */}
 
 ## Install Registry Casework
 
-Install `casework`, `caseworkctl`, and `mint`.
-[Registry Mint](../../reference/glossary/#registry-mint) issues the local access tokens this
-tutorial uses, standing in for the identity provider a deployment would have:
+Install `casework` and `caseworkctl`. The local development command starts the maintained stock
+identity provider and registers the tutorial clients:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 caseworkctl --version
-mint --version
 ```
 
-The installer checks the three binaries against the release `SHA256SUMS` before anything reaches
+The installer checks both binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
 Keep that directory on your `PATH`.
 
@@ -124,23 +121,23 @@ caseworkctl dev tutorial-work/casework
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
 The command returns once Casework answers, with `status: ready` in its report.
-`dev` started PostgreSQL in a container, registered the four clients from `dev-clients.yaml` with
-Mint under a fresh key each, wrote an operator file, migrated the database, started `casework`, and
+`dev` started PostgreSQL and the maintained stock identity provider in containers, registered the
+four clients from `dev-clients.yaml` under a fresh key each, wrote an operator file, migrated the
+database, started `casework`, and
 seeded the [directory](../../reference/glossary/#directory) from the same clients file, which the
 report confirms under `directory`.
 
-The report also names the Casework address, the Mint token endpoint, the audience, the runtime
-journal, and the credential file paths for each client.
+The report also names the Casework address, the issuer, the token endpoint, the audience, the
+runtime journal, and the credential file paths for each client.
 The services keep running after the command returns, so this one terminal is enough.
 
 Use the two addresses printed in the report. These assignments use the default ports or the
-`CASEWORKCTL_DEV_CASEWORK_PORT` and `CASEWORKCTL_DEV_MINT_PORT` overrides; replace the URLs if the
-report differs:
+`CASEWORKCTL_DEV_CASEWORK_PORT` and `CASEWORKCTL_DEV_ISSUER_PORT` overrides; replace the URL if
+the report differs:
 
 ```sh
 casework_url="http://127.0.0.1:${CASEWORKCTL_DEV_CASEWORK_PORT:-8092}"
-token_endpoint="http://127.0.0.1:${CASEWORKCTL_DEV_MINT_PORT:-8093}/token"
-credentials=tutorial-work/casework/.casework/dev/credentials
+headers=tutorial-work/casework/.casework/dev/secrets
 ```
 
 Keep this terminal open so the values remain available to the later commands.
@@ -151,23 +148,19 @@ Keep this terminal open so the values remain available to the later commands.
 
 ## Submit a request as the Requester
 
-Ask Mint for a token as the `requester` client and write it into a file `curl` can send as an
-authorization header:
+Ask the local issuer for a token as the `requester` client. The command writes an owner-only header
+file that `curl` can send:
 
 ```sh
 umask 077
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/requester/client-id")" \
-  --key "$credentials/requester/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+caseworkctl dev token tutorial-work/casework requester
 ```
 
-Success prints nothing.
-`mint token` signs a request with the client's private key and posts it to the token endpoint, the
-way an application would; the token carries the `casework:request` scope and lasts five minutes.
+`caseworkctl dev token` requests a fresh token through the registered client and reports the private
+header-file path. The token carries the `casework:request` scope and lasts five minutes.
 
 :::caution[Header files hold live tokens]
-`tutorial-work/requester.header` and the other header files written later each hold a bearer token
+`$headers/requester.header` and the other header files written later each hold a bearer token
 that acts as that client until it expires.
 `umask 077` makes them readable only by your user.
 Keep them out of version control, screenshots, and support messages.
@@ -177,7 +170,7 @@ Submit the renewal:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/requester.header \
+  --header @"$headers/requester.header" \
   --header 'Registry-Casework-Profile: requester' \
   --header 'Idempotency-Key: tutorial-renewal-1' \
   --header 'Content-Type: application/json' \
@@ -228,24 +221,21 @@ own request later.
 {/* Evidence: crates/registry-casework/src/http.rs, create_hosted_item() and idempotency_key();
     crates/registry-casework/src/hosted.rs, create_hosted_item();
     crates/registry-casework-core/src/hosted.rs, HostedCreateRequest;
-    crates/registry-mint/src/cli.rs. */}
+    crates/registry-caseworkctl/src/dev/mod.rs, fresh_token(). */}
 
 ## Open the inbox as Staff
 
-Mint a second token, this time as the `staff` client:
+Request a second token, this time as the `staff` client:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token tutorial-work/casework staff
 ```
 
 List the [work items](../../reference/glossary/#work-item) the Staff client's teams serve:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --header 'Registry-Casework-Profile: staff' \
   --output tutorial-work/inbox.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/work-items?view=my_teams&queue=decisions&limit=25"
@@ -341,10 +331,7 @@ Renew the Staff token before you act, so time spent reading the inbox cannot tur
 an authentication refusal:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token tutorial-work/casework staff
 ```
 
 Take the identifier and the offered `ifMatch` value from the inbox rather than typing them:
@@ -358,7 +345,7 @@ Claim it:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --header 'Registry-Casework-Profile: staff' \
   --header "If-Match: $claim_match" \
   --header 'Idempotency-Key: tutorial-claim-1' \
@@ -411,7 +398,7 @@ python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["i
 }
 ```
 
-The holder is the token's issuer and subject, the identity Mint put in the token, and the revision
+The holder is the token's issuer and subject, the identity provider's token identity, and the revision
 moved to 2.
 `actions` now offers the two declared outcomes beside `release` and `delegate`, each carrying the
 new `ifMatch`: claiming an item is what opens deciding it.
@@ -425,17 +412,14 @@ new `ifMatch`: claiming an item is what opens deciding it.
 Renew the Staff token again before the two decision attempts:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token tutorial-work/casework staff
 ```
 
 Try to confirm the renewal with the `ifMatch` value the inbox offered before the claim:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --header 'Registry-Casework-Profile: staff' \
   --header "If-Match: $claim_match" \
   --header 'Idempotency-Key: tutorial-decide-1' \
@@ -463,7 +447,7 @@ Take the `ifMatch` value the claim offered for the `confirmed` outcome, and deci
 ```sh
 decide_match=$(python3 -c 'import json; actions = json.load(open("tutorial-work/claimed.json"))["item"]["actions"]; print(next(action["ifMatch"] for action in actions if action["operation"] == "confirmed"))')
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --header 'Registry-Casework-Profile: staff' \
   --header "If-Match: $decide_match" \
   --header 'Idempotency-Key: tutorial-decide-1' \
@@ -514,17 +498,14 @@ Renew the Requester token before reading its own
 [terminal feed](../../reference/glossary/#terminal-feed):
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/requester/client-id")" \
-  --key "$credentials/requester/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+caseworkctl dev token tutorial-work/casework requester
 ```
 
 Read the feed:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/requester.header \
+  --header @"$headers/requester.header" \
   --header 'Registry-Casework-Profile: requester' \
   --output tutorial-work/terminal.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/hosted-items/terminal"
@@ -567,13 +548,10 @@ back to its own records needs, and the opaque `actorRef` in place of the casewor
 ## See who decided, as the Supervisor
 
 A Supervisor resolves the opaque handle to a person, one decision at a time.
-Mint a Supervisor token:
+Request a Supervisor token:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/supervisor/client-id")" \
-  --key "$credentials/supervisor/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/supervisor.header
+caseworkctl dev token tutorial-work/casework supervisor
 ```
 
 Read the [accountability record](../../reference/glossary/#accountability-record) for the decision
@@ -582,7 +560,7 @@ event:
 ```sh
 event_id=$(python3 -c 'import json; print(json.load(open("tutorial-work/decided.json"))["eventId"])')
 curl --silent --show-error \
-  --header @tutorial-work/supervisor.header \
+  --header @"$headers/supervisor.header" \
   --header 'Registry-Casework-Profile: supervisor' \
   --output tutorial-work/accountability.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/hosted-accountability/$event_id"
@@ -630,17 +608,14 @@ Renew the Requester token so the first refusal proves the profile boundary rathe
 expiry:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/requester/client-id")" \
-  --key "$credentials/requester/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/requester.header
+caseworkctl dev token tutorial-work/casework requester
 ```
 
 Ask for the Staff inbox with the Requester token:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/requester.header \
+  --header @"$headers/requester.header" \
   --header 'Registry-Casework-Profile: requester' \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/work-items?view=my_teams&queue=decisions"
@@ -657,15 +632,12 @@ The Requester profile carries no authority over the queue, whatever it asks for.
 Renew the Staff token, then ask for the same inbox while selecting the `supervisor` profile:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token tutorial-work/casework staff
 ```
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --header 'Registry-Casework-Profile: supervisor' \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/work-items?view=my_teams&queue=decisions"
@@ -686,7 +658,7 @@ Last, send the Staff request with no profile header at all:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @"$headers/staff.header" \
   --output tutorial-work/problem.json --write-out 'HTTP %{http_code}\n' \
   "$casework_url/v1/work-items?view=my_teams&queue=decisions"
 python3 -c 'import json; print(json.load(open("tutorial-work/problem.json"))["code"])'
@@ -745,7 +717,7 @@ All of it came from the YAML in `tutorial-work/casework`.
 ### Renew an expired token
 
 A local token lasts five minutes.
-Run the `mint token` command for that client again; it replaces the header file.
+Run `caseworkctl dev token tutorial-work/casework <client>` again; it replaces that client's header file.
 If it fails, the runtime is stopped: start it again with the command from
 [Start Casework](#start-casework), then renew.
 
@@ -753,15 +725,15 @@ If it fails, the runtime is stopped: start it again with the command from
 
 | Symptom | Next move |
 | --- | --- |
-| `caseworkctl`, `casework`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
-| `caseworkctl dev` refuses over a reported version | The `casework` or `mint` it resolved comes from another release than `caseworkctl`. The refusal names both versions. Install all three from the same release, or put the matching build first on `PATH`. |
-| `caseworkctl dev` refuses a port | Something else listens on 8092, 8093, or 55433. Set `CASEWORKCTL_DEV_CASEWORK_PORT`, `CASEWORKCTL_DEV_MINT_PORT`, or `CASEWORKCTL_DEV_DATABASE_PORT`, or pass `--casework-port`, `--mint-port`, or `--database-port`, on the first start; later starts keep the ports you chose, and the `casework_url` and `token_endpoint` assignments from [Start Casework](#start-casework) pick them up. |
+| `caseworkctl` or `casework` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| `caseworkctl dev` refuses over a reported version | The `casework` it resolved comes from another release than `caseworkctl`. Install both from the same release, or put the matching build first on `PATH`. |
+| `caseworkctl dev` refuses a port | Something else listens on 8092, 8093, or 55433. Set `CASEWORKCTL_DEV_CASEWORK_PORT`, `CASEWORKCTL_DEV_ISSUER_PORT`, or `CASEWORKCTL_DEV_DATABASE_PORT`, or pass `--casework-port`, `--issuer-port`, or `--database-port`, on the first start; later starts keep the ports you chose, and the `casework_url` and `token_endpoint` assignments from [Start Casework](#start-casework) pick them up. |
 | `caseworkctl dev` fails before it reports `ready` | Read the refusal: it names the check that failed. Otherwise check that Docker is running. Run `caseworkctl dev events tutorial-work/casework` for the retained runtime journal; do not share the credential files beside it. |
-| A request returns `401` with code `authentication.refused` | The token expired, or the header file is stale. Mint it again for that client, as [Renew an expired token](#renew-an-expired-token) describes. |
+| A request returns `401` with code `authentication.refused` | The token expired, or the header file is stale. Request it again for that client, as [Renew an expired token](#renew-an-expired-token) describes. |
 | A request returns `400` with code `request.invalid` | A required header is missing. Every request carries `Registry-Casework-Profile`, and every write also carries `Idempotency-Key`. |
 | A claim or decision returns `412` | The item moved. Re-read it, take the `ifMatch` value from the `actions` entry for the operation you want, and send it again. |
 | A claim returns `409` | Another caller holds the item. Its `actions` array shows what remains open to you. |
-| You opened a fresh terminal | Run the `casework_url`, `token_endpoint`, and `credentials` assignments from [Start Casework](#start-casework) again. The header files and `tutorial-work` directory are still there. |
+| You opened a fresh terminal | Run the `casework_url` and `headers` assignments from [Start Casework](#start-casework) again. The header files and `tutorial-work` directory are still there. |
 
 ## Next
 

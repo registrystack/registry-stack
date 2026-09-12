@@ -5,7 +5,6 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-evidence
-  - registry-mint
   - registry-relay
   - registry-stack
 last_reviewed: "2026-08-11"
@@ -18,11 +17,11 @@ This page lists Registry Stack's supported fixed environment-variable interfaces
 adopter tooling, and installers. It also records how Relayctl keeps fixture scratch state independent
 of host temporary-directory configuration.
 
-The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway and Registry Mint read no secret from the environment under either kind of name, as the sections for each product record.
+The stack's other kind of environment variable is operator-named. Secret material such as an audit integrity key is not read from a fixed variable name: a configuration field carries a reference that names the variable, and the operator chooses the name. Relay and Base Registry Engine are the products that work that way, and the reference grammar is closed rather than free-form. Evidence Gateway reads no secret from the environment under either kind of name, as its section records.
 
 ## Configuration expansion
 
-Relay, Evidence Gateway, and Registry Mint expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`), and Registry Mint in `MintConfig::load` (`crates/registry-mint/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
+Relay and Evidence Gateway expand no environment reference inside their configuration documents. Each parses its documents as written: Relay in `RelayRuntime::parse_yaml` and `RegistryContract::parse_yaml` (`crates/registry-relay-v2/src/contract.rs`), and Evidence Gateway in `RuntimeConfig::parse_yaml` (`crates/registry-evidence/src/config.rs`). Base Registry Engine is the exception: `breg` expands `${NAME}` expressions in its runtime file at load, as [its section](#base-registry-engine) records.
 
 ## Relay
 
@@ -157,23 +156,6 @@ preserves the previous set. The `mint` it installs is the same release asset the
 toolset installer ships. It does not verify release authenticity.
 
 {/* Evidence: crates/registry-breg/install.sh; crates/registry-breg/src/main.rs; crates/registry-breg/src/runtime_config.rs. */}
-
-## Registry Mint
-
-The `mint` binary reads these variables.
-
-| Name | Purpose | Default or required |
-| --- | --- | --- |
-| `MINT_CONFIG` | YAML config path for `mint check`, `mint serve`, and `mint verify-audit`. Equivalent to `--config`. | Required for those three subcommands, by flag or by variable. |
-| `MINT_HEALTHCHECK_URL` | Exact numeric loopback or private-address HTTP URL for `mint healthcheck`. The path must be `/ready`; credentials, query, and fragment are refused. | Defaults to `http://127.0.0.1:8081/ready`. |
-| `RUST_LOG` | Tracing filter for the JSON operational logs. Applies to every subcommand; `mint token` sends its logs to standard error so the access token stays alone on standard output. | Defaults to `info`. |
-
-Registry Mint's governed service public keys, Transit proxy settings, and client registrations are named
-in its configuration: `signing.activePublicJwkFile`, `signing.publishedPublicJwkFiles`,
-`signing.revokedKeyIds`, `signer`, and `clients.directory`. None is an environment variable. The
-`mint token` subcommand is a caller tool rather than an operator one: it reads no server configuration
-at all, and takes the caller's private JWK and any delegation subject as file paths rather than as
-values. See the [Registry Mint reference](../mint/) for the full configuration surface.
 
 ## Source
 

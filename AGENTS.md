@@ -46,13 +46,6 @@ Registry Manifest describes sources portably; Relay is its consumer in code
 and `registry-platform-*` crates are shared primitives. `relayctl` is Relay
 adopter tooling; `registry-evidencectl` is Evidence adopter tooling.
 
-Registry Mint is a supporting service, not a runtime product of its own: it
-issues the access tokens a resource server such as Evidence or Base Registry
-Engine verifies, for deployments with no identity provider. The dependency runs
-one way only in production: no Evidence crate depends on Mint at runtime. Mint's
-tests drive Evidence's authenticator, and Evidence test code may drive a real
-Mint instance to prove a client against a real authorization server.
-
 `registry-evidence-oid4vci` is a supporting service in the same sense, not a
 runtime product of its own: it delivers Evidence credentials to a wallet over
 OID4VCI 1.0 Final, the wallet-facing protocol Evidence deliberately refuses to
@@ -96,7 +89,6 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-evidence-client-py` | Python binding for `registry-evidence-client`, via PyO3 |
 | `crates/registry-evidencectl` | Evidence adopter tooling (`evidencectl`): key material, incomplete OpenAPI authoring workspaces, fixture runs for complete projects |
 | `crates/registry-evidence-authoring` | The authoring form: the single implementation of the model an adopter writes and the checks it must satisfy, shared by adopter tooling |
-| `crates/registry-mint` | Short-lived access tokens for registered clients, and the `mint` binary |
 | `crates/registry-manifest-*` | Manifest core types and CLI |
 | `crates/registry-platform-*` | Shared primitives used by the maintained runtimes and tooling |
 | `crates/registry-platform-sqlite` | Shared bounded read-only SQLite security boundary used by Relay V2 and Evidence |

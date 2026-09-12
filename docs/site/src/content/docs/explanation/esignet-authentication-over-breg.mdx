@@ -36,19 +36,15 @@ BReg owns the registry: the population records, the access profiles that decide 
 read which fields, the revision history, and the audit journal. It knows nothing about eSignet as a
 product. From its side, the provider is one more client with one narrow grant.
 
-Registry Mint issues the short-lived access token the provider presents to BReg. The provider
-authenticates to Mint as a registered `private_key_jwt` client and never holds a long-lived registry
-credential.
+The provider obtains a short-lived access token from the OAuth issuer your deployment configures.
+It authenticates as a registered `private_key_jwt` client and fixes the BReg resource and scopes in
+its own configuration, so a login request cannot widen them.
 
 The provider itself is a Go module compiled into the eSignet host. eSignet selects it by setting the
 authentication provider to `breg` and pointing it at one YAML configuration file. The provider
 contributes three things: it verifies the citizen's challenge, it performs the governed lookup, and it
 derives the claims and the pairwise subject that eSignet then signs. Everything else stays with
 eSignet.
-
-{/* Evidence: crates/registry-mint/src/lib.rs, crates/registry-mint/src/assertion.rs, and
-crates/registry-mint/src/clients.rs implement RFC 7523 private_key_jwt client authentication for
-the client_credentials grant that the provider uses to obtain its BReg access token. */}
 
 ## The login flow
 
@@ -60,14 +56,14 @@ sequenceDiagram
     participant C as Citizen
     participant E as eSignet
     participant P as BReg provider
-    participant M as Registry Mint
+    participant I as OAuth issuer
     participant B as BReg
 
     C->>E: Enter identifier, receive challenge
     C->>E: Submit challenge response
     E->>P: Verify challenge
-    P->>M: private_key_jwt client_credentials
-    M-->>P: Short-lived access token
+    P->>I: private_key_jwt client_credentials
+    I-->>P: Short-lived access token
     P->>B: Lookup account-check fields only
     B-->>P: uin, status
     E->>C: Consent screen (requested claims)
@@ -82,7 +78,7 @@ sequenceDiagram
 The order matters for data protection:
 
 1. **Challenge first.** The provider verifies the citizen's one-time code or other challenge before
-   any registry call. A wrong code never reaches BReg or Mint, so the registry is not an oracle for
+   any registry call. A wrong code never reaches BReg or the token issuer, so the registry is not an oracle for
    guessing identifiers.
 2. **Account check with the smallest projection.** After a correct challenge, the provider looks up
    the identifier and asks BReg for only the fields named in `account_check_fields`, typically the
@@ -112,7 +108,7 @@ body carrying the selector and the verified identifier.
 
 ```http
 POST /v1/records/population:lookup?accessProfile=esignet-source&$select=uin,status
-Authorization: Bearer <Mint access token>
+Authorization: Bearer <access token>
 Content-Type: application/json
 Accept: application/json
 
@@ -154,16 +150,14 @@ a code change. The provider needs:
 admits a request when every entry in required_scopes is present in the verified token, so an empty
 set admits any caller that satisfies the principal claim and the row boundaries.
 crates/registry-breg/src/access.rs raises access.profile.no_required_scope for that case.
-crates/registry-mint/src/token.rs joins a client's registered scopes into the minted scope claim. */}
+The provider configuration fixes the token resource and scopes for every exchange. */}
 
-On the Mint side, register the provider as a `private_key_jwt` client with an ES256 or RS256 key,
-and put the profile's required scope in that client's `authorization.scopes` and nowhere else. The
-provider's token request carries no scope of its own, so the registration is the only thing that
-lets it select the profile. Mint issues tokens the BReg access profile trusts, and the provider
-caches each one for at most five minutes.
+Register the provider with your OAuth issuer as a `private_key_jwt` client using an ES256 or RS256
+key. Configure the provider with the exact token endpoint, assertion audience, BReg resource, and
+required scopes. The provider sends that immutable resource and scope set on every token request and
+caches each returned token for at most five minutes.
 
-The pages on [BReg access profiles](../../configure/breg-access/),
-[Registry Mint](../../configure/mint/), and
+The pages on [BReg access profiles](../../configure/breg-access/) and
 [governed registry actions](../governed-registry-actions/) explain the surrounding model.
 
 ## Claims and the pairwise subject
@@ -185,7 +179,7 @@ rules shape it:
 An eSignet ID Token or UserInfo JWT authenticates a citizen to a relying party. It is not a registry
 credential. BReg and Evidence Gateway verify access tokens against their configured issuer and
 required token type, so forwarding a citizen's ID Token to either one is rejected. The only
-credential that reaches the registry is the provider's own Mint access token.
+credential that reaches the registry is the provider's own access token.
 
 {/* Evidence: crates/registry-breg/src/runtime_config.rs and crates/registry-evidence/src/auth.rs
 both build TokenVerifierConfig::access_token_profile, whose allowed_typ list is required and fails
@@ -202,7 +196,7 @@ party or a citizen never learns whether an identifier exists, is inactive, or is
 | `registry_auth_invalid_request` | The request to the provider is malformed or the configuration rejects it. |
 | `registry_auth_challenge_failed` | The one-time code or other challenge did not verify. No registry call was made. |
 | `registry_auth_subject_denied` | The lookup resolved no record the profile may disclose. |
-| `registry_auth_unavailable` | Mint or BReg did not answer within the configured timeout, returned an oversized body, redirected, or omitted a configured account-check field. |
+| `registry_auth_unavailable` | The token issuer or BReg did not answer within the configured timeout, returned an oversized body, redirected, or omitted a configured account-check field. |
 | `registry_auth_context_invalid` | The authentication context does not match the relying party, client, or transaction. |
 | `registry_auth_context_expired` | The five-minute authentication context has lapsed. |
 
@@ -226,10 +220,14 @@ breg:
   access_profile: esignet-source
   provisioned_fields: [uin, status, givenName, familyName, birthdate, gender]
   account_check_fields: [uin, status]
-mint:
-  token_endpoint: https://mint.example.org/token
+token_client:
+  token_endpoint: https://issuer.example.org/oauth2/token
+  assertion_audience: https://issuer.example.org/oauth2/token
   client_id: esignet-source
   private_key_file: /run/secrets/registry-client.jwk
+  key_id: esignet-source-2026-09
+  resource: urn:breg:population
+  scopes: [registry.read, records.lookup]
 claim_map:
   sub: $psut
   given_name: givenName
@@ -244,8 +242,12 @@ demo:
 ```
 
 Secrets arrive as mounted files, never as inline values or environment variables. The pairwise
-subject secret and the Mint client key are the two the deployment must protect and rotate on its
+subject secret and the token client key are the two the deployment must protect and rotate on its
 own schedule.
+
+The retired top-level `mint` key is rejected. Rename it to `token_client` and add the explicit
+`assertion_audience`, `key_id`, `resource`, and nonempty `scopes` fields; there is no compatibility
+alias and no client-secret mode.
 
 :::caution[The demo verifier is for fixtures only]
 The `demo` block enables a synthetic one-time code verifier that reads codes from a static file.
@@ -286,10 +288,6 @@ separate registrystack/solmara-lab repository (docs/esignet.md) and cannot be an
 ## Next
 
 - [Configure BReg access profiles](../../configure/breg-access/) to define the lookup-only grant.
-- [Run Registry Mint](../../configure/mint/) and register the provider as a `private_key_jwt`
-  client.
-- [Request an access token](../../configure/request-an-access-token/) to test the permission before
-  wiring eSignet.
 - [BReg HTTP API reference](../../reference/breg-api/) for the lookup route and problem documents.
 - [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/) for the
   principles this integration applies.
