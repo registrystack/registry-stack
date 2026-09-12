@@ -172,12 +172,9 @@ GRANT USAGE ON SCHEMA registry_spatial_ext
   TO registry_migration, registry_runtime, registry_runtime__spatial_bbox;
 ```
 
-The launcher behind [Create and query your first registry](../../tutorials/first-breg/) writes
-exactly these statements for its local container, so a quickstart run's generated `database/`
-directory is a working reference.
+The maintained runtime validates these ownership boundaries when it prepares spatial storage.
 
-{/* Evidence: products/breg/quickstart/support/quickstart.py, _initialize_sql();
-    crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects() and
+{/* Evidence: crates/registry-breg/src/postgres/schema.rs, refuse_existing_managed_objects() and
     prepare_schema_test_database_with_connections();
     crates/registry-breg/src/postgres/roles.rs. */}
 
