@@ -3,12 +3,25 @@
 use crate::SourceAddArgs;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 const MAX_PROVIDER_OUTPUT: usize = 2 * 1024 * 1024;
+
+/// The casework-reader access profile's identity: the client id, access
+/// profile id, required scope, required purpose, and principal claim name
+/// `candidate_fragments` authors into the BReg project. The local dev client
+/// that exercises the profile, and the Casework clients that act through it,
+/// read these same constants so neither can name a different one.
+const READER_CLIENT_ID: &str = "casework-reader";
+const READER_PRINCIPAL_CLAIM: &str = "registry_principal";
+const READER_SCOPE: &str = "casework:source-reader";
+const READER_PURPOSE: &str = "casework-sync";
+/// The Mint claim a local BReg client's access token carries its purpose under.
+const PURPOSE_CLAIM: &str = "registry_purpose";
 
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
@@ -39,6 +52,8 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     let candidate_explanation = verify_candidate(&args.bregctl_bin, &registry, &proposed)?;
     let candidate_request = select_request(&project, &args.source_id, &candidate_explanation)?;
     let (event_patch, reader_patch) = candidate_fragments(&request_entity, &projection);
+    let dev_clients_plan =
+        plan_breg_dev_clients(&registry, &project, &authored, candidate_request.0)?;
     let description =
         source_description(&args.source_id, candidate_request, &candidate_explanation)?;
     let description_path = project
@@ -48,6 +63,10 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         .join("sources")
         .join(format!("{}.breg-runtime.yaml", args.source_id));
     let binding = runtime_binding(&args.source_id);
+    let mut breg_authoring_changes = changes.as_array().cloned().unwrap_or_default();
+    if let Value::Array(dev_clients_changes) = &dev_clients_plan.changes {
+        breg_authoring_changes.extend(dev_clients_changes.iter().cloned());
+    }
     let mut report = json!({
         "ok": true,
         "command": "source add",
@@ -57,8 +76,8 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "project": project,
         "sourceDescription": description_path,
         "bregRuntimeBinding": binding_path,
-        "bregAuthoringChanges": changes,
-        "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch},
+        "bregAuthoringChanges": breg_authoring_changes,
+        "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch, "devClients": dev_clients_plan.patch},
         "activation": "not_performed",
         "next": if args.apply {
             json!(["Review the generated BReg runtime binding, provision its secret reference, and let the launcher activate each product through its normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
@@ -75,11 +94,21 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     if fs::read(&registry_yaml).context("re-reading BReg registry.yaml before apply")? != bytes {
         bail!("BReg registry.yaml changed after preview; no files were written, retry source add against its current revision");
     }
+    if let Some(write) = &dev_clients_plan.write {
+        if fs::read(&write.path).context("re-reading BReg dev-clients.yaml before apply")?
+            != write.original
+        {
+            bail!("BReg dev-clients.yaml changed after preview; no files were written, retry source add against its current revision");
+        }
+    }
     fs::create_dir_all(description_path.parent().expect("source file has parent"))
         .context("creating Casework source directory")?;
     write_atomic(&registry_yaml, proposed.as_bytes())?;
     write_json_atomic(&description_path, &description)?;
     write_atomic(&binding_path, binding.as_bytes())?;
+    if let Some(write) = &dev_clients_plan.write {
+        write_atomic(&write.path, write.proposed.as_bytes())?;
+    }
     let final_check = invoke(&args.bregctl_bin, &["--format", "json", "check"], &registry)?;
     require_ok("check after apply", &final_check)?;
     Ok(report)
@@ -168,6 +197,34 @@ fn require_ok(operation: &str, report: &Value) -> Result<()> {
         bail!("bregctl {operation} did not return a successful public report");
     }
     Ok(())
+}
+
+/// The scopes and purpose a Casework staff or supervisor dev client inherits
+/// from the selected BReg request's review and apply access profiles.
+struct ReviewerAuthority {
+    scopes: BTreeSet<String>,
+    purpose: String,
+}
+
+/// What it takes to write a planned set of BReg local dev clients back to the
+/// project's `dev-clients.yaml`, captured at preview time so apply can refuse
+/// a file that has since changed.
+#[derive(Debug)]
+struct DevClientsWrite {
+    path: PathBuf,
+    original: Vec<u8>,
+    proposed: String,
+}
+
+/// The outcome of planning the BReg `dev-clients.yaml` side of `source add`:
+/// the exact clients for the preview report, the authoring changes they
+/// correspond to, and, when the BReg project has a dev-clients.yaml to patch,
+/// what apply needs to write it.
+#[derive(Debug)]
+struct DevClientsPlan {
+    patch: Value,
+    changes: Value,
+    write: Option<DevClientsWrite>,
 }
 
 struct SelectedRequest<'a>(&'a Value);
@@ -328,16 +385,16 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
         .get_mut("accessProfiles")
         .and_then(Value::as_array_mut)
         .context("BReg registry.yaml has no accessProfiles")?;
-    match profiles.iter().find(|item| item["id"] == "casework-reader") {
+    match profiles.iter().find(|item| item["id"] == READER_CLIENT_ID) {
         Some(existing) if existing != &profile => {
-            bail!("BReg access profile casework-reader already exists with different content")
+            bail!("BReg access profile {READER_CLIENT_ID} already exists with different content")
         }
         None => profiles.push(profile),
         _ => {}
     }
     Ok(json!([
         {"file":"registry.yaml","path":format!("/entities/{entity_id}/events/casework-lifecycle-v1"),"operation":"ensure_exact"},
-        {"file":"registry.yaml","path":"/accessProfiles/casework-reader","operation":"ensure_exact"}
+        {"file":"registry.yaml","path":format!("/accessProfiles/{READER_CLIENT_ID}"),"operation":"ensure_exact"}
     ]))
 }
 
@@ -346,8 +403,8 @@ fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value)
     (
         json!({"id":"casework-lifecycle-v1","trigger":"request_lifecycle","projection":["record"],"webhook":{"destinationId":"casework"}}),
         json!({
-            "id":"casework-reader", "default":false, "principalClaim":"registry_principal",
-            "requiredScopes":["casework:source-reader"], "requiredPurposes":["casework-sync"],
+            "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
+            "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
             "grants":[{"entity":entity_id,"operations":["get","list"],"readableFields":fields,"readableRequestFields":["review_state"],"rowBoundaries":[]}]
         }),
     )
@@ -381,7 +438,7 @@ fn render_candidate_preserving_authored_text(
     let has_profile = parsed["accessProfiles"].as_array().is_some_and(|profiles| {
         profiles
             .iter()
-            .any(|profile| profile["id"] == "casework-reader")
+            .any(|profile| profile["id"] == READER_CLIENT_ID)
     });
     let mut rendered = text.to_owned();
     if !has_event {
@@ -455,7 +512,7 @@ fn insert_access_profile(text: &str, entity_id: &str, projection: &[String]) -> 
                 && !lines[*index].trim_start().starts_with('#')
         })
         .unwrap_or(lines.len());
-    let block = format!("  - id: casework-reader\n    default: false\n    principalClaim: registry_principal\n    requiredScopes: [casework:source-reader]\n    requiredPurposes: [casework-sync]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
+    let block = format!("  - id: {READER_CLIENT_ID}\n    default: false\n    principalClaim: {READER_PRINCIPAL_CLAIM}\n    requiredScopes: [{READER_SCOPE}]\n    requiredPurposes: [{READER_PURPOSE}]\n    grants:\n      - entity: {entity_id}\n        operations: [get, list]\n        readableFields: {fields}\n        readableRequestFields: [review_state]\n        rowBoundaries: []\n");
     Ok(insert_at_line(&lines, end, &block))
 }
 
@@ -470,6 +527,330 @@ fn insert_at_line(lines: &[&str], index: usize, block: &str) -> String {
 
 fn leading_spaces(line: &str) -> usize {
     line.bytes().take_while(|byte| *byte == b' ').count()
+}
+
+/// The local BReg client exercising the casework-reader access profile, with
+/// the same id, scope, purpose, and principal claim `candidate_fragments`
+/// authors the profile itself with.
+fn reader_dev_client() -> Value {
+    json!({
+        "id": READER_CLIENT_ID,
+        "accessProfiles": [READER_CLIENT_ID],
+        "scopes": [READER_SCOPE],
+        "claims": {READER_PRINCIPAL_CLAIM: READER_CLIENT_ID, PURPOSE_CLAIM: READER_PURPOSE},
+    })
+}
+
+/// The scopes and purpose every Casework staff or supervisor dev client must
+/// carry to act as a reviewer on the selected BReg request: the union of
+/// `requiredScopes` from every distinct access profile named in its
+/// `reviewGrants`/`applyGrants`, and the one `registry_purpose` those
+/// profiles must agree on.
+fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAuthority> {
+    let profile_ids: BTreeSet<&str> = request["reviewGrants"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(request["applyGrants"].as_array().into_iter().flatten())
+        .filter_map(|grant| grant["profile"].as_str())
+        .collect();
+    if profile_ids.is_empty() {
+        bail!("the selected BReg request has no review or apply access profiles to bind a Casework reviewer through");
+    }
+    let profiles = authored["accessProfiles"]
+        .as_array()
+        .context("BReg registry.yaml has no accessProfiles")?;
+    let mut scopes = BTreeSet::new();
+    let mut purpose: Option<String> = None;
+    for id in profile_ids {
+        let profile = profiles
+            .iter()
+            .find(|candidate| candidate["id"] == id)
+            .with_context(|| format!("BReg access profile {id} named by the selected request is absent from registry.yaml"))?;
+        if profile["principalClaim"] != Value::String(READER_PRINCIPAL_CLAIM.to_owned()) {
+            bail!("BReg access profile {id} does not authenticate its principal through {READER_PRINCIPAL_CLAIM}");
+        }
+        for scope in profile["requiredScopes"]
+            .as_array()
+            .with_context(|| format!("BReg access profile {id} has no requiredScopes"))?
+        {
+            scopes.insert(
+                scope
+                    .as_str()
+                    .with_context(|| {
+                        format!("BReg access profile {id} requiredScopes must be strings")
+                    })?
+                    .to_owned(),
+            );
+        }
+        let first_purpose = profile["requiredPurposes"]
+            .as_array()
+            .and_then(|purposes| purposes.first())
+            .and_then(Value::as_str)
+            .with_context(|| format!("BReg access profile {id} has no requiredPurposes"))?;
+        match &purpose {
+            None => purpose = Some(first_purpose.to_owned()),
+            Some(existing) if existing != first_purpose => bail!(
+                "the selected request's review and apply access profiles disagree on {PURPOSE_CLAIM}"
+            ),
+            _ => {}
+        }
+    }
+    Ok(ReviewerAuthority {
+        scopes,
+        purpose: purpose.expect("profile_ids was checked non-empty above"),
+    })
+}
+
+/// The BReg dev client bound to one non-Requester Casework dev client: same
+/// id and scopes and claims, no access profile of its own. A staff or
+/// supervisor client additionally carries the selected request's reviewer
+/// scopes and purpose claim.
+fn human_dev_client(
+    client: &Value,
+    role: &str,
+    authority: Option<&ReviewerAuthority>,
+) -> Result<Value> {
+    let id = client["id"]
+        .as_str()
+        .context("a Casework dev client's id must be a string")?;
+    let mut scopes: BTreeSet<String> = client["scopes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect();
+    let mut claims: BTreeMap<String, String> = client["claims"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
+        .collect();
+    if matches!(role, "staff" | "supervisor") {
+        let authority = authority.context(
+            "a Casework staff or supervisor dev client has no reviewer authority to bind",
+        )?;
+        scopes.extend(authority.scopes.iter().cloned());
+        match claims.get(PURPOSE_CLAIM) {
+            Some(existing) if existing != &authority.purpose => bail!(
+                "Casework dev client {id} already sets {PURPOSE_CLAIM} to a value that conflicts with the selected BReg request's reviewer purpose"
+            ),
+            _ => {
+                claims.insert(PURPOSE_CLAIM.to_owned(), authority.purpose.clone());
+            }
+        }
+    }
+    Ok(json!({
+        "id": id,
+        "accessProfiles": Vec::<String>::new(),
+        "scopes": scopes.into_iter().collect::<Vec<_>>(),
+        "claims": claims,
+    }))
+}
+
+/// Plans the BReg `dev-clients.yaml` side of `source add`: the reader client
+/// exercising casework-reader, and one client for every Casework dev client
+/// whose role is not Requester. Reads but never writes; the caller decides
+/// whether and when to apply `write`.
+fn plan_breg_dev_clients(
+    registry: &Path,
+    project: &Path,
+    authored: &Value,
+    request: &Value,
+) -> Result<DevClientsPlan> {
+    let bytes = fs::read(project.join("dev-clients.yaml"))
+        .context("reading the Casework project's dev-clients.yaml")?;
+    let casework_dev_clients: Value = serde_norway::from_slice(&bytes)
+        .context("parsing the Casework project's dev-clients.yaml")?;
+    let casework_policy = load_casework_policy(project)?;
+    let profiles = casework_policy["accessProfiles"]
+        .as_array()
+        .context("casework.yaml has no accessProfiles")?;
+    let casework_clients = casework_dev_clients["clients"]
+        .as_array()
+        .context("the Casework project's dev-clients.yaml has no clients")?;
+
+    let mut eligible = Vec::new();
+    let mut needs_authority = false;
+    for client in casework_clients {
+        let profile_id = client["accessProfile"]
+            .as_str()
+            .context("a Casework dev client's accessProfile must be a string")?;
+        let role = profiles
+            .iter()
+            .find(|profile| profile["id"] == profile_id)
+            .and_then(|profile| profile["role"].as_str())
+            .context("a Casework dev client names an access profile absent from casework.yaml")?;
+        if role == "requester" {
+            continue;
+        }
+        needs_authority |= matches!(role, "staff" | "supervisor");
+        eligible.push((client, role.to_owned()));
+    }
+    let authority = if needs_authority {
+        Some(reviewer_authority(authored, request)?)
+    } else {
+        None
+    };
+    let mut clients = vec![reader_dev_client()];
+    for (client, role) in &eligible {
+        clients.push(human_dev_client(client, role, authority.as_ref())?);
+    }
+
+    let dev_clients_path = registry.join("dev-clients.yaml");
+    match fs::read(&dev_clients_path) {
+        Ok(original) => {
+            let mut authored_dev_clients: Value =
+                serde_norway::from_slice(&original).context("parsing BReg dev-clients.yaml")?;
+            let changes = apply_dev_clients_candidate(&mut authored_dev_clients, &clients)?;
+            let proposed = render_dev_clients_preserving_authored_text(
+                &original,
+                &clients,
+                &authored_dev_clients,
+            )?;
+            Ok(DevClientsPlan {
+                patch: Value::Array(clients),
+                changes,
+                write: Some(DevClientsWrite {
+                    path: dev_clients_path,
+                    original,
+                    proposed,
+                }),
+            })
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DevClientsPlan {
+            patch: json!("absent"),
+            changes: json!([]),
+            write: None,
+        }),
+        Err(error) => Err(error).context("reading BReg dev-clients.yaml"),
+    }
+}
+
+fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Value> {
+    let object = root
+        .as_object_mut()
+        .context("BReg dev-clients.yaml must contain an object")?;
+    let existing = object
+        .entry("clients")
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .context("BReg dev-clients.yaml clients must be an array")?;
+    let mut changes = Vec::new();
+    for client in clients {
+        let id = client["id"]
+            .as_str()
+            .expect("planned BReg dev client has an id");
+        match existing.iter().find(|item| item["id"] == id) {
+            Some(found) if found != client => {
+                bail!("BReg dev client {id} already exists with different content")
+            }
+            None => existing.push(client.clone()),
+            _ => {}
+        }
+        changes.push(json!({"file":"dev-clients.yaml","path":format!("/clients/{id}"),"operation":"ensure_exact"}));
+    }
+    Ok(Value::Array(changes))
+}
+
+fn render_dev_clients_preserving_authored_text(
+    original: &[u8],
+    clients: &[Value],
+    expected: &Value,
+) -> Result<String> {
+    let text = std::str::from_utf8(original).context("BReg dev-clients.yaml must be UTF-8")?;
+    if text.trim_start().starts_with('{') {
+        // JSON authoring has no comment syntax. Pretty-printing this branch keeps
+        // every parsed key while avoiding a misleading claim about preserving
+        // comments that JSON cannot contain.
+        let mut rendered = serde_json::to_string_pretty(expected)?;
+        rendered.push('\n');
+        return Ok(rendered);
+    }
+    let parsed: Value = serde_norway::from_str(text)?;
+    let present = parsed["clients"].as_array().cloned().unwrap_or_default();
+    let missing: Vec<&Value> = clients
+        .iter()
+        .filter(|client| !present.iter().any(|item| item["id"] == client["id"]))
+        .collect();
+    let mut rendered = text.to_owned();
+    if !missing.is_empty() {
+        rendered = insert_dev_clients(&rendered, &missing)?;
+    }
+    let round_trip: Value =
+        serde_norway::from_str(&rendered).context("parsing narrow BReg dev-clients YAML patch")?;
+    if &round_trip != expected {
+        bail!("narrow BReg dev-clients YAML patch changed unexpected authored content; no files were written");
+    }
+    Ok(rendered)
+}
+
+fn insert_dev_clients(text: &str, clients: &[&Value]) -> Result<String> {
+    let lines = text.split_inclusive('\n').collect::<Vec<_>>();
+    let start = lines
+        .iter()
+        .position(|line| line.trim() == "clients:")
+        .context("narrow YAML patch could not locate clients")?;
+    let end = (start + 1..lines.len())
+        .find(|index| {
+            leading_spaces(lines[*index]) == 0
+                && !lines[*index].trim().is_empty()
+                && !lines[*index].trim_start().starts_with('#')
+        })
+        .unwrap_or(lines.len());
+    let mut block = String::new();
+    for client in clients {
+        block.push_str(&render_dev_client_yaml_block(client)?);
+    }
+    Ok(insert_at_line(&lines, end, &block))
+}
+
+fn render_dev_client_yaml_block(client: &Value) -> Result<String> {
+    let id = client["id"]
+        .as_str()
+        .context("planned BReg dev client id must be a string")?;
+    let access_profiles = string_array(
+        &client["accessProfiles"],
+        "planned BReg dev client accessProfiles",
+    )?;
+    let scopes = string_array(&client["scopes"], "planned BReg dev client scopes")?;
+    let claims = client["claims"]
+        .as_object()
+        .context("planned BReg dev client claims must be an object")?;
+    let mut block = format!(
+        "  - id: {id}\n    accessProfiles: {}\n    scopes: {}\n",
+        flow_sequence(&access_profiles),
+        flow_sequence(&scopes),
+    );
+    if claims.is_empty() {
+        block.push_str("    claims: {}\n");
+    } else {
+        block.push_str("    claims:\n");
+        for (key, value) in claims {
+            let value = value
+                .as_str()
+                .context("planned BReg dev client claim values must be strings")?;
+            block.push_str(&format!("      {key}: {value}\n"));
+        }
+    }
+    Ok(block)
+}
+
+fn string_array<'a>(value: &'a Value, label: &str) -> Result<Vec<&'a str>> {
+    value
+        .as_array()
+        .with_context(|| format!("{label} must be an array"))?
+        .iter()
+        .map(|item| {
+            item.as_str()
+                .with_context(|| format!("{label} entries must be strings"))
+        })
+        .collect()
+}
+
+fn flow_sequence(items: &[&str]) -> String {
+    format!("[{}]", items.join(", "))
 }
 
 fn source_description(
@@ -697,5 +1078,261 @@ mod tests {
         assert!(patched.contains("# useful"));
         assert!(patched.contains("# keep this"));
         assert_eq!(serde_norway::from_str::<Value>(&patched).unwrap(), expected);
+    }
+
+    /// A synthetic BReg `registry.yaml`'s `accessProfiles` and a selected
+    /// request naming a `reviewer` profile in both its review and apply
+    /// grants, matching the professional-licences starter's reviewer shape.
+    fn reviewer_fixture() -> (Value, Value) {
+        let authored = json!({
+            "accessProfiles": [{
+                "id": "reviewer",
+                "principalClaim": "registry_principal",
+                "requiredScopes": ["starter:reviewer"],
+                "requiredPurposes": ["starter-learning"]
+            }]
+        });
+        let request = json!({
+            "reviewGrants": [{"profile": "reviewer"}],
+            "applyGrants": [{"profile": "reviewer"}]
+        });
+        (authored, request)
+    }
+
+    #[test]
+    fn dev_clients_plan_adds_reader_and_eligible_casework_clients_json_authored() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            serde_json::to_vec(&json!({
+                "version": 1,
+                "clients": [
+                    {"id":"operator","accessProfiles":["operator"],"scopes":["starter:operator"],"claims":{}}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let (authored, request) = reviewer_fixture();
+        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+
+        let clients = plan.patch.as_array().unwrap();
+        let ids: Vec<&str> = clients.iter().map(|c| c["id"].as_str().unwrap()).collect();
+        assert_eq!(
+            ids,
+            ["casework-reader", "administrator", "supervisor", "staff"]
+        );
+
+        let reader = clients
+            .iter()
+            .find(|c| c["id"] == "casework-reader")
+            .unwrap();
+        assert_eq!(reader["accessProfiles"], json!(["casework-reader"]));
+        assert_eq!(reader["scopes"], json!(["casework:source-reader"]));
+        assert_eq!(
+            reader["claims"],
+            json!({"registry_principal":"casework-reader","registry_purpose":"casework-sync"})
+        );
+
+        let administrator = clients.iter().find(|c| c["id"] == "administrator").unwrap();
+        assert_eq!(administrator["accessProfiles"], json!([]));
+        assert_eq!(administrator["scopes"], json!(["casework:admin"]));
+        assert_eq!(
+            administrator["claims"],
+            json!({"registry_actor_kind":"human","registry_principal":"professional-review-administrator"})
+        );
+        assert!(administrator["claims"].get("registry_purpose").is_none());
+
+        for role in ["supervisor", "staff"] {
+            let client = clients.iter().find(|c| c["id"] == role).unwrap();
+            assert_eq!(
+                client["scopes"],
+                json!([format!("casework:{role}"), "starter:reviewer"])
+            );
+            assert_eq!(client["claims"]["registry_purpose"], "starter-learning");
+            assert_eq!(
+                client["claims"]["registry_principal"],
+                format!("professional-review-{role}")
+            );
+        }
+
+        assert_eq!(
+            plan.changes,
+            json!([
+                {"file":"dev-clients.yaml","path":"/clients/casework-reader","operation":"ensure_exact"},
+                {"file":"dev-clients.yaml","path":"/clients/administrator","operation":"ensure_exact"},
+                {"file":"dev-clients.yaml","path":"/clients/supervisor","operation":"ensure_exact"},
+                {"file":"dev-clients.yaml","path":"/clients/staff","operation":"ensure_exact"}
+            ])
+        );
+
+        let write = plan.write.unwrap();
+        write_atomic(&write.path, write.proposed.as_bytes()).unwrap();
+        let written: Value = serde_json::from_slice(&fs::read(&write.path).unwrap()).unwrap();
+        let written_ids: Vec<&str> = written["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap())
+            .collect();
+        // The pre-existing client stays first; the four planned clients follow it.
+        assert_eq!(
+            written_ids,
+            [
+                "operator",
+                "casework-reader",
+                "administrator",
+                "supervisor",
+                "staff"
+            ]
+        );
+    }
+
+    #[test]
+    fn dev_clients_narrow_yaml_patch_preserves_comments() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let input = "# operator callers\nversion: 1\nclients:\n  - id: operator\n    # do not rotate without notice\n    accessProfiles: [operator]\n    scopes: [starter:operator]\n    claims: {}\n";
+        fs::write(registry.path().join("dev-clients.yaml"), input).unwrap();
+        let (authored, request) = reviewer_fixture();
+        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+        let clients = plan.patch.as_array().unwrap().clone();
+        let mut expected: Value = serde_norway::from_str(input).unwrap();
+        apply_dev_clients_candidate(&mut expected, &clients).unwrap();
+        let write = plan.write.unwrap();
+        assert!(write.proposed.contains("# operator callers"));
+        assert!(write.proposed.contains("# do not rotate without notice"));
+        assert_eq!(
+            serde_norway::from_str::<Value>(&write.proposed).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn dev_clients_reapply_is_byte_identical() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        fs::write(
+            registry.path().join("dev-clients.yaml"),
+            serde_json::to_vec(&json!({"version":1,"clients":[]})).unwrap(),
+        )
+        .unwrap();
+        let (authored, request) = reviewer_fixture();
+        let first = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+        let write = first.write.unwrap();
+        write_atomic(&write.path, write.proposed.as_bytes()).unwrap();
+        let second = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+        let rewrite = second.write.unwrap();
+        assert_eq!(rewrite.proposed.as_bytes(), write.proposed.as_bytes());
+        assert_eq!(
+            fs::read(&rewrite.path).unwrap(),
+            rewrite.proposed.as_bytes()
+        );
+    }
+
+    #[test]
+    fn dev_clients_refuses_existing_client_with_different_content_naming_only_the_id() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = serde_json::to_vec(&json!({
+            "version": 1,
+            "clients": [
+                {"id":"staff","accessProfiles":[],"scopes":["unexpected:scope"],"claims":{}}
+            ]
+        }))
+        .unwrap();
+        fs::write(registry.path().join("dev-clients.yaml"), &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+        let error =
+            plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("staff"), "{message}");
+        assert!(!message.contains("unexpected:scope"), "{message}");
+        assert_eq!(
+            fs::read(registry.path().join("dev-clients.yaml")).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn dev_clients_plan_never_writes_before_an_explicit_write_atomic_call() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let original = serde_json::to_vec(&json!({"version":1,"clients":[]})).unwrap();
+        fs::write(registry.path().join("dev-clients.yaml"), &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+        assert!(
+            plan.write.is_some(),
+            "a present dev-clients.yaml must produce a pending write"
+        );
+        assert_eq!(
+            fs::read(registry.path().join("dev-clients.yaml")).unwrap(),
+            original,
+            "planning must never write to disk by itself"
+        );
+    }
+
+    #[test]
+    fn dev_clients_reports_absent_when_breg_project_has_no_dev_clients_file() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let (authored, request) = reviewer_fixture();
+        let plan = plan_breg_dev_clients(registry.path(), &project, &authored, &request).unwrap();
+        assert_eq!(plan.patch, json!("absent"));
+        assert_eq!(plan.changes, json!([]));
+        assert!(plan.write.is_none());
+    }
+
+    #[test]
+    fn reviewer_authority_bails_on_wrong_principal_claim_or_disagreeing_purpose() {
+        let mismatched_principal = json!({
+            "accessProfiles": [
+                {"id":"reviewer","principalClaim":"sub","requiredScopes":["starter:reviewer"],"requiredPurposes":["starter-learning"]}
+            ]
+        });
+        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
+        assert!(reviewer_authority(&mismatched_principal, &request).is_err());
+
+        let disagreeing_purpose = json!({
+            "accessProfiles": [
+                {"id":"reviewer","principalClaim":"registry_principal","requiredScopes":["starter:reviewer"],"requiredPurposes":["starter-learning"]},
+                {"id":"approver","principalClaim":"registry_principal","requiredScopes":["starter:approver"],"requiredPurposes":["starter-approval"]}
+            ]
+        });
+        let request =
+            json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[{"profile":"approver"}]});
+        assert!(reviewer_authority(&disagreeing_purpose, &request).is_err());
+    }
+
+    #[test]
+    fn human_dev_client_bails_when_existing_purpose_claim_conflicts() {
+        let authority = ReviewerAuthority {
+            scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
+            purpose: "starter-learning".to_owned(),
+        };
+        let client = json!({"id":"staff","scopes":["casework:staff"],"claims":{"registry_purpose":"other-purpose"}});
+        let error = human_dev_client(&client, "staff", Some(&authority)).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("staff"), "{message}");
+        assert!(!message.contains("other-purpose"), "{message}");
+        assert!(!message.contains("starter-learning"), "{message}");
+
+        let matching = json!({"id":"staff","scopes":["casework:staff"],"claims":{"registry_purpose":"starter-learning"}});
+        let merged = human_dev_client(&matching, "staff", Some(&authority)).unwrap();
+        assert_eq!(merged["claims"]["registry_purpose"], "starter-learning");
     }
 }

@@ -236,9 +236,13 @@ pub(super) const PROFESSIONAL_REVIEW_DEV_CLIENTS: &str = r#"# Local callers for 
 # `registry_principal` is this project's `principalClaim`, and
 # `registry_actor_kind: human` is the claim Casework requires of a person.
 #
-# This project binds a BReg source, so `caseworkctl dev` does not serve it: a
-# source binding needs a running source system and its own reader credential.
-# Point these clients at the deployed runtime's own token issuer.
+# This project binds a BReg source, so `caseworkctl dev` serves it only beside
+# a running `bregctl dev` session for that registry, named with
+# `--source-project`: the local session borrows that registry's Mint as its
+# issuer and exports each client below as a registry client with the same
+# principal, which `caseworkctl source add --apply` writes into the registry's
+# own dev-clients.yaml. For a deployment, point these clients at the runtime's
+# own token issuer instead.
 version: 1
 clients:
   - id: administrator
