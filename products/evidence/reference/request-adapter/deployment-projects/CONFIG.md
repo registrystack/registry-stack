@@ -1345,8 +1345,8 @@ schemas, question, derivation, and fixture that can run immediately with
 `evidencectl test <dir> --explain`. Both forms create
 owner-only disposable local P-256 Evidence signing material plus distinct audit
 and subject-binding masters. Neither creates deployment input or a real
-extract. `evidencectl dev` creates session-scoped P-256 Mint, caller, and holder
-keys automatically for HTTP-source local sessions.
+extract. `evidencectl dev` creates session-scoped caller and holder keys
+automatically for HTTP-source local sessions and starts the pinned stock issuer.
 While authoring, use only synthetic responses and selectors. Add the smallest
 provider-shaped `prepare/2`, `extract/2`, and requirement `derive/3` scripts,
 then add exact positive, legitimate-false, boundary, unresolved,
@@ -1402,7 +1402,7 @@ complete authority, resolved review markers, complete governance, governed
 public keys, and complete fixtures. It delegates its internal bundle-only check
 and every fixture to the real `evidence` binary without generating a temporary
 signing key or other validation secret, and publishes nothing on failure. It
-makes no identity-provider, source-data, or Mint call; opens no listener; and
+makes no identity-provider or source-data call; opens no listener; and
 writes no production audit event. The editable project and `.evidence` local
 state remain unchanged.
 
@@ -1440,16 +1440,14 @@ response, verify it under independently prepared production policy and trusted
 keys, and verify the audit chain. A provider API or governance change produces
 a newly reviewed bundle revision and reruns the fixture matrix.
 
-When no suitable OIDC issuer exists, author Mint separately and run
-`mint check --config <mint.yaml>`. The optional
-`evidencectl artifact inspect <candidate> --mint-config <mint.yaml>` check is
-read-only: it compares issuer, derived JWKS URI, audiences, allowed signing
-algorithm, `at+jwt` admission, and configured principal, requester-tag,
-evidence-audience, grant-id, grant-authority, and optional actor claim names.
-It does not infer legal basis, create authority profiles, register callers, or
-copy Mint configuration into the candidate. Mint's replay cache is memory-only
-and clears on restart; Version 1 makes no multi-instance or high-availability
-claim.
+Configure an OIDC issuer independently and register each workload with the exact
+resource, scopes, client identity, and public key required by its approved
+journey. Match the runtime's issuer, JWKS URI, audiences, allowed algorithms,
+accepted token types, and principal, requester-tag, Evidence-audience, grant,
+and optional actor claim mappings. The maintained local tooling uses stock
+ThunderID. Deployment inspection does not register callers, decide authority,
+or provision an issuer; verify the configured issuer-to-resource journey as
+part of the handoff.
 
 Docker Compose is a documented adapter rather than build output. It mounts the
 candidate bundle unchanged and read-only; mounts a distinct container runtime,
@@ -1457,8 +1455,8 @@ secrets, and persistent audit storage separately; binds Evidence privately; and
 keeps TLS and public routing operator-controlled. The Compose runtime has its
 own revision while assertions continue to carry their unchanged per-requirement
 configuration revisions.
-When Mint shares that network, retain its public HTTPS issuer and JWKS URI;
-internal plain-HTTP service names do not replace them.
+Retain the configured issuer's public HTTPS identity and JWKS URI when services
+share a network; internal plain-HTTP service names do not replace them.
 
 After those checks, publish the static token-acquisition, legal context,
 endpoint-trust, and verifier guidance for each approved consumer class using
