@@ -43,7 +43,10 @@ sources:
   professional-register:
     baseUrl: https://registry.example.test
     readerProfile: casework-reader
-    tokenEndpoint: https://identity.example.test/realms/registry/token
+    tokenEndpoint: https://identity.example.test/oauth2/token
+    clientAssertionAudience: https://identity.example.test
+    resource: urn:breg:professional-licences
+    scopes: [casework:source-reader]
     clientIdRef: secret:file/breg-reader-client-id
     clientAssertionKeyRef: secret:file/breg-reader-key
     webhookSecretRef: secret:file/breg-casework-webhook

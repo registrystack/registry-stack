@@ -54,6 +54,15 @@ pub struct BregBinding {
     pub base_url: String,
     pub reader_profile: String,
     pub token_endpoint: String,
+    /// Explicit OAuth client assertion audience; omission preserves endpoint audience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_assertion_audience: Option<String>,
+    /// Exact resource indicator required by the configured authorization server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// Explicit scopes for this source reader's service credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scopes: Option<Vec<String>>,
     pub client_id_ref: String,
     pub client_assertion_key_ref: String,
     pub webhook_secret_ref: String,
@@ -84,6 +93,9 @@ impl fmt::Debug for BregBinding {
             .field("base_url", &"[REDACTED]")
             .field("reader_profile", &self.reader_profile)
             .field("token_endpoint", &"[REDACTED]")
+            .field("client_assertion_audience", &"[REDACTED]")
+            .field("resource", &"[REDACTED]")
+            .field("scopes", &"[REDACTED]")
             .field("client_id_ref", &"[REDACTED]")
             .field("client_assertion_key_ref", &"[REDACTED]")
             .field("webhook_secret_ref", &"[REDACTED]")
@@ -140,10 +152,7 @@ pub fn build_adapter(
 
     let request_timeout = Duration::from_millis(binding.request_timeout_milliseconds);
     let connect_timeout = Duration::from_millis(binding.connect_timeout_milliseconds);
-    let token_endpoint = parse_url(&binding.token_endpoint)?;
-    let mut token_config = PrivateKeyJwtConfig::new(token_endpoint, client_id, key)
-        .with_request_timeout(request_timeout)
-        .with_connect_timeout(connect_timeout);
+    let mut token_config = source_token_config(binding, &client_id, key)?;
     if let Some(trust) = &trust {
         token_config = token_config.with_trusted_root_certificates(trust.expose_secret().to_vec());
     }
@@ -177,6 +186,27 @@ pub fn build_adapter(
     )
 }
 
+fn source_token_config(
+    binding: &BregBinding,
+    client_id: &str,
+    key: PrivateJwk,
+) -> Result<PrivateKeyJwtConfig, SourceAdapterError> {
+    validate_binding(binding)?;
+    let mut config = PrivateKeyJwtConfig::new(parse_url(&binding.token_endpoint)?, client_id, key)
+        .with_request_timeout(Duration::from_millis(binding.request_timeout_milliseconds))
+        .with_connect_timeout(Duration::from_millis(binding.connect_timeout_milliseconds));
+    if let Some(audience) = &binding.client_assertion_audience {
+        config = config.with_audience(audience);
+    }
+    if let Some(resource) = &binding.resource {
+        config = config.with_resource(resource);
+    }
+    if let Some(scopes) = &binding.scopes {
+        config = config.with_scopes(scopes.clone());
+    }
+    Ok(config)
+}
+
 fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
     if !valid_scalar(&binding.reader_profile, 512)
         || !valid_scalar(&binding.event_type, 512)
@@ -189,6 +219,22 @@ fn validate_binding(binding: &BregBinding) -> Result<(), SourceAdapterError> {
         || binding.reconciliation_interval_milliseconds
             > MAXIMUM_RECONCILIATION_INTERVAL_MILLISECONDS
         || !valid_event_source(&binding.event_source)
+        || [&binding.client_assertion_audience, &binding.resource]
+            .iter()
+            .any(|value| {
+                value
+                    .as_ref()
+                    .is_some_and(|value| !registry_platform_httputil::valid_resource_uri(value))
+            })
+        || binding.scopes.as_ref().is_some_and(|scopes| {
+            scopes.is_empty()
+                || scopes.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPES
+                || scopes.iter().collect::<BTreeSet<_>>().len() != scopes.len()
+                || scopes.iter().any(|scope| {
+                    scope.len() > registry_platform_httputil::MAXIMUM_REQUESTED_SCOPE_BYTES
+                        || !registry_platform_httputil::valid_scope_token(scope)
+                })
+        })
     {
         return Err(SourceAdapterError::Invalid);
     }
@@ -496,6 +542,15 @@ fn binding_generation(
         "connectTimeoutMilliseconds": binding.connect_timeout_milliseconds,
         "descriptionSha256": sha256_uri(description),
     });
+    if let Some(audience) = &binding.client_assertion_audience {
+        identity["clientAssertionAudience"] = json!(audience);
+    }
+    if let Some(resource) = &binding.resource {
+        identity["resource"] = json!(resource);
+    }
+    if let Some(scopes) = &binding.scopes {
+        identity["scopes"] = json!(scopes);
+    }
     if let Some(display_reference) = source
         .requests
         .first()
@@ -555,6 +610,9 @@ mod tests {
             base_url: "https://registry.example".into(),
             reader_profile: "casework-reader".into(),
             token_endpoint: "https://issuer.example/token".into(),
+            client_assertion_audience: None,
+            resource: None,
+            scopes: None,
             client_id_ref: "secret:file/client-id".into(),
             client_assertion_key_ref: "secret:file/client-key.jwk".into(),
             webhook_secret_ref: "secret:file/webhook".into(),
@@ -784,7 +842,6 @@ mod tests {
         .unwrap();
         assert_ne!(first, changed_reference);
     }
-
     #[test]
     fn generation_ignores_reconciliation_cadence() {
         let source = source();
@@ -808,5 +865,76 @@ mod tests {
         .unwrap();
 
         assert_eq!(first, changed_cadence);
+
+    #[test]
+    fn source_token_authority_is_explicit_bounded_and_part_of_generation() {
+        let baseline =
+            binding_generation(&binding(), &source(), "reader", &description("correction"))
+                .unwrap();
+        let mut configured = binding();
+        configured.client_assertion_audience = Some("https://issuer.example".into());
+        configured.resource = Some("urn:breg:example".into());
+        configured.scopes = Some(vec!["casework:source-reader".into()]);
+        assert!(validate_binding(&configured).is_ok());
+        assert_ne!(
+            baseline,
+            binding_generation(&configured, &source(), "reader", &description("correction"))
+                .unwrap()
+        );
+        configured.scopes = Some(vec![]);
+        assert!(validate_binding(&configured).is_err());
+        configured.scopes = Some(vec![
+            "casework:source-reader".into(),
+            "casework:source-reader".into(),
+        ]);
+        assert!(validate_binding(&configured).is_err());
+        configured.scopes = None;
+        configured.resource = Some(" not a resource".into());
+        assert!(validate_binding(&configured).is_err());
+    }
+
+    #[tokio::test]
+    async fn source_reader_posts_configured_assertion_audience_resource_and_scopes() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+        use registry_platform_httputil::TokenProvider;
+        use wiremock::{
+            matchers::{method, path},
+            Mock, MockServer, ResponseTemplate,
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/oauth2/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token":"synthetic-reader-token","token_type":"Bearer","expires_in":300
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut configured = binding();
+        configured.token_endpoint = format!("{}/oauth2/token", server.uri());
+        configured.client_assertion_audience = Some(server.uri());
+        configured.resource = Some("urn:breg:configured".into());
+        configured.scopes = Some(vec!["casework:source-reader".into()]);
+        let mut key = registry_platform_crypto::generate_private_jwk(
+            registry_platform_crypto::GeneratedKeyAlgorithm::Es384,
+        )
+        .unwrap();
+        key.kid = Some("synthetic-reader-key".into());
+        let provider =
+            PrivateKeyJwt::new(source_token_config(&configured, "casework-reader", key).unwrap())
+                .unwrap();
+        assert!(provider.bearer_token().await.is_ok());
+        let requests = server.received_requests().await.unwrap();
+        let fields: BTreeMap<_, _> = url::form_urlencoded::parse(&requests[0].body)
+            .into_owned()
+            .collect();
+        assert_eq!(fields["resource"], "urn:breg:configured");
+        assert_eq!(fields["scope"], "casework:source-reader");
+        let assertion = fields["client_assertion"].split('.').nth(1).unwrap();
+        let claims: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(assertion).unwrap()).unwrap();
+        assert_eq!(claims["aud"], server.uri());
+        assert_eq!(claims["iss"], "casework-reader");
+        assert_eq!(claims["sub"], "casework-reader");
     }
 }

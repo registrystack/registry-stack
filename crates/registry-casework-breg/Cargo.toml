@@ -21,6 +21,7 @@ registry-casework-core.workspace = true
 registry-breg-client.workspace = true
 registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -29,6 +30,7 @@ url.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 time.workspace = true
 tokio.workspace = true
 wiremock.workspace = true

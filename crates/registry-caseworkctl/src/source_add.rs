@@ -90,7 +90,7 @@ pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
         "bregAuthoringPatch": {"event": event_patch, "accessProfile": reader_patch, "devClients": dev_clients_plan.patch},
         "activation": "not_performed",
         "next": if args.apply {
-            json!(["Review the generated BReg runtime binding, provision its secret reference, and let the launcher activate each product through its normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
+            json!(["Review the generated BReg webhook binding and provision its secret reference. Configure the Casework source reader with the actual issuer tokenEndpoint, clientAssertionAudience, resource and scopes before activating through each product's normal path.", "Run caseworkctl doctor --runtime-config FILE after authenticated directory setup."])
         } else {
             json!(["Review these exact local changes, then repeat source add with --apply."])
         }

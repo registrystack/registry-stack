@@ -3569,10 +3569,12 @@ name = "registry-casework-breg"
 version = "0.30.0"
 dependencies = [
  "async-trait",
+ "base64",
  "registry-breg-client",
  "registry-casework-core",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "schemars",
  "serde",
  "serde_json",
@@ -3639,6 +3641,7 @@ dependencies = [
  "chrono-tz",
  "jsonschema",
  "registry-platform-canonical-json",
+ "registry-platform-httputil",
  "serde",
  "serde_json",
  "serde_norway",
