@@ -54,7 +54,7 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
             self.wheels[product] = wheel
 
     def run_assembler(
-        self, *, version: str | None = None, include_casework: bool = True
+        self, *, version: str | None = None, include_casework: bool = False
     ) -> subprocess.CompletedProcess[str]:
         command = [
             "python3",
@@ -177,7 +177,7 @@ class AssembleRegistryClientWheelTest(unittest.TestCase):
         self.assertIn("facade version does not match 99.0.0", result.stderr)
 
     def test_0_29_refuses_the_casework_facade_without_explicit_selection(self) -> None:
-        result = self.run_assembler(include_casework=False)
+        result = self.run_assembler(version="0.29.0")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("explicit --include-casework", result.stderr)
 
