@@ -574,8 +574,6 @@ fn provision(project: &Path) {
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
-  grantIdClaim: evidence_grant_id
-  grantAuthorityClaim: evidence_authority
 signing: secret:file/signing-p256-private-jwk
 audit: secret:file/audit-hmac-key
 subjectBinding: secret:file/subject-binding-hmac-key
