@@ -1035,18 +1035,23 @@ class CiChangesTest(unittest.TestCase):
             "docs/site/scripts/check-casework-tutorial.sh",
             "docs/site/scripts/check-casework-tutorial.test.mjs",
             "docs/site/src/content/docs/tutorials/first-casework.mdx",
+            "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
             "docs/site/package.json",
         )
         for path in infrastructure:
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])
-        # The replay builds and runs these three: the runtime the reader calls,
-        # the tool that starts and seeds the local session, and Registry Mint,
-        # which issues every token the reader's calls carry.
+        # The replay builds and runs these five: the runtime the reader calls,
+        # the tool that starts and seeds the local session, Registry Mint,
+        # which issues every token the reader's calls carry, and the Base
+        # Registry Engine runtime and tool the two-product page runs beside
+        # Casework.
         for path in (
             "crates/registry-casework/src/http.rs",
             "crates/registry-caseworkctl/src/dev/mod.rs",
             "crates/registry-mint/src/lib.rs",
+            "crates/registry-breg/src/lib.rs",
+            "crates/registry-bregctl/src/dev/mod.rs",
         ):
             with self.subTest(path=path):
                 self.assertTrue(classify(self.workspace, (path,))["casework_tutorial"])

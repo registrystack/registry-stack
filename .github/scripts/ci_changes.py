@@ -234,6 +234,7 @@ CASEWORK_TUTORIAL_INPUTS = (
     "docs/site/scripts/check-casework-tutorial.sh",
     "docs/site/scripts/check-casework-tutorial.test.mjs",
     "docs/site/src/content/docs/tutorials/first-casework.mdx",
+    "docs/site/src/content/docs/tutorials/review-breg-changes-in-casework.mdx",
 )
 
 # This guide explains the authoring form across three intentionally separate
@@ -394,11 +395,13 @@ BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | froz
 )
 
 # The gate builds and runs exactly these: the Casework runtime, the tool that
-# starts and seeds the local session, and Registry Mint, because every call the
-# reader makes carries a token that session issued. The clients in the Casework
-# shard are not on the replayed path.
+# starts and seeds the local session, Registry Mint, because every call the
+# reader makes carries a token that session issued, and the Base Registry
+# Engine runtime and tool, because the two-product page runs a registry beside
+# Casework and connects the two. The clients in the Casework shard are not on
+# the replayed path.
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
-    {"registry-casework", "registry-caseworkctl"}
+    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl"}
 ) | frozenset(SHARDS["mint"])
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
