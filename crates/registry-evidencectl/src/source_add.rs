@@ -6,7 +6,7 @@ use std::{
     ffi::OsString,
     fs,
     io::{IsTerminal as _, Read as _, Write as _},
-    os::unix::fs::MetadataExt as _,
+    os::unix::fs::{MetadataExt as _, PermissionsExt as _},
     path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
     time::Duration,
@@ -907,7 +907,10 @@ fn check_credential_outputs(
     // The public provider export owns credential identity and validity. Stage
     // its retained pair privately so preflight never fills a missing output,
     // including while a review reports the choices it would apply.
-    let temporary = tempfile::tempdir().context("staging the retained credential comparison")?;
+    let temporary = tempfile::Builder::new()
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir()
+        .context("staging the retained credential comparison")?;
     let temporary_path = fs::canonicalize(temporary.path())
         .context("resolving the private credential staging directory")?;
     invoke(&export_client_args(
@@ -1028,7 +1031,6 @@ fn provider_refusal(arguments: &[OsString], bytes: &[u8]) -> anyhow::Error {
 mod tests {
     use super::*;
     use clap::Parser as _;
-    use std::os::unix::fs::PermissionsExt as _;
 
     fn args(registry: &Path, project: &Path) -> SourceAddArgs {
         let cli = crate::Cli::try_parse_from([
@@ -1152,6 +1154,11 @@ mod tests {
                 assert_eq!(
                     fs::canonicalize(path.parent().unwrap())?,
                     path.parent().unwrap()
+                );
+                assert_eq!(
+                    fs::metadata(path.parent().unwrap())?.permissions().mode() & 0o077,
+                    0,
+                    "a provider credential export must use an owner-only directory"
                 );
                 if path.exists() {
                     if fs::read(&path)? != bytes {
