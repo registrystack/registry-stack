@@ -637,41 +637,61 @@ def prepare_dev(root: Path, fixture: Path, fixture_kind: str, webhook: bool = Fa
     root = _require_root(root)
     _local_project(root, fixture.resolve(), webhook, fixture_kind)
     project = root / "project"
-    journeys_path = project / "tests/journeys.yaml"
-    if journeys_path.is_file():
-        lines = journeys_path.read_text().splitlines(keepends=True)
-        kept=[]; skip=False
-        for line in lines:
-            if line.startswith("      - id:"):
-                skip = "no-purpose" in line or "without-purpose" in line
-            if not skip:
-                kept.append(line)
-        journeys_path.write_text("".join(kept))
+    registry = project / "registry.yaml"
+    source = registry.read_text(encoding="utf-8")
     if fixture_kind == "business-establishments":
-        registry = project / "registry.yaml"
-        source = registry.read_text()
-        source = source.replace("          - field: id\n            claim: business_id", "          - field: business-code\n            claim: business_code", 1)
-        registry.write_text(source)
+        source = source.replace(
+            "          - field: id\n            claim: business_id",
+            "          - field: business-code\n            claim: business_code",
+            1,
+        )
     elif fixture_kind == "household":
-        registry = project / "registry.yaml"
-        source = registry.read_text()
-        source = source.replace("          - field: id\n            claim: household_id", "          - field: household-code\n            claim: household_code", 1)
-        registry.write_text(source)
-    profiles: dict[str, list[tuple[str, list[str], dict[str, Any]]]] = {
-        "business-establishments": [("business-demo", ["registry:business:operate"], {"registry_principal":"synthetic-business-operator","registry_purpose":"business-administration"}), ("business-demo-viewer", ["registry:business:view"], {"registry_principal":"synthetic-business-viewer","registry_purpose":"business-view","business_code":"BUSINESS-DEMO-001"})],
-        "household": [("household-demo", ["registry:household:operate"], {"registry_principal":"synthetic-household-operator","registry_purpose":"household-administration"}), ("household-demo-viewer", ["registry:household:view"], {"registry_principal":"synthetic-household-viewer","registry_purpose":"household-view","household_code":"HOUSEHOLD-DEMO-001"})],
-        "asset-site": [("asset-site-demo-operator", [ASSET_OPERATOR_SCOPE], {"registry_principal":"synthetic-asset-operator","registry_purpose":"asset-management"}), ("asset-site-demo-planner", [ASSET_PLANNER_SCOPE], {"registry_principal":"synthetic-site-planner","registry_purpose":"site-planning"})],
-        "asset-change-request": [("asset-change-demo-operator", [ASSET_OPERATOR_SCOPE], {"registry_principal":"asset-operator","registry_purpose":"asset-management"}), ("asset-change-demo-planner", [ASSET_PLANNER_SCOPE], {"registry_principal":"synthetic-site-planner","registry_purpose":"site-planning"}), ("asset-change-demo-submitter", ["registry:corrections:submit"], {"registry_principal":"correction-submitter","registry_purpose":"asset-correction"}), ("asset-change-demo-reviewer", ["registry:corrections:review"], {"registry_principal":"correction-reviewer","registry_purpose":"asset-correction-review"}), ("asset-change-demo-supervisor", ["registry:corrections:supervise"], {"registry_principal":"correction-supervisor","registry_purpose":"asset-correction-review"}), ("asset-change-demo-applier", ["registry:corrections:apply"], {"registry_principal":"correction-applier","registry_purpose":"asset-correction-apply"})],
-        "facility": [("facility-demo-operator", [FACILITY_OPERATOR_SCOPE], {"administrative_boundaries":"north-district","registry_principal":"synthetic-facility-operator","registry_purpose":"facility-registry"})],
-        "inspection": [("inspection-demo-inspector", [INSPECTION_INSPECTOR_SCOPE], {"registry_principal":"synthetic-inspection-inspector","registry_purpose":"facility-inspection"})],
+        source = source.replace(
+            "          - {field: id, claim: household_id, operator: equals}",
+            "          - {field: household-code, claim: household_code, operator: equals}",
+            1,
+        )
+    registry.write_text(source, encoding="utf-8")
+    profiles: dict[str, list[dict[str, Any]]] = {
+        "business-establishments": [
+            {"id":"business-demo", "profile":"business-operator", "scopes":["registry:business:operate"], "claims":{"registry_principal":"synthetic-business-operator", "registry_purpose":"business-administration"}},
+            {"id":"business-demo-no-purpose", "profile":"business-operator", "scopes":["registry:business:operate"], "claims":{"registry_principal":"synthetic-business-operator"}, "testBindings":[{"journeyId":"business-establishment-lifecycle", "stepId":"operator-without-purpose-is-concealed"}]},
+            {"id":"business-demo-viewer", "profile":"business-viewer", "scopes":["registry:business:view"], "claims":{"registry_principal":"synthetic-business-viewer", "registry_purpose":"business-view", "business_code":"BUSINESS-DEMO-001"}},
+        ],
+        "household": [
+            {"id":"household-demo", "profile":"household-operator", "scopes":["registry:household:operate"], "claims":{"registry_principal":"synthetic-household-operator", "registry_purpose":"household-administration"}},
+            {"id":"household-demo-no-purpose", "profile":"household-operator", "scopes":["registry:household:operate"], "claims":{"registry_principal":"synthetic-household-operator"}, "testBindings":[{"journeyId":"household-person-lifecycle", "stepId":"operator-without-purpose-is-concealed"}]},
+            {"id":"household-demo-viewer", "profile":"household-viewer", "scopes":["registry:household:view"], "claims":{"registry_principal":"synthetic-household-viewer", "registry_purpose":"household-view", "household_code":"HOUSEHOLD-DEMO-001"}},
+        ],
+        "asset-site": [
+            {"id":"asset-site-demo-operator", "profile":"asset-operator", "scopes":[ASSET_OPERATOR_SCOPE], "claims":{"registry_principal":"synthetic-asset-operator", "registry_purpose":"asset-management"}},
+            {"id":"asset-site-demo-planner", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner", "registry_purpose":"site-planning"}},
+            {"id":"asset-site-demo-planner-no-purpose", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner"}, "testBindings":[{"journeyId":"asset-and-site-caller-surfaces", "stepId":"planner-without-purpose-is-concealed"}]},
+        ],
+        "asset-change-request": [
+            {"id":"asset-change-demo-operator", "profile":"asset-operator", "scopes":[ASSET_OPERATOR_SCOPE], "claims":{"registry_principal":"asset-operator", "registry_purpose":"asset-management"}},
+            {"id":"asset-change-demo-planner", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner", "registry_purpose":"site-planning"}},
+            {"id":"asset-change-demo-submitter", "profile":"correction-submitter", "scopes":["registry:corrections:submit"], "claims":{"registry_principal":"correction-submitter", "registry_purpose":"asset-correction"}},
+            {"id":"asset-change-demo-reviewer", "profile":"correction-reviewer", "scopes":["registry:corrections:review"], "claims":{"registry_principal":"correction-reviewer", "registry_purpose":"asset-correction-review"}},
+            {"id":"asset-change-demo-supervisor", "profile":"correction-supervisor", "scopes":["registry:corrections:supervise"], "claims":{"registry_principal":"correction-supervisor", "registry_purpose":"asset-correction-review"}},
+            {"id":"asset-change-demo-applier", "profile":"correction-applier", "scopes":["registry:corrections:apply"], "claims":{"registry_principal":"correction-applier", "registry_purpose":"asset-correction-apply"}},
+        ],
+        "facility": [
+            {"id":"facility-demo-operator", "profile":"facility-operator", "scopes":[FACILITY_OPERATOR_SCOPE], "claims":{"administrative_boundaries":"north-district", "registry_principal":"synthetic-facility-operator", "registry_purpose":"facility-registry"}},
+            {"id":"facility-demo-south-operator", "profile":"facility-operator", "scopes":[FACILITY_OPERATOR_SCOPE], "claims":{"administrative_boundaries":"south-district", "registry_principal":"synthetic-facility-operator", "registry_purpose":"facility-registry"}, "testBindings":[{"journeyId":"bounded-facility-and-batch-validation", "stepId":"south-district-claim-cannot-see-north-record"}]},
+        ],
+        "inspection": [
+            {"id":"inspection-demo-inspector", "profile":"inspection-inspector", "scopes":[INSPECTION_INSPECTOR_SCOPE], "claims":{"registry_principal":"synthetic-inspection-inspector", "registry_purpose":"facility-inspection"}},
+            {"id":"inspection-demo-no-purpose", "profile":"inspection-inspector", "scopes":[INSPECTION_INSPECTOR_SCOPE], "claims":{"registry_principal":"synthetic-inspection-inspector"}, "testBindings":[{"journeyId":"inspection-and-schema-validation", "stepId":"inspector-without-purpose-is-concealed"}]},
+        ],
     }
-    config = _fixture_config(fixture_kind)
-    clients=[]
-    for client_id, scopes, claims in profiles[fixture_kind]:
-        persona=next((item for item in config["personas"] if item["token_name"].replace("-token","") in client_id or item["access_profile"] in client_id), None)
-        profile = persona["access_profile"] if persona else ({"business-demo":"business-operator","business-demo-viewer":"business-viewer","household-demo":"household-operator","household-demo-viewer":"household-viewer","asset-site-demo-operator":"asset-operator","asset-site-demo-planner":"site-planner","asset-change-demo-operator":"asset-operator","facility-demo-operator":"facility-operator","inspection-demo-inspector":"inspection-inspector"}.get(client_id, client_id.removeprefix("asset-change-demo-")))
-        clients.append({"id":client_id,"accessProfiles":[profile],"scopes":scopes,"claims":claims})
-    (project / "dev-clients.yaml").write_text(json.dumps({"version":1,"clients":clients}, indent=2)+"\n")
+    clients = []
+    for declaration in profiles[fixture_kind]:
+        client = {"id": declaration["id"], "accessProfiles": [declaration["profile"]], "scopes": declaration["scopes"], "claims": declaration["claims"]}
+        if "testBindings" in declaration:
+            client["testBindings"] = declaration["testBindings"]
+        clients.append(client)
+    (project / "dev-clients.yaml").write_text(json.dumps({"version": 1, "clients": clients}, indent=2) + "\n", encoding="utf-8")
 
 def bind_webhook_module(
     root: Path,
@@ -1287,6 +1307,13 @@ def seed_business(root: Path) -> None:
     )
     if [len(response.get("items", [])) for response in (establishments_response, business_response, assignment_response)] != [8, 3, 8]:
         raise DemoError("seeded list counts did not match the expected 8 establishments, 3 businesses, and 8 assignments")
+    _request(
+        root,
+        "GET",
+        f"/v1/records/establishments/{establishment_ids['ESTABLISHMENT-DEMO-001']}?accessProfile=business-operator",
+        "no-purpose-token",
+        expected=404,
+    )
     print("Seeded 8 synthetic establishments, 3 businesses, and 8 current assignments.")
 
 
@@ -1365,6 +1392,13 @@ def seed(root: Path) -> None:
     )
     if [len(response.get("items", [])) for response in (people_response, household_response, membership_response)] != [8, 3, 8]:
         raise DemoError("seeded list counts did not match the expected 8 people, 3 households, and 8 memberships")
+    _request(
+        root,
+        "GET",
+        f"/v1/records/persons/{person_ids['PERSON-DEMO-001']}?accessProfile=household-operator",
+        "no-purpose-token",
+        expected=404,
+    )
     print("Seeded 8 synthetic people, 3 households, and 8 current memberships.")
 
 
@@ -1422,6 +1456,15 @@ def seed_asset_site(root: Path) -> None:
         response, _ = _request(root, "GET", route, "planner-token" if "site-planner" in route else "operator-token")
         if len(response.get("items", [])) != expected_count:
             raise DemoError(f"{route} did not return the expected seeded records")
+    concealed, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/assets/{urllib.parse.quote(asset_id, safe='')}?accessProfile=site-planner",
+        "planner-no-purpose-token",
+        expected=404,
+    )
+    if concealed.get("code") != "resource.not_found":
+        raise DemoError("planner without purpose did not receive the concealed resource response")
     print("Seeded 1 synthetic asset, site, placement, and create-only inspection.")
 
 
@@ -1757,6 +1800,15 @@ def seed_inspection(root: Path) -> None:
         response, _ = _request(root, "GET", route, "operator-token")
         if len(response.get("items", [])) != expected_count:
             raise DemoError(f"{route} did not return the expected seeded records")
+    concealed, _ = _request(
+        root,
+        "GET",
+        f"/v1/records/inspections/{urllib.parse.quote(inspection_id, safe='')}?accessProfile=inspection-inspector",
+        "no-purpose-token",
+        expected=404,
+    )
+    if concealed.get("code") != "resource.not_found":
+        raise DemoError("inspection token without purpose did not receive the concealed resource response")
     print("Seeded 1 inspection authority, inspection, structured observation, and 2 create-only permits.")
 
 

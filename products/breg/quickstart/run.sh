@@ -31,10 +31,14 @@ else
   "$bregctl" --format json init "$run_dir/project" >"$run_dir/init-report.json"
 fi
 cleanup() {
-  "$bregctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
-  if [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-quickstart-v1 ]]; then
+  local exit_code=$?
+  local remove=()
+  [[ "$exit_code" -eq 0 ]] && remove=(--remove)
+  "$bregctl" dev stop "${remove[@]}" --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
+  if [[ "$exit_code" -eq 0 ]] && [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-quickstart-v1 ]]; then
     rm -rf -- "$run_dir"
   fi
+  return "$exit_code"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP

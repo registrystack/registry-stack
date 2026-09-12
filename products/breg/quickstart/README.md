@@ -77,5 +77,7 @@ products/breg/quickstart/self-test.sh
 ```
 
 All disposable files are under `quickstart/.run/`. The launcher removes its
-owned dev session on exit. Production deployments require an operated issuer,
+owned dev session after a successful run. It retains failed or interrupted state
+for diagnosis; stop that owned session before removing `.run/` and retrying.
+Production deployments require an operated issuer,
 signer custody, signed packages, and an operated PostgreSQL service.

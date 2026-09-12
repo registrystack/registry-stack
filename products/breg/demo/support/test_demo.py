@@ -24,21 +24,23 @@ class DevPreparationTests(unittest.TestCase):
 
     def test_business_clients_use_private_key_dev_contract(self):
         root, document = self.prepare("business-establishments")
-        self.assertEqual([c["id"] for c in document["clients"]], ["business-demo", "business-demo-viewer"])
-        viewer = document["clients"][1]
+        self.assertEqual([c["id"] for c in document["clients"]], ["business-demo", "business-demo-no-purpose", "business-demo-viewer"])
+        viewer = document["clients"][2]
         self.assertEqual(viewer["claims"]["business_code"], "BUSINESS-DEMO-001")
         registry = (root / "project/registry.yaml").read_text()
         self.assertIn("field: business-code\n            claim: business_code", registry)
-        self.assertNotIn("operator-without-purpose-is-concealed", (root / "project/tests/journeys.yaml").read_text())
+        self.assertIn("operator-without-purpose-is-concealed", (root / "project/tests/journeys.yaml").read_text())
+        self.assertEqual(document["clients"][1]["testBindings"][0]["stepId"], "operator-without-purpose-is-concealed")
 
     def test_each_fixture_has_one_explicit_client_per_persona_profile(self):
-        expected = {"household": 2, "asset-site": 2, "asset-change-request": 6, "facility": 1, "inspection": 1}
+        expected = {"household": 3, "asset-site": 3, "asset-change-request": 6, "facility": 2, "inspection": 2}
         for fixture, count in expected.items():
             with self.subTest(fixture=fixture):
                 _, document = self.prepare(fixture)
                 self.assertEqual(len(document["clients"]), count)
                 profiles = [c["accessProfiles"][0] for c in document["clients"]]
-                self.assertEqual(len(profiles), len(set(profiles)))
+                variants = [c for c in document["clients"] if c.get("testBindings")]
+                self.assertEqual(len(variants), len(profiles) - len(set(profiles)))
                 self.assertTrue(all(c["scopes"] and c["claims"] for c in document["clients"]))
 
     def test_prepare_refuses_existing_output(self):

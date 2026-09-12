@@ -83,12 +83,22 @@ if [[ "$webhook" == true ]]; then
   prepare+=(--webhook)
 fi
 "${prepare[@]}"
+if [[ "$webhook" == true ]]; then
+  "$bregctl" --format json explain model "$run_dir/project" >"$run_dir/webhook-model-report.json"
+  python3 "$support" bind-webhook-module \
+    --root "$run_dir" \
+    --report "$run_dir/webhook-model-report.json"
+fi
 read -r database_port issuer_port breg_port < <(python3 "$support" ports)
 cleanup() {
-  "$bregctl" dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
-  if [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-demo-v1 ]]; then
+  local exit_code=$?
+  local remove=()
+  [[ "$exit_code" -eq 0 ]] && remove=(--remove)
+  "$bregctl" dev stop "${remove[@]}" --docker-bin "$(command -v docker)" "$run_dir/project" >/dev/null 2>&1 || true
+  if [[ "$exit_code" -eq 0 ]] && [[ -f "$run_dir/.launcher-owned" ]] && [[ "$(cat "$run_dir/.launcher-owned")" == registry-stack-breg-demo-v1 ]]; then
     rm -rf -- "$run_dir"
   fi
+  return "$exit_code"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -108,9 +118,16 @@ for client in json.load(open(sys.argv[1], encoding='utf-8'))['clients']:
 PY
 while read -r client profile; do
   "$bregctl" --format json dev token "$client" "$run_dir/project" >"$run_dir/$client-token-report.json"
-  token_name=$(python3 - "$fixture" "$profile" <<'PY'
+  token_name=$(python3 - "$fixture" "$profile" "$client" <<'PY'
 import sys
-fixture, profile = sys.argv[1:]
+fixture, profile, client = sys.argv[1:]
+variants = {
+    'business-demo-no-purpose': 'no-purpose',
+    'household-demo-no-purpose': 'no-purpose',
+    'asset-site-demo-planner-no-purpose': 'planner-no-purpose',
+    'facility-demo-south-operator': 'south-operator',
+    'inspection-demo-no-purpose': 'no-purpose',
+}
 names = {
     ('business-establishments', 'business-operator'): 'operator',
     ('business-establishments', 'business-viewer'): 'viewer',
@@ -127,7 +144,7 @@ names = {
     ('facility', 'facility-operator'): 'operator',
     ('inspection', 'inspection-inspector'): 'operator',
 }
-print(names[(fixture, profile)])
+print(variants.get(client, names[(fixture, profile)]))
 PY
 )
   python3 - "$run_dir/$client-token-report.json" "$run_dir/headers/$token_name.header" "$run_dir/secrets/$token_name-token" <<'PY'

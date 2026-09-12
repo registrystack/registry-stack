@@ -37,7 +37,7 @@ You will run the supplied workflow against PostgreSQL, adapt its configuration, 
 
 ## Before you start
 
-[Create and query your first registry](../first-breg/) installs `breg`, `bregctl`, and `mint`.
+[Create and query your first registry](../first-breg/) installs `breg` and `bregctl`.
 The example project, and the launcher this tutorial borrows a database from, live in the repository,
 so clone it at the version you installed:
 
@@ -211,11 +211,12 @@ explains each grant and the `retention` mode the example selects.
 In a second terminal, at the root of the same clone, start the local quickstart.
 You are borrowing its disposable PostgreSQL cluster, which the runner reaches over TLS with the
 quickstart's certificate authority.
-The `--installed` flag makes the launcher use the `breg`, `bregctl`, and `mint` you installed
+The `--installed` flag makes the launcher use the `breg` and `bregctl` you installed
 rather than building them from the checkout.
 
 :::caution[Disposable local services]
-Starting the quickstart replaces its previous `products/breg/quickstart/.run` directory.
+The quickstart refuses an existing `products/breg/quickstart/.run` directory so
+it cannot overwrite retained or unrelated state.
 Do not run two quickstarts in the same clone.
 Stopping the launcher removes its database container and the records inside it.
 Keep real data and production credentials out of this tutorial.
@@ -225,12 +226,10 @@ Keep real data and production credentials out of this tutorial.
 products/breg/quickstart/run.sh --installed
 ```
 
-The launcher first prints `== Using installed breg, bregctl, and mint from PATH` with the three
-paths it resolved.
 Wait for this line, then leave the terminal running:
 
 ```text
-Base Registry Engine generic quickstart is ready.
+Base Registry Engine quickstart is ready.
 ```
 
 ## Run the approval workflow
@@ -261,12 +260,16 @@ from urllib.parse import urlsplit
 import shlex
 import sys
 run = Path(sys.argv[1])
-connection = urlsplit((run / "secrets/runtime-database-url").read_text().strip())
-password = (run / "secrets/database-password").read_text().strip()
-url = f"postgresql://postgres:{password}@localhost:{connection.port}/postgres"
+connection = urlsplit((run / "project/.breg/dev/secrets/runtime-database-url").read_text().strip())
+database = dict(
+    line.split("=", 1)
+    for line in (run / "project/.breg/dev/database/postgres.env").read_text().splitlines()
+    if "=" in line
+)
+url = f"postgresql://{database['POSTGRES_USER']}:{database['POSTGRES_PASSWORD']}@localhost:{connection.port}/postgres"
 values = {
     "BREG_TEST_DATABASE_URL": url,
-    "BREG_TEST_TLS_CA_PEM_PATH": str(run / "tls/ca.pem"),
+    "BREG_TEST_TLS_CA_PEM_PATH": str(run / "project/.breg/dev/tls/ca.pem"),
 }
 target = Path(sys.argv[2])
 target.touch(mode=0o600)
@@ -422,7 +425,7 @@ deployment are separate steps.
 | Renaming the stage makes `check` fail | Match the stage `id` to the supervisor's `reviewStages` entry. |
 | The runner reports `test.step.failed` | Its path `journeys[0].steps[<n>]` counts the steps of `tests/journeys.yaml` from zero. Check that step's `stage` and expected status. |
 | `change-requests` is not a recognized explain subject | Your `bregctl` predates the checkout. Confirm that `bregctl --version` matches the checkout's tag, then reinstall or clone again so they agree. |
-| `command not found` for `bregctl` or `mint` | The installers in [Create and query your first registry](../first-breg/) place all three binaries in `~/.local/bin`. Add that directory to `PATH` in this terminal, or rerun the installer you skipped. |
+| `command not found` for `bregctl` | The installer in [Create and query your first registry](../first-breg/) places `breg` and `bregctl` in `~/.local/bin`. Add that directory to `PATH` in this terminal, or rerun the installer you skipped. |
 
 ## Next
 

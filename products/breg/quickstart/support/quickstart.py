@@ -32,22 +32,6 @@ def prepare_spatial(fixture: Path, project: Path):
         for old, new in (("service-sites:map.read", "service-sites:map:read"), ("service-sites:directory.read", "service-sites:directory:read"), ("service-sites:site.read", "service-sites:site:read")):
             text = text.replace(old, new)
         child.write_text(text, encoding="utf-8")
-    journey_path = project / "tests/journeys.yaml"
-    lines = journey_path.read_text(encoding="utf-8").splitlines(keepends=True)
-    kept = []
-    skip = False
-    for line in lines:
-        if line.startswith("      - id:"):
-            skip = False
-        if line.strip() in ("accessProfile: map-reader", "accessProfile: directory-reader"):
-            while kept and not kept[-1].startswith("      - id:"):
-                kept.pop()
-            if kept:
-                kept.pop()
-            skip = True
-        if not skip:
-            kept.append(line)
-    journey_path.write_text("".join(kept), encoding="utf-8")
     (project/'dev-clients.yaml').write_text('''version: 1
 clients:
   - id: operator
@@ -116,5 +100,6 @@ def main():
     elif a.cmd=='prepare-spatial-project': prepare_spatial(a.fixture,a.project)
     elif a.cmd=='request': generic(a.root,a.action,a.code,a.label,a.record_id)
     else: spatial_smoke(a.root,a.seed)
-try: main()
-except (QuickstartError,OSError,KeyError,json.JSONDecodeError) as e: print(f'quickstart: {e}',file=sys.stderr); raise SystemExit(1)
+if __name__ == '__main__':
+    try: main()
+    except (QuickstartError,OSError,KeyError,json.JSONDecodeError) as e: print(f'quickstart: {e}',file=sys.stderr); raise SystemExit(1)

@@ -67,7 +67,8 @@ products/breg/demo/run.sh --webhook --smoke
 ```
 
 All generated project, service state, credentials, and reports live under
-`demo/.run/` or the explicit `--state-dir`. A new disposable run first stops
-and removes any previous owned dev session before replacing that directory.
+`demo/.run/` or the explicit `--state-dir`. A new run refuses an existing path.
+Successful runs remove their owned state; failed or interrupted runs retain it
+for diagnosis. Stop the owned dev session before removing that directory and retrying.
 Production deployments require an operated issuer, signer custody, signed
 packages, and an operated PostgreSQL service.
