@@ -211,7 +211,7 @@
           ]
         },
         "scopeClaim": {
-          "default": "scope",
+          "default": "registry_scopes",
           "type": "string"
         }
       },
