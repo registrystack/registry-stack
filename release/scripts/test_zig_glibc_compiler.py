@@ -558,7 +558,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
         source_sha = "1" * 40
 
-        def build(group: str, version: str = "0.30.0") -> subprocess.CompletedProcess[str]:
+        def build(group: str, version: str = "0.30.1") -> subprocess.CompletedProcess[str]:
             arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
             if group != "all":
                 arguments.extend(["--group", group])
@@ -598,7 +598,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [
                 str(self.scripts / "merge-release-binary-shards.py"),
                 "--version",
-                "0.30.0",
+                "0.30.1",
                 "--source-sha",
                 source_sha,
                 "--core",

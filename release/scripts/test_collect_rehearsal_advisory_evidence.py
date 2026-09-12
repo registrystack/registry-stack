@@ -196,14 +196,14 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
         with self.assertRaises(MODULE.EvidenceError):
             MODULE.parse_roster("evidence mint relay\n")
 
-    def test_v0_30_roster_is_owned_and_complete(self) -> None:
+    def test_post_mint_roster_is_owned_and_complete(self) -> None:
         result = subprocess.run(
             [
                 "python3",
                 str(ROOT / "release/scripts/release_candidate.py"),
                 "image-names",
                 "--version",
-                "0.30.0",
+                "0.30.1",
             ],
             check=True,
             capture_output=True,
