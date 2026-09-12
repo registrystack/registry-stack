@@ -220,6 +220,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         allow_breg_access: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });
@@ -229,15 +230,21 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         allow_breg_access: true,
         scopes: vec!["registry:generic:review".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let root = state.root();
-    private::read(&root.join("mint/clients/guest.yaml"), MAX_BYTES)
-        .expect("the unbound client still registers with the local Mint");
-    private::read(&root.join("mint/clients/casework-reviewer.yaml"), MAX_BYTES)
-        .expect("the integration client registers with the local Mint");
+    let issuer = config::issuer_description(&state, &clients, &root).unwrap();
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "guest"));
+    assert!(issuer
+        .machine_clients
+        .iter()
+        .any(|client| client.client_id == "casework-reviewer"));
     let runtime: Value = serde_norway::from_slice(
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )
@@ -277,6 +284,7 @@ fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client(
         allow_breg_access: false,
         scopes: vec!["registry:generic:introspect".into()],
         claims: BTreeMap::new(),
+        test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
     });

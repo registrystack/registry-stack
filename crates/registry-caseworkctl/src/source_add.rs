@@ -25,14 +25,8 @@ const READER_CLIENT_ID: &str = "casework-reader";
 const READER_PRINCIPAL_CLAIM: &str = "registry_principal";
 const READER_SCOPE: &str = "casework:source-reader";
 const READER_PURPOSE: &str = "casework-sync";
-/// The Mint claim a local BReg client's access token carries its purpose under.
+/// The issuer claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
-
-/// A source-backed Casework session borrows BReg's local Mint, so a synthesized
-/// subject must match the principal BReg registers for that client.
-fn borrowed_breg_principal(client_id: &str) -> String {
-    format!("urn:breg:dev:{client_id}")
-}
 
 pub(super) fn run(args: &SourceAddArgs) -> Result<Value> {
     validate_id(&args.source_id)?;
@@ -667,15 +661,15 @@ fn reader_dev_client() -> Value {
 /// The scopes and purpose every Casework staff or supervisor dev client must
 /// carry to act as a reviewer on the selected BReg request: the union of
 /// `requiredScopes` from every distinct access profile named in its
-/// `reviewGrants`/`applyGrants`, and the one `registry_purpose` those
+/// `reviewPermissions`/`applyPermissions`, and the one `registry_purpose` those
 /// restricted profiles must accept in common. Profiles with no
 /// `requiredPurposes` restriction do not require the claim.
 fn reviewer_authority(authored: &Value, request: &Value) -> Result<ReviewerAuthority> {
-    let profile_ids: BTreeSet<&str> = request["reviewGrants"]
+    let profile_ids: BTreeSet<&str> = request["reviewPermissions"]
         .as_array()
         .into_iter()
         .flatten()
-        .chain(request["applyGrants"].as_array().into_iter().flatten())
+        .chain(request["applyPermissions"].as_array().into_iter().flatten())
         .filter_map(|grant| grant["profile"].as_str())
         .collect();
     if profile_ids.is_empty() {
@@ -796,7 +790,7 @@ fn human_dev_client(
             "a Casework staff or supervisor dev client has no reviewer authority to bind",
         )?;
         let principal = if casework_principal_claim == "sub" {
-            borrowed_breg_principal(id)
+            bail!("Casework dev client {id} uses principalClaim sub, whose stock-issuer subject is session-qualified; author an explicit stable principal claim for the shared BREG issuer bridge")
         } else {
             claims
                 .get(casework_principal_claim)
@@ -1456,8 +1450,8 @@ mod tests {
             }]
         });
         let request = json!({
-            "reviewGrants": [{"profile": "reviewer"}],
-            "applyGrants": [{"profile": "reviewer"}]
+            "reviewPermissions": [{"profile": "reviewer"}],
+            "applyPermissions": [{"profile": "reviewer"}]
         });
         (authored, request)
     }
@@ -1797,7 +1791,7 @@ mod tests {
                 {"id":"reviewer","principalClaim":"sub","requiredScopes":["starter:reviewer"],"requiredPurposes":["starter-learning"]}
             ]
         });
-        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
         assert!(reviewer_authority(&mismatched_principal, &request).is_err());
 
         let disagreeing_purpose = json!({
@@ -1806,8 +1800,7 @@ mod tests {
                 {"id":"approver","principalClaim":"registry_principal","requiredScopes":["starter:approver"],"requiredPurposes":["starter-approval"]}
             ]
         });
-        let request =
-            json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[{"profile":"approver"}]});
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[{"profile":"approver"}]});
         assert!(reviewer_authority(&disagreeing_purpose, &request).is_err());
     }
 
@@ -1819,8 +1812,7 @@ mod tests {
                 {"id":"approver","principalClaim":"registry_principal","requiredScopes":[],"requiredPurposes":[]}
             ]
         });
-        let request =
-            json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[{"profile":"approver"}]});
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[{"profile":"approver"}]});
         let authority = reviewer_authority(&unrestricted, &request).unwrap();
         assert!(authority.scopes.is_empty());
         assert_eq!(authority.purpose, None);
@@ -1847,7 +1839,7 @@ mod tests {
                 }]
             }]
         });
-        let request = json!({"reviewGrants":[{"profile":"reviewer"}],"applyGrants":[]});
+        let request = json!({"reviewPermissions":[{"profile":"reviewer"}],"applyPermissions":[]});
 
         let error = reviewer_authority(&authored, &request)
             .err()
@@ -1916,7 +1908,7 @@ mod tests {
     }
 
     #[test]
-    fn human_dev_client_derives_the_mint_subject_for_breg_review() {
+    fn human_dev_client_refuses_a_session_qualified_subject_for_breg_review() {
         let authority = ReviewerAuthority {
             scopes: BTreeSet::from(["starter:reviewer".to_owned()]),
             purpose: None,
@@ -1927,26 +1919,10 @@ mod tests {
             "claims":{"registry_actor_kind":"human"}
         });
 
-        let merged = human_dev_client(&client, "staff", "sub", Some(&authority)).unwrap();
-        assert_eq!(
-            merged["claims"][READER_PRINCIPAL_CLAIM],
-            borrowed_breg_principal("staff")
-        );
-        assert!(merged["claims"].get("sub").is_none());
-
-        let already_aligned = json!({
-            "id":"staff",
-            "scopes":["casework:staff"],
-            "claims":{
-                "registry_actor_kind":"human",
-                "registry_principal":borrowed_breg_principal("staff")
-            }
-        });
-        let merged = human_dev_client(&already_aligned, "staff", "sub", Some(&authority)).unwrap();
-        assert_eq!(
-            merged["claims"][READER_PRINCIPAL_CLAIM],
-            borrowed_breg_principal("staff")
-        );
+        let refusal = human_dev_client(&client, "staff", "sub", Some(&authority))
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("session-qualified"), "{refusal}");
     }
 
     #[test]

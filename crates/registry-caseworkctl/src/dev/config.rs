@@ -375,9 +375,14 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     ] {
         private::directory(&root.join(directory))?;
     }
+    let borrowed = !state.sources.is_empty();
     let mut local_clients = Vec::new();
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
+        private::directory(&directory)?;
+        if borrowed {
+            continue;
+        }
         let public = keypair(&directory)?;
         private::create(&directory.join("client-id"), client.id.as_bytes())?;
         local_clients.push(registry_thunderid_tooling::local::LocalClient {
@@ -390,21 +395,23 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     }
     // Stable teaching subjects are qualified by the exact local issuer URL.
     // The container label separately binds the randomly owned dev session.
-    let mut description = registry_thunderid_tooling::local::local_description(
-        registry_thunderid_tooling::description::SessionIdentity {
-            label: format!("casework-dev-{}", state.owner),
-            id: "casework-local".into(),
-        },
-        state.issuer_port,
-        root.join("issuer"),
-        state.audience(),
-        local_clients,
-    )?;
-    if let Some(integrations) = &clients.integrations {
-        let policy = crate::project::load_and_check_policy(&state.project)?;
-        integrations.prepare(root, state, &mut description, &policy)?;
+    if !borrowed {
+        let mut description = registry_thunderid_tooling::local::local_description(
+            registry_thunderid_tooling::description::SessionIdentity {
+                label: format!("casework-dev-{}", state.owner),
+                id: "casework-local".into(),
+            },
+            state.issuer_port,
+            root.join("issuer"),
+            state.audience(),
+            local_clients,
+        )?;
+        if let Some(integrations) = &clients.integrations {
+            let policy = crate::project::load_and_check_policy(&state.project)?;
+            integrations.prepare(root, state, &mut description, &policy)?;
+        }
+        registry_thunderid_tooling::render::render(&description)?;
     }
-    registry_thunderid_tooling::render::render(&description)?;
     private::create(
         &root.join("secrets/casework-audit-key"),
         hex_secret()?.as_bytes(),
@@ -469,11 +476,13 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    let mut operator = operator(state);
-    if let Some(integrations) = &clients.integrations {
-        integrations.operator(state, clients, &mut operator)?;
+    if !borrowed {
+        let mut operator = operator(state);
+        if let Some(integrations) = &clients.integrations {
+            integrations.operator(state, clients, &mut operator)?;
+        }
+        write_yaml(&root.join("operator.yaml"), &operator)?;
     }
-    write_yaml(&root.join("operator.yaml"), &operator)?;
     Ok(())
 }
 
@@ -484,6 +493,25 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
 /// policy the reader's `caseworkctl check` reads.
 pub(super) fn operator(state: &State) -> Value {
     let root = state.root();
+    let sources = state
+        .sources
+        .iter()
+        .filter_map(|(id, source)| {
+            source.binding.as_ref().map(|binding| (id.clone(), json!({
+        "baseUrl": binding.breg_url,
+        "readerProfile": "casework-reader",
+        "tokenEndpoint": binding.token_endpoint,
+        "clientAssertionAudience": state.issuer_origin(),
+        "resource": binding.audience,
+        "scopes": ["casework:source-reader"],
+        "clientIdRef": format!("secret:file/{id}-reader-client-id"),
+        "clientAssertionKeyRef": format!("secret:file/{id}-reader-assertion-key.jwk"),
+        "webhookSecretRef": format!("secret:file/{id}-webhook-key"),
+        "eventSource": binding.event_source,
+        "reconciliationIntervalMilliseconds": 5000
+    })))
+        })
+        .collect::<serde_json::Map<_, _>>();
     json!({
         "apiVersion": registry_casework::RUNTIME_CONFIG_API_VERSION,
         "kind": registry_casework::RUNTIME_CONFIG_KIND,
@@ -513,7 +541,7 @@ pub(super) fn operator(state: &State) -> Value {
             "path": root.join("audit/casework.ndjson"),
             "hashKeyRef": "secret:file/casework-audit-key"
         },
-        "sources": {}
+        "sources": sources
     })
 }
 

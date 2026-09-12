@@ -865,6 +865,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(first, changed_cadence);
+    }
 
     #[test]
     fn source_token_authority_is_explicit_bounded_and_part_of_generation() {

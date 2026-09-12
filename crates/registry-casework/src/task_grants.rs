@@ -620,8 +620,7 @@ impl crate::CaseworkService {
             Err(
                 registry_casework_core::SourceAdapterError::Concealed
                 | registry_casework_core::SourceAdapterError::Denied
-                | registry_casework_core::SourceAdapterError::BindingMoved
-                | registry_casework_core::SourceAdapterError::DefinitiveRefusal,
+                | registry_casework_core::SourceAdapterError::BindingMoved,
             ) => false,
             Err(error) => return Err(error.into()),
         };
