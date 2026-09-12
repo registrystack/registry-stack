@@ -142,11 +142,6 @@ jobs:
       - name: Test advisory baseline exposure policy
         run: python3 -m unittest release/scripts/test_check_advisory_baselines.py
 
-      - name: Test Mint demonstration support scripts
-        run: |
-          python3 -m unittest discover \
-            --start-directory crates/registry-mint/demo/support
-
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04
@@ -582,6 +577,8 @@ jobs:
         run: products/relay-v2/scripts/check-authoring-schema.sh
 
       - name: Relay V2 coequal HTTP journeys
+        env:
+          RELAY_V2_STOCK_ISSUER: "1"
         run: products/relay-v2/scripts/test-http.sh
 
       - name: Relay V2 tutorial reader gate
@@ -779,6 +776,17 @@ jobs:
         env:
           BREG_POSTGRES_LANE: ${{ matrix.lane }}
         run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
+
+      - name: Casework task approval through stock issuer and BReg
+        if: matrix.lane == 'postgres'
+        shell: bash
+        run: |
+          set -euo pipefail
+          CASEWORK_ASSIGNMENT_TEST_DATABASE_URL="${BREG_TEST_DATABASE_URL}" \
+            cargo test --locked --profile ci -p registry-casework \
+              --features postgres-test --lib \
+              approved_casework_task_exchanges_on_stock_thunderid_and_revokes_breg_writes \
+              -- --ignored
 
       - name: Base Registry Engine PostgreSQL TLS proof
         if: matrix.lane == 'contracts'
@@ -1108,7 +1116,7 @@ jobs:
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-evidence -p registry-evidencectl \
-            -p registry-evidence-oid4vci -p registry-mint
+            -p registry-evidence-oid4vci
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
             cargo test --locked --profile ci \
             -p registry-evidence-oid4vci --test inji_interoperability --no-run
@@ -1167,7 +1175,6 @@ jobs:
         shell: bash
         env:
           EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
-          MINT_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/mint
         run: |
           set -euo pipefail
           CARGO_TARGET_DIR="target/evidence-tutorial-source" \
@@ -1175,23 +1182,17 @@ jobs:
             -p registry-evidencectl --test dev_lifecycle -- \
             --ignored --test-threads=1
 
-      - name: Execute the Evidence tutorials in a clean container
+      - name: Execute the Evidence tutorials with the stock issuer
         shell: bash
+        env:
+          EVIDENCE_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence
+          EVIDENCECTL_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidencectl
+          EVIDENCE_OID4VCI_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/evidence-oid4vci
+          EVIDENCE_OID4VCI_INTEROP_TEST_BIN: ${{ github.workspace }}/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test
         run: |
           set -euo pipefail
-          # The image is the repository's pinned release-builder digest, used
-          # here only as a clean Debian userland: the gate exercises a shell
-          # and coreutils, and the toolset binaries are mounted in prebuilt.
-          docker run --rm \
-            --mount "type=bind,src=${PWD},dst=/work,readonly" \
-            --env EVIDENCE_BIN=/work/target/evidence-tutorial-source/ci/evidence \
-            --env EVIDENCECTL_BIN=/work/target/evidence-tutorial-source/ci/evidencectl \
-            --env EVIDENCE_OID4VCI_BIN=/work/target/evidence-tutorial-source/ci/evidence-oid4vci \
-            --env EVIDENCE_OID4VCI_INTEROP_TEST_BIN=/work/target/evidence-tutorial-source/ci/inji-oid4vci-interop-test \
-            --env MINT_BIN=/work/target/evidence-tutorial-source/ci/mint \
-            --env "REGISTRY_CLIENT_PY_WHEEL=${TUTORIAL_CLIENT_WHEEL}" \
-            rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 \
-            bash /work/docs/site/scripts/check-evidence-tutorials.sh
+          REGISTRY_CLIENT_PY_WHEEL="${GITHUB_WORKSPACE}/${TUTORIAL_CLIENT_WHEEL#/work/}" \
+            bash docs/site/scripts/check-evidence-tutorials.sh
 
   breg-tutorial:
     name: Base Registry Engine tutorial from source
@@ -1242,7 +1243,7 @@ jobs:
           CARGO_TARGET_DIR="target/breg-tutorial-source" \
             cargo build --locked --profile ci \
             -p registry-breg --features registry-breg/runtime \
-            -p registry-bregctl -p registry-mint --bins
+            -p registry-bregctl --bins
 
       - name: Verify native retained development lifecycle
         shell: bash
@@ -1279,7 +1280,6 @@ jobs:
         env:
           BREG_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/breg
           BREGCTL_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/bregctl
-          MINT_BIN: ${{ github.workspace }}/target/breg-tutorial-source/ci/mint
         run: |
           set -euo pipefail
           # This replay does not run in a clean read-only container the way the
@@ -1332,7 +1332,7 @@ jobs:
           set -euo pipefail
           CARGO_TARGET_DIR="target/casework-tutorial-source" \
             cargo build --locked --profile ci \
-            -p registry-casework -p registry-caseworkctl -p registry-mint --bins
+            -p registry-casework -p registry-caseworkctl --bins
 
       - name: Verify the retained local development lifecycle
         shell: bash
@@ -1349,7 +1349,6 @@ jobs:
         env:
           CASEWORK_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/casework
           CASEWORKCTL_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/caseworkctl
-          MINT_BIN: ${{ github.workspace }}/target/casework-tutorial-source/ci/mint
         run: |
           set -euo pipefail
           # The tutorial passes no port flags, and this runner listens on none

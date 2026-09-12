@@ -24,7 +24,6 @@ CORE = [
     f"discovery-{TAG}-linux-amd64",
     f"evidence-{TAG}-linux-amd64",
     f"evidencectl-{TAG}-linux-amd64",
-    f"mint-{TAG}-linux-amd64",
     f"evidence-oid4vci-{TAG}-linux-amd64",
     f"registry-manifest-{TAG}-linux-amd64",
     f"relay-{TAG}-linux-amd64",
@@ -41,8 +40,7 @@ IMAGE_SOURCES = {
     "breg": BREG[0],
     "casework": CASEWORK[0],
     "evidence": CORE[1],
-    "mint": CORE[3],
-    "relay": CORE[6],
+    "relay": CORE[5],
 }
 
 
@@ -157,7 +155,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         rosters_030, images_030 = MODULE.rosters("0.30.0")
         self.assertEqual(2, len(rosters_030["casework"]))
         self.assertEqual(
-            ["discovery", "breg", "casework", "evidence", "mint", "relay"],
+            ["discovery", "breg", "casework", "evidence", "relay"],
             [name for name, _ in images_030],
         )
 

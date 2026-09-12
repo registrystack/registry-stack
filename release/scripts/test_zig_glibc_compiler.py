@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -224,7 +225,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "target = pathlib.Path('target/release')\n"
             "target.mkdir(parents=True, exist_ok=True)\n"
             "for binary in ('registry-manifest', 'relay', 'relayctl', 'evidence', "
-            "'evidencectl', 'mint', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
+            "'evidencectl', 'evidence-oid4vci', 'discovery', 'breg', 'bregctl', "
             "'casework', 'caseworkctl'):\n"
             "    (target / binary).write_text('fixture binary\\n')\n",
             encoding="utf-8",
@@ -246,16 +247,17 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             "bin_dir = root / 'dist/bin'\n"
             "image_dir = root / 'dist/image-bin'\n"
             "parsed = tuple(int(part) for part in version.split('.'))\n"
-            "core = ['evidence', 'evidencectl', 'mint', 'evidence-oid4vci', "
+            "core = ['evidence', 'evidencectl', 'evidence-oid4vci', "
             "'registry-manifest', 'relay', 'relayctl']\n"
             "if parsed >= (0, 24, 0):\n"
             "    core.insert(0, 'discovery')\n"
             "breg = ['breg', 'bregctl'] if parsed >= (0, 26, 0) else []\n"
             "selected = (core if group in ('all', 'core') else []) + "
-            "(breg if group in ('all', 'breg') else [])\n"
+            "(breg if group in ('all', 'breg') else []) + "
+            "(['casework', 'caseworkctl'] if parsed >= (0, 30, 0) and group in ('all', 'casework') else [])\n"
             "for name in selected:\n"
             "    (bin_dir / f'{name}-{tag}-linux-amd64').write_text(name + '\\n')\n"
-            "for name in ('discovery', 'breg', 'evidence', 'mint', 'relay'):\n"
+            "for name in ('discovery', 'breg', 'casework', 'evidence', 'relay'):\n"
             "    if name in selected:\n"
             "        (image_dir / name).write_text(name + '\\n')\n",
             encoding="utf-8",
@@ -365,8 +367,6 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
                 "registry-evidence",
                 "-p",
                 "registry-evidencectl",
-                "-p",
-                "registry-mint",
                 "-p",
                 "registry-evidence-oid4vci",
             ],
@@ -522,6 +522,14 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         self.assertEqual(
             "", (shard_root / "breg/bin/SHA256SUMS").read_text(encoding="utf-8")
         )
+        # Historical recovery retains the bytes produced by the old builder.
+        legacy_bin = shard_root / "core/bin" / "mint-v0.25.0-linux-amd64"
+        legacy_bin.write_bytes(b"historical Mint fixture\n")
+        legacy_bin.chmod(0o755)
+        sums = shard_root / "core/bin/SHA256SUMS"
+        lines = sums.read_text().splitlines(keepends=True)
+        lines.insert(3, f"{hashlib.sha256(legacy_bin.read_bytes()).hexdigest()}  {legacy_bin.name}\n")
+        sums.write_text("".join(lines))
         output = self.root / "merged"
         result = subprocess.run(
             [
@@ -550,7 +558,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
     def test_merged_groups_are_byte_mode_and_inventory_equivalent_to_all(self) -> None:
         source_sha = "1" * 40
 
-        def build(group: str, version: str = "0.27.0") -> subprocess.CompletedProcess[str]:
+        def build(group: str, version: str = "0.30.0") -> subprocess.CompletedProcess[str]:
             arguments = ["bash", str(self.scripts / BINARY_RECIPE.name)]
             if group != "all":
                 arguments.extend(["--group", group])
@@ -576,7 +584,7 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
         shutil.copytree(self.root / "dist/image-bin", expected / "image-bin")
 
         shards = self.root / "shards"
-        for group in ("core", "breg"):
+        for group in ("core", "breg", "casework"):
             result = build(group)
             self.assertEqual(result.returncode, 0, result.stderr)
             destination = shards / group
@@ -590,13 +598,15 @@ class CanonicalCompilerIdentityTest(unittest.TestCase):
             [
                 str(self.scripts / "merge-release-binary-shards.py"),
                 "--version",
-                "0.27.0",
+                "0.30.0",
                 "--source-sha",
                 source_sha,
                 "--core",
                 str(shards / "core"),
                 "--breg",
                 str(shards / "breg"),
+                "--casework",
+                str(shards / "casework"),
                 "--output",
                 str(output),
                 "--builder-image",

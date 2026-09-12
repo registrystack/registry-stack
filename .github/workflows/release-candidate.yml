@@ -496,7 +496,7 @@ jobs:
             --profile minimal --target "${{ matrix.target }}"
           cargo build --release --locked \
             -p registry-relayctl -p registry-evidence -p registry-evidencectl \
-            -p registry-mint -p registry-evidence-oid4vci \
+            -p registry-evidence-oid4vci \
             --target "${{ matrix.target }}"
           IFS=. read -r release_major release_minor _release_patch \
             <<<"${{ needs.validate.outputs.version }}"
@@ -526,7 +526,7 @@ jobs:
           chmod 0755 "platform/${asset}"
           test "$("platform/${asset}" --version)" = \
             "relayctl ${{ needs.validate.outputs.version }}"
-          for evidence_binary in evidence evidencectl mint evidence-oid4vci; do
+          for evidence_binary in evidence evidencectl evidence-oid4vci; do
             asset="${evidence_binary}-${{ needs.validate.outputs.tag }}-${{ matrix.asset }}"
             cp "target/${{ matrix.target }}/release/${evidence_binary}" \
               "platform/${asset}"
@@ -1593,14 +1593,13 @@ jobs:
               sha256sum -- \
                 "breg-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 "bregctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 > SHA256SUMS
             )
             breg_install_dir="${RUNNER_TEMP}/candidate-breg-install"
             BREG_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
             BREG_INSTALL_DIR="${breg_install_dir}" \
               bash "candidate/bundle-root/${breg_installer}"
-            for breg_binary in breg bregctl mint; do
+            for breg_binary in breg bregctl; do
               observed="$("${breg_install_dir}/${breg_binary}" --version)"
               test "${observed}" = \
                 "${breg_binary} ${{ needs.validate.outputs.version }}"
@@ -1633,14 +1632,13 @@ jobs:
               sha256sum -- \
                 "casework-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 "caseworkctl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-                "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \
                 > SHA256SUMS
             )
             casework_install_dir="${RUNNER_TEMP}/candidate-casework-install"
             CASEWORK_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
             CASEWORK_INSTALL_DIR="${casework_install_dir}" \
               bash "candidate/bundle-root/${casework_installer}"
-            for casework_binary in casework caseworkctl mint; do
+            for casework_binary in casework caseworkctl; do
               observed="$("${casework_install_dir}/${casework_binary}" --version)"
               test "${observed}" = \
                 "${casework_binary} ${{ needs.validate.outputs.version }}"
@@ -1676,7 +1674,6 @@ jobs:
             sha256sum -- \
               "evidence-${{ needs.validate.outputs.tag }}-linux-amd64" \
               "evidencectl-${{ needs.validate.outputs.tag }}-linux-amd64" \
-              "mint-${{ needs.validate.outputs.tag }}-linux-amd64" \
               "evidence-oid4vci-${{ needs.validate.outputs.tag }}-linux-amd64" \
               > SHA256SUMS
           )
@@ -1684,7 +1681,7 @@ jobs:
           EVIDENCECTL_ASSET_DIR="${GITHUB_WORKSPACE}/candidate/bundle-root" \
           EVIDENCECTL_INSTALL_DIR="${evidence_install_dir}" \
             bash "candidate/bundle-root/${evidencectl_installer}"
-          for binary in evidence evidencectl mint evidence-oid4vci; do
+          for binary in evidence evidencectl evidence-oid4vci; do
             observed="$("${evidence_install_dir}/${binary}" --version)"
             test "${observed}" = \
               "${binary} ${{ needs.validate.outputs.version }}"
