@@ -529,7 +529,14 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             assert registrations == (state_root / "clients.json").read_bytes()
             settings = yaml.safe_load((project / "targets/local/settings.yaml").read_text())
             settings["governance"]["sourceConnections"]["registry"]["baseUrl"] = session["bregUrl"]
-            settings["governance"]["sourceConnections"]["registry"]["authentication"]["tokenEndpoint"] = session["tokenEndpoint"]
+            source_authentication = settings["governance"]["sourceConnections"]["registry"][
+                "authentication"
+            ]
+            source_authentication["tokenEndpoint"] = session["tokenEndpoint"]
+            source_authentication["clientAssertionAudience"] = session["clientAssertionAudience"]
+            source_authentication["audience"] = session["audience"]
+            source_authentication["resource"] = session["resource"]
+            source_authentication["scope"] = " ".join(source["scopes"])
             settings["runtime"]["bundleDirectory"] = str(candidate / "bundle")
             settings["runtime"]["secretProviders"]["file"]["root"] = str(project / "secrets")
             settings["runtime"]["auditStorage"]["path"] = str(project / "audit/evidence.jsonl")
@@ -540,6 +547,16 @@ def verify_live(workspace: Path, binaries: dict[str, Path], *, late: bool = Fals
             command("evidencectl", "source", "import", exported, "--project", project, "--target", target)
             command("evidencectl", "fixtures", "run", "--project", project, "--target", target)
             command("evidencectl", "build", "--project", project, "--target", target, "--output", candidate)
+            compiled_authentication = yaml.safe_load(
+                (candidate / "bundle/evidence.yaml").read_text()
+            )["sourceConnections"]["registry"]["authentication"]
+            assert (
+                compiled_authentication["clientAssertionAudience"]
+                == session["clientAssertionAudience"]
+            )
+            assert compiled_authentication["audience"] == session["audience"]
+            assert compiled_authentication["resource"] == session["resource"]
+            assert compiled_authentication["scope"] == " ".join(source["scopes"])
         restarted = json.loads(command("bregctl", "dev", "start", registry, "--format", "json"))
         if late:
             assert restarted["packageRevision"] != session["packageRevision"], "source needs a successor"
