@@ -16,14 +16,15 @@ use registry_casework::{
     PostgresStore, ServiceError, StoreError,
 };
 use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActorContext, AttemptState, AuthoritativeObservation,
-    BootstrapDirectoryRequest, CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole,
-    DiscoveryCursor, EphemeralCredential, EventRequest, ExecutePreparedRequest, InboxPolicy,
-    InboxView, IssuerPrincipal, OccurrenceKind, OccurrenceState, OperationName, PageStatus,
-    PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, RecoveryEvidence, SourceAdapter,
-    SourceAdapterError, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
-    SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER, CASEWORK_API_VERSION, CASEWORK_KIND,
-    CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER, IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
+    standalone_decision_starter_kind, AccessProfile, ActiveSubjectsPage, ActorContext,
+    AttemptState, AuthoritativeObservation, BootstrapDirectoryRequest, CallerSubjectView,
+    CaseworkIdentity, CaseworkProject, CaseworkRole, DiscoveryCursor, EphemeralCredential,
+    EventRequest, ExecutePreparedRequest, InboxPolicy, InboxView, IssuerPrincipal, OccurrenceKind,
+    OccurrenceState, OperationName, PageStatus, PrepareActionRequest, PreparedSourceAttempt,
+    QueuePolicy, RecoveryEvidence, SourceAdapter, SourceAdapterError, SourceBinding, SourcePolicy,
+    SourceReceipt, SourceRequestPolicy, SubjectRef, TransitionHint, ATTEMPT_REFERENCE_HEADER,
+    CASEWORK_API_VERSION, CASEWORK_KIND, CASEWORK_PROFILE_HEADER, IDEMPOTENCY_KEY_HEADER,
+    IF_MATCH_HEADER, SOURCE_PROFILE_HEADER,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
@@ -3271,16 +3272,16 @@ async fn http_authentication_and_directory_authority_are_enforced() {
         MockSource::with_successful_action(item_subject, CallerRead::Visible("authorized"));
     let project = project(policy(10, 1_000));
     let service = CaseworkService::new(
-        store,
+        store.clone(),
         project.clone(),
         [Arc::new(source) as Arc<dyn SourceAdapter>],
     )
     .unwrap();
-    let authenticator = Arc::new(authenticator(&project));
+    let casework_authenticator = Arc::new(authenticator(&project));
     let app = router(HttpState {
         service: service.clone(),
-        authenticator,
-        project: Arc::new(project),
+        authenticator: casework_authenticator,
+        project: Arc::new(project.clone()),
     });
 
     let bootstrap = authenticated_request(
@@ -3331,6 +3332,39 @@ async fn http_authentication_and_directory_authority_are_enforced() {
     assert!(problem["detail"]
         .as_str()
         .is_some_and(|detail| detail.contains("Registry-Source-Profile")));
+
+    let mut mixed_project = project.clone();
+    let mut hosted_kind = standalone_decision_starter_kind();
+    hosted_kind.queue = QUEUE.to_owned();
+    assert!(!hosted_kind
+        .deciding_profiles
+        .iter()
+        .any(|profile| profile == "supervisor"));
+    mixed_project.hosted_kinds.push(hosted_kind);
+    let mixed_service = CaseworkService::new(
+        store,
+        mixed_project.clone(),
+        [Arc::new(MockSource::with_reads([])) as Arc<dyn SourceAdapter>],
+    )
+    .unwrap();
+    let mixed_app = router(HttpState {
+        service: mixed_service,
+        authenticator: Arc::new(authenticator(&mixed_project)),
+        project: Arc::new(mixed_project),
+    });
+    let hosted_supervisor = authenticated_request(
+        "GET",
+        "/v1/work-items?view=my_teams",
+        &access_token("supervisor"),
+        "supervisor",
+        json!(null),
+        &[],
+    );
+    let response = mixed_app.oneshot(hosted_supervisor).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let page = response_body(response).await;
+    assert_eq!(page["items"], json!([]));
+    assert_eq!(page["status"], "complete");
 
     let next = authenticated_request(
         "GET",

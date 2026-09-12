@@ -397,11 +397,15 @@ async fn list_items(
     if source_profile.is_none()
         && matches!(actor.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
         && !state.project.sources.is_empty()
-        && !state.project.hosted_kinds.iter().any(|kind| {
-            kind.deciding_profiles
-                .iter()
-                .any(|profile| profile == &actor.profile_id)
-        })
+        && match actor.role {
+            CaseworkRole::Staff => !state.project.hosted_kinds.iter().any(|kind| {
+                kind.deciding_profiles
+                    .iter()
+                    .any(|profile| profile == &actor.profile_id)
+            }),
+            CaseworkRole::Supervisor => state.project.hosted_kinds.is_empty(),
+            _ => false,
+        }
     {
         return Err(HttpError::SourceProfileRequired);
     }

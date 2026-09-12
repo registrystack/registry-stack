@@ -12,6 +12,7 @@ use std::process::{Command, Stdio};
 const MAX_PROVIDER_OUTPUT: usize = 2 * 1024 * 1024;
 // Keep the generated local teaching identities within bregctl's closed v1
 // dev-client format before source add offers to write them.
+const MAX_BREG_DEV_CLIENTS: usize = 32;
 const MAX_BREG_DEV_CLIENT_SCOPES: usize = 32;
 const MAX_BREG_DEV_CLIENT_CLAIMS: usize = 32;
 
@@ -843,6 +844,9 @@ fn apply_dev_clients_candidate(root: &mut Value, clients: &[Value]) -> Result<Va
         }
         changes.push(json!({"file":"dev-clients.yaml","path":format!("/clients/{id}"),"operation":"ensure_exact"}));
     }
+    if existing.len() > MAX_BREG_DEV_CLIENTS {
+        bail!("merged BReg dev-clients.yaml exceeds the local clients v1 32-client bound");
+    }
     Ok(Value::Array(changes))
 }
 
@@ -1305,6 +1309,33 @@ mod tests {
                 "staff"
             ]
         );
+    }
+
+    #[test]
+    fn dev_clients_plan_refuses_a_merged_total_over_the_breg_client_bound() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        crate::project::init(&project, "professional-review").unwrap();
+        let registry = tempfile::tempdir().unwrap();
+        let existing = (0..MAX_BREG_DEV_CLIENTS - 2)
+            .map(|index| {
+                json!({
+                    "id": format!("existing-{index}"),
+                    "accessProfiles": [],
+                    "scopes": ["existing:read"],
+                    "claims": {}
+                })
+            })
+            .collect::<Vec<_>>();
+        let original = serde_json::to_vec(&json!({"version": 1, "clients": existing})).unwrap();
+        let path = registry.path().join("dev-clients.yaml");
+        fs::write(&path, &original).unwrap();
+        let (authored, request) = reviewer_fixture();
+
+        let error = plan_breg_dev_clients(registry.path(), &project, &authored, &request)
+            .expect_err("the merged local client count must be bounded");
+        assert!(format!("{error:#}").contains("32-client bound"));
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 
     #[test]
