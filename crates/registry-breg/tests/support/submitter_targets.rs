@@ -4,11 +4,30 @@ fn quote(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
 }
 
-fn starter() -> registry_breg::CompiledRegistry {
-    let project = parse_project_json(include_bytes!(
+fn starter_source() -> Value {
+    let mut source: Value = serde_json::from_slice(include_bytes!(
         "../../../../products/breg/starters/professional-licences/core/registry.yaml"
     ))
     .expect("starter parses");
+    let reviewer = source["accessProfiles"]
+        .as_array_mut()
+        .expect("starter access profiles")
+        .iter_mut()
+        .find(|profile| profile["id"] == "reviewer")
+        .expect("starter reviewer profile")
+        .as_object_mut()
+        .expect("reviewer profile is an object");
+    // This module injects claims after token verification. Contextual actor and
+    // client admission has its own authentication tests; these cases isolate
+    // current target predicates, locks, replay, and request atomicity.
+    reviewer.remove("actorKind");
+    reviewer.remove("requesterClients");
+    source
+}
+
+fn starter() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(&serde_json::to_vec(&starter_source()).unwrap())
+        .expect("starter parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("holder target admission compiles")
 }
@@ -332,10 +351,7 @@ async fn native_reference_submitter_admission_is_live_and_atomic() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn review_snapshots_require_current_target_authority() {
-    let mut source: Value = serde_json::from_slice(include_bytes!(
-        "../../../../products/breg/starters/professional-licences/core/registry.yaml"
-    ))
-    .unwrap();
+    let mut source = starter_source();
     let reviewer = source["accessProfiles"]
         .as_array_mut()
         .unwrap()

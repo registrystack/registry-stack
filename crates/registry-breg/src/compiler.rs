@@ -1608,7 +1608,7 @@ fn expand_project_access(
                 "a requester client must be a bounded non-whitespace identifier",
             ));
         }
-        if profile.actor_kind.is_some() != !profile.requester_clients.is_empty() {
+        if profile.actor_kind.is_some() == profile.requester_clients.is_empty() {
             errors.push(Diagnostic::error(
                 "access_profile.actor_client.binding_required",
                 "project.accessProfiles[]",
