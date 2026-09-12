@@ -1187,7 +1187,7 @@ def task_schemas() -> dict:
     uuid = {"type":"string", "format":"uuid"}
     subjects = {"type":"object", "maxProperties":32, "additionalProperties":{"type":["string","integer","boolean"]}}
     permission = obj({"collection":text, "operations":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":text}}, ["collection","operations"])
-    common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds")}
+    common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "scopes":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[\x21\x23-\x29\x2b-\x5b\x5d-\x7e]+$"}}, "purpose":text, "bounds":ref("TaskGrantBounds")}
     preview = {"id":text, "version":text, "label":text, **common, "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
     template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting_applicant","waiting_application"]}}}
     template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
@@ -1561,7 +1561,7 @@ def document(contract: dict) -> dict:
     })
     for path in ["/v1/task-grants/{grant_id}/assertion", "/v1/task-grants/{grant_id}/status"]:
         for operation_value in paths[path].values():
-            operation_value["parameters"] = [p for p in operation_value["parameters"] if p.get("name") != "registry-casework-profile"]
+            operation_value["parameters"] = [p for p in operation_value["parameters"] if p.get("name", "").lower() != "registry-casework-profile"]
     apply_operation_contract(paths, contract, catalog)
     apply_hosted_validation_headers(paths)
     result = {

@@ -14,13 +14,15 @@ Add `taskTemplates` to the Casework project. Each template declares:
 - `eligibleTeams`, human Staff/Supervisor `eligibleProfiles`, `source`,
   `itemKinds`, and eligible `itemStates`.
 - Exact `agent: {issuer, subject}`, OAuth `client`, one absolute `resource`,
-  and `purpose`.
+  and `purpose`, plus explicit OAuth `scopes` for that resource.
 - `bounds`, either `{type: evidence, requirement: ...}` or
   `{type: breg, permissions: [{collection: ..., operations: [...]}]}`.
 - `subjects`, mapping token identity keys to governed source logical fields.
 - `lifetimeSeconds`, no more than 900 seconds.
 
-Use exact product operation names. Wildcards and duplicate bounds are refused.
+Scopes are immutable approved authorization, not inferred from product operations.
+The assertion includes those scopes, and stock token exchange only accepts a
+requested subset. Use exact product operation names. Wildcards and duplicate bounds are refused.
 Required source fields must be disclosed to the approving human and exposed to
 the configured service reader for later checks. Callers cannot supply subject
 values. Changing a template requires a new version. Retiring a version
