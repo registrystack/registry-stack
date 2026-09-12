@@ -162,8 +162,9 @@ export function applyDocsetRefs(repoManifest, docset, { requireAllActive = true 
   if (!repoManifest?.repos || typeof repoManifest.repos !== 'object') {
     throw new Error('repo-docs.yaml must contain a top-level repos map');
   }
-  const activeRepos = Object.entries(repoManifest.repos).filter(([, repo]) => {
-    return Array.isArray(repo.docs) && repo.docs.length > 0;
+  const activeRepos = Object.entries(repoManifest.repos).filter(([repoId, repo]) => {
+    return (Array.isArray(repo.docs) && repo.docs.length > 0) ||
+      (repo.openapi && docset.products[repoId]);
   });
 
   for (const [repoId, repo] of activeRepos) {
