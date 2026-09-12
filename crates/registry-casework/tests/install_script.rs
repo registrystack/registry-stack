@@ -420,7 +420,11 @@ exec /bin/mv "${arguments[@]}"
             self.install_dir.join(".casework-current"),
         )
         .unwrap();
-        fs::write(self.install_dir.join("caseworkctl"), "caseworkctl previous binary\n").unwrap();
+        fs::write(
+            self.install_dir.join("caseworkctl"),
+            "caseworkctl previous binary\n",
+        )
+        .unwrap();
     }
 
     /// An existing Casework toolset beside a retired Mint command owned by

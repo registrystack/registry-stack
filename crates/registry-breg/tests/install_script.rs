@@ -318,7 +318,11 @@ exec /bin/mv "${arguments[@]}"
             self.install_dir.join(".breg-current"),
         )
         .unwrap();
-        fs::write(self.install_dir.join("bregctl"), "bregctl previous binary\n").unwrap();
+        fs::write(
+            self.install_dir.join("bregctl"),
+            "bregctl previous binary\n",
+        )
+        .unwrap();
     }
 
     fn command(&self) -> Command {

@@ -111,7 +111,6 @@ pub struct PrepareArgs {
 
     #[arg(long, hide = true)]
     evidence_bin: Option<PathBuf>,
-
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum, Deserialize, Serialize)]
