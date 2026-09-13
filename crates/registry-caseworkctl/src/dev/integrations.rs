@@ -186,10 +186,34 @@ impl Integrations {
         &self,
         root: &Path,
         state: &State,
-        description: &mut IssuerDescription,
+        mut description: Option<&mut IssuerDescription>,
         policy: &CaseworkProject,
     ) -> Result<()> {
         self.validate_session(state, policy)?;
+        if let (Some(authority), Some(owner_root)) =
+            (&self.task_authority, super::borrowed_issuer(state)?)
+        {
+            let owner_clients: Value = serde_json::from_slice(&private::read(
+                &owner_root.join("clients.json"),
+                super::MAX_BYTES,
+            )?)?;
+            let expected_jwks = format!(
+                "http://host.docker.internal:{}/oauth2/jwks",
+                authority.jwks_port
+            );
+            let registered = owner_clients["issuer"]["exchangeIssuers"]
+                .as_array()
+                .is_some_and(|entries| {
+                    entries.iter().any(|entry| {
+                        entry["issuer"] == authority.issuer
+                            && entry["jwksEndpoint"] == expected_jwks
+                            && entry["mapping"] == "institutional_grant"
+                    })
+                });
+            if !registered {
+                bail!("shared issuer owner must pre-register the exact Casework task authority connection");
+            }
+        }
         for (name, path) in &self.secret_files {
             let bytes = zeroize::Zeroizing::new(private::read(path, 64 * 1024)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
@@ -206,7 +230,8 @@ impl Integrations {
                 64 * 1024,
             )?);
             private::create(&root.join("secrets/task-authority-signing-key"), &key)?;
-            description.exchange_issuers.push(ExchangeIssuer {
+            if let Some(description) = description.as_deref_mut() {
+                description.exchange_issuers.push(ExchangeIssuer {
                 id: local::agent_id("casework-authority", &authority.issuer),
                 name: "Casework task authority".into(),
                 issuer: authority.issuer.clone(),
@@ -214,12 +239,40 @@ impl Integrations {
                     "http://host.docker.internal:{}/oauth2/jwks",
                     authority.jwks_port
                 ),
+                mapping:
+                    registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
             });
+            }
         }
         for client in &self.service_clients {
             let directory = root.join("credentials").join(&client.id);
-            let public = config::keypair(&directory)?;
-            private::create(&directory.join("client-id"), client.id.as_bytes())?;
+            let mut attributes = client.claims.clone();
+            attributes.insert(
+                "registry_actor_kind".into(),
+                json!(if client.task_exchange {
+                    "agent"
+                } else {
+                    "service"
+                }),
+            );
+            let resource = client.resource.clone().unwrap_or_else(|| state.audience());
+            let public = if state.issuer_project.is_some() {
+                private::directory(&directory)?;
+                config::borrow_client(
+                    &directory,
+                    state,
+                    &client.id,
+                    &client.scopes,
+                    &json!(attributes),
+                    &resource,
+                    client.task_exchange,
+                )?;
+                serde_json::from_slice(&private::read(&directory.join("public.jwk"), 4096)?)?
+            } else {
+                let public = config::keypair(&directory)?;
+                private::create(&directory.join("client-id"), client.id.as_bytes())?;
+                public
+            };
             private::create(
                 &root
                     .join("secrets")
@@ -236,49 +289,43 @@ impl Integrations {
                     .join(format!("service-{}-key", client.id)),
                 &key,
             )?;
-            let resource = client.resource.clone().unwrap_or_else(|| state.audience());
-            let server = local::declare_resource(description, &resource, &client.scopes)?;
-            let mut attributes = client.claims.clone();
-            attributes.insert(
-                "registry_actor_kind".into(),
-                json!(if client.task_exchange {
-                    "agent"
-                } else {
-                    "service"
-                }),
-            );
-            for name in attributes.keys() {
-                if !description.schema_attributes.contains(name) {
-                    description.schema_attributes.push(name.clone());
+            if let Some(description) = description.as_deref_mut() {
+                let server = local::declare_resource(description, &resource, &client.scopes)?;
+                for name in attributes.keys() {
+                    if !description.schema_attributes.contains(name) {
+                        description.schema_attributes.push(name.clone());
+                    }
                 }
+                let agent = config::principal(&client.id);
+                description.roles.push(Role {
+                    id: local::agent_id("casework-service-role", &client.id),
+                    name: format!("Local {}", client.id),
+                    description: "Explicit local service permissions".into(),
+                    permissions: vec![(server.clone(), client.scopes.clone())],
+                    assigned_agents: vec![agent.clone()],
+                });
+                description.machine_clients.push(MachineClient {
+                    agent_id: agent,
+                    name: format!("Local {}", client.id),
+                    description: "Explicit local service client".into(),
+                    client_id: client.id.clone(),
+                    public_jwks: json!({"keys":[public]}).to_string(),
+                    token_attributes: attributes.keys().cloned().collect(),
+                    attributes,
+                    access_token_lifetime_seconds: 300,
+                    token_exchange: client.task_exchange.then(|| TokenExchangeClient {
+                        assertion_resource_server_id: server,
+                        assertion_scope: "casework:grants:assert".into(),
+                    }),
+                });
             }
-            let agent = config::principal(&client.id);
-            description.roles.push(Role {
-                id: local::agent_id("casework-service-role", &client.id),
-                name: format!("Local {}", client.id),
-                description: "Explicit local service permissions".into(),
-                permissions: vec![(server.clone(), client.scopes.clone())],
-                assigned_agents: vec![agent.clone()],
-            });
-            description.machine_clients.push(MachineClient {
-                agent_id: agent,
-                name: format!("Local {}", client.id),
-                description: "Explicit local service client".into(),
-                client_id: client.id.clone(),
-                public_jwks: json!({"keys":[public]}).to_string(),
-                token_attributes: attributes.keys().cloned().collect(),
-                attributes,
-                access_token_lifetime_seconds: 300,
-                token_exchange: client.task_exchange.then(|| TokenExchangeClient {
-                    assertion_resource_server_id: server,
-                    assertion_scope: "casework:grants:assert".into(),
-                }),
-            });
         }
-        for template in &policy.task_templates {
-            local::declare_resource(description, &template.resource, &template.scopes)?;
+        if let Some(description) = description.as_deref_mut() {
+            for template in &policy.task_templates {
+                local::declare_resource(description, &template.resource, &template.scopes)?;
+            }
+            description.validate()?;
         }
-        description.validate()?;
         Ok(())
     }
 

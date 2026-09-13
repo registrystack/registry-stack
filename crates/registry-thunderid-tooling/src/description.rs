@@ -48,6 +48,9 @@ pub struct IssuerDescription {
     pub roles: Vec<Role>,
     pub machine_clients: Vec<MachineClient>,
     pub compatibility_clients: Vec<CompatibilityClient>,
+    /// Explicit synthetic browser sign-in resources for a local session.
+    pub interactive_applications: Vec<InteractiveApplication>,
+    pub synthetic_users: Vec<SyntheticUser>,
     /// External signed-assertion issuers. Every entry has the same protected issuer mapping.
     pub exchange_issuers: Vec<ExchangeIssuer>,
     /// Optional string attributes appended to the default agent schema so
@@ -152,6 +155,14 @@ pub struct ExchangeIssuer {
     pub name: String,
     pub issuer: String,
     pub jwks_endpoint: String,
+    /// First-party assertions do not acquire institutional grant provenance.
+    pub mapping: ExchangeMapping,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ExchangeMapping {
+    InstitutionalGrant,
+    FirstParty,
 }
 
 /// Closed exchange-token profile. The issuer derives source issuer from verified
@@ -188,6 +199,28 @@ pub struct CompatibilityClient {
     pub secret_file: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+pub struct InteractiveApplication {
+    pub id: String,
+    pub client_id: String,
+    /// Relative owner-only file inside the issuer state root.
+    pub client_secret_file: PathBuf,
+    pub origin: String,
+    pub redirect_uris: Vec<String>,
+    pub audience: String,
+    pub token_attributes: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyntheticUser {
+    pub id: String,
+    pub username: String,
+    pub email: String,
+    /// Relative owner-only file inside the issuer state root.
+    pub password_file: PathBuf,
+    pub attributes: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ClientSecretMethod {
     Basic,
@@ -222,6 +255,25 @@ pub(crate) fn valid_uuid(value: &str) -> bool {
 /// server will see: RFC 6749 scope-token bytes, which `:` belongs to.
 fn valid_permission(value: &str) -> bool {
     registry_platform_httputil::valid_scope_token(value)
+}
+
+fn private_file_name(path: &std::path::Path) -> bool {
+    !path.as_os_str().is_empty()
+        && !path.is_absolute()
+        && path
+            .components()
+            .all(|part| matches!(part, std::path::Component::Normal(_)))
+}
+
+fn local_url(value: &str) -> bool {
+    url::Url::parse(value).is_ok_and(|url| {
+        url.scheme() == "http"
+            && url.host_str() == Some("127.0.0.1")
+            && url.port().is_some_and(|port| port != 0)
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.fragment().is_none()
+    })
 }
 
 impl IssuerDescription {
@@ -310,6 +362,65 @@ impl IssuerDescription {
                 return refuse(
                     "resource parents must name a distinct resource handle in the same server",
                 );
+            }
+        }
+        if self.interactive_applications.len() > 8 || self.synthetic_users.len() > 32 {
+            return refuse("local browser applications or synthetic users exceed their bounds");
+        }
+        if !self.synthetic_users.is_empty() && self.interactive_applications.is_empty() {
+            return refuse("synthetic users require a local browser application");
+        }
+        let mut browser_ids = BTreeSet::new();
+        let mut browser_clients = BTreeSet::new();
+        for app in &self.interactive_applications {
+            if !valid_uuid(&app.id)
+                || !browser_ids.insert(&app.id)
+                || !bounded(&app.client_id, 128)
+                || !browser_clients.insert(&app.client_id)
+                || !private_file_name(&app.client_secret_file)
+                || !local_url(&app.origin)
+                || !identifiers.contains(&app.audience)
+                || app.redirect_uris.is_empty()
+                || app.redirect_uris.len() > 8
+                || app.redirect_uris.iter().any(|uri| !local_url(uri))
+                || app.token_attributes.is_empty()
+                || app.token_attributes.len() > 16
+                || app.token_attributes.iter().any(|name| {
+                    protected_attribute(name)
+                        || !bounded(name, 128)
+                        || !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                })
+            {
+                return refuse("local browser application identity, audience, redirect or attributes are invalid");
+            }
+        }
+        let mut usernames = BTreeSet::new();
+        let mut user_ids = BTreeSet::new();
+        for user in &self.synthetic_users {
+            if !valid_uuid(&user.id)
+                || !user_ids.insert(&user.id)
+                || !bounded(&user.username, 64)
+                || !user
+                    .username
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                || !usernames.insert(&user.username)
+                || !bounded(&user.email, 128)
+                || !user.email.ends_with(".test")
+                || !private_file_name(&user.password_file)
+                || user.attributes.len() > 16
+                || user.attributes.iter().any(|(name, value)| {
+                    protected_attribute(name)
+                        || !bounded(name, 128)
+                        || !name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                        || !bounded(value, 512)
+                })
+            {
+                return refuse("synthetic user identity or attributes are invalid");
             }
         }
         if self.roles.is_empty() {
@@ -455,6 +566,12 @@ impl IssuerDescription {
         if client_ids.len() != self.machine_clients.len() + self.compatibility_clients.len() {
             return refuse("client ids are distinct across every registration");
         }
+        if browser_clients
+            .iter()
+            .any(|client| client_ids.contains(client.as_str()))
+        {
+            return refuse("browser and machine client ids must be distinct");
+        }
         let mut role_ids = BTreeSet::new();
         for role in &self.roles {
             if !valid_uuid(&role.id) || !role_ids.insert(role.id.clone()) {
@@ -537,6 +654,7 @@ mod tests {
             name: "Synthetic Authority".into(),
             issuer: "https://authority.example".into(),
             jwks_endpoint: "https://authority.example/jwks".into(),
+            mapping: ExchangeMapping::InstitutionalGrant,
         });
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),

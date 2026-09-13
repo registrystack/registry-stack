@@ -13,6 +13,8 @@ fn session(project: &Path) -> State {
         status: Status::Stopped,
         casework_port: 8092,
         issuer_port: 8093,
+        issuer_project: None,
+        issuer_owner: None,
         database_port: 55433,
         clients_file: project.join("dev-clients.yaml"),
         source_digest: String::new(),
@@ -844,6 +846,7 @@ fn a_stopped_session_retains_an_explicit_equivalent_clients_file() {
         clients_file: Some(replacement.clone()),
         casework_port: None,
         issuer_port: None,
+        issuer_project: None,
         database_port: None,
         source_project: Vec::new(),
         casework_bin: Some(project.join("missing-casework")),
@@ -905,6 +908,7 @@ fn an_active_session_refuses_an_equivalent_clients_file_at_a_new_path() {
             clients_file: Some(replacement),
             casework_port: None,
             issuer_port: None,
+            issuer_project: None,
             database_port: None,
             source_project: Vec::new(),
             casework_bin: None,
@@ -2716,7 +2720,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     )
     .unwrap();
     integrations
-        .prepare(&root, &state, &mut description, &policy)
+        .prepare(&root, &state, Some(&mut description), &policy)
         .unwrap();
     let agent = description
         .machine_clients
@@ -2822,6 +2826,66 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
     let mut wrong = integrations;
     wrong.sources.clear();
     assert!(wrong.validate(&clients, &policy).is_err());
+}
+
+#[test]
+fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
+    let project_temp = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(project_temp.path()).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    private::directory(&owner_root.join("credentials")).unwrap();
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&json!({
+            "version":2,"project":owner_project,"owner":owner_id,
+            "status":"ready","issuerPort":8093,"issuerProject":null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let resource = format!("urn:breg:dev:{owner_id}");
+    let scopes = vec!["casework:staff".to_owned()];
+    let claims = json!({"registry_actor_kind":"human"});
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&json!({
+            "clients":[{"id":"staff","scopes":scopes,"claims":claims}],
+            "issuer":{"clientResources":{}}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = owner_root.join("credentials/staff");
+    config::keypair(&source).unwrap();
+    private::create(&source.join("client-id"), b"staff").unwrap();
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project);
+    state.issuer_owner = Some(owner_id);
+    state.resource = Some(resource.clone());
+    let target = project.join("client");
+    private::directory(&target).unwrap();
+    config::borrow_client(&target, &state, "staff", &scopes, &claims, &resource, false).unwrap();
+    assert_eq!(
+        private::read(&target.join("assertion-key.jwk"), MAX_BYTES).unwrap(),
+        private::read(&source.join("assertion-key.jwk"), MAX_BYTES).unwrap()
+    );
+    assert!(config::borrow_client(
+        &project.join("other"),
+        &state,
+        "staff",
+        &scopes,
+        &json!({"registry_actor_kind":"service"}),
+        &resource,
+        false
+    )
+    .is_err());
 }
 
 struct RegistrySession {

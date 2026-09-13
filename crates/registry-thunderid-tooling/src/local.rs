@@ -265,6 +265,8 @@ pub fn typed_local_description(
         roles,
         machine_clients,
         compatibility_clients: vec![],
+        interactive_applications: vec![],
+        synthetic_users: vec![],
         exchange_issuers: vec![],
         schema_attributes: attributes.into_iter().collect(),
     };

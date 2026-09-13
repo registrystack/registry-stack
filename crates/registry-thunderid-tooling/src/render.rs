@@ -15,7 +15,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::description::IssuerDescription;
+use crate::description::{ExchangeMapping, IssuerDescription};
 use crate::ToolingError;
 
 /// The pinned release's default `agent_type` document for the `default`
@@ -291,14 +291,118 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "attributeConfiguration": {
                 "user_type_resolution": {"default": "registry-exchange"},
                 "user_type_attribute_mappings": [{
-                    "user_type": "registry-exchange", "attributes": [{
-                        "external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"
-                    }]
+                    "user_type": "registry-exchange", "attributes": match issuer.mapping {
+                        ExchangeMapping::InstitutionalGrant => json!([{
+                            "external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"
+                        }]),
+                        ExchangeMapping::FirstParty => json!([]),
+                    }
                 }]
             }
         });
         write_owner_only(
             &root.join("connections").join(format!("{}.yaml", issuer.id)),
+            yaml_document(&document)?.as_bytes(),
+        )?;
+    }
+
+    if !description.interactive_applications.is_empty() {
+        let mut schema = serde_json::Map::new();
+        for name in ["username", "email", "password"] {
+            schema.insert(
+                name.into(),
+                json!({
+                    "type": "string", "displayName": name,
+                    "required": name == "username" || name == "email",
+                    "unique": name == "username" || name == "email",
+                    "credential": name == "password",
+                }),
+            );
+        }
+        for name in description
+            .synthetic_users
+            .iter()
+            .flat_map(|user| user.attributes.keys())
+        {
+            schema.entry(name.clone()).or_insert_with(|| {
+                json!({
+                    "type": "string", "displayName": name,
+                })
+            });
+        }
+        let user_type = json!({
+            "resource_type": "user_type",
+            "id": "0197aaaa-0000-7000-8000-000000000010",
+            "category": "user", "name": "RegistryPerson", "ouHandle": description.organization_unit.handle,
+            "allowSelfRegistration": false,
+            "systemAttributes": {"display": "username"},
+            "schema": schema,
+        });
+        write_owner_only(
+            &root.join("user_types/registry-person.yaml"),
+            yaml_document(&user_type)?.as_bytes(),
+        )?;
+    }
+    for user in &description.synthetic_users {
+        let password = fs::read_to_string(description.state_root.join(&user.password_file))
+            .map_err(|_| ToolingError::Filesystem {
+                reason: "a synthetic user password file could not be read",
+            })?;
+        if password.trim().len() < 12 || password.trim().len() > 256 {
+            return Err(ToolingError::InvalidDescription {
+                reason: "synthetic user passwords are 12..=256 bytes",
+            });
+        }
+        let mut attributes = serde_json::Map::from_iter([
+            ("username".into(), json!(user.username)),
+            ("email".into(), json!(user.email)),
+        ]);
+        attributes.extend(
+            user.attributes
+                .iter()
+                .map(|(name, value)| (name.clone(), json!(value))),
+        );
+        let document = json!({
+            "resource_type": "user", "id": user.id, "type": "RegistryPerson",
+            "ouHandle": description.organization_unit.handle,
+            "attributes": attributes, "credentials": {"password": password.trim()},
+        });
+        write_owner_only(
+            &root.join("users").join(format!("{}.yaml", user.id)),
+            yaml_document(&document)?.as_bytes(),
+        )?;
+    }
+    for app in &description.interactive_applications {
+        let secret = fs::read_to_string(description.state_root.join(&app.client_secret_file))
+            .map_err(|_| ToolingError::Filesystem {
+                reason: "a browser application secret file could not be read",
+            })?;
+        if secret.trim().len() < 16 || secret.trim().len() > 256 {
+            return Err(ToolingError::InvalidDescription {
+                reason: "browser application secrets are 16..=256 bytes",
+            });
+        }
+        let document = json!({
+            "resource_type": "application", "id": app.id,
+            "name": app.client_id, "description": "Synthetic local browser application",
+            "type": "fullstack", "ouHandle": description.organization_unit.handle,
+            "url": app.origin,
+            "authFlowId": "01900000-0000-7000-8000-000000000068",
+            "isRegistrationFlowEnabled": false, "isRecoveryFlowEnabled": false,
+            "allowedUserTypes": ["RegistryPerson"],
+            "inboundAuthConfig": [{"type": "oauth2", "config": {
+                "clientId": app.client_id, "clientSecret": secret.trim(),
+                "redirectUris": app.redirect_uris,
+                "postLogoutRedirectUris": [app.origin],
+                "grantTypes": ["authorization_code"], "responseTypes": ["code"],
+                "tokenEndpointAuthMethod": "client_secret_post", "pkceRequired": true, "publicClient": false,
+                "token": {"accessToken": {"defaultAudience": app.audience,
+                    "userConfig": {"validityPeriod": 300, "attributes": app.token_attributes}},
+                    "idToken": {"validityPeriod": 3600, "userAttributes": app.token_attributes}},
+            }}],
+        });
+        write_owner_only(
+            &root.join("applications").join(format!("{}.yaml", app.id)),
             yaml_document(&document)?.as_bytes(),
         )?;
     }
@@ -605,6 +709,7 @@ mod tests {
             name: "Authority".into(),
             issuer: "https://authority.example".into(),
             jwks_endpoint: "https://authority.example/jwks".into(),
+            mapping: ExchangeMapping::InstitutionalGrant,
         });
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
@@ -663,6 +768,116 @@ mod tests {
             render(&description).is_err(),
             "a second render must not overwrite session resources"
         );
+        fs::remove_dir_all(&description.state_root).unwrap();
+    }
+
+    #[test]
+    fn first_party_exchange_does_not_invent_grant_provenance() {
+        use crate::description::{ExchangeIssuer, TokenExchangeClient};
+        let mut description = crate::testing::synthetic_description();
+        description.compatibility_clients.clear();
+        description.state_root = std::env::temp_dir().join(format!(
+            "registry-first-party-render-{}",
+            crate::container::random_urlsafe(16).unwrap()
+        ));
+        fs::create_dir(&description.state_root).unwrap();
+        fs::set_permissions(&description.state_root, fs::Permissions::from_mode(0o700)).unwrap();
+        description.exchange_issuers.push(ExchangeIssuer {
+            id: "0197aaaa-0000-7000-8000-0000000000d1".into(),
+            name: "Local portal".into(),
+            issuer: "http://127.0.0.1:3030".into(),
+            jwks_endpoint: "http://host.docker.internal:3030/.well-known/jwks.json".into(),
+            mapping: ExchangeMapping::FirstParty,
+        });
+        description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
+            assertion_resource_server_id: description.resource_servers[0].id.clone(),
+            assertion_scope: "evidence:invoke".into(),
+        });
+        let rendered = render(&description).unwrap();
+        let connection: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("connections/0197aaaa-0000-7000-8000-0000000000d1.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
+            json!([])
+        );
+        fs::remove_dir_all(&description.state_root).unwrap();
+    }
+
+    #[test]
+    fn synthetic_browser_resources_use_pkce_and_explicit_user_attributes() {
+        use crate::description::{InteractiveApplication, SyntheticUser};
+        let mut description = crate::testing::synthetic_description();
+        description.compatibility_clients.clear();
+        description.state_root = std::env::temp_dir().join(format!(
+            "registry-browser-render-{}",
+            crate::container::random_urlsafe(16).unwrap()
+        ));
+        fs::create_dir(&description.state_root).unwrap();
+        fs::set_permissions(&description.state_root, fs::Permissions::from_mode(0o700)).unwrap();
+        fs::create_dir(description.state_root.join("secrets")).unwrap();
+        fs::set_permissions(
+            description.state_root.join("secrets"),
+            fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
+        fs::write(
+            description.state_root.join("secrets/app"),
+            "synthetic-application-secret",
+        )
+        .unwrap();
+        fs::write(
+            description.state_root.join("secrets/user"),
+            "synthetic-user-password",
+        )
+        .unwrap();
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: "0197aaaa-0000-7000-8000-0000000000e1".into(),
+                client_id: "synthetic-browser".into(),
+                client_secret_file: "secrets/app".into(),
+                origin: "http://127.0.0.1:3000".into(),
+                redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
+                audience: description.resource_servers[0].identifier.clone(),
+                token_attributes: vec!["registry_role".into()],
+            });
+        description.synthetic_users.push(SyntheticUser {
+            id: "0197aaaa-0000-7000-8000-0000000000e2".into(),
+            username: "staff-one".into(),
+            email: "staff-one@example.test".into(),
+            password_file: "secrets/user".into(),
+            attributes: std::collections::BTreeMap::from([(
+                "registry_role".into(),
+                "staff".into(),
+            )]),
+        });
+        let rendered = render(&description).unwrap();
+        let app: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("applications/0197aaaa-0000-7000-8000-0000000000e1.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(app["inboundAuthConfig"][0]["config"]["pkceRequired"], true);
+        assert_eq!(
+            app["inboundAuthConfig"][0]["config"]["token"]["accessToken"]["userConfig"]
+                ["attributes"],
+            json!(["registry_role"])
+        );
+        assert!(rendered
+            .resources_dir
+            .join("users/0197aaaa-0000-7000-8000-0000000000e2.yaml")
+            .exists());
         fs::remove_dir_all(&description.state_root).unwrap();
     }
 }

@@ -36,11 +36,13 @@ from this command, never from hand editing.
 
 ## Institutional token exchange
 
-`IssuerDescription.exchange_issuers` registers external grant authorities as
-native `connection` resources. The connection fixes user-type resolution to an
-internal mapping label and copies the verified subject-token `iss` into
-`registry_grant_source_issuer`. Incoming claims cannot select a different
-mapping or replace that derived value. The development container loads identity
+`IssuerDescription.exchange_issuers` registers external assertion authorities
+as native `connection` resources. `InstitutionalGrant` fixes user-type
+resolution to an internal mapping label and copies the verified subject-token
+`iss` into `registry_grant_source_issuer`. Incoming claims cannot select a
+different mapping or replace that derived value. `FirstParty` carries verified
+claims without assigning institutional grant provenance, for an explicitly
+trusted application authority. The development container loads identity
 providers only from declarative resources.
 
 A machine client's `token_exchange: Some(TokenExchangeClient { ... })` enables
@@ -92,6 +94,12 @@ scope trees, per-client roles and public-key registrations for adopter CLI dev
 sessions. `local::agent_id` returns the stable native principal used to seed a
 local directory and identify the resulting token's subject. The helper refuses
 unrepresentable or ambiguous scope trees rather than rewriting permissions.
+`local::declare_resource` adds another exact audience and scope tree but never
+assigns a role. The owning CLI binds each client to its audience. The same
+description can declare browser applications and synthetic users with owner-only
+secret files, exact local redirect URIs, authorization code with PKCE, and
+short-lived access tokens. Those local identities are explicit fixtures; the
+tooling crate does not infer staff from machine clients.
 
 `LocalClient.allow_human_fixture` must be explicit when teaching fixtures need a
 human marker on a local machine token. This option neither creates production

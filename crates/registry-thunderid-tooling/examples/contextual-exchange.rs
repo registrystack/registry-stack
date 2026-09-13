@@ -228,6 +228,8 @@ fn description(
         }],
         machine_clients,
         compatibility_clients: vec![],
+        interactive_applications: vec![],
+        synthetic_users: vec![],
         schema_attributes: vec![],
         exchange_issuers: ["a", "b", "unavailable"]
             .iter()
@@ -237,6 +239,8 @@ fn description(
                 name: format!("Gate0 Authority {which}"),
                 issuer: keys.issuer(which),
                 jwks_endpoint: format!("{}/jwks", keys.issuer(which)),
+                mapping:
+                    registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
             })
             .collect(),
     }

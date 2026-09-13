@@ -141,6 +141,9 @@ struct StartArgs {
     /// Local issuer loopback port on first start (default 8091; retained for restarts).
     #[arg(long)]
     issuer_port: Option<u16>,
+    /// Ready BREG dev project that owns the shared local issuer and client registrations.
+    #[arg(long, value_name = "PROJECT")]
+    issuer_project: Option<PathBuf>,
     /// Immutable local candidate issuer image ID on first start; retained for restarts.
     #[arg(long, value_parser = candidate_issuer_image)]
     issuer_image: Option<String>,
@@ -202,6 +205,11 @@ struct State {
     status: Status,
     breg_port: u16,
     issuer_port: u16,
+    /// A separate ready BREG dev session owns this issuer and its registrations.
+    #[serde(default)]
+    issuer_project: Option<PathBuf>,
+    #[serde(default)]
+    issuer_owner: Option<String>,
     #[serde(default)]
     issuer_image: Option<String>,
     database_port: u16,
@@ -297,7 +305,10 @@ impl State {
         format!("http://127.0.0.1:{}", self.issuer_port)
     }
     fn audience(&self) -> String {
-        format!("urn:breg:dev:{}", self.owner)
+        format!(
+            "urn:breg:dev:{}",
+            self.issuer_owner.as_deref().unwrap_or(&self.owner)
+        )
     }
     fn save(&self) -> Result<()> {
         private::replace(
@@ -319,6 +330,7 @@ impl State {
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
             "bregUrl":self.breg_origin(),"issuer":self.issuer_origin(),"tokenEndpoint":format!("{}/oauth2/token",self.issuer_origin()),
+            "issuerProject":self.issuer_project,"issuerOwner":self.issuer_owner,
             "clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
@@ -470,6 +482,11 @@ fn read_state(root: &Path) -> Result<State> {
             })
         || state.root() != root
         || uuid::Uuid::parse_str(&state.owner).is_err()
+        || state.issuer_project.is_some() != state.issuer_owner.is_some()
+        || state
+            .issuer_owner
+            .as_ref()
+            .is_some_and(|owner| uuid::Uuid::parse_str(owner).is_err() || owner == &state.owner)
         || state
             .container_id
             .as_ref()
@@ -487,6 +504,27 @@ fn read_state(root: &Path) -> Result<State> {
         bail!("retained webhook receiver needs a distinct nonzero loopback port");
     }
     Ok(state)
+}
+
+/// Verify the live registration owner before borrowing its issuer or private
+/// client keys. The retained owner UUID pins restarts to one exact session.
+fn borrowed_owner(state: &State) -> Result<Option<State>> {
+    let Some(project_path) = &state.issuer_project else {
+        return Ok(None);
+    };
+    let owner_project = project(project_path)?;
+    if &owner_project == project_path && owner_project != state.project {
+        let owner_root = owner_project.join(".breg/dev");
+        let owner = read_state(&owner_root)?;
+        if owner.issuer_project.is_none()
+            && state.issuer_owner.as_deref() == Some(owner.owner.as_str())
+            && state.issuer_port == owner.issuer_port
+            && control(&owner_root, "status").is_ok_and(|status| status == "ready")
+        {
+            return Ok(Some(owner));
+        }
+    }
+    bail!("the retained issuer project is not the same ready owner session; start its BREG dev session first")
 }
 
 fn candidate_issuer_image(value: &str) -> std::result::Result<String, String> {
@@ -533,6 +571,12 @@ fn receiver_port(state: &State) -> Result<u16> {
 /// no receiver binding. Repair that incomplete local setup without touching
 /// its database, credentials, or captured source.
 fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
+    if !clients.event_destinations.is_empty() {
+        if state.webhook_port.is_some() {
+            bail!("retained inbox binding conflicts with explicit event destinations");
+        }
+        return Ok(());
+    }
     if state.webhook_port.is_some() {
         return Ok(());
     }
@@ -750,6 +794,17 @@ fn capture(project: &Path, client_bytes: &[u8]) -> Result<CapturedSource> {
 
 fn start(args: StartArgs) -> Result<Value> {
     let project = project(&args.project)?;
+    let requested_issuer = args
+        .issuer_project
+        .as_deref()
+        .map(self::project)
+        .transpose()?;
+    if requested_issuer.as_ref() == Some(&project) {
+        bail!("--issuer-project must name a separate BREG dev owner");
+    }
+    if requested_issuer.is_some() && args.issuer_image.is_some() {
+        bail!("--issuer-image belongs to the issuer owner, not a borrowing BREG session");
+    }
     let parent = parent_directory(&project)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
@@ -788,6 +843,9 @@ fn start(args: StartArgs) -> Result<Value> {
             if digest != state.source_digest
                 || args.breg_port.is_some_and(|p| p != state.breg_port)
                 || args.issuer_port.is_some_and(|p| p != state.issuer_port)
+                || requested_issuer
+                    .as_ref()
+                    .is_some_and(|path| Some(path) != state.issuer_project.as_ref())
                 || args
                     .issuer_image
                     .as_ref()
@@ -811,6 +869,7 @@ fn start(args: StartArgs) -> Result<Value> {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
+            borrowed_owner(&state)?;
             verify_outputs(&state)?;
             return state.report();
         }
@@ -824,6 +883,27 @@ fn start(args: StartArgs) -> Result<Value> {
             bail!("first dev start requires package.sequence: 1");
         }
         let previous = previous.as_ref();
+        let issuer_project = requested_issuer
+            .clone()
+            .or_else(|| previous.and_then(|state| state.issuer_project.clone()));
+        let issuer_owner = if let Some(issuer_project) = &issuer_project {
+            let owner = read_state(&issuer_project.join(".breg/dev"))?;
+            if owner.issuer_project.is_some()
+                || !matches!(owner.status, Status::Ready)
+                || !control(&owner.root(), "status").is_ok_and(|status| status == "ready")
+            {
+                bail!("--issuer-project must name a ready BREG dev issuer owner");
+            }
+            if args
+                .issuer_port
+                .is_some_and(|port| port != owner.issuer_port)
+            {
+                bail!("--issuer-port differs from the retained issuer owner port");
+            }
+            Some(owner)
+        } else {
+            None
+        };
         let mut state = State {
             version: 2,
             project: project.clone(),
@@ -835,8 +915,11 @@ fn start(args: StartArgs) -> Result<Value> {
                 .unwrap_or(8090),
             issuer_port: args
                 .issuer_port
+                .or(issuer_owner.as_ref().map(|owner| owner.issuer_port))
                 .or(previous.map(|s| s.issuer_port))
                 .unwrap_or(8091),
+            issuer_project,
+            issuer_owner: issuer_owner.as_ref().map(|owner| owner.owner.clone()),
             issuer_image: args
                 .issuer_image
                 .clone()
@@ -864,10 +947,15 @@ fn start(args: StartArgs) -> Result<Value> {
             failure: None,
         };
         ports(state.breg_port, state.issuer_port, state.database_port)?;
-        for port in [state.breg_port, state.issuer_port, state.database_port] {
+        for port in [state.breg_port, state.database_port] {
             probe(port)?;
         }
-        if !compiled.event_deliveries().deliveries.is_empty() {
+        if state.issuer_project.is_none() {
+            probe(state.issuer_port)?;
+        }
+        if !compiled.event_deliveries().deliveries.is_empty()
+            && clients.event_destinations.is_empty()
+        {
             state.webhook_port = Some(receiver_port(&state)?);
         }
         initialize(&root, &state, &clients, &files)?;
@@ -893,8 +981,12 @@ fn start(args: StartArgs) -> Result<Value> {
     // A prior supervisor may have exited without reaching cleanup. Reclaim
     // only this session's issuer before testing whether its port is free.
     stop_issuer(&docker, &state)?;
-    for port in [state.breg_port, state.issuer_port] {
+    borrowed_owner(&state)?;
+    for port in [state.breg_port] {
         probe(port)?;
+    }
+    if state.issuer_project.is_none() {
+        probe(state.issuer_port)?;
     }
     if let Some(port) = state.webhook_port {
         probe(port)?;
@@ -1086,8 +1178,11 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     let docker = executable("docker", docker_bin)?;
     stop_issuer(&docker, &state)?;
-    for port in [state.breg_port, state.issuer_port] {
+    for port in [state.breg_port] {
         probe(port)?;
+    }
+    if state.issuer_project.is_none() {
+        probe(state.issuer_port)?;
     }
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
@@ -2283,6 +2378,10 @@ async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -
 /// acquisition above.
 fn issuer(docker: &Path, state: &State, _clients: &Clients) -> Result<()> {
     let root = state.root();
+    if let Some(owner) = borrowed_owner(state)? {
+        let jwks = private::read(&owner.root().join("secrets/issuer-jwks"), MAX_BYTES)?;
+        return private::replace(&root.join("secrets/issuer-jwks"), &jwks);
+    }
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
     let image = state.issuer_image.as_deref().unwrap_or(&pin.image);
     let state_root = root.join("issuer");
@@ -2301,6 +2400,9 @@ fn issuer(docker: &Path, state: &State, _clients: &Clients) -> Result<()> {
 }
 
 fn stop_issuer(docker: &Path, state: &State) -> Result<()> {
+    if state.issuer_project.is_some() {
+        return Ok(());
+    }
     let state_root = state.root().join("issuer");
     if !state_root.join("session.json").exists() {
         return Ok(());

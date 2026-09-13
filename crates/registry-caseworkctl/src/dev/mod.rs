@@ -169,6 +169,9 @@ struct StartArgs {
     /// Local issuer loopback port on first start (default 8093; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_ISSUER_PORT")]
     issuer_port: Option<u16>,
+    /// Ready BREG dev project that owns the shared issuer registration.
+    #[arg(long, value_name = "PROJECT")]
+    issuer_project: Option<PathBuf>,
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_DATABASE_PORT")]
     database_port: Option<u16>,
@@ -231,6 +234,10 @@ struct State {
     status: Status,
     casework_port: u16,
     issuer_port: u16,
+    #[serde(default)]
+    issuer_project: Option<PathBuf>,
+    #[serde(default)]
+    issuer_owner: Option<String>,
     database_port: u16,
     clients_file: PathBuf,
     source_digest: String,
@@ -516,6 +523,11 @@ fn read_state(root: &Path) -> Result<State> {
     if state.version != 2
         || state.root() != root
         || uuid::Uuid::parse_str(&state.owner).is_err()
+        || state.issuer_project.is_some() != state.issuer_owner.is_some()
+        || state
+            .issuer_owner
+            .as_ref()
+            .is_some_and(|owner| uuid::Uuid::parse_str(owner).is_err())
         || state
             .resource
             .as_ref()
@@ -530,6 +542,32 @@ fn read_state(root: &Path) -> Result<State> {
     }
     ports(state.casework_port, state.issuer_port, state.database_port)?;
     Ok(state)
+}
+
+/// Read the exact retained BREG owner; a borrowed Casework session never
+/// manages that issuer's container or changes its client registrations.
+fn borrowed_issuer(state: &State) -> Result<Option<PathBuf>> {
+    let Some(project) = &state.issuer_project else {
+        return Ok(None);
+    };
+    let canonical = fs::canonicalize(project)?;
+    if &canonical != project || canonical == state.project {
+        bail!("the retained issuer project path changed or names this Casework project");
+    }
+    let root = canonical.join(".breg/dev");
+    private::check(&root, true)?;
+    let owner: Value =
+        serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)?;
+    if owner["version"] != 2
+        || owner["project"] != canonical.to_string_lossy().as_ref()
+        || owner["status"] != "ready"
+        || !owner["issuerProject"].is_null()
+        || owner["owner"].as_str() != state.issuer_owner.as_deref()
+        || owner["issuerPort"] != state.issuer_port
+    {
+        bail!("the retained BREG issuer owner is not the same ready session");
+    }
+    Ok(Some(root))
 }
 
 fn ports(casework: u16, issuer: u16, database: u16) -> Result<()> {
@@ -1150,6 +1188,18 @@ fn issuer_keys(issuer: &str) -> Result<Vec<u8>> {
 
 fn start(args: StartArgs) -> Result<Value> {
     let project = project(&args.project)?;
+    let requested_issuer = args
+        .issuer_project
+        .as_deref()
+        .map(fs::canonicalize)
+        .transpose()?;
+    if requested_issuer.as_ref() == Some(&project)
+        || (requested_issuer.is_some() && !args.source_project.is_empty())
+    {
+        bail!(
+            "--issuer-project needs a separate BREG owner and cannot combine with --source-project"
+        );
+    }
     let parent = parent_directory(&project)?;
     let _lock = private::lock(&parent.join("dev.lock"))?;
     let root = parent.join("dev");
@@ -1176,6 +1226,14 @@ fn start(args: StartArgs) -> Result<Value> {
         &args.source_project,
         retained_sources,
     )?;
+    if (requested_issuer.is_some()
+        || existing
+            .as_ref()
+            .is_some_and(|state| state.issuer_project.is_some()))
+        && clients.integrations.is_none()
+    {
+        bail!("--issuer-project needs explicit integrations.resource and source/task bindings in the local clients file");
+    }
     // The source pin protects the records a session retains. Once `dev stop
     // --remove` has discarded them, changed inputs start a fresh session on
     // the ports and clients file the previous one used.
@@ -1185,6 +1243,9 @@ fn start(args: StartArgs) -> Result<Value> {
             if digest != state.source_digest
                 || args.casework_port.is_some_and(|p| p != state.casework_port)
                 || args.issuer_port.is_some_and(|p| p != state.issuer_port)
+                || requested_issuer
+                    .as_ref()
+                    .is_some_and(|path| Some(path) != state.issuer_project.as_ref())
                 || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
             let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
@@ -1198,6 +1259,9 @@ fn start(args: StartArgs) -> Result<Value> {
         private::validate_tree(&root.join("credentials"))?;
         private::validate_tree(&root.join("secrets"))?;
         if control(&root, "status").is_ok_and(|status| status == "ready") {
+            if borrowed_issuer(&state)?.is_some() {
+                issuer_keys(&state.issuer_origin())?;
+            }
             if args.clients_file.is_some() && state.clients_file != clients_file {
                 bail!("the active local development session still uses {}; stop it before selecting a different --clients-file path", state.clients_file.display());
             }
@@ -1218,6 +1282,38 @@ fn start(args: StartArgs) -> Result<Value> {
         state
     } else {
         let previous = previous.as_ref();
+        let issuer_project = requested_issuer
+            .clone()
+            .or_else(|| previous.and_then(|state| state.issuer_project.clone()));
+        let issuer_owner = if let Some(owner_project) = &issuer_project {
+            let owner_root = owner_project.join(".breg/dev");
+            private::check(&owner_root, true)?;
+            let owner: Value =
+                serde_json::from_slice(&private::read(&owner_root.join("state.json"), MAX_BYTES)?)?;
+            if owner["version"] != 2
+                || owner["status"] != "ready"
+                || !owner["issuerProject"].is_null()
+                || owner["project"] != owner_project.to_string_lossy().as_ref()
+            {
+                bail!("--issuer-project must name a ready BREG dev owner");
+            }
+            let port = owner["issuerPort"]
+                .as_u64()
+                .filter(|port| *port > 0 && *port <= u16::MAX as u64)
+                .context("BREG issuer owner has no valid issuer port")?
+                as u16;
+            if args.issuer_port.is_some_and(|requested| requested != port) {
+                bail!("--issuer-port differs from the BREG issuer owner");
+            }
+            issuer_keys(&format!("http://127.0.0.1:{port}"))?;
+            let owner_id = owner["owner"]
+                .as_str()
+                .context("BREG issuer owner has no ID")?;
+            uuid::Uuid::parse_str(owner_id).context("BREG issuer owner has an invalid ID")?;
+            Some((owner_id.to_owned(), port))
+        } else {
+            None
+        };
         let state = State {
             version: 2,
             project: project.clone(),
@@ -1229,8 +1325,11 @@ fn start(args: StartArgs) -> Result<Value> {
                 .unwrap_or(8092),
             issuer_port: args
                 .issuer_port
+                .or(issuer_owner.as_ref().map(|(_, port)| *port))
                 .or(previous.map(|s| s.issuer_port))
                 .unwrap_or(8093),
+            issuer_project,
+            issuer_owner: issuer_owner.map(|(owner, _)| owner),
             database_port: args
                 .database_port
                 .or(previous.map(|s| s.database_port))
@@ -1267,7 +1366,10 @@ fn start(args: StartArgs) -> Result<Value> {
         };
         ports(state.casework_port, state.issuer_port, state.database_port)?;
         for port in std::iter::once(state.casework_port)
-            .chain(state.sources.is_empty().then_some(state.issuer_port))
+            .chain(
+                (state.sources.is_empty() && state.issuer_project.is_none())
+                    .then_some(state.issuer_port),
+            )
             .chain(std::iter::once(state.database_port))
         {
             probe(port)?;
@@ -1308,9 +1410,9 @@ fn start(args: StartArgs) -> Result<Value> {
     if let Some(bregctl) = &bregctl {
         bind_sources(bregctl, &mut state, &clients)?;
     }
-    for port in std::iter::once(state.casework_port)
-        .chain(state.sources.is_empty().then_some(state.issuer_port))
-    {
+    for port in std::iter::once(state.casework_port).chain(
+        (state.sources.is_empty() && state.issuer_project.is_none()).then_some(state.issuer_port),
+    ) {
         probe(port)?;
     }
     // Verify the container before accepting a retained database port.
@@ -1460,9 +1562,10 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     if service_ports_must_be_free(&state.status) {
-        for port in std::iter::once(state.casework_port)
-            .chain(state.sources.is_empty().then_some(state.issuer_port))
-        {
+        for port in std::iter::once(state.casework_port).chain(
+            (state.sources.is_empty() && state.issuer_project.is_none())
+                .then_some(state.issuer_port),
+        ) {
             probe(port)?;
         }
     }
@@ -3667,6 +3770,10 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
 }
 
 fn issuer(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
+    if borrowed_issuer(state)?.is_some() {
+        let jwks = issuer_keys(&state.issuer_origin())?;
+        return private::replace(&state.root().join("secrets/issuer-jwks"), &jwks);
+    }
     let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
     let state_root = state.root().join("issuer");
     let session = registry_thunderid_tooling::container::Session {
@@ -3686,7 +3793,7 @@ fn issuer(docker: &Path, state: &State, terminate: &AtomicBool) -> Result<()> {
 }
 
 fn stop_issuer(docker: &Path, state: &State) -> Result<()> {
-    if !state.sources.is_empty() {
+    if !state.sources.is_empty() || state.issuer_project.is_some() {
         return Ok(());
     }
     let state_root = state.root().join("issuer");

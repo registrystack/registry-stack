@@ -348,6 +348,7 @@ pub(super) fn run(args: PrepareSourceArgs) -> Result<Value> {
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     };
     clients.clients.push(client.clone());
     let client_bytes = yaml_with_comments(&serde_json::to_value(&clients)?, &bytes)?;

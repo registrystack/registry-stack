@@ -103,6 +103,15 @@ authoring cannot silently change a populated session.
 Start the session with `caseworkctl dev`. Its report names the issuer, exact
 resource and operator configuration. Configure the source's own issuer trust
 and generated source-reader credential, then ensure the source is running.
+For a composed local issuer, start the BREG issuer owner first and use
+`caseworkctl dev start ./casework --issuer-project ./issuer-owner`. This option
+requires explicit `integrations.resource`; it is separate from the older
+`--source-project` compatibility bridge. The owner must pre-register each
+Casework teaching and service client with the same scopes, claims and resource,
+plus the task authority connection and the `taskExchange` bootstrap clients.
+Casework copies those exact client pairs into its private state, keeps its own
+task signing key, and neither starts nor stops the owner's issuer. An owner
+session change or unavailable issuer is refused before restart.
 Casework reconciles active source requests on startup and every minute. Use
 `caseworkctl dev token staff` to write a fresh owner-only human fixture header.
 Approve a displayed governed template through the Casework UI or API. The
