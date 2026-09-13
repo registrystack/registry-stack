@@ -99,6 +99,19 @@ pub struct ClientAddArgs {
     /// Bootstrap resource audience. Omit to use the shared issuer owner's default.
     #[arg(long, requires = "grant_bootstrap_scope")]
     grant_bootstrap_resource: Option<String>,
+    /// Use a signed first-party context with this one bootstrap scope.
+    #[arg(
+        long,
+        conflicts_with = "grant_bootstrap_scope",
+        requires = "first_party_issuer"
+    )]
+    first_party_bootstrap_scope: Option<String>,
+    /// Resource for the first-party bootstrap credential.
+    #[arg(long, requires = "first_party_bootstrap_scope")]
+    first_party_bootstrap_resource: Option<String>,
+    /// Exact trusted issuer of the signed first-party context.
+    #[arg(long, requires = "first_party_bootstrap_scope")]
+    first_party_issuer: Option<String>,
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
@@ -146,12 +159,15 @@ pub(crate) struct ActiveClientExchange {
     /// None means the issuer owner's default resource, not the Evidence resource.
     #[serde(default)]
     pub(crate) bootstrap_resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_issuer: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) enum ActiveClientExchangeKind {
     InstitutionalGrant,
+    FirstParty,
 }
 
 impl ActiveClientExchange {
@@ -169,6 +185,20 @@ impl ActiveClientExchange {
             resource.len() > 512 || !authoring::valid_local_audience(resource)
         }) {
             bail!("grant bootstrap resource must be a bounded resource URI");
+        }
+        match self.kind {
+            ActiveClientExchangeKind::InstitutionalGrant if self.source_issuer.is_some() => {
+                bail!("institutional grant issuer comes from its governed task policy")
+            }
+            ActiveClientExchangeKind::FirstParty
+                if self.bootstrap_resource.is_none()
+                    || self.source_issuer.as_ref().is_none_or(|issuer| {
+                        issuer.len() > 512 || !authoring::valid_local_audience(issuer)
+                    }) =>
+            {
+                bail!("first-party exchange needs exact bootstrap resource and source issuer")
+            }
+            _ => {}
         }
         Ok(())
     }
@@ -257,14 +287,23 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
     if !args.generate_local_key {
         bail!("local client creation requires --generate-local-key");
     }
-    let exchange = args
-        .grant_bootstrap_scope
-        .as_ref()
-        .map(|scope| ActiveClientExchange {
+    let exchange = if let Some(scope) = &args.grant_bootstrap_scope {
+        Some(ActiveClientExchange {
             kind: ActiveClientExchangeKind::InstitutionalGrant,
             bootstrap_scope: scope.clone(),
             bootstrap_resource: args.grant_bootstrap_resource.clone(),
-        });
+            source_issuer: None,
+        })
+    } else {
+        args.first_party_bootstrap_scope
+            .as_ref()
+            .map(|scope| ActiveClientExchange {
+                kind: ActiveClientExchangeKind::FirstParty,
+                bootstrap_scope: scope.clone(),
+                bootstrap_resource: args.first_party_bootstrap_resource.clone(),
+                source_issuer: args.first_party_issuer.clone(),
+            })
+    };
     if let Some(exchange) = &exchange {
         exchange.validate()?;
     }

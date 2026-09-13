@@ -785,24 +785,34 @@ fn verify_borrowed_registrations(
             ),
             None => {}
             Some((binding, source_issuers)) => {
+                let (sources, mapping) = match binding.kind {
+                    access::ActiveClientExchangeKind::InstitutionalGrant => {
+                        (source_issuers.clone(), "institutional_grant")
+                    }
+                    access::ActiveClientExchangeKind::FirstParty => (
+                        binding.source_issuer.iter().cloned().collect(),
+                        "first_party",
+                    ),
+                };
                 let paired = assertion_issuers.get(&client.client_id);
                 if !registered_exchange
-                    || source_issuers.is_empty()
-                    || source_issuers.iter().any(|source| {
+                    || sources.is_empty()
+                    || (binding.kind == access::ActiveClientExchangeKind::FirstParty
+                        && !source_issuers.is_empty())
+                    || sources.iter().any(|source| {
                         !paired.is_some_and(|issuers| issuers.contains(source))
                             || !inventory["issuer"]["exchangeIssuers"]
                                 .as_array()
                                 .is_some_and(|issuers| {
                                     issuers.iter().any(|issuer| {
-                                        issuer["issuer"] == *source
-                                            && issuer["mapping"] == "institutional_grant"
+                                        issuer["issuer"] == *source && issuer["mapping"] == mapping
                                     })
                                 })
                     })
                     || client.scopes != [binding.bootstrap_scope.clone()]
                 {
                     bail!(
-                        "BREG issuer task-exchange registration differs from Evidence client {}",
+                        "BREG issuer signed-context exchange registration differs from Evidence client {}",
                         client.client_id
                     );
                 }
@@ -2042,21 +2052,39 @@ fn prepare_and_start(
                     }
                 }
             }
-            if task_sources.is_empty() != registration.exchange.is_none() {
-                bail!("task grant requester needs one declared institutional exchange binding");
+            match registration.exchange.as_ref().map(|binding| binding.kind) {
+                Some(access::ActiveClientExchangeKind::InstitutionalGrant)
+                    if task_sources.is_empty() =>
+                {
+                    bail!("institutional exchange needs one active assigned task policy");
+                }
+                Some(access::ActiveClientExchangeKind::FirstParty) if !task_sources.is_empty() => {
+                    bail!("task requester cannot use first-party exchange");
+                }
+                None if !task_sources.is_empty() => {
+                    bail!("task grant requester needs one declared institutional exchange binding");
+                }
+                _ => {}
             }
             let (claims, scopes) = if let Some(binding) = &registration.exchange {
-                if owner.is_none()
-                    || binding.kind != access::ActiveClientExchangeKind::InstitutionalGrant
-                {
-                    bail!("institutional task exchange needs a borrowed issuer owner");
+                if owner.is_none() {
+                    bail!("signed context exchange needs a borrowed issuer owner");
                 }
                 exchange_bindings.insert(
                     registration.client_id.clone(),
                     (binding.clone(), task_sources),
                 );
                 (
-                    BTreeMap::from([("registry_actor_kind".to_owned(), json!("agent"))]),
+                    BTreeMap::from([(
+                        "registry_actor_kind".to_owned(),
+                        json!(
+                            if binding.kind == access::ActiveClientExchangeKind::FirstParty {
+                                "service"
+                            } else {
+                                "agent"
+                            }
+                        ),
+                    )]),
                     vec![binding.bootstrap_scope.clone()],
                 )
             } else {
@@ -3844,6 +3872,7 @@ requirements:
             kind: access::ActiveClientExchangeKind::InstitutionalGrant,
             bootstrap_scope: "casework:grants:assert".into(),
             bootstrap_resource: None,
+            source_issuer: None,
         };
         let sources = BTreeSet::from(["https://casework.invalid".to_owned()]);
         let exchanges =
@@ -3893,12 +3922,60 @@ requirements:
         .is_err());
         inventory["issuer"]["exchangeClients"] = json!([]);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        let mut portal_client = exchange_client.clone();
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             &[exchange_client],
             &admitted,
             &paired,
+            &exchanges,
+        )
+        .is_err());
+
+        portal_client.claims = BTreeMap::from([("registry_actor_kind".into(), json!("service"))]);
+        portal_client.scopes = vec!["evidence:invoke".into()];
+        inventory["clients"][0] = json!({
+            "id":"evidence-client", "claims":portal_client.claims,
+            "scopes":portal_client.scopes,
+        });
+        inventory["issuer"]["clientResources"] =
+            json!({"evidence-client":LOCAL_ACCESS_TOKEN_AUDIENCE});
+        inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
+        inventory["issuer"]["exchangeIssuers"] = json!([{
+            "id":"portal", "issuer":"http://127.0.0.1:4494", "mapping":"first_party",
+            "clients":["evidence-client"],
+        }]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        let first_party = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::FirstParty,
+            bootstrap_scope: "evidence:invoke".into(),
+            bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.into()),
+            source_issuer: Some("http://127.0.0.1:4494".into()),
+        };
+        let exchanges =
+            BTreeMap::from([("evidence-client".to_owned(), (first_party, BTreeSet::new()))]);
+        let portal_paired = BTreeMap::from([(
+            "evidence-client".to_owned(),
+            vec!["http://127.0.0.1:4494".to_owned()],
+        )]);
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&portal_client),
+            &admitted,
+            &portal_paired,
+            &exchanges,
+        )
+        .expect("registered first-party context client borrows the owner");
+        inventory["issuer"]["exchangeIssuers"][0]["mapping"] = json!("institutional_grant");
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&portal_client),
+            &admitted,
+            &portal_paired,
             &exchanges,
         )
         .is_err());

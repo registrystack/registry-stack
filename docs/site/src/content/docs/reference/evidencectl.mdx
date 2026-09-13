@@ -150,6 +150,12 @@ requester bindings. Create the requester with
 Use `--grant-bootstrap-resource <URI>` only if its issuer bootstrap resource differs from the
 shared issuer owner's default. The borrowed issuer must register that same key and bootstrap
 binding for institutional exchange. A direct client omits both bootstrap flags.
+For a portal that signs first-party context, create an active policy client with
+`--first-party-bootstrap-scope evidence:invoke --first-party-bootstrap-resource <Evidence resource> --first-party-issuer <issuer>`.
+The borrowed owner must register the same client key and bootstrap permission, and an exact
+`first_party` exchange issuer. Its bootstrap registration carries no static Evidence requester
+tags or audience; the signed context supplies those attributes for each request. The client
+still needs an active Evidence policy assignment and cannot use a task-grant policy.
 {/* Evidence: crates/registry-evidence-authoring/src/model.rs, AccessTaskGrant, AccessTaskBinding;
     crates/registry-evidencectl/src/authoring.rs, render_policy_authority_profile;
     crates/registry-evidencectl/src/access.rs, ClientAddArgs, ActiveClientExchange;

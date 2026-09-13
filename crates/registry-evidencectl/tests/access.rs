@@ -332,6 +332,44 @@ fn institutional_exchange_keeps_bootstrap_binding_explicit_and_preserves_it_on_r
 }
 
 #[test]
+fn first_party_exchange_records_exact_context_issuer_and_bootstrap_resource() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+    success(&add_policy(project, "age-checks", &["adult-status"]));
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "portal-host",
+            "--policy",
+            "age-checks",
+            "--generate-local-key",
+            "--first-party-bootstrap-scope",
+            "evidence:invoke",
+            "--first-party-bootstrap-resource",
+            "urn:seed-demo:evidence:growers",
+            "--first-party-issuer",
+            "http://127.0.0.1:4494",
+        ],
+    ));
+    let document: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/portal-host.yaml")).expect("client"),
+    )
+    .expect("yaml");
+    assert_eq!(
+        document["exchange"],
+        serde_json::json!({
+            "kind":"first-party", "bootstrapScope":"evidence:invoke",
+            "bootstrapResource":"urn:seed-demo:evidence:growers",
+            "sourceIssuer":"http://127.0.0.1:4494",
+        })
+    );
+}
+
+#[test]
 fn invalid_or_ambiguous_exchange_binding_cannot_publish_a_client() {
     let fixture = tempfile::tempdir().expect("tempdir");
     let project = fixture.path();
@@ -345,6 +383,31 @@ fn invalid_or_ambiguous_exchange_binding_cannot_publish_a_client() {
             "tasks:assert",
             "--grant-bootstrap-resource",
             "not-a-uri",
+        ],
+        vec!["--first-party-bootstrap-scope", "evidence:invoke"],
+        vec![
+            "--first-party-bootstrap-scope",
+            "evidence:invoke",
+            "--first-party-issuer",
+            "http://127.0.0.1:4494",
+        ],
+        vec![
+            "--first-party-bootstrap-scope",
+            "evidence:invoke",
+            "--first-party-bootstrap-resource",
+            "urn:seed-demo:evidence:growers",
+            "--first-party-issuer",
+            "not-a-uri",
+        ],
+        vec![
+            "--grant-bootstrap-scope",
+            "tasks:assert",
+            "--first-party-bootstrap-scope",
+            "evidence:invoke",
+            "--first-party-bootstrap-resource",
+            "urn:seed-demo:evidence:growers",
+            "--first-party-issuer",
+            "http://127.0.0.1:4494",
         ],
     ] {
         let mut args = vec![
@@ -371,6 +434,7 @@ fn invalid_or_ambiguous_exchange_binding_cannot_publish_a_client() {
         serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert", "unexpected":true}),
         serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert other"}),
         serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert", "bootstrapResource":"relative"}),
+        serde_json::json!({"kind":"first-party", "bootstrapScope":"evidence:invoke", "bootstrapResource":"urn:seed-demo:evidence:growers"}),
     ] {
         let mut document = original.clone();
         document["exchange"] = exchange;
