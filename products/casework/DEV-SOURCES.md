@@ -52,6 +52,7 @@ integrations:
       taskExchange: true
     - id: breg-status
       scopes: [casework:grants:status]
+  browserClients: [staff-portal]
   taskAuthority:
     issuer: https://casework.local.example
     jwksPort: 8094
@@ -112,6 +113,11 @@ plus the task authority connection and the `taskExchange` bootstrap clients.
 Casework copies those exact client pairs into its private state, keeps its own
 task signing key, and neither starts nor stops the owner's issuer. An owner
 session change or unavailable issuer is refused before restart.
+`browserClients` is an optional explicit list of auth-code application IDs
+admitted to Casework's local runtime. Each must be registered by the shared
+owner for this exact resource; a browser app mapped to another resource is
+refused. The resulting token still needs a governed human profile, marker,
+principal, and scopes for any Casework API call.
 Casework reconciles active source requests on startup and every minute. Use
 `caseworkctl dev token staff` to write a fresh owner-only human fixture header.
 Approve a displayed governed template through the Casework UI or API. The
