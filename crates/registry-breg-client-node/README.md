@@ -21,8 +21,13 @@ accessors, symbols, exotic objects, sparse arrays, non-finite numbers, more
 than 128 levels or 100,000 nodes, and more than 4 MiB of string data are
 rejected before native conversion.
 
-Authentication is optional. Configure either one static bearer token or the
-private-key-JWT provider declared in `client.d.ts`. The client performs one
+Authentication is optional. Configure a static bearer token, private-key-JWT,
+or the context-bound `exchange` provider declared in `client.d.ts`. For a
+person, pass attributes derived from a fresh host verification, never browser
+claims, and give each verified generation its own client. For an institutional
+agent, pass the exact Casework assertion endpoint, a Casework-only bootstrap,
+and the approved exchange resource and scopes. A remote grant refresh obtains
+a fresh authority assertion and can be refused after revocation. The client performs one
 exchange per method, never follows redirects, never uses ambient proxy
 configuration, never retries, and never follows links automatically.
 

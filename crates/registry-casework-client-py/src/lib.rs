@@ -828,6 +828,12 @@ impl CaseworkClient {
             }),
         )
     }
+    fn task_assertion_endpoint(&self, py: Python<'_>, grant_id: &str) -> PyResult<String> {
+        self.inner
+            .task_assertion_endpoint(uuid(py, grant_id)?)
+            .map(|value| value.to_string())
+            .map_err(|error| client_error(py, error))
+    }
     fn task_grant_status<'py>(
         &self,
         py: Python<'py>,

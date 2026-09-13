@@ -155,7 +155,7 @@ class CrossBindingApiParityTest(unittest.TestCase):
             {"dataflow", "datastructure"},
         )
 
-    def test_static_and_private_key_jwt_are_the_two_binding_auth_modes(self):
+    def test_static_private_key_jwt_and_exchange_match_across_bindings(self):
         python_authorization = next(
             node
             for node in self.python_tree.body
@@ -172,7 +172,7 @@ class CrossBindingApiParityTest(unittest.TestCase):
                 if isinstance(node, ast.Name)
                 and node.id.endswith("Authorization")
             },
-            {"StaticAuthorization", "PrivateKeyJwtAuthorization"},
+            {"StaticAuthorization", "PrivateKeyJwtAuthorization", "ExchangeAuthorization"},
         )
 
         node_authorization = re.search(
@@ -182,7 +182,7 @@ class CrossBindingApiParityTest(unittest.TestCase):
         self.assertIsNotNone(node_authorization)
         self.assertEqual(
             set(re.findall(r"\{ ([A-Za-z][A-Za-z0-9]*):", node_authorization.group(1))),
-            {"static", "privateKeyJwt"},
+            {"static", "privateKeyJwt", "exchange"},
         )
 
 

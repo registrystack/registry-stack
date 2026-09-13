@@ -3451,6 +3451,7 @@ dependencies = [
  "napi-derive",
  "registry-breg-client",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "serde",
  "serde_json",
  "tokio",
@@ -3466,6 +3467,7 @@ dependencies = [
  "pyo3-build-config",
  "registry-breg-client",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "serde",
  "serde_json",
  "tokio",
@@ -3591,8 +3593,13 @@ dependencies = [
 name = "registry-casework-client"
 version = "0.31.0"
 dependencies = [
+ "async-trait",
  "axum",
+ "base64",
+ "ed25519-dalek",
+ "getrandom 0.4.3",
  "registry-casework-core",
+ "registry-platform-crypto",
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "reqwest",
@@ -3602,6 +3609,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]
@@ -4377,6 +4385,7 @@ dependencies = [
  "napi-build",
  "napi-derive",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "registry-relay-client",
  "serde",
  "serde_json",
@@ -4391,6 +4400,7 @@ dependencies = [
  "pyo3",
  "pyo3-build-config",
  "registry-platform-crypto",
+ "registry-platform-httputil",
  "registry-relay-client",
  "serde",
  "serde_json",

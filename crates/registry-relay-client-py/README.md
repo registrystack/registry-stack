@@ -68,6 +68,12 @@ The flow accepts no deployment-defined form members. When an issuer requires
 other fields, acquire a short-lived bearer separately and pass it through
 `authorization={"static": token}`.
 
+For an RFC 8693 exchange, pass `authorization={"exchange": config}`. The
+exchange config binds a verified person or grant context to the client,
+resource, scopes, and deadline. A `first_party` source signs a host-verified
+human assertion; a `remote` source requests a fresh authority assertion for
+each grant-token refresh. The typed configuration is in `__init__.pyi`.
+
 Every method is blocking and releases the Python GIL while the private
 current-thread Tokio runtime waits for I/O. Conditional methods return a plain
 mapping discriminated by `kind`: either `complete` with `value`, `trace_id`,
