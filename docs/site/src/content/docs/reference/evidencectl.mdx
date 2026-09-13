@@ -112,6 +112,12 @@ fixture. Both create disposable, unbound Evidence Gateway key material in the ig
 `secrets/` directory. Neither creates a production target, issuer configuration, or deployable bundle.
 
 `evidencectl dev start [<project>]` starts Evidence Gateway and the pinned local issuer on loopback.
+When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--resource <URI>`
+registered for this Evidence service. The default resource is
+`urn:registrystack:evidence:local:gateway`; a retained session keeps its selected resource and
+refuses a different one on restart. The compiled governed bundle binds this audience.
+{/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource;
+    crates/registry-evidencectl/src/authoring.rs, render_local_bundle, local_compilation_keeps_two_exact_evidence_resources_separate */}
 It creates a session-scoped P-256 pair for an SD-JWT VC holder and an implicit caller pair only when the project has no explicit access
 policy; explicit local clients use their keys under `.evidence/clients/`. Nothing under
 `.evidence/dev` or `.evidence/clients` enters a production target.

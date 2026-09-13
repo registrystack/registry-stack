@@ -82,7 +82,9 @@ fn add_scope(
     let chain = vec![segments[0].to_owned()];
     let action = segments[1..].join(":");
     if action.len() > 64 {
-        return Err(refuse("local scope action exceeds the upstream handle bound"));
+        return Err(refuse(
+            "local scope action exceeds the upstream handle bound",
+        ));
     }
     resources.entry(chain.clone()).or_insert_with(|| Resource {
         name: chain[0].clone(),
@@ -350,11 +352,22 @@ mod tests {
         let mut client = client();
         client.scopes = vec!["unstructured".into()];
         assert!(build(client.clone()).is_err());
-        client.scopes = vec!["a:records:get".into(), "b:records:get".into(),
-                             "seed-demo:casework:intake".into(), "casework:grants:assert".into()];
+        client.scopes = vec![
+            "a:records:get".into(),
+            "b:records:get".into(),
+            "seed-demo:casework:intake".into(),
+            "casework:grants:assert".into(),
+        ];
         let description = build(client).unwrap();
-        assert_eq!(description.roles[0].permissions[0].1,
-                   ["a:records:get", "b:records:get", "seed-demo:casework:intake", "casework:grants:assert"]);
+        assert_eq!(
+            description.roles[0].permissions[0].1,
+            [
+                "a:records:get",
+                "b:records:get",
+                "seed-demo:casework:intake",
+                "casework:grants:assert"
+            ]
+        );
         assert_eq!(description.resource_servers[0].resources.len(), 4);
     }
 

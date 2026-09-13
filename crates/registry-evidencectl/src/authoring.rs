@@ -186,6 +186,7 @@ fn cleanup_failure_line(path: &Path, error: &anyhow::Error) -> String {
 enum CompileProfile {
     Local {
         ports: LocalServicePorts,
+        audience: String,
         active_public_jwk_file: String,
         active_public_jwk: Vec<u8>,
     },
@@ -246,38 +247,41 @@ pub(crate) fn compile_local_project(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn compile_local_project_with_ports(
     project_root: &Path,
     staging_root: &Path,
     evidence_bin: &Path,
     ports: LocalServicePorts,
 ) -> Result<CompiledProject> {
-    compile_local_project_with_connections(
+    compile_local_project_with_ports_and_resource(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        LOCAL_AUDIENCE,
+    )
+}
+
+pub(crate) fn compile_local_project_with_ports_and_resource(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    audience: &str,
+) -> Result<CompiledProject> {
+    compile_local_project_with_target_inputs_and_resource(
         project_root,
         staging_root,
         evidence_bin,
         ports,
         json!({}),
-    )
-}
-
-pub(crate) fn compile_local_project_with_connections(
-    project_root: &Path,
-    staging_root: &Path,
-    evidence_bin: &Path,
-    ports: LocalServicePorts,
-    source_connections: Value,
-) -> Result<CompiledProject> {
-    compile_local_project_with_target_inputs(
-        project_root,
-        staging_root,
-        evidence_bin,
-        ports,
-        source_connections,
         json!({"systemRoots": true, "trustProfiles": {}}),
+        audience,
     )
 }
 
+#[cfg(test)]
 pub(crate) fn compile_local_project_with_target_inputs(
     project_root: &Path,
     staging_root: &Path,
@@ -286,7 +290,30 @@ pub(crate) fn compile_local_project_with_target_inputs(
     source_connections: Value,
     outbound_tls: Value,
 ) -> Result<CompiledProject> {
+    compile_local_project_with_target_inputs_and_resource(
+        project_root,
+        staging_root,
+        evidence_bin,
+        ports,
+        source_connections,
+        outbound_tls,
+        LOCAL_AUDIENCE,
+    )
+}
+
+pub(crate) fn compile_local_project_with_target_inputs_and_resource(
+    project_root: &Path,
+    staging_root: &Path,
+    evidence_bin: &Path,
+    ports: LocalServicePorts,
+    source_connections: Value,
+    outbound_tls: Value,
+    audience: &str,
+) -> Result<CompiledProject> {
     LocalServicePorts::new(ports.evidence, ports.issuer)?;
+    if !valid_local_audience(audience) {
+        bail!("local Evidence resource must be one exact bounded absolute URI");
+    }
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
     validate_evidence_binary(evidence_bin)?;
@@ -300,6 +327,7 @@ pub(crate) fn compile_local_project_with_target_inputs(
         inputs,
         CompileProfile::Local {
             ports,
+            audience: audience.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
         },
@@ -328,6 +356,15 @@ pub(crate) fn compile_local_project_with_target_inputs(
     }
 
     Ok(compilation)
+}
+
+pub(crate) fn valid_local_audience(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && !value.chars().any(char::is_whitespace)
+        && url::Url::parse(value).is_ok_and(|url| {
+            url.fragment().is_none() && url.username().is_empty() && url.password().is_none()
+        })
 }
 
 fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
@@ -444,6 +481,7 @@ pub(crate) fn compile_check_project(
         inputs,
         CompileProfile::Local {
             ports: LocalServicePorts::default(),
+            audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
             active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
         },
@@ -495,6 +533,7 @@ pub(crate) fn compile_fixture_project_with_connections(
         inputs,
         CompileProfile::Local {
             ports: LocalServicePorts::default(),
+            audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
         },
@@ -1502,11 +1541,17 @@ fn compile_plan_with_connections(
     match profile {
         CompileProfile::Local {
             ports,
+            audience,
             active_public_jwk_file,
             active_public_jwk,
         } => {
-            let mut bundle =
-                render_local_bundle(&questions, &access_policies, ports, &active_public_jwk_file)?;
+            let mut bundle = render_local_bundle(
+                &questions,
+                &access_policies,
+                ports,
+                &active_public_jwk_file,
+                &audience,
+            )?;
             if source_connections
                 .as_object()
                 .is_some_and(|connections| !connections.is_empty())
@@ -3394,7 +3439,13 @@ fn render_governance_parts(
 /// compiled from authored questions and access policies by `dev`.
 pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
     let (key, _) = local_signing_public_jwk(project)?;
-    let mut governance = render_local_bundle(&[], &[], LocalServicePorts::new(8080, 8081)?, &key)?;
+    let mut governance = render_local_bundle(
+        &[],
+        &[],
+        LocalServicePorts::new(8080, 8081)?,
+        &key,
+        LOCAL_AUDIENCE,
+    )?;
     let object = governance
         .as_object_mut()
         .expect("local bundle is a mapping");
@@ -3409,6 +3460,7 @@ fn render_local_bundle(
     access_policies: &[AuthoredAccessPolicy],
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
+    audience: &str,
 ) -> Result<Value> {
     let issuer_origin = ports.issuer_origin();
     let selector_profiles = questions
@@ -3473,7 +3525,7 @@ fn render_local_bundle(
         "authentication": {
             "kind": "oidc-access-token",
             "issuer": issuer_origin,
-            "audiences": [LOCAL_AUDIENCE],
+            "audiences": [audience],
             "tokenTypes": ["at+jwt"],
             "algorithms": ["RS256"],
             "jwksUri": format!("{issuer_origin}/oauth2/jwks"),
@@ -3658,7 +3710,10 @@ fn write_plan(
     Ok(CompiledProject {
         runtime_path,
         questions,
-        local_audience: LOCAL_AUDIENCE.to_owned(),
+        local_audience: plan.bundle["authentication"]["audiences"][0]
+            .as_str()
+            .context("local Evidence audience missing")?
+            .to_owned(),
         requester_tag: AUTHORITY_PROFILE_ID.to_owned(),
         caller_evidence_audience: LOCAL_CALLER_EVIDENCE_AUDIENCE.to_owned(),
         access_policies: plan
@@ -4606,6 +4661,30 @@ properties:
   givenName: {type: string, minLength: 1, maxLength: 200}
   dateOfBirth: {type: string, format: date}
 "#;
+
+    #[test]
+    fn local_compilation_keeps_two_exact_evidence_resources_separate() {
+        for audience in [
+            "urn:seed-demo:evidence:growers",
+            "urn:seed-demo:evidence:laboratory",
+        ] {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            let compiled = compile_local_project_with_ports_and_resource(
+                &fixture.project,
+                &fixture.staging,
+                &fixture.evidence,
+                LocalServicePorts::default(),
+                audience,
+            )
+            .unwrap();
+            assert_eq!(compiled.local_audience, audience);
+            let bundle: Value = serde_norway::from_slice(
+                &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(bundle["authentication"]["audiences"], json!([audience]));
+        }
+    }
 
     #[test]
     fn compiles_only_the_canonical_private_local_generation() {
@@ -6100,6 +6179,7 @@ fn prepare(selectors, context) {
             read_inputs(&fixture.project, false).unwrap(),
             CompileProfile::Local {
                 ports: LocalServicePorts::default(),
+                audience: LOCAL_AUDIENCE.to_owned(),
                 active_public_jwk_file: "public-keys/test.jwk".to_owned(),
                 active_public_jwk: vec![],
             },
