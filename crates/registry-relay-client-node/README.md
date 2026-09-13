@@ -81,6 +81,12 @@ one of those fields, obtain a short-lived bearer token separately and pass it
 as `{ authorization: { static: token } }`; Rust callers can instead implement a
 custom `TokenProvider`.
 
+For a reviewed RFC 8693 exchange, use `{ authorization: { exchange: config } }`.
+The shared exchange configuration in `client.d.ts` binds an immutable verified
+person or grant context to the target client, resource, scopes, and deadline.
+`firstParty` signs a host-verified human assertion; `remote` obtains a fresh
+assertion through its configured authority before each grant-token refresh.
+
 Every mapped failure is thrown as `RelayClientError` with a stable `kind` and,
 when the Rust error provides them, `code`, `status`, `traceId`,
 `retryAfterSeconds`, `transportKind`, and `tokenKind`. No error exposes token

@@ -7,6 +7,7 @@ mod client;
 mod config;
 mod error;
 mod model;
+mod task_assertion_source;
 
 pub use client::CaseworkClient;
 pub use config::CaseworkClientConfig;
@@ -42,6 +43,7 @@ pub use registry_casework_core::{
     WorkingDaysBefore, WorkingWeekday,
 };
 pub use registry_platform_httputil::client::BearerToken;
+pub use task_assertion_source::CaseworkTaskAssertionSource;
 /// The identifier type every item, attempt, and event argument carries, so a
 /// caller names it through this crate rather than a second `uuid` dependency.
 pub use uuid::Uuid;

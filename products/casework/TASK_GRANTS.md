@@ -68,6 +68,14 @@ BREG [`taskGrantStatus`](../breg/TASK_GRANTS.md) entry for governed writes.
 4. Exchange the assertion using RFC 8693. Assertions last at most 60 seconds;
    access tokens last at most 300 seconds. Neither extends the grant deadline.
 
+The Casework clients expose `task_assertion_endpoint(grant_id)` (or
+`taskAssertionEndpoint(grantId)` in Node) for the exact empty-POST route. Pass
+that endpoint to a shared `exchange` authorization option with a
+Casework-audience bootstrap scoped only to `casework:grants:assert`. The
+provider checks the grant, client, resource, scopes and deadline in each fresh
+assertion before exchanging it. Its cache ends by the grant deadline; renewal
+asks Casework again, so an inactive grant cannot issue another access token.
+
 The unified Node/Python Casework clients expose these operations. App Kit's
 source-item view provides review, approval, retry, listing, and revocation.
 Credentials stay on the server. Exact approval retries return the original

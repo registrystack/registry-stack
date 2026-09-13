@@ -15,6 +15,7 @@ crate-type = ["cdylib"]
 napi.workspace = true
 napi-derive.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 registry-relay-client.workspace = true
 serde.workspace = true
 serde_json.workspace = true

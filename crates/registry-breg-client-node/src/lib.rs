@@ -25,8 +25,7 @@ use registry_breg_client::{
     BRegPreparedCreate as CorePreparedCreate, BRegPreparedLifecycle as CorePreparedLifecycle,
     BRegProblemCode, BRegProtocolFailure, BRegRawDocument, BRegRecordFormat, BRegRecordOptions,
     BRegRelationshipContinuation, BRegRelationshipContinuationProjection,
-    BRegRelationshipListRequest, BRegRequestApplicationDisposition, BRegRequestProposal,
-    BRegRequestReview, BRegRequestReviewMode, BRegRequestState, BRegSnapshotContinuation,
+    BRegRelationshipListRequest, BRegRequestReview, BRegSnapshotContinuation,
     BRegSnapshotContinuationProjection, BRegSnapshotListRequest, BRegTombstoneBinding,
     BRegWebhookDelivery as CoreWebhookDelivery, BRegWebhookVerificationError,
     BaseRegistryClient as CoreClient, BaseRegistryClientConfig, BaseRegistryClientError,
@@ -34,6 +33,7 @@ use registry_breg_client::{
     StaticToken, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::exchange_authorization_from_json;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use url::Url;
@@ -656,7 +656,7 @@ fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>
     if object.len() != 1 {
         return Err(binding_error(
             "configuration",
-            "authorization must contain exactly one of static or privateKeyJwt",
+            "authorization must contain exactly one of static, privateKeyJwt, or exchange",
         ));
     }
     if let Some(value) = object.get("static") {
@@ -671,9 +671,14 @@ fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>
         return private_key_jwt(value)
             .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>));
     }
+    if let Some(value) = object.get("exchange") {
+        return exchange_authorization_from_json(value)
+            .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>))
+            .map_err(|error| mapped_error(token_error_value(error)));
+    }
     Err(binding_error(
         "configuration",
-        "authorization must contain exactly one of static or privateKeyJwt",
+        "authorization must contain exactly one of static, privateKeyJwt, or exchange",
     ))
 }
 
@@ -1554,58 +1559,8 @@ fn parse_record(
     }
 }
 
-fn state_name(value: BRegRequestState) -> &'static str {
-    match value {
-        BRegRequestState::Draft => "draft",
-        BRegRequestState::Submitted => "submitted",
-        BRegRequestState::Approved => "approved",
-        BRegRequestState::NeedsChanges => "needs_changes",
-        BRegRequestState::Rejected => "rejected",
-        BRegRequestState::Canceled => "canceled",
-        BRegRequestState::Applied => "applied",
-    }
-}
-
-fn proposal_value(value: &BRegRequestProposal) -> Value {
-    json!({
-        "reviewMode": match value.review_mode() {
-            BRegRequestReviewMode::None => "none",
-            BRegRequestReviewMode::Staged => "staged",
-        },
-        "applicationDisposition": match value.application_disposition() {
-            BRegRequestApplicationDisposition::Apply => "apply",
-            BRegRequestApplicationDisposition::Queue => "queue",
-        },
-        "queueReason": value.queue_reason().map(|reason| json!({
-            "code": reason.code(),
-            "label": reason.label(),
-        })),
-    })
-}
-
 fn receipt_value(value: &BRegLifecycleActionReceipt) -> Value {
-    let request = value.request();
-    let mut receipt = json!({
-        "id": value.record_identifier(),
-        "revision": value.revision(),
-        "snapshot": value.snapshot(),
-        "request": {
-            "bregState": state_name(request.breg_state()),
-            "proposalVersion": request.proposal_version().map(|value| value.get()),
-            "effectDigest": request.effect_digest().map(|value| value.as_str()),
-            "proposal": request.proposal().map(proposal_value),
-            "application": request.application().map(|application| json!({
-                "id": application.application_identifier(),
-                "proposalVersion": application.proposal_version().get(),
-                "effectDigest": application.effect_digest().as_str(),
-                "appliedAt": application.applied_at(),
-            })),
-        },
-    });
-    if let Some(actor_reference) = value.actor_reference() {
-        receipt["actorReference"] = Value::String(actor_reference.to_owned());
-    }
-    receipt
+    value.to_value()
 }
 
 fn review_value(value: &BRegRequestReview) -> Value {
