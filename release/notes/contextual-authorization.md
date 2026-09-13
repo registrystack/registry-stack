@@ -3,6 +3,18 @@
 These notes describe unreleased source changes. They do not change the published
 v0.30.0 release or select the version of a future release.
 
+## Breaking changes for the release notes
+
+- Registry Mint retired; the `mint` config key and retired CLI flags are refused.
+- Grant authority removed: BREG `taskGrant.authority` and task status client
+  `authority`, Casework `taskAuthority.id`, and Evidence's `grantAuthority`
+  claim name. BREG status clients are keyed by source issuer only.
+- Casework task assertions no longer carry `registry_grant_authority` or
+  `registry_grant_source_issuer`; ThunderID derives the source issuer from the
+  verified `iss`.
+- Local dev databases holding grants or drafts from before #1044 no longer load;
+  reset local dev state.
+
 ## Issuer and local development
 
 Registry Mint is removed from current source and future toolsets. Configure an

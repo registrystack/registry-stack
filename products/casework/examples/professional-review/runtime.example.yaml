@@ -20,7 +20,7 @@ authentication:
   oidc:
     issuer: https://identity.example.test/realms/registry
     audience: urn:example:casework
-    # Registry Mint emits OAuth scopes in `scope`; the compatibility default is
+    # Stock ThunderID emits OAuth scopes in `scope`; the compatibility default is
     # `registry_scopes` for deployments that omit this field.
     scopeClaim: scope
     # Signing keys come from issuer discovery by default. Declare the static

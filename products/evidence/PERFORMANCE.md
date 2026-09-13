@@ -27,8 +27,8 @@ The result is two append durability obligations per successful request. Their
 barriers are serialized, but concurrent requests can share one barrier.
 
 The legacy shared `JsonlFileSink` ends its append at `write_all` plus `flush`
-and does not provide this durability contract. Evidence and Mint now use the
-shared non-destructive durable segmented engine instead. This section records
+and does not provide this durability contract. Evidence now uses the shared
+non-destructive durable segmented engine instead. This section records
 the historical Evidence ceiling that motivated adding group commit to that
 engine.
 

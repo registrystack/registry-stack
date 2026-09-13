@@ -344,6 +344,8 @@ What this example must prove:
 
 - even a broadly scoped token cannot create list or identifier-read routes;
 - lookup scope, trusted purpose, and service-area binding are all required;
+- the optional stock ThunderID acceptance journey registers the same audience, scope, purpose, and
+  service-area binding and traverses the ordinary verifier and access-decision path;
 - selectors and the hidden `service_area_code` never become public properties;
 - selecting `enrolmentStatus,validThrough` returns less than the authorized default without changing authorization;
 - a useful local vocabulary, JSON-LD context, JSON Schema, and SHACL starter are generated without any external vocabulary mapping;
@@ -649,7 +651,7 @@ profile does not claim OGC API Features conformance.
 
 ## Example 3: civil-event registry
 
-This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer for the core journey. Registry Mint may replace that issuer by registering the same audience, scope, and optional authority claims.
+This registry is CRVS-shaped but the runtime remains event-domain neutral. It has no collection-list operation. Authorized registrars may read a known opaque event identifier under one scope and disclosure profile. A verification client may perform only a named exact lookup under a different scope and smaller disclosure profile. It uses an ordinary external issuer that registers the required audience, scopes, purpose, and jurisdiction claims.
 
 This live source is intentionally unversioned. Its Record revision remains
 source-bound, while source revision is explicitly unavailable and responses are
@@ -1259,7 +1261,7 @@ What this example must prove:
 - the absence of `list` prevents collection enumeration for every client;
 - read and lookup scopes are independent and cannot be substituted for one another;
 - the lookup disclosure is smaller than the registrar disclosure, and both can be narrowed further by the requester;
-- issuer-assigned audience, scope, purpose, and jurisdiction authority all use the one standard verifier path; a conforming Mint token may use that path without a Mint-specific branch;
+- issuer-assigned audience, scope, purpose, and jurisdiction authority all use the one standard verifier path without an issuer-specific branch;
 - Relay returns an unsigned registry response, while Evidence may use the fixed verification lookup as a source when a signed assertion is needed;
 - capability discovery derives `consultation.retrieve` and constrained `consultation.search`, not Record Match or Evidence-family support.
 
@@ -1289,5 +1291,5 @@ The examples also freeze these boundaries:
 - one explicit default and a finite ordered access profile set is compiled per operation; requester `fields` only narrows the selected profile and caller-derived variants are deferred;
 - identification is schema-only and value-free; generated, imported, and manual classification review all bind the complete classification inventory before production compilation;
 - only `partial-string` with Relay's fixed `***` marker and `date-precision` to `year` or `year-month` are transform forms; every transform produces a distinct reviewed property;
-- Mint and external issuers use one strict Relay JWT access-token profile;
+- stock ThunderID and institution-operated issuers use one strict Relay JWT access-token profile;
 - generated capabilities and a maintained alignment note describe the written draft standards without consuming their legacy OpenAPI or claiming conformance.

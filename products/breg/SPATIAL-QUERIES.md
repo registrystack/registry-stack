@@ -6,8 +6,8 @@ predicate. Ordinary Point storage, validation, history and GeoJSON reads that
 do not use a spatial predicate work without PostGIS.
 
 Start with the [spatial quickstart](quickstart/README.md#spatial-service-site-quickstart)
-for a complete project, local database bootstrap, Mint installation credential
-and QGIS connection. The [service-site fixture](acceptance/spatial-service-sites/README.md)
+for a complete project, local database bootstrap, stock-issuer client, and protected
+GeoJSON smoke. The [service-site fixture](acceptance/spatial-service-sites/README.md)
 contains public and protected map profiles, a hidden-geometry profile, a
 get-only profile and synthetic edge/null cases.
 
@@ -104,11 +104,13 @@ links to retain authentication and follow every page.
 The adapter accepts `bbox`, `limit`, `cursor` and `f=json`. An oversized `limit`
 is clamped to the compiled page maximum, with an opaque cursor-only next link
 when more rows remain. It returns flat authorized attributes and
-`numberReturned`; it does not compute hidden extents or counts. Follow the
-[quickstart's OAuth2 connection steps](quickstart/README.md#spatial-service-site-quickstart)
-and keep credentials in the QGIS authentication store, not in URLs or project
-source. Removing a Mint installation client prevents subsequent renewal but
-does not erase data already cached by QGIS.
+`numberReturned`; it does not compute hidden extents or counts. The maintained
+stock-issuer quickstart has no QGIS authentication recipe because that issuer
+accepts private-key JWT clients only. To connect QGIS to a protected collection,
+configure an institution-operated issuer flow that QGIS supports and keep its
+credentials in the QGIS authentication store, not in URLs or project source.
+Removing the client at its issuer prevents subsequent renewal but does not erase
+data already cached by QGIS.
 
 The six routes are landing, API description, conformance, collection listing,
 collection detail and collection items. There is no adapter item-detail route,

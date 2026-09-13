@@ -2077,7 +2077,7 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
     }
 }
 
-/// Replacement acceptance for the former Registry Mint dependency. The
+/// Stock-issuer acceptance for the Evidence authorization boundary. The
 /// private-key-JWT client obtains a token from pinned ThunderID 1.0.1, then
 /// carries an Evidence request through the real runtime and verifier.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

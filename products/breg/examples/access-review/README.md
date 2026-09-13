@@ -1,6 +1,6 @@
 # Review access configuration
 
-This offline example checks a district-scoped reader without PostgreSQL, Mint,
+This offline example checks a district-scoped reader without PostgreSQL, an identity provider,
 tokens, or real records. Run from the repository root after building
 `bregctl`.
 

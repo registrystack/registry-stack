@@ -78,7 +78,7 @@ whose questions all name a `source.ref` is held to the version alone.
 
 `evidencectl dev --target <local-target> start .` reuses that local target's
 `sourceConnections` and outbound TLS settings in the generated local caller
-rehearsal. It requires `assuranceProfile: local`. Evidence and Mint still use
+rehearsal. It requires `assuranceProfile: local`. Evidence and pinned stock ThunderID use
 the generated local authentication, keys, and caller governance, and source
 secret references resolve through the project's existing `secrets/` directory.
 Use `evidencectl package <project> --target <target> --output <new-candidate>`

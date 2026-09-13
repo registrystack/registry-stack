@@ -14,10 +14,10 @@ You run [OpenFn](https://www.openfn.org/) Lightning to move data between governm
 you want its workflows to read from and write to Evidence Gateway, Base Registry Engine (BReg), and
 Registry Relay without hand-writing HTTP calls or minting tokens in job code. The
 [Registry Stack adaptors for OpenFn](https://github.com/registrystack/openfn-language-registry-stack)
-give you that: three adaptor packages that wrap the maintained clients, plus a self-hosted synthetic
-pilot that shows registration, reviewed correction, and event-driven downstream updates end to end.
-This page explains what each adaptor does, how you configure it, how it fails, and what the pilot
-does and does not establish.
+give you that through three adaptor packages that wrap the maintained clients. The separate v0.1.0
+repository also preserves a self-hosted synthetic pilot, but its authorization service predates the
+current Registry Stack and the pilot is not a runnable current-source example. This page explains
+what each adaptor does, how you configure it, how it fails, and what the pilot recorded.
 
 {/* TODO[evidence]: adaptor behaviour, operation lists, result branches, and pilot topology live in
 the separate registrystack/openfn-language-registry-stack repository and cannot be anchored from
@@ -183,13 +183,14 @@ workflow, where it can be tied to the idempotency key and the source-event corre
 define the evidence.unavailable problem code the Evidence adaptor maps to its
 evidence_not_available branch. */}
 
-## The synthetic agriculture pilot
+## The v0.1.0 synthetic agriculture pilot
 
-The repository ships a complete self-hosted pilot so you can see the adaptors run against real
-services before designing your own workflows. It adapts the maintained agricultural-holdings core
-starter, keeping its Farm, holder, responsibility, and reviewed name-correction model, and runs
-upstream Lightning 2.18.2 with websocket worker 1.29.0 beside BReg, Mint, Evidence Gateway, an
-authenticated event bridge, and a small SQLite destination.
+The separately published v0.1.0 repository preserves a complete self-hosted pilot built against an
+older Registry Stack release. Its authorization service was retired, so this topology does not run
+against current Registry Stack source. The pilot adapts the maintained agricultural-holdings core
+starter, keeping its Farm, holder, responsibility, and reviewed name-correction model, and ran
+upstream Lightning 2.18.2 with websocket worker 1.29.0 beside BReg, an OAuth issuer, Evidence
+Gateway, an authenticated event bridge, and a small SQLite destination.
 
 Three workflows carry the story:
 

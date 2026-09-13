@@ -287,7 +287,7 @@ reaches `ready` because Docker is not running.
 
 | Symptom | Next move |
 | --- | --- |
-| `bregctl dev` refuses with `dev.failed` over a reported version | The installed `breg` or `mint` comes from another release than this `bregctl`. The refusal names the file that answered, the version it reported, and the version this `bregctl` reports. Install all three from the same release, or put the matching build first on `PATH`. |
+| `bregctl dev` refuses with `dev.failed` over a reported version | The installed `breg` comes from another release than this `bregctl`. The refusal names the file that answered, the version it reported, and the version this `bregctl` reports. Install both from the same release, or put the matching build first on `PATH`. |
 | `init --from publicschema` refuses with `init.selection.missing` | No terminal is attached, so the wizard cannot ask its questions. Pass `--starter household` or `--selection <FILE>` instead. |
 | `init --from publicschema --selection <FILE>` refuses over the file | `<FILE>` is a symbolic link, or larger than 256 KiB. Point `--selection` at an ordinary file under that size. |
 | `bregctl init` cannot parse the edited `model/selection.yaml` | Compare the indentation of the lines you changed with the rest of the file; a selection is a plain YAML list of entities, each with a `properties` list under it. |

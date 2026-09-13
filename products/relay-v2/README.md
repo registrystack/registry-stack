@@ -15,7 +15,7 @@ The initial boundary is intentionally narrow:
 - explicitly bound, pre-aggregated statistical datasets map only to the
   Aggregate Data statistical-dataflow pattern and the aligned SDMX read subset;
 - responses are unsigned;
-- Registry Mint is optional and Registry Evidence remains a separate product;
+- token issuance remains external and Registry Evidence remains a separate product;
 - the separately versioned Relay client, including its Node and Python native
   bindings, consumes the fixed public HTTP contract but never adds a route,
   deployment capability, or Relay authorization semantic;
@@ -63,8 +63,8 @@ responses.
 Set `RELAY_V2_STOCK_ISSUER=1` to include the pinned ThunderID container journey
 for private-key-JWT service issuance and protected lookup. Docker must be
 available; the fixture uses an isolated loopback port and owned temporary state.
-The existing CI HTTP journey enables this replacement for the former Mint-backed
-issuer test. Ordinary local HTTP tests do not require Docker.
+The existing CI HTTP journey enables this stock-issuer test. Ordinary local HTTP
+tests do not require Docker.
 
 `scripts/check-client-contract.sh` verifies the standalone fixed route and
 problem inventory used by `registry-relay-client`; it has no live deployment or

@@ -142,7 +142,7 @@ service starts.
 
 Set `accessProfiles: []` for a machine client that carries only scopes or
 claims for another product, such as Casework. The empty list gives that client
-no BReg access-profile binding. It is registered with the local Mint but omitted
+no BReg access-profile binding. It is registered with the local issuer but omitted
 from the BReg runtime's `allowedClients`, so it cannot call BReg.
 
 An integration client that must call BReg without becoming a journey or seed
