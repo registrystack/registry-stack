@@ -1781,6 +1781,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "casework",
                 "discovery",
                 "evidence",
+                "mint",
+                "relay",
+            ],
+            "v0.31.0": [
+                "breg",
+                "casework",
+                "discovery",
+                "evidence",
                 "relay",
             ],
         }
