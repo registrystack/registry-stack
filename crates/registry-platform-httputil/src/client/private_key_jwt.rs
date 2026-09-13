@@ -1684,6 +1684,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exchange_requires_every_requested_scope_even_when_the_issuer_narrows() {
+        for (scopes, accepted) in [
+            (vec!["records:read", "records:write"], false),
+            (vec!["records:read"], true),
+        ] {
+            let server = token_endpoint_serving(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "scope-test-credential",
+                "token_type": "Bearer", "expires_in": 300,
+                "issued_token_type": ACCESS_TOKEN_TYPE,
+                "scope": "records:read"
+            })))
+            .await;
+            let client = PrivateKeyJwt::with_clock(
+                config(endpoint(&server.uri()), client_key(Some(KEY_ID)))
+                    .with_resource("urn:registry:records")
+                    .with_scopes(scopes),
+                Arc::new(TestClock::new(NOW)),
+            )
+            .unwrap();
+            let result = client.exchange("task-grant").await;
+            if accepted {
+                assert!(result.is_ok());
+            } else {
+                assert_eq!(result.unwrap_err(), TokenError::ScopeNarrowed);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn exchange_rejects_missing_or_wrong_issued_type_and_narrowed_scope() {
         for (issued_type, scope) in [
             (None, "records:read"),

@@ -143,9 +143,12 @@ clients:
 The OAuth client must already be registered with that key and permitted to
 exchange assertions from the configured Casework authority. Before approval,
 its client-credentials permission is only `casework:grants:assert` at the
-bootstrap resource. The requested resource and scopes above are fixed ceilings;
-the real Casework assertion supplies immutable authority, subjects and task
-bounds, and the issuer enforces the scope subset.
+bootstrap resource. The resource and scopes above are the exact request sent on
+each exchange. The Casework assertion supplies immutable authority, subjects and
+task bounds, and the issuer limits the scopes it grants. The client also requires
+every requested scope in a stated response scope: a narrower response is refused
+with `ScopeNarrowed`. Configure only the scopes this task actually needs; the
+client does not silently retry with fewer permissions.
 
 Each invocation acquires a fresh bootstrap token, requests a short-lived signed
 Casework assertion, and performs uncached RFC 8693 exchange. Only the final bearer
