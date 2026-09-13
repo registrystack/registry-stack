@@ -418,13 +418,20 @@ impl CaseworkClient {
         grant_id: Uuid,
     ) -> Result<CaseworkComplete<registry_casework_core::TaskAssertionResponse>, CaseworkClientError>
     {
-        let url = self.url(&["v1", "task-grants", &grant_id.to_string(), "assertion"])?;
+        let url = self.task_assertion_endpoint(grant_id)?;
         let request = self
             .http
             .post(url)
             .header(AUTHORIZATION, token.authorization_header_value())
             .header(ACCEPT, JSON_MEDIA_TYPE);
         self.send_json(request, StatusCode::OK).await
+    }
+
+    /// The exact fixed authority route for this grant. A host may pass this
+    /// descriptor to the shared remote exchange provider while Casework keeps
+    /// ownership of its route and response contract.
+    pub fn task_assertion_endpoint(&self, grant_id: Uuid) -> Result<url::Url, CaseworkClientError> {
+        self.url(&["v1", "task-grants", &grant_id.to_string(), "assertion"])
     }
 
     /// Perform a fresh check using the service token registered for the resource.

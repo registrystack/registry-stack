@@ -18,6 +18,7 @@ test('task grants preserve preview, approval revision/key and token-only machine
  res.writeHead(200,{'content-type':'application/json',traceparent:'00-0123456789abcdef0123456789abcdef-0123456789abcdef-01'});res.end(JSON.stringify(value));});});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const client=new CaseworkClient({baseUrl:`http://127.0.0.1:${server.address().port}/`});
+ assert.equal(client.taskAssertionEndpoint(grant),`http://127.0.0.1:${server.address().port}/v1/task-grants/${grant}/assertion`);
  assert.deepEqual((await client.previewTaskTemplates('human-token','staff','source-reviewer',item)).value.templates,[preview]);
  assert.equal((await client.listTaskGrants('human-token','staff','source-reviewer',item)).value.grants[0].id,grant);
  const approval={templateId:'verify-status',templateVersion:'1'};
@@ -32,5 +33,6 @@ test('task grants preserve preview, approval revision/key and token-only machine
  const before=requests.length;
  await assert.rejects(client.approveTaskGrant('human-token','staff','source-reviewer',item,7,'caller-attempt-key',{...approval,resource:'urn:other'}),e=>e.kind==='invalid_request');
  await assert.rejects(client.taskAssertion('bootstrap-token','not-a-grant-id'),e=>e.kind==='invalid_request');
+ assert.throws(()=>client.taskAssertionEndpoint('not-a-grant-id'),e=>e.kind==='invalid_request');
  assert.equal(requests.length,before);
 });

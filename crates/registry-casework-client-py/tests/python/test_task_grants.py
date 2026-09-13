@@ -35,6 +35,7 @@ class TaskGrantTests(unittest.TestCase):
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         try:
             client = CaseworkClient(f"http://127.0.0.1:{server.server_port}/")
+            self.assertEqual(client.task_assertion_endpoint(GRANT), f"http://127.0.0.1:{server.server_port}/v1/task-grants/{GRANT}/assertion")
             args = ("human-token", "staff", "source-reviewer", ITEM)
             self.assertEqual(client.preview_task_templates(*args)["value"]["templates"], [PREVIEW])
             self.assertEqual(client.list_task_grants(*args)["value"]["grants"], [VIEW])
@@ -59,6 +60,7 @@ class TaskGrantTests(unittest.TestCase):
             count = len(requests)
             with self.assertRaises(CaseworkClientError): client.approve_task_grant(*args, 7, "caller-attempt-key", {**approval, "resource": "urn:other"})
             with self.assertRaises(CaseworkClientError): client.task_assertion("bootstrap-token", "invalid")
+            with self.assertRaises(CaseworkClientError): client.task_assertion_endpoint("invalid")
             self.assertEqual(len(requests), count)
         finally:
             server.shutdown(); thread.join(); server.server_close()

@@ -482,6 +482,13 @@ impl CaseworkClient {
         outcome(self.inner.task_assertion(&token, grant_id).await)
     }
     #[napi]
+    pub fn task_assertion_endpoint(&self, grant_id: String) -> Result<String> {
+        self.inner
+            .task_assertion_endpoint(uuid(&grant_id)?)
+            .map(|value| value.to_string())
+            .map_err(client_error)
+    }
+    #[napi]
     pub async fn task_grant_status(
         &self,
         token: String,

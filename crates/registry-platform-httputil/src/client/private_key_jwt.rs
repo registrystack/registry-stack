@@ -455,6 +455,13 @@ pub struct PrivateKeyJwt {
 }
 
 impl PrivateKeyJwt {
+    /// The fixed resource indicator and scopes selected for this provider.
+    /// Consumers can preflight a narrowly scoped bootstrap before it is used.
+    #[must_use]
+    pub fn configured_resource_and_scopes(&self) -> (Option<&str>, &[String]) {
+        (self.resource.as_deref(), &self.requested_scopes)
+    }
+
     /// Exchange one externally signed JWT assertion for an access token.
     ///
     /// The resource and scopes are fixed when this provider is constructed.
@@ -463,6 +470,15 @@ impl PrivateKeyJwt {
     /// cache, including when two tasks use the same client concurrently.
     /// The consuming resource server must verify the returned token's bounds.
     pub async fn exchange(&self, subject_token: &str) -> Result<BearerToken, TokenError> {
+        self.exchange_acquired(subject_token)
+            .await
+            .map(|acquired| acquired.token)
+    }
+
+    pub(super) async fn exchange_acquired(
+        &self,
+        subject_token: &str,
+    ) -> Result<AcquiredToken, TokenError> {
         if self.resource.is_none() || self.scope.is_none() {
             return Err(TokenError::Configuration {
                 reason: "token exchange requires a configured resource and scopes",
@@ -482,7 +498,22 @@ impl PrivateKeyJwt {
             Some(subject_token),
         )
         .await
-        .map(|acquired| acquired.token)
+    }
+
+    pub(super) fn exchange_binding(&self) -> Result<(&str, &str, &[String]), TokenError> {
+        Ok((
+            &self.client_id,
+            self.resource.as_deref().ok_or(TokenError::Configuration {
+                reason: "token exchange requires a configured resource and scopes",
+            })?,
+            if self.scope.is_some() {
+                &self.requested_scopes
+            } else {
+                return Err(TokenError::Configuration {
+                    reason: "token exchange requires a configured resource and scopes",
+                });
+            },
+        ))
     }
 
     /// Refuse a configuration that cannot authenticate, cannot protect its
@@ -948,9 +979,9 @@ impl fmt::Debug for PrivateKeyJwt {
 }
 
 /// A credential and what may be assumed about how long it lasts.
-struct AcquiredToken {
-    token: BearerToken,
-    expires_at: Option<Instant>,
+pub(super) struct AcquiredToken {
+    pub(super) token: BearerToken,
+    pub(super) expires_at: Option<Instant>,
 }
 
 /// The success response of RFC 6749 section 5.1, in the members this client uses.

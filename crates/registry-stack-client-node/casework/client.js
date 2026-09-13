@@ -92,6 +92,14 @@ class CaseworkClient {
       throw normalized(error, 'configuration');
     }
   }
+
+  taskAssertionEndpoint(grantId) {
+    try {
+      return this.native.taskAssertionEndpoint(grantId);
+    } catch (error) {
+      throw normalized(error, 'invalid_request');
+    }
+  }
 }
 
 for (const [method, jsonIndexes] of [
