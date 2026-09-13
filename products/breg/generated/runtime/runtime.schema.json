@@ -22,6 +22,45 @@
       ],
       "type": "string"
     },
+    "EvidencePrivateKeyJwtConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "assertionAudience": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clientId": {
+          "type": "string"
+        },
+        "privateKeyRef": {
+          "type": "string"
+        },
+        "resource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopes": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tokenEndpoint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tokenEndpoint",
+        "clientId",
+        "privateKeyRef"
+      ],
+      "type": "object"
+    },
     "EvidenceProviderConfig": {
       "additionalProperties": false,
       "properties": {
@@ -34,6 +73,16 @@
             "null"
           ]
         },
+        "privateKeyJwt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EvidencePrivateKeyJwtConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "revokedKeyIds": {
           "default": [],
           "items": {
@@ -42,7 +91,11 @@
           "type": "array"
         },
         "tokenRef": {
-          "type": "string"
+          "description": "Compatibility path for a pre-issued token. Long-running providers\nshould configure `privateKeyJwt` so expiry triggers a fresh exchange.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "trustBindingId": {
           "type": "string"
@@ -54,7 +107,6 @@
       "required": [
         "baseUrl",
         "trustBindingId",
-        "tokenRef",
         "trustedJwksRef"
       ],
       "type": "object"

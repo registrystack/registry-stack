@@ -18,11 +18,33 @@ use std::{
 pub struct EvidenceProviderConfig {
     pub base_url: String,
     pub trust_binding_id: String,
-    pub token_ref: String,
+    /// Compatibility path for a pre-issued token. Long-running providers
+    /// should configure `privateKeyJwt` so expiry triggers a fresh exchange.
+    pub token_ref: Option<String>,
+    pub private_key_jwt: Option<EvidencePrivateKeyJwtConfig>,
     pub trusted_jwks_ref: String,
     #[serde(default)]
     pub revoked_key_ids: Vec<String>,
     pub ca_bundle_ref: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct EvidencePrivateKeyJwtConfig {
+    pub token_endpoint: String,
+    pub client_id: String,
+    pub private_key_ref: String,
+    pub assertion_audience: Option<String>,
+    pub resource: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+impl std::fmt::Debug for EvidencePrivateKeyJwtConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EvidencePrivateKeyJwtConfig([protected])")
+    }
 }
 impl std::fmt::Debug for EvidenceProviderConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -58,12 +80,7 @@ pub fn activate(
         {
             return Err(Error::InvalidBinding);
         }
-        let token = secrets
-            .resolve(&binding.token_ref)
-            .map_err(|_| Error::Secret)?;
-        let token = std::str::from_utf8(token.expose_secret()).map_err(|_| Error::Secret)?;
-        let token = registry_evidence_client::StaticToken::new(token.to_owned())
-            .map_err(|_| Error::InvalidBinding)?;
+        let token_provider = token_provider(binding, secrets)?;
         let keys = secrets
             .resolve(&binding.trusted_jwks_ref)
             .map_err(|_| Error::Secret)?;
@@ -75,7 +92,7 @@ pub fn activate(
                 .base_url
                 .parse()
                 .map_err(|_| Error::InvalidBinding)?,
-            Arc::new(token),
+            token_provider,
             jwks,
             binding.revoked_key_ids.clone(),
         );
@@ -106,6 +123,67 @@ fn required_provider_ids(registry: &CompiledRegistry) -> BTreeSet<String> {
         .flat_map(|request| request.application.preconditions.evidence.iter())
         .map(|evidence| evidence.capability.provider.clone());
     immediate.chain(reviewed_requests).collect()
+}
+
+fn token_provider(
+    binding: &EvidenceProviderConfig,
+    secrets: &SecretResolver,
+) -> Result<
+    Arc<dyn registry_evidence_client::TokenProvider>,
+    crate::runtime_config::RuntimeConfigError,
+> {
+    use crate::runtime_config::RuntimeConfigError as Error;
+    if binding.token_ref.is_some() == binding.private_key_jwt.is_some() {
+        return Err(Error::InvalidBinding);
+    }
+    let provider: Arc<dyn registry_evidence_client::TokenProvider> = if let Some(reference) =
+        &binding.token_ref
+    {
+        let token = secrets.resolve(reference).map_err(|_| Error::Secret)?;
+        let token = std::str::from_utf8(token.expose_secret()).map_err(|_| Error::Secret)?;
+        Arc::new(
+            registry_evidence_client::StaticToken::new(token.to_owned())
+                .map_err(|_| Error::InvalidBinding)?,
+        )
+    } else {
+        let source = binding
+            .private_key_jwt
+            .as_ref()
+            .ok_or(Error::InvalidBinding)?;
+        let endpoint = source
+            .token_endpoint
+            .parse()
+            .map_err(|_| Error::InvalidBinding)?;
+        let key = secrets
+            .resolve(&source.private_key_ref)
+            .map_err(|_| Error::Secret)?;
+        let key = std::str::from_utf8(key.expose_secret()).map_err(|_| Error::Secret)?;
+        let key =
+            registry_platform_crypto::PrivateJwk::parse(key).map_err(|_| Error::InvalidBinding)?;
+        let mut token_config = registry_evidence_client::PrivateKeyJwtConfig::new(
+            endpoint,
+            source.client_id.clone(),
+            key,
+        );
+        if let Some(audience) = &source.assertion_audience {
+            token_config = token_config.with_audience(audience.clone());
+        }
+        if let Some(resource) = &source.resource {
+            token_config = token_config.with_resource(resource.clone());
+        }
+        if !source.scopes.is_empty() {
+            token_config = token_config.with_scopes(source.scopes.clone());
+        }
+        if let Some(reference) = &binding.ca_bundle_ref {
+            let ca = secrets.resolve(reference).map_err(|_| Error::Secret)?;
+            token_config = token_config.with_trusted_root_certificates(ca.expose_secret().to_vec());
+        }
+        Arc::new(
+            registry_evidence_client::PrivateKeyJwt::new(token_config)
+                .map_err(|_| Error::InvalidBinding)?,
+        )
+    };
+    Ok(provider)
 }
 
 #[cfg(test)]
@@ -160,7 +238,8 @@ mod tests {
         let binding = EvidenceProviderConfig {
             base_url: "https://invalid.example".into(),
             trust_binding_id: "unused".into(),
-            token_ref: "secret:file/missing".into(),
+            token_ref: Some("secret:file/missing".into()),
+            private_key_jwt: None,
             trusted_jwks_ref: "secret:file/missing".into(),
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
@@ -174,6 +253,68 @@ mod tests {
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
     }
+
+    #[test]
+    fn credential_binding_selects_exactly_one_provider_without_a_token_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let write_secret = |name: &str, value: &str| {
+            let path = directory.path().join(name);
+            std::fs::write(&path, value).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        };
+        write_secret("token", "synthetic-token");
+        // Published synthetic platform test key. No issuer or Evidence service
+        // is running: constructing either provider must remain offline.
+        let mut key = serde_json::json!({
+            "kty":"EC", "crv":"P-256", "alg":"ES256",
+            "d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4",
+            "x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+            "y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU"
+        });
+        let parsed = registry_platform_crypto::PrivateJwk::parse(&key.to_string()).unwrap();
+        key["kid"] = serde_json::json!(parsed.public().jkt().unwrap());
+        write_secret("key", &key.to_string());
+        let secrets = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            directory.path(),
+        )
+        .unwrap();
+        let mut binding = EvidenceProviderConfig {
+            base_url: "https://evidence.example.org".into(),
+            trust_binding_id: "reviewed".into(),
+            token_ref: Some("secret:file/token".into()),
+            private_key_jwt: None,
+            trusted_jwks_ref: "secret:file/unused".into(),
+            revoked_key_ids: vec![],
+            ca_bundle_ref: None,
+        };
+        assert!(token_provider(&binding, &secrets).is_ok());
+        binding.private_key_jwt = Some(EvidencePrivateKeyJwtConfig {
+            token_endpoint: "https://issuer.example.org/token".into(),
+            client_id: "action-client".into(),
+            private_key_ref: "secret:file/key".into(),
+            assertion_audience: Some("https://issuer.example.org".into()),
+            resource: Some("https://evidence.example.org".into()),
+            scopes: vec!["evidence.read".into()],
+        });
+        assert!(matches!(
+            token_provider(&binding, &secrets),
+            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
+        ));
+        binding.token_ref = None;
+        assert!(token_provider(&binding, &secrets).is_ok());
+        binding.private_key_jwt.as_mut().unwrap().resource = Some("not-an-uri".into());
+        assert!(matches!(
+            token_provider(&binding, &secrets),
+            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
+        ));
+        binding.private_key_jwt = None;
+        assert!(matches!(
+            token_provider(&binding, &secrets),
+            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
+        ));
+    }
+
     #[test]
     fn reviewed_request_guards_require_activation_even_without_an_immediate_action() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -254,7 +395,8 @@ mod tests {
         let binding = EvidenceProviderConfig {
             base_url: "https://evidence.example".into(),
             trust_binding_id: "reviewed".into(),
-            token_ref: "secret:file/missing".into(),
+            token_ref: Some("secret:file/missing".into()),
+            private_key_jwt: None,
             trusted_jwks_ref: "secret:file/missing".into(),
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
@@ -289,7 +431,7 @@ mod tests {
         )
         .unwrap();
         let binding = EvidenceProviderConfig {
-            token_ref: "secret:file/token".into(),
+            token_ref: Some("secret:file/token".into()),
             trusted_jwks_ref: "secret:file/jwks".into(),
             ..binding
         };
