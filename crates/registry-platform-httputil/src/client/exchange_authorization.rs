@@ -519,6 +519,7 @@ impl ExchangeAuthorization {
                 .get("kid")
                 .and_then(Value::as_str)
                 .is_none_or(|value| !valid_text(value))
+            || header.get("typ").and_then(Value::as_str) != Some("JWT")
         {
             return Err(TokenError::Invalid {
                 reason: "the authority assertion header is not supported",
@@ -550,8 +551,7 @@ impl ExchangeAuthorization {
                 .is_none_or(|issued| issued > now || issued < now - MAX_ASSERTION_LIFETIME_SECONDS)
             || claims
                 .get("nbf")
-                .and_then(Value::as_i64)
-                .is_some_and(|start| start > now)
+                .is_some_and(|value| value.as_i64().is_none_or(|start| start > now))
             || claims
                 .get("jti")
                 .and_then(Value::as_str)
@@ -789,6 +789,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cached_person_token_stops_at_verified_context_deadline() {
+        let server = MockServer::start().await;
+        endpoint(&server, Some(300)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 2),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Unavailable)
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn mismatched_scope_and_expired_context_refuse_before_token_request() {
         let server = MockServer::start().await;
         let exchange = exchange(&server, "urn:records", &["records:read"]);
@@ -812,6 +831,61 @@ mod tests {
     }
 
     struct BrokenAuthority;
+
+    struct GrantAuthority;
+
+    #[async_trait]
+    impl ExchangeAssertionSource for GrantAuthority {
+        async fn assertion(
+            &self,
+            context: &ExchangeContext,
+        ) -> Result<SignedExchangeAssertion, TokenError> {
+            let now = now_seconds()?;
+            let exp = context.deadline.min(now + 60);
+            let claims = json!({"iss":context.issuer, "sub":context.subject, "aud":context.audience,
+                "iat":now, "exp":exp, "jti":"grant-assertion", "scope":"records:read",
+                "registry_actor_kind":"agent", "registry_grant_id":context.grant_id,
+                "registry_grant_client":"portal-client", "registry_grant_resource":"urn:records",
+                "registry_grant_exp":context.deadline});
+            let header = json!({"alg":"EdDSA", "kid":"test-key", "typ":"JWT"});
+            SignedExchangeAssertion::new(
+                format!(
+                    "{}.{}.signature",
+                    URL_SAFE_NO_PAD.encode(header.to_string()),
+                    URL_SAFE_NO_PAD.encode(claims.to_string())
+                ),
+                exp,
+            )
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_grant_token_stops_at_immutable_grant_deadline() {
+        let server = MockServer::start().await;
+        endpoint(&server, Some(300)).await;
+        let grant = ExchangeContext::grant(
+            "https://casework.example",
+            "agent-1",
+            "https://issuer.example",
+            "grant-generation-1",
+            now_seconds().unwrap() + 2,
+            "grant-one",
+        )
+        .unwrap();
+        let provider = ExchangeAuthorization::from_authority(
+            exchange(&server, "urn:records", &["records:read"]),
+            grant,
+            Arc::new(GrantAuthority),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Unavailable)
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
 
     #[async_trait]
     impl ExchangeAssertionSource for BrokenAuthority {
