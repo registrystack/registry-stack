@@ -123,6 +123,10 @@ pub struct DevArgs {
     #[arg(long, global = true)]
     issuer_port: Option<u16>,
 
+    /// Ready BREG dev project that owns the shared issuer and Evidence client registrations.
+    #[arg(long, global = true, value_name = "PROJECT")]
+    issuer_project: Option<PathBuf>,
+
     /// Retained Mint-era spelling, refused with migration guidance.
     #[arg(long, global = true, hide = true)]
     mint_port: Option<u16>,
@@ -259,6 +263,10 @@ struct DevState {
     evidence_origin: String,
     issuer_origin: String,
     issuer_session_id: String,
+    #[serde(default)]
+    issuer_project: Option<PathBuf>,
+    #[serde(default)]
+    issuer_owner: Option<String>,
     token_url: String,
     access_token_audience: String,
     caller: Option<CallerState>,
@@ -438,7 +446,22 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             if args.detach || args.project.is_some() {
                 bail!("`dev start` does not accept the compatibility flags --detach or --project");
             }
-            let ports = selected_ports(&start.project, args.evidence_port, args.issuer_port)?;
+            let owner = args
+                .issuer_project
+                .as_deref()
+                .map(load_breg_issuer)
+                .transpose()?;
+            if owner
+                .as_ref()
+                .is_some_and(|owner| args.issuer_port.is_some_and(|port| port != owner.port))
+            {
+                bail!("--issuer-port differs from the BREG issuer owner");
+            }
+            let ports = selected_ports(
+                &start.project,
+                args.evidence_port,
+                owner.as_ref().map(|owner| owner.port).or(args.issuer_port),
+            )?;
             start_detached(
                 &start.project,
                 args.evidence_bin.as_deref(),
@@ -446,6 +469,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
+                args.issuer_project.as_deref(),
                 format,
             )
         }
@@ -473,7 +497,22 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 bail!("the local development lifecycle requires `evidencectl dev --detach`");
             }
             let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
-            let ports = selected_ports(project, args.evidence_port, args.issuer_port)?;
+            let owner = args
+                .issuer_project
+                .as_deref()
+                .map(load_breg_issuer)
+                .transpose()?;
+            if owner
+                .as_ref()
+                .is_some_and(|owner| args.issuer_port.is_some_and(|port| port != owner.port))
+            {
+                bail!("--issuer-port differs from the BREG issuer owner");
+            }
+            let ports = selected_ports(
+                project,
+                args.evidence_port,
+                owner.as_ref().map(|owner| owner.port).or(args.issuer_port),
+            )?;
             start_detached(
                 project,
                 args.evidence_bin.as_deref(),
@@ -481,6 +520,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 args.ready_timeout_seconds,
                 ports,
                 args.target.as_deref(),
+                args.issuer_project.as_deref(),
                 format,
             )
         }
@@ -520,6 +560,155 @@ fn selected_ports(
             .or(retained.map(|ports| ports.1))
             .unwrap_or(8081),
     )
+}
+
+#[derive(Clone, Debug)]
+struct BorrowedIssuer {
+    project: PathBuf,
+    owner: String,
+    port: u16,
+}
+
+fn load_breg_issuer(project: &Path) -> Result<BorrowedIssuer> {
+    let project = canonical_project(project)?;
+    let root = project.join(".breg/dev");
+    validate_private_directory(&project.join(".breg"))?;
+    validate_private_directory(&root)?;
+    let state = read_owner_json(&root.join("state.json"), MAX_STATE_BYTES)?;
+    let owner = state["owner"]
+        .as_str()
+        .context("BREG issuer owner has no ID")?;
+    if owner.len() != 36
+        || owner.bytes().enumerate().any(|(index, byte)| {
+            if matches!(index, 8 | 13 | 18 | 23) {
+                byte != b'-'
+            } else {
+                !byte.is_ascii_hexdigit()
+            }
+        })
+    {
+        bail!("BREG issuer owner ID is invalid");
+    }
+    let port = state["issuerPort"]
+        .as_u64()
+        .filter(|port| *port > 0 && *port <= u16::MAX as u64)
+        .context("BREG issuer owner has no valid port")? as u16;
+    if state["version"] != 2
+        || state["status"] != "ready"
+        || state["project"] != project.to_string_lossy().as_ref()
+        || !state["issuerProject"].is_null()
+    {
+        bail!("--issuer-project must name a ready BREG dev issuer owner");
+    }
+    Ok(BorrowedIssuer {
+        project,
+        owner: owner.to_owned(),
+        port,
+    })
+}
+
+fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
+    let current = load_breg_issuer(&owner.project)?;
+    if current.owner != owner.owner || current.port != owner.port {
+        bail!(
+            "the BREG issuer owner session or port changed; preserve the stopped Evidence session"
+        );
+    }
+    let origin = format!("http://127.0.0.1:{}", owner.port);
+    let agent = ureq::AgentBuilder::new()
+        .try_proxy_from_env(false)
+        .redirects(0)
+        .timeout_connect(Duration::from_secs(1))
+        .timeout_read(Duration::from_secs(2))
+        .timeout_write(Duration::from_secs(1))
+        .build();
+    for (path, expected) in [
+        ("/.well-known/openid-configuration", "issuer"),
+        ("/oauth2/jwks", "keys"),
+    ] {
+        let response = agent
+            .get(&format!("{origin}{path}"))
+            .call()
+            .context("the shared BREG issuer is not answering")?;
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(MAX_HTTP_BODY_BYTES + 1)
+            .read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_HTTP_BODY_BYTES {
+            bail!("shared issuer response exceeds its bound");
+        }
+        let value: Value =
+            serde_json::from_slice(&bytes).context("shared issuer response is invalid")?;
+        if (expected == "issuer" && value["issuer"] != origin)
+            || (expected == "keys" && value["keys"].as_array().is_none_or(Vec::is_empty))
+        {
+            bail!("the shared issuer does not publish its exact identity and keys");
+        }
+    }
+    Ok(())
+}
+
+fn verify_borrowed_registrations(
+    owner: &BorrowedIssuer,
+    audience: &str,
+    clients: &[registry_thunderid_tooling::local::TypedLocalClient],
+) -> Result<()> {
+    let root = owner.project.join(".breg/dev");
+    let inventory = read_owner_json(&root.join("clients.json"), MAX_STATE_BYTES)?;
+    if !inventory["issuer"]["resources"]
+        .as_array()
+        .is_some_and(|resources| {
+            resources.iter().any(|resource| {
+                resource["audience"] == audience
+                    && resource["scopes"]
+                        .as_array()
+                        .is_some_and(|scopes| scopes.iter().any(|scope| scope == "evidence:invoke"))
+            })
+        })
+    {
+        bail!("BREG issuer owner has not declared the Evidence audience and invoke scope");
+    }
+    for client in clients {
+        let registered = inventory["clients"]
+            .as_array()
+            .and_then(|entries| entries.iter().find(|entry| entry["id"] == client.client_id))
+            .with_context(|| {
+                format!(
+                    "BREG issuer owner has no registration for Evidence client {}",
+                    client.client_id
+                )
+            })?;
+        if registered["scopes"] != json!(client.scopes)
+            || registered["claims"] != json!(client.claims)
+            || registered["allowHumanFixture"] == true
+            || registered["allowBregAccess"] == true
+            || inventory["issuer"]["clientResources"][&client.client_id] != audience
+        {
+            bail!(
+                "BREG issuer registration differs from Evidence client {}",
+                client.client_id
+            );
+        }
+        let expected: Value = serde_json::from_str(&client.public_jwks)?;
+        let public = read_owner_json(
+            &root
+                .join("credentials")
+                .join(&client.client_id)
+                .join("public.jwk"),
+            4096,
+        )?;
+        if expected["keys"]
+            .as_array()
+            .is_none_or(|keys| keys.len() != 1 || keys[0] != public)
+        {
+            bail!(
+                "BREG issuer owner registered a different key for Evidence client {}",
+                client.client_id
+            );
+        }
+    }
+    Ok(())
 }
 
 fn approved_grant(args: GrantArgs, format: OutputFormat) -> Result<ExitCode> {
@@ -822,6 +1011,21 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
     if state.project != project
         || state.runtime_path != dev_root.join("runtime.yaml")
         || !origins_are_closed
+        || state.issuer_project.is_some() != state.issuer_owner.is_some()
+        || state
+            .issuer_project
+            .as_ref()
+            .is_some_and(|path| !path.is_absolute() || path == project)
+        || state.issuer_owner.as_ref().is_some_and(|owner| {
+            owner.len() != 36
+                || owner.bytes().enumerate().any(|(index, byte)| {
+                    if matches!(index, 8 | 13 | 18 | 23) {
+                        byte != b'-'
+                    } else {
+                        !byte.is_ascii_hexdigit()
+                    }
+                })
+        })
         || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
         || !questions_are_closed
         || !access_policies_are_closed
@@ -1162,6 +1366,7 @@ fn start_detached(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    issuer_project: Option<&Path>,
     format: OutputFormat,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
@@ -1174,10 +1379,51 @@ fn start_detached(
 
     preflight_retained_stopped_session(&project, &dev_root, &retained_root)?;
 
+    let prior = if dev_root.join("state.json").exists() {
+        Some(read_state(&dev_root.join("state.json"))?)
+    } else {
+        None
+    };
+    let owner_project = issuer_project
+        .map(canonical_project)
+        .transpose()?
+        .or_else(|| {
+            prior
+                .as_ref()
+                .and_then(|state| state.issuer_project.clone())
+        });
+    if let (Some(prior), Some(requested)) = (&prior, &owner_project) {
+        if prior
+            .issuer_project
+            .as_ref()
+            .is_some_and(|previous| previous != requested)
+        {
+            bail!("the requested BREG issuer project differs from the retained Evidence session");
+        }
+    }
+    let owner = owner_project.as_deref().map(load_breg_issuer).transpose()?;
+    if let Some(owner) = &owner {
+        if owner.project == project
+            || owner.port != ports.issuer
+            || prior
+                .as_ref()
+                .and_then(|state| state.issuer_owner.as_deref())
+                .is_some_and(|previous| previous != owner.owner)
+        {
+            bail!("the requested BREG issuer differs from the retained Evidence session");
+        }
+        verify_borrowed_issuer(owner)?;
+    } else if prior
+        .as_ref()
+        .is_some_and(|state| state.issuer_project.is_some())
+    {
+        bail!("the retained Evidence session needs its BREG issuer owner");
+    }
+
     // A refused restart must leave the stopped session intact so its selected
     // ports remain available to the next attempt. The services bind again
     // after this probe, so this is an actionable preflight rather than a lock.
-    probe_local_ports(ports)?;
+    probe_local_ports(ports, owner.is_some())?;
 
     let retained = retain_completed_dev_root(&project, &dev_root, &retained_root)?;
 
@@ -1191,6 +1437,7 @@ fn start_detached(
             ready_timeout_seconds,
             ports,
             target,
+            owner.as_ref(),
             format,
         )
     });
@@ -1227,11 +1474,14 @@ fn start_detached(
 /// a detached supervisor, where the failure reaches the operator as a
 /// readiness timeout that names neither the port nor a way out. Binding first
 /// is the same question asked where the answer can still be acted on.
-fn probe_local_ports(ports: LocalServicePorts) -> Result<()> {
+fn probe_local_ports(ports: LocalServicePorts, borrowed_issuer: bool) -> Result<()> {
     for (port, service, flag) in [
         (ports.evidence, "Evidence Gateway", "--evidence-port"),
         (ports.issuer, "issuer", "--issuer-port"),
     ] {
+        if borrowed_issuer && service == "issuer" {
+            continue;
+        }
         if let Err(error) = TcpListener::bind(("127.0.0.1", port)) {
             if error.kind() == std::io::ErrorKind::AddrInUse {
                 return Err(PortConflict {
@@ -1465,6 +1715,7 @@ fn prepare_and_start(
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
     target: Option<&Path>,
+    owner: Option<&BorrowedIssuer>,
     format: OutputFormat,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
@@ -1512,6 +1763,9 @@ fn prepare_and_start(
     generate_holder_key(&keys)?;
     let mut issuer_clients = Vec::new();
     let caller = if compiled.access_policies.is_empty() {
+        if owner.is_some() {
+            bail!("--issuer-project requires explicit Evidence access policies and active clients before the issuer owner starts");
+        }
         let (caller_private, caller_public) =
             keygen::generate_dev_keypair(&keys, "caller-private.jwk", "caller-public.jwk.json")?;
         let caller_public = read_owner_json(&caller_public, 16 * 1024)?;
@@ -1571,17 +1825,21 @@ fn prepare_and_start(
     getrandom::fill(&mut random)?;
     let issuer_session_id = hex::encode(random);
     let issuer_label = format!("evidence-dev-{}", &issuer_session_id[..12]);
-    let description = registry_thunderid_tooling::local::typed_local_description(
-        registry_thunderid_tooling::description::SessionIdentity {
-            label: issuer_label,
-            id: issuer_session_id.clone(),
-        },
-        ports.issuer,
-        generated.join("issuer"),
-        compiled.local_audience.clone(),
-        issuer_clients,
-    )?;
-    registry_thunderid_tooling::render::render(&description)?;
+    if let Some(owner) = owner {
+        verify_borrowed_registrations(owner, &compiled.local_audience, &issuer_clients)?;
+    } else {
+        let description = registry_thunderid_tooling::local::typed_local_description(
+            registry_thunderid_tooling::description::SessionIdentity {
+                label: issuer_label,
+                id: issuer_session_id.clone(),
+            },
+            ports.issuer,
+            generated.join("issuer"),
+            compiled.local_audience.clone(),
+            issuer_clients,
+        )?;
+        registry_thunderid_tooling::render::render(&description)?;
+    }
 
     let state = DevState {
         schema: STATE_SCHEMA.to_owned(),
@@ -1591,6 +1849,8 @@ fn prepare_and_start(
         evidence_origin: evidence_origin.clone(),
         issuer_origin: issuer_origin.clone(),
         issuer_session_id,
+        issuer_project: owner.map(|owner| owner.project.clone()),
+        issuer_owner: owner.map(|owner| owner.owner.clone()),
         token_url: token_url.clone(),
         access_token_audience: compiled.local_audience.clone(),
         caller,
@@ -1839,11 +2099,21 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
         state_root: &issuer_root,
         image: &pin.image,
     };
-    if let Err(error) =
+    let issuer_start = if let Some(project) = &state.issuer_project {
+        let owner = BorrowedIssuer {
+            project: project.clone(),
+            owner: state.issuer_owner.clone().expect("closed borrowed owner"),
+            port: local_origin_port(&state.issuer_origin).expect("closed issuer origin"),
+        };
+        verify_borrowed_issuer(&owner)
+    } else {
         registry_thunderid_tooling::local::start(&issuer_session, &args.docker_bin, &mut || {
             terminate.load(Ordering::Relaxed)
         })
-    {
+        .map(|_| ())
+        .map_err(anyhow::Error::from)
+    };
+    if let Err(error) = issuer_start {
         eprintln!("Issuer start failed: {error}");
         return fail_before_evidence(&state_path, &mut state, FailureKind::IssuerStart);
     }
@@ -1859,7 +2129,10 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
             Ok(child) => child,
             Err(error) => {
                 eprintln!("Evidence start failed: {error:#}");
-                let _ = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
+                if state.issuer_project.is_none() {
+                    let _ =
+                        registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
+                }
                 return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceStart);
             }
         },
@@ -1884,7 +2157,9 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     .is_err()
     {
         eprintln!("Evidence did not reach its fixed local readiness proof");
-        let _ = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
+        if state.issuer_project.is_none() {
+            let _ = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin);
+        }
         return fail_before_evidence(&state_path, &mut state, FailureKind::EvidenceReadiness);
     }
 
@@ -1903,8 +2178,12 @@ fn supervise(args: SupervisorArgs, terminate: &AtomicBool) -> Result<()> {
     state.status = DevStatus::Stopping;
     let stopping_state = replace_state(&state_path, &state);
     children.stop();
-    let issuer_cleanup = registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin)
-        .map_err(anyhow::Error::from);
+    let issuer_cleanup = if state.issuer_project.is_some() {
+        Ok(())
+    } else {
+        registry_thunderid_tooling::local::stop(&issuer_session, &args.docker_bin)
+            .map_err(anyhow::Error::from)
+    };
     stopping_state?;
     issuer_cleanup?;
 
@@ -2791,6 +3070,8 @@ requirements:
             evidence_origin: local_origin(8080),
             issuer_origin: local_origin(8081),
             issuer_session_id: "0123456789abcdef0123456789abcdef0123456789abcdef".to_owned(),
+            issuer_project: None,
+            issuer_owner: None,
             token_url: format!("{}/oauth2/token", local_origin(8081)),
             access_token_audience: compiled.local_audience.clone(),
             caller: Some(CallerState {
@@ -3019,21 +3300,99 @@ requirements:
         let free_port = free.local_addr().expect("free address").port();
         drop(free);
 
-        let error = probe_local_ports(LocalServicePorts::new(port, free_port).expect("ports"))
-            .expect_err("a held Evidence port is refused")
-            .to_string();
+        let error = probe_local_ports(
+            LocalServicePorts::new(port, free_port).expect("ports"),
+            false,
+        )
+        .expect_err("a held Evidence port is refused")
+        .to_string();
         assert!(error.contains(&port.to_string()), "{error}");
         assert!(error.contains("already in use"), "{error}");
         assert!(error.contains("--evidence-port"), "{error}");
 
-        let error = probe_local_ports(LocalServicePorts::new(free_port, port).expect("ports"))
-            .expect_err("a held issuer port is refused")
-            .to_string();
+        let error = probe_local_ports(
+            LocalServicePorts::new(free_port, port).expect("ports"),
+            false,
+        )
+        .expect_err("a held issuer port is refused")
+        .to_string();
         assert!(error.contains("--issuer-port"), "{error}");
+        probe_local_ports(
+            LocalServicePorts::new(free_port, port).expect("ports"),
+            true,
+        )
+        .expect("a borrower accepts the owner's held issuer port");
 
         drop(held);
-        probe_local_ports(LocalServicePorts::new(port, free_port).expect("ports"))
-            .expect("a released port passes the probe");
+        probe_local_ports(
+            LocalServicePorts::new(port, free_port).expect("ports"),
+            false,
+        )
+        .expect("a released port passes the probe");
+    }
+
+    #[test]
+    fn borrowed_evidence_registration_requires_exact_audience_claims_and_key() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = fs::canonicalize(temporary.path()).unwrap();
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+        let parent = project.join(".breg");
+        create_private_directory(&parent).unwrap();
+        let root = parent.join("dev");
+        create_private_directory(&root).unwrap();
+        let credentials = root.join("credentials");
+        create_private_directory(&credentials).unwrap();
+        let client_dir = credentials.join("evidence-client");
+        create_private_directory(&client_dir).unwrap();
+        keygen::generate_dev_keypair(&client_dir, "assertion-key.jwk", "public.jwk").unwrap();
+        let public = read_owner_json(&client_dir.join("public.jwk"), 4096).unwrap();
+        let claims = BTreeMap::from([
+            ("registry_actor_kind".into(), json!("service")),
+            ("evidence_tags".into(), json!(["policy-one"])),
+            (
+                "evidence_audience".into(),
+                json!("urn:evidence:client:synthetic"),
+            ),
+        ]);
+        let client = registry_thunderid_tooling::local::TypedLocalClient {
+            client_id: "evidence-client".into(),
+            public_jwks: json!({"keys":[public]}).to_string(),
+            claims: claims.clone(),
+            scopes: vec!["evidence:invoke".into()],
+            allow_human_fixture: false,
+        };
+        let mut inventory = json!({
+            "clients":[{"id":"evidence-client","claims":claims,"scopes":["evidence:invoke"]}],
+            "issuer":{"resources":[{"audience":LOCAL_ACCESS_TOKEN_AUDIENCE,"scopes":["evidence:invoke"]}],
+                "clientResources":{"evidence-client":LOCAL_ACCESS_TOKEN_AUDIENCE}}
+        });
+        let clients_path = root.join("clients.json");
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        fs::set_permissions(&clients_path, fs::Permissions::from_mode(0o600)).unwrap();
+        let owner = BorrowedIssuer {
+            project,
+            owner: "01234567-89ab-4def-8123-456789abcdef".into(),
+            port: 8091,
+        };
+        verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[client.clone()])
+            .unwrap();
+        let mut altered = client.clone();
+        altered
+            .claims
+            .insert("evidence_audience".into(), json!("urn:evidence:other"));
+        assert!(
+            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[altered]).is_err()
+        );
+        let mut altered = client.clone();
+        altered.public_jwks = json!({"keys":[{"kty":"EC","kid":"different"}]}).to_string();
+        assert!(
+            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[altered]).is_err()
+        );
+        inventory["clients"][0]["allowBregAccess"] = json!(true);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(
+            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[client]).is_err()
+        );
     }
 
     #[test]
