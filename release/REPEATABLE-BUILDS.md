@@ -23,7 +23,8 @@ The workflow:
    release manifest.
 3. Rebuilds the canonical Linux payload with fresh Cargo and target
    directories.
-4. Requires byte equality for the seven declared Linux amd64 binaries.
+4. Requires byte equality for every Linux amd64 binary declared by the selected
+   release manifest.
 5. Rebuilds each release image without cache.
 6. Compares its image configuration and ordered root filesystem layers with
    the published digest-bound image.

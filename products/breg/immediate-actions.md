@@ -402,7 +402,7 @@ authority, verify it, then start `breg` with the runtime config used
 for that package. The scripts [quickstart/run.sh](quickstart/run.sh),
 [demo/run.sh](demo/run.sh), and
 [test-change-request-examples.sh](scripts/test-change-request-examples.sh) show
-the runtime file shape, Mint setup, loopback server start, schema-test credential
+the runtime file shape, stock ThunderID setup, loopback server start, schema-test credential
 binding, and owner-only token files. Keep bearer tokens in files or environment
 variables, not in shell history or logs.
 

@@ -18,6 +18,36 @@ relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
 
+- Registry Mint retired; the `mint` config key and retired CLI flags are refused.
+
+{/* Evidence: crates/registry-bregctl/src/dev/mod.rs, DevArgs;
+    crates/registry-caseworkctl/src/dev/mod.rs, read_state();
+    crates/registry-evidencectl/src/dev.rs, RetiredMintDevelopment. */}
+
+- Grant authority removed: Base Registry Engine (BReg) `taskGrant.authority` and task status client
+  `authority`, Casework `taskAuthority.id`, and Evidence's `grantAuthority`
+  claim name. BReg status clients are keyed by source issuer only.
+
+{/* Evidence: crates/registry-breg/src/contract.rs, TaskGrantSource;
+    crates/registry-breg/src/task_grant/config.rs, TaskGrantStatusConfig;
+    crates/registry-casework/src/config.rs, TaskAuthorityConfig;
+    crates/registry-platform-oidc/src/authorization_claims.rs, ClaimNames. */}
+
+- Casework task assertions no longer carry `registry_grant_authority` or
+  `registry_grant_source_issuer`; ThunderID derives the source issuer from the
+  verified `iss`.
+
+{/* Evidence: crates/registry-casework/src/task_grants.rs, task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit();
+    crates/registry-thunderid-tooling/src/description.rs, GRANT_ATTRIBUTES;
+    crates/registry-thunderid-tooling/src/render.rs, render(). */}
+
+- Local dev databases holding grants or drafts from before #1044 no longer load;
+  reset local dev state.
+
+{/* Evidence: crates/registry-casework-core/src/task_grant.rs, TaskGrant;
+    crates/registry-casework/src/task_grants.rs, PostgresStore::task_grant();
+    crates/registry-breg/src/request_workflow.rs, RequestWorkflow. */}
+
 - `@registrystack/client` exposes `breg.verifyWebhookDelivery()` for Node
   receivers. The helper delegates the Version 1 signature contract to the
   shared Rust verifier and returns the authenticated CloudEvents attributes,

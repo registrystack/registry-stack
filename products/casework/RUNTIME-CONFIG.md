@@ -39,7 +39,7 @@ available only to builds with the `postgres-test` feature and an explicit
 
 `authentication.oidc` requires `issuer` and `audience`. `jwksSource` defaults to
 discovery and can instead select a static `documentRef`. `scopeClaim` defaults
-to `registry_scopes` for compatibility with existing deployments. Registry Mint
+to `registry_scopes` for compatibility with existing deployments. Stock ThunderID
 emits `scope`, so the maintained example and `caseworkctl init` set that explicit
 override. `humanIdentity` defaults to claim
 `registry_actor_kind` with value `human` and applies only to human roles.

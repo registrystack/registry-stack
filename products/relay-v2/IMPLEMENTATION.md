@@ -691,12 +691,12 @@ contract and source revisions, and exact released bytes. They never contain a
 key, component constraint, time bound, observation, codelist value, hidden
 authority value, or response value.
 
-Registry Mint is optional. Relay production crates do not depend on Mint. A
-Mint deployment may be paired through its standard authorization registration,
-which emits Relay's audience, scope, optional purpose, and optional binding
-claims. Mint never copies requested authority from the caller. A real-router
-acceptance test exercises this pairing through the same verifier and decision
-path without adding a production dependency from Relay to Mint.
+The pinned stock ThunderID journey is optional. Relay production crates do not
+depend on ThunderID. Its authorization registration emits Relay's audience,
+scope, optional purpose, and optional binding claims. The issuer never copies
+requested authority from the caller. A real-router acceptance test exercises
+this pairing through the same verifier and decision path without adding a
+production dependency from Relay to ThunderID.
 
 The initial machine-to-machine profile is OAuth client credentials at the
 authorization server followed by this JWT access token at Relay. Mutual-TLS
@@ -831,7 +831,7 @@ any diagnostic surface.
   fixtures, and a real local `relay` process.
 - Use focused parameterized compiler/runtime tests for multi-resource state
   isolation instead of a fifth deployment project.
-- Exercise Mint's standard authorization registration through the Relay
+- Exercise stock ThunderID's authorization registration through the Relay
   client's private-key-JWT provider and the real Relay router.
 - Record Relay's named lookup as an ordinary protected HTTP source contract for
   a future Evidence integration. A real Evidence pairing remains a separate,
@@ -900,7 +900,7 @@ future compatibility profiles do not block focused implementation milestones.
 - any Digital Registries family other than the three declared Consultation
   patterns or another Aggregate Data pattern beyond statistical dataflow;
 - publisher-owned live revisions, live pagination, and live caching;
-- multi-issuer selection, new authorization-server discovery modes, and Mint
+- multi-issuer selection, new authorization-server discovery modes, and issuer
   grant changes;
 - a frozen `relay`/`relayctl` subprocess protocol;
 - SDMX schema or availability routes, history, structure maintenance, dynamic

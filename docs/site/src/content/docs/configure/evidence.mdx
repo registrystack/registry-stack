@@ -50,12 +50,14 @@ The OpenAPI path retains the document bytes exactly and creates empty authoring 
 `evidencectl source suggest --project <dir>` then drafts one HTTP source and its editable artifacts.
 The SQLite path creates a neutral synthetic source, statement, question, derivation, schemas, and
 fixture that `evidencectl test <dir>` can evaluate immediately. Neither path
-creates Mint configuration, a production target, a real extract, or a deployable bundle. Both
+creates identity-provider configuration, a production target, a real extract, or a deployable bundle. Both
 automatically create disposable local signing and HMAC material. After you add a question to an
 HTTP project, `evidencectl dev start`
 compiles the authoring objects into a private local runtime and delegates validation to the real
-Evidence Gateway loader. Each development session also scaffolds disposable P-256 keys for Registry
-Mint, its caller, and the optional SD-JWT VC holder.
+Evidence Gateway loader. Each development session also starts the pinned stock ThunderID issuer
+and scaffolds a disposable P-256 key for the optional SD-JWT VC holder. A project with no explicit
+access policy also gets an implicit caller pair; explicit local clients use their keys under
+`.evidence/clients/`.
 
 A compact question may set `responseFormats: [signed-jws, sd-jwt-vc]` to permit both signed
 serializations during local development. Omission means signed JWS only. Signed JWS is mandatory,
@@ -423,7 +425,7 @@ evidencectl package "<editable-project>" \
 The output is create-only and contains `runtime.yaml` and a closed `bundle/`. It contains no
 secret values, source responses, local request state, or audit records. The compiler validates
 the resulting bundle with the `evidence` binary and every referenced fixture before publishing.
-It does not contact an identity provider, Mint, or a source endpoint.
+It does not contact an identity provider or a source endpoint.
 
 Use [Build and deploy an Evidence Gateway project](../../tutorials/build-and-deploy-evidence-project/)
 for the full handoff, and [Evidencectl command reference](../../reference/evidencectl/) for the

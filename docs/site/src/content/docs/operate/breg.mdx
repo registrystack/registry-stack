@@ -425,7 +425,7 @@ Disabling an account or changing a group at the issuer does not update claims in
 For a compromised signing key, add its identifier to `deniedKids` and restart every serving instance with that configuration.
 That rejects all tokens signed with the denied key, including otherwise legitimate tokens.
 Static JWKS documents also require a configuration change and restart to rotate.
-[Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/) covers the same rotation discipline for Relay, Evidence Gateway, and Mint.
+[Rotate credentials, keys, certificates, and trust](../advanced/rotate-credentials-and-trust/) covers related rotation boundaries for Relay and Evidence Gateway.
 
 ### Change the issuer without losing request context
 

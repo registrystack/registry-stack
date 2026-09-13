@@ -183,7 +183,7 @@ claim for a narrow read subset, not full SDMX conformance.
 Relay V2 does not claim Provisioning, Evidence, Write, Notification, another
 Aggregate Data pattern, Access Transparency, or Identity Federation. `relayctl` is offline
 authoring tooling, not a Provisioning API. Internal audit is not an Access
-Transparency service. OAuth protection and optional Mint issuance are not
+Transparency service. OAuth protection and external token issuance are not
 Identity Federation. Registry Evidence remains a separate product.
 
 The draft Digital Registries target is recorded as an `alignmentTarget`, and
@@ -569,7 +569,7 @@ The resource posture and contract define the maximum compiled operation set. Tok
 
 Each request produces a typed access decision followed by a typed disclosure plan. The plan contains the authorized operation and access profile, row constraints, selected disclosure profile, and any requester-selected property subset. This architectural seam keeps authentication, authorization, row constraints, query construction, and serialization separate. Version one uses static reviewed disclosure plans and does not require a general PDP, CEL, dynamic masking, per-client field permissions, or tag-based ABAC.
 
-### Token issuers and optional Registry Mint
+### Token issuers
 
 Relay is an OAuth 2.0 resource server. Protected operations accept a narrow
 registered JWT access-token profile with strict issuer, audience, subject or
@@ -584,9 +584,9 @@ out-of-band trust decision. Existing canonical discovery URLs may derive the
 trusted issuer only from the canonical discovery suffix. Multi-issuer selection
 waits for demonstrated deployments.
 
-The token may come from an institution's existing identity provider or authorization server. Registry Mint is an optional issuer for machine-to-machine deployments that do not have one. Relay has no production runtime dependency on Mint and does not need to know which conforming issuer produced a token.
+The token may come from an institution's existing identity provider or authorization server. The optional Docker-backed issuer-portability acceptance journey uses pinned stock ThunderID. Relay has no production runtime dependency on ThunderID and does not need to know which conforming issuer produced a token.
 
-Mint issues product-neutral, registered scopes and audiences for Relay, with optional authority-controlled purpose and row-binding claims. Mint writes that authority server-side rather than copying authority from a caller. The real-router acceptance journey exercises the same Relay verifier and access-decision path used with an external issuer. This is an interoperability profile between two independent products, not a special Mint authentication mode in Relay.
+The stock ThunderID registration issues Relay's registered scopes and audiences, with optional authority-controlled purpose and row-binding claims. The issuer writes that authority server-side rather than copying authority from a caller. The real-router acceptance journey exercises the same Relay verifier and access-decision path used with an institution-operated issuer. This is an issuer-portability check, not a special authentication mode in Relay.
 
 Public operations may explicitly allow anonymous access. They still use the same compiled disclosure, validation, bounds, provenance, and audit model appropriate to public publication.
 
@@ -743,7 +743,7 @@ Relay V2 should reuse mature product-neutral primitives directly and avoid inher
 - `registry-platform-crypto` is useful for signed configuration, digests, and pseudonymization support, but Relay V2 does not sign registry responses.
 - `registry-platform-httputil` is used indirectly by OIDC. Relay's SQLite-only version has no general outbound data-source boundary.
 - The retired `registry-platform-ops` crate was not reused; Relay owns its fixed readiness and audit behavior.
-- Registry Mint is an optional conforming token issuer, not a platform dependency. Any wider audience, scope, purpose, or binding support belongs in Mint's own product-neutral token profile.
+- Stock ThunderID is a conforming token issuer used by optional acceptance testing, not a platform dependency. Any wider audience, scope, purpose, or binding support belongs in the chosen issuer's registration.
 
 ### Do not reuse in the initial core
 
@@ -826,7 +826,7 @@ The first coherent Relay V2 release should contain:
 6. property classification with provenance and the `public`, `internal`, `confidential`, and `restricted` handling levels;
 7. derived public, protected, or absent enumeration with independently compiled list, read, named-lookup, and named Point-bbox search operations;
 8. `pageSize` and client-opaque authenticated-encrypted cursor lists, direct predefined equality filters, and safe caller selection of fewer properties than the selected access profile;
-9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and an optional conforming Mint issuer;
+9. strict OAuth JWT access-token verification, operation scopes, trusted purpose, optional authority row binding, and a conforming external issuer;
 10. snapshot and live read-only SQLite profiles, including useful unversioned live read and lookup deployments;
 11. deterministic disclosure plans, bounded queries, stable `404` lookup outcomes, atomic activation, and Registry Stack problems;
 12. unsigned registry responses with truthful Record, source, and contract revisions;
@@ -846,12 +846,13 @@ registry domain. They are four separate Registries exercised as independently
 instantiated one-Registry services over real loopback HTTP, plus one packaged
 real-process start, request, stop, and restart smoke:
 
-- a sensitive social assistance registry proves exact-lookup-only consultation, trusted purpose, row binding, protected classification, and live SQLite;
+- a sensitive social assistance registry proves exact-lookup-only consultation, trusted purpose,
+  row binding, protected classification, live SQLite, and optional stock ThunderID issuer
+  portability;
 - a public business registry proves deterministic list and identifier read, predefined filters, public semantic alignment, snapshot reproducibility, and caching;
 - a protected civil-event registry proves separate read and lookup scopes,
-  operation-specific disclosures, optional conforming Mint tokens,
-  unversioned-live truthfulness, and the ordinary protected-source boundary a
-  future Evidence integration can use.
+  operation-specific disclosures, unversioned-live truthfulness, and the
+  ordinary protected-source boundary a future Evidence integration can use.
 - a labour-statistics registry proves separate format-neutral statistical
   datasets, snapshot-only bounded reads, fixed public and protected access,
   typed SQLite predicates, typed SDMX-JSON values, equivalent CSV, exact
@@ -884,7 +885,7 @@ shape. The generated schema makes their constraints precise.
   entitlement variants are deferred.
 - Handling levels are `public`, `internal`, `confidential`, and `restricted`; purpose and row binding are separate explicit constraints.
 - Snapshot SQLite is valuable but optional. Unversioned live sources are `no-store` and do not compile paginated lists.
-- A deployment configures at most one issuer in Version one. Responses are unsigned. Registry Mint is optional, never a Relay runtime dependency, and may be paired when it emits the same standard token profile.
+- A deployment configures at most one issuer in Version one. Responses are unsigned. The optional stock ThunderID journey uses the same token profile as an institution-operated issuer and adds no Relay runtime dependency.
 - Registry Stack problem codes and type URIs remain canonical. GovStack compatibility is a later profile, not a core wire mode.
 - The written GovStack drafts inform alignment. Their legacy OpenAPI does not.
 
