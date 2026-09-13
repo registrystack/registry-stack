@@ -32,6 +32,7 @@ chrono.workspace = true
 evidence-client-sdk = { package = "registry-evidence-client", path = "../registry-evidence-client", version = "0.31.0" }
 pyo3.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 url.workspace = true

@@ -198,13 +198,13 @@ test('the handwritten request-batch input types preserve the common and item fie
 test('the handwritten client configuration names exactly the keys the binding reads', () => {
   // `token` is read by `token_provider_from_json`, which `config_from_json`
   // delegates to, so it is added here rather than found in that body.
-  const read = [...configurationKeysRead('config_from_json'), 'token'].sort();
+  const read = [...configurationKeysRead('config_from_json'), 'token', 'authorization'].sort();
   assert.deepEqual(interfaceFields('EvidenceClientConfig').sort(), read);
 });
 
 test('the handwritten token configuration covers exactly the sources the binding accepts', () => {
   const sources = configurationKeysRead('token_provider_from_json').filter(
-    (key) => key !== 'token',
+    (key) => !['token', 'authorization', 'exchange'].includes(key),
   );
   const declaration = clientDeclaration();
   const start = declaration.indexOf('export type EvidenceTokenConfig =');

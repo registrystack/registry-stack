@@ -10,6 +10,7 @@ from __future__ import annotations
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
 
 _TESTS_DIR = pathlib.Path(__file__).resolve().parent
@@ -25,6 +26,30 @@ import registry_evidence_client as revc  # noqa: E402
 
 
 class ConstructionTest(unittest.TestCase):
+    def test_exchange_authorization_constructs_offline_and_rejects_ambiguous_token(self):
+        # Synthetic P-256 key matching the committed public test fixture.
+        key = {
+            "kty": "EC", "crv": "P-256", "alg": "ES256",
+            "kid": "_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo",
+            "d": "MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4",
+            "x": "3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4",
+            "y": "GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU",
+        }
+        authorization = {"exchange": {
+            "client": {"token_endpoint": "https://issuer.example/token", "client_id": "staff-client",
+                       "client_key": key, "resource": "urn:registry:evidence", "scopes": ["evidence:invoke"]},
+            "context": {"issuer": "https://portal.example", "subject": "staff-1",
+                        "audience": "https://issuer.example", "generation": "verified-1",
+                        "deadline_seconds": int(time.time()) + 300},
+            "first_party": {"key": key, "attributes": {"registry_actor_kind": "human"}},
+        }}
+        client = revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                     authorization=authorization)
+        self.assertIsInstance(client, revc.EvidenceClient)
+        with self.assertRaises(revc.ConfigurationError):
+            revc.EvidenceClient("https://evidence.example", fixtures.VALID_JWKS, [],
+                                "ambiguous", authorization=authorization)
+
     def test_a_non_https_non_loopback_base_url_is_refused(self):
         with self.assertRaises(revc.ConfigurationError) as raised:
             revc.EvidenceClient("http://example.org", fixtures.VALID_JWKS, [], "test-token")

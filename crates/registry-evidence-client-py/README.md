@@ -101,8 +101,11 @@ guesses a format from the returned bytes. The shipped type stub exposes
 `EvidenceResponseFormat` and `EvidenceRequestSpec` for these inputs.
 
 `token` is either a bare string (a static token) or a mapping with exactly one
-key, `"private_key_jwt"`. There is no caller-supplied token provider; that is
-out of scope for this binding, same as the Node binding.
+key, `"private_key_jwt"`. For a context-bound staff exchange, omit `token` and
+pass `authorization={"exchange": {"client": ..., "context": ..., "firstParty": ...}}`
+or the `remote` authority variant. The shared exchange parser checks the
+verified context and credential binding before any token request. Exactly one
+of `token` and `authorization` must be present.
 
 Holder-bound issuance is supported: `prepare()` accepts public `holder_keys`,
 and `SdJwtVcBatchResponse` parses the ordered credential envelope returned for

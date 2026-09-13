@@ -24,6 +24,7 @@ napi.workspace = true
 napi-derive.workspace = true
 registry-evidence-client.workspace = true
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 url.workspace = true

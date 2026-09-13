@@ -48,6 +48,26 @@ test('a non-HTTPS, non-loopback base URL is refused', () => {
   );
 });
 
+test('exchange authorization constructs offline and rejects an ambiguous token', () => {
+  const key = () => ({
+    ...crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey.export({ format: 'jwk' }),
+    alg: 'ES256', kid: 'synthetic-test',
+  });
+  const config = validConfig({
+    authorization: { exchange: {
+      client: { tokenEndpoint: 'https://issuer.example/token', clientId: 'staff-client',
+        clientKey: key(), resource: 'urn:registry:evidence', scopes: ['evidence:invoke'] },
+      context: { issuer: 'https://portal.example', subject: 'staff-1',
+        audience: 'https://issuer.example', generation: 'verified-1',
+        deadlineSeconds: Math.floor(Date.now() / 1000) + 300 },
+      firstParty: { key: key(), attributes: { registry_actor_kind: 'human' } },
+    } },
+  });
+  assertConfigurationRefusal(() => new EvidenceClient(config));
+  delete config.token;
+  assert.ok(new EvidenceClient(config) instanceof EvidenceClient);
+});
+
 test('an empty trusted key set is refused', () => {
   assertConfigurationRefusal(() => new EvidenceClient(validConfig({ trustedJwks: { keys: [] } })));
 });

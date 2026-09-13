@@ -40,8 +40,8 @@ use evidence_client_sdk::VerifiedEvidenceRequestBatchItem as RealVerifiedEvidenc
 mod convert;
 
 use convert::{
-    batch_spec_from_json, config_from_parts, datetime_from_unix_seconds, evidence_to_json,
-    json_to_python, map_client_error, map_config_error, map_conversion_error,
+    batch_spec_from_json, config_from_parts_with_authorization, datetime_from_unix_seconds,
+    evidence_to_json, json_to_python, map_client_error, map_config_error, map_conversion_error,
     progressive_subjects_from_json, python_to_json, selector_values_from_json, spec_from_json,
     subject_expectations_to_json, MappedError,
 };
@@ -833,6 +833,8 @@ impl EvidenceClient {
     /// bearer string or the private-key-JWT provider's own settings; there is no
     /// caller-supplied token provider in this binding.
     ///
+    /// `authorization={"exchange": ...}` is an alternative to `token` for
+    /// a context-bound staff exchange. Exactly one must be configured.
     /// `max_response_bytes` bounds the signed response `send` reads.
     /// `max_metadata_bytes` bounds the documents `discover` and `fetch_jwks`
     /// read, which are neither signed nor verified, and is a separate decision.
@@ -841,13 +843,14 @@ impl EvidenceClient {
         base_url,
         trusted_jwks,
         revoked_key_ids,
-        token,
+        token=None,
         request_timeout_seconds=None,
         connect_timeout_seconds=None,
         user_agent=None,
         trusted_root_certificates=None,
         max_response_bytes=None,
         max_metadata_bytes=None,
+        authorization=None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
@@ -855,23 +858,32 @@ impl EvidenceClient {
         base_url: &str,
         trusted_jwks: &Bound<'_, PyAny>,
         revoked_key_ids: Vec<String>,
-        token: &Bound<'_, PyAny>,
+        token: Option<&Bound<'_, PyAny>>,
         request_timeout_seconds: Option<f64>,
         connect_timeout_seconds: Option<f64>,
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
         max_response_bytes: Option<u64>,
         max_metadata_bytes: Option<u64>,
+        authorization: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let trusted_jwks_json = python_to_json(trusted_jwks)
             .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
-        let token_json =
-            python_to_json(token).map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
-        let config = config_from_parts(
+        let token_json = token
+            .map(python_to_json)
+            .transpose()
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?
+            .unwrap_or(serde_json::Value::Null);
+        let authorization_json = authorization
+            .map(python_to_json)
+            .transpose()
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let config = config_from_parts_with_authorization(
             base_url,
             &trusted_jwks_json,
             revoked_key_ids,
             &token_json,
+            authorization_json.as_ref(),
             request_timeout_seconds,
             connect_timeout_seconds,
             user_agent,

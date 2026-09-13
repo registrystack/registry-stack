@@ -118,12 +118,46 @@ export type EvidenceTokenConfig =
   | { static: string }
   | { privateKeyJwt: PrivateKeyJwtConfig }
 
+/** A verified actor/grant generation with a bounded authorization lifetime. */
+export interface EvidenceExchangeContext {
+  issuer: string
+  subject: string
+  audience: string
+  generation: string
+  deadlineSeconds: number
+  grantId?: string
+}
+
+export interface EvidenceExchangeClientConfig extends PrivateKeyJwtConfig {
+  resource: string
+  scopes: ReadonlyArray<string>
+}
+
+export type EvidenceExchangeAuthorizationConfig = {
+  client: EvidenceExchangeClientConfig
+  context: EvidenceExchangeContext
+} & (
+  | { firstParty: { key: Readonly<Record<string, unknown>>, attributes: Readonly<Record<string, unknown>> }, remote?: never }
+  | { firstParty?: never, remote: {
+      endpoint: string
+      bootstrap: EvidenceExchangeClientConfig
+      bootstrapResource: string
+      bootstrapScope: string
+      requestTimeoutMilliseconds?: number
+      connectTimeoutMilliseconds?: number
+      userAgent?: string
+      trustedRootCertificates?: string
+    } }
+)
+
 /** The configuration `new EvidenceClient(...)` reads. */
 export interface EvidenceClientConfig {
   baseUrl: string
   trustedJwks: TrustedJwks
   revokedKeyIds: ReadonlyArray<string>
-  token: EvidenceTokenConfig
+  /** Configure exactly one of `token` or `authorization`. */
+  token?: EvidenceTokenConfig
+  authorization?: { exchange: EvidenceExchangeAuthorizationConfig }
   requestTimeoutMs?: number
   connectTimeoutMs?: number
   userAgent?: string
