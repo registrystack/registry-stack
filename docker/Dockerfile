@@ -19,6 +19,8 @@
 # its transitive dependency closure, so a manifest change in an unrelated
 # workspace member invalidates none of these images.
 
+ARG SOURCE_DATE_EPOCH=0
+
 # Keep the tag for humans and the digest for reproducible pulls.
 FROM rust:1.95-trixie@sha256:f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3 AS chef
 RUN cargo install cargo-chef --locked --version 0.1.77
@@ -35,6 +37,7 @@ RUN cargo chef prepare --recipe-path recipe-evidence.json --bin evidence \
     && cargo chef prepare --recipe-path recipe-casework.json --bin casework
 
 FROM chef AS evidence-builder
+ARG SOURCE_DATE_EPOCH
 COPY --from=planner /workspace/recipe-evidence.json recipe.json
 # No --locked here: the bin-filtered recipe carries a lockfile trimmed to the
 # closure, which cargo would refuse to reconcile. The final build is --locked.
@@ -42,11 +45,17 @@ RUN cargo chef cook --release --recipe-path recipe.json --bin evidence
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY products ./products
-RUN cargo build --release --locked -p registry-evidence --bin evidence \
+ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
+ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
+RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
+    cargo build --release --locked -p registry-evidence --bin evidence \
     && mkdir -p \
         /workspace/runtime-root/etc/registry-evidence \
         /workspace/runtime-root/var/lib/registry-evidence/audit \
-    && chown -R 65532:65532 /workspace/runtime-root
+    && /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
+    && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-evidence \
+    && chmod 0700 /workspace/runtime-root/var/lib/registry-evidence/audit \
+    && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS evidence
 
@@ -69,17 +78,23 @@ ENTRYPOINT ["/usr/local/bin/evidence"]
 CMD ["serve"]
 
 FROM chef AS casework-builder
+ARG SOURCE_DATE_EPOCH
 COPY --from=planner /workspace/recipe-casework.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json --bin casework
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY products ./products
-RUN cargo build --release --locked -p registry-casework --bin casework \
+ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
+ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb
+RUN --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
+    cargo build --release --locked -p registry-casework --bin casework \
     && mkdir -p \
         /workspace/runtime-root/etc/registry-casework \
         /workspace/runtime-root/var/lib/registry-casework/audit \
+    && /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-casework \
-    && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit
+    && chmod 0700 /workspace/runtime-root/var/lib/registry-casework/audit \
+    && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS casework
 
