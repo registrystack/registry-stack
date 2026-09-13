@@ -230,3 +230,39 @@ fn action_requirements_do_not_bypass_reviewed_change_control() {
         .iter()
         .any(|diagnostic| diagnostic.code == "action.effect.controlled_target"));
 }
+
+#[test]
+fn equality_inputs_must_be_required_and_explicit_null_is_preserved() {
+    let mut source = support::project();
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"expected-status", "type":"vocabulary-code", "vocabulary":"status",
+            "values":["active","inactive"], "required":false, "classification":"restricted"
+        }));
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
+
+    let mut source = support::project();
+    source["entities"][0]["fields"][0]["required"] = json!(false);
+    source["actions"][0]["requires"][0]["equals"] = Value::Null;
+    let registry = compile(source.clone()).unwrap();
+    assert_eq!(
+        registry.actions().actions[0].requires[0].equals,
+        Some(Value::Null)
+    );
+    let requirement = &registry.actions().actions[0].requires[0];
+    let restored: registry_breg::model::CompiledActionRequirement =
+        serde_json::from_value(serde_json::to_value(requirement).unwrap()).unwrap();
+    assert_eq!(&restored, requirement);
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    assert!(format!("{:?}", compile(source).unwrap_err()).contains("action.requires.value_invalid"));
+}

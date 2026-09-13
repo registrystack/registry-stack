@@ -1288,6 +1288,27 @@ fn compile_request_entity(
         };
     application.preconditions =
         compile_preconditions(project, request_entity, entities, assets, request, errors);
+    if !application.preconditions.is_empty() {
+        let base_bytes = match &planner {
+            Some(planner) => maximum_planner_snapshot_bytes(request_entity, &planner.writes),
+            None => maximum_snapshot_bytes(request_entity, entities, &effects),
+        };
+        let combined = base_bytes.and_then(|base| {
+            maximum_precondition_snapshot_bytes(
+                request_entity,
+                entities,
+                &application.preconditions,
+            )
+            .and_then(|guards| base.checked_add(guards))
+        });
+        if combined.is_none_or(|bytes| bytes > u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES)) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.bounds",
+                format!("{}.changeRequest.application.preconditions", entity_path(&request_entity.id)),
+                "the compiled Evidence contracts and maximum frozen guard values exceed the remaining proposal snapshot ceiling",
+            ));
+        }
+    }
     let actions = compile_action_routes(&stages);
     let review_permissions =
         compile_review_permissions(request_entity, &stages, &changed_fields, entities, errors);
@@ -2451,6 +2472,87 @@ fn maximum_snapshot_bytes(
         }
     }
     Some(total)
+}
+
+// Account for the exact frozen shape, including each cloned reviewed definition.
+// Null placeholders avoid allocating maximum-sized strings during compilation.
+fn maximum_precondition_snapshot_bytes(
+    request_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+    contract: &CompiledChangeRequestPreconditions,
+) -> Option<u64> {
+    let mut request_fields = BTreeSet::new();
+    let mut target_fields = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for predicate in &contract.request {
+        request_fields.insert(predicate.field.as_str());
+        if let CompiledChangeRequestPredicateExpected::RequestField { field } = &predicate.expected
+        {
+            request_fields.insert(field.as_str());
+        }
+    }
+    for target in &contract.targets {
+        request_fields.insert(target.from_field.as_str());
+        let fields = target_fields.entry(target.id.as_str()).or_default();
+        for predicate in &target.requires {
+            fields.insert(predicate.field.as_str());
+            if let CompiledChangeRequestPredicateExpected::RequestField { field } =
+                &predicate.expected
+            {
+                request_fields.insert(field.as_str());
+            }
+        }
+    }
+    for evidence in &contract.evidence {
+        for selector in evidence
+            .subjects
+            .values()
+            .flat_map(|subject| subject.selectors.values())
+        {
+            match selector {
+                CompiledChangeRequestSelector::RequestField { field } => {
+                    request_fields.insert(field.as_str());
+                }
+                CompiledChangeRequestSelector::TargetField { target, field } => {
+                    target_fields
+                        .get_mut(target.as_str())?
+                        .insert(field.as_str());
+                }
+            }
+        }
+        for requirement in &evidence.requires {
+            if let CompiledChangeRequestEvidenceExpected::RequestField { field } =
+                &requirement.expected
+            {
+                request_fields.insert(field.as_str());
+            }
+        }
+    }
+    let mut extra = 0_u64;
+    let mut values = |entity: &CompiledEntity,
+                      fields: &BTreeSet<&str>|
+     -> Option<BTreeMap<String, Value>> {
+        let mut placeholders = BTreeMap::new();
+        for id in fields {
+            let field = entity.fields.get(*id)?;
+            extra = extra.checked_add(maximum_field_json_bytes(&field.field_type)?.max(4) - 4)?;
+            placeholders.insert((*id).to_owned(), Value::Null);
+        }
+        Some(placeholders)
+    };
+    let request_values = values(request_entity, &request_fields)?;
+    let mut targets = Vec::new();
+    for target in &contract.targets {
+        targets.push(json!({
+            "id":target.id, "entityId":target.entity_id,
+            "recordId":"ffffffff-ffff-4fff-bfff-ffffffffffff", "expectedRevision":9_007_199_254_740_991_i64,
+            "values":values(entities.get(&target.entity_id)?, target_fields.get(target.id.as_str())?)?,
+        }));
+    }
+    // Canonical JSON admits only safe integers in the placeholder, while
+    // PostgreSQL can retain an i64 revision. Reserve three digits per target.
+    extra = extra.checked_add(3_u64.checked_mul(targets.len() as u64)?)?;
+    let frozen = json!({"contract":contract, "requestValues":request_values, "targets":targets});
+    (canonicalize_json(&frozen).ok()?.len() as u64).checked_add(extra)
 }
 
 fn maximum_planner_snapshot_bytes(

@@ -263,3 +263,76 @@ fn request_fields_can_narrow_a_target_vocabulary_for_effects_and_guards() {
         .push(json!({"field":"release-state", "equalsFromRequestField":"release-state"}));
     compile(source).unwrap();
 }
+
+#[test]
+fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
+    let mut source = project();
+    source["entities"][1]["fields"].as_array_mut().unwrap().push(json!({
+        "id":"optional-note", "type":"string", "maxLength":32, "required":false, "classification":"restricted"
+    }));
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["request"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"field":"optional-note", "equals":null}));
+    let registry = compile(source.clone()).unwrap();
+    let preconditions = &registry.entities()["release-request"]
+        .change_request
+        .as_ref()
+        .unwrap()
+        .application
+        .preconditions;
+    assert!(preconditions.request.iter().any(|p| p.field == "optional-note" && matches!(&p.expected, CompiledChangeRequestPredicateExpected::Literal { value } if value.is_null())));
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["request"]
+        .as_array_mut()
+        .unwrap()
+        .last_mut()
+        .unwrap()
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    assert!(format!("{:?}", compile(source).unwrap_err())
+        .contains("change_request.preconditions.predicate_operator_invalid"));
+}
+
+#[test]
+fn frozen_guard_values_are_counted_with_the_original_proposal_snapshot() {
+    let mut source = project();
+    let field = source["entities"][1]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|field| field["id"] == "report-reference")
+        .unwrap();
+    field["maxLength"] = json!(200_000);
+    let failure = format!("{:?}", compile(source).unwrap_err());
+    assert!(
+        failure.contains("change_request.preconditions.bounds"),
+        "{failure}"
+    );
+}
+
+#[test]
+fn duplicated_reviewed_evidence_definitions_count_toward_the_snapshot_ceiling() {
+    let mut source = project();
+    source["entities"][1]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|field| field["id"] == "report-reference")
+        .unwrap()["maxLength"] = json!(174_350);
+    compile(source.clone()).unwrap();
+
+    let mut second = source["entities"][1]["changeRequest"]["application"]["preconditions"]
+        ["evidence"][0]
+        .clone();
+    second["id"] = json!("release-check-again");
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"]
+        .as_array_mut()
+        .unwrap()
+        .push(second);
+    let failure = format!("{:?}", compile(source).unwrap_err());
+    assert!(
+        failure.contains("change_request.preconditions.bounds"),
+        "{failure}"
+    );
+}

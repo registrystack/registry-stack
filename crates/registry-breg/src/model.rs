@@ -532,7 +532,11 @@ pub struct CompiledActionRequirement {
     pub input: String,
     pub entity_id: String,
     pub field: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::contract::present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,

@@ -198,6 +198,13 @@ fn evidence_requirement_value_valid(
     value: &serde_json::Value,
     form: &ExpectedFormDocument,
 ) -> bool {
+    // Reuse the verifier's closed wire representation before comparing forms.
+    // This rejects missing members and extra properties in structured scalars.
+    if serde_json::from_value::<registry_evidence_verifier::model::PublicValue>(value.clone())
+        .is_err()
+    {
+        return false;
+    }
     match form {
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => value.is_boolean(),
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => value
@@ -437,4 +444,47 @@ fn digest_fingerprint(bytes: impl AsRef<[u8]>) -> String {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     )
+}
+
+#[cfg(test)]
+mod requirement_literal_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn structured_scalar_literals_follow_the_complete_verifier_wire_shape() {
+        for (form, valid) in [
+            (
+                ExpectedScalarFormDocument::DateBucket,
+                json!({"form":"date-bucket", "scheme":"urn:example:year", "bucket":"2026"}),
+            ),
+            (
+                ExpectedScalarFormDocument::TimeBucket,
+                json!({"form":"time-bucket", "scheme":"urn:example:hour", "bucket":"09"}),
+            ),
+            (
+                ExpectedScalarFormDocument::EntityReference,
+                json!({"form":"audience-scoped-entity-reference", "reference":"urn:example:record:1"}),
+            ),
+        ] {
+            let expected = ExpectedFormDocument::Scalar(form);
+            assert!(evidence_requirement_value_valid(&valid, &expected));
+            for field in valid.as_object().unwrap().keys() {
+                let mut missing = valid.clone();
+                missing.as_object_mut().unwrap().remove(field);
+                assert!(!evidence_requirement_value_valid(&missing, &expected));
+            }
+            let mut extra = valid.clone();
+            extra["unexpected"] = json!(true);
+            assert!(!evidence_requirement_value_valid(&extra, &expected));
+            let mut wrong_type = valid.clone();
+            let field = if valid.get("reference").is_some() {
+                "reference"
+            } else {
+                "bucket"
+            };
+            wrong_type[field] = json!(42);
+            assert!(!evidence_requirement_value_valid(&wrong_type, &expected));
+        }
+    }
 }
