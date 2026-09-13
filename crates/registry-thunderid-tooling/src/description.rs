@@ -617,6 +617,16 @@ impl IssuerDescription {
         }) {
             return refuse("first-party clients must be registered exchange clients");
         }
+        if self
+            .exchange_issuers
+            .iter()
+            .all(|issuer| issuer.mapping == ExchangeMapping::FirstParty)
+            && self.machine_clients.iter().any(|client| {
+                client.token_exchange.is_some() && !first_party_clients.contains(&client.client_id)
+            })
+        {
+            return refuse("each exchange client needs a declared signer");
+        }
         for client in &self.compatibility_clients {
             if !valid_uuid(&client.agent_id) || !agent_ids.insert(client.agent_id.clone()) {
                 return refuse("each compatibility client carries a distinct UUID agent id");
@@ -1042,6 +1052,10 @@ mod tests {
             .token_attributes
             .insert("evidence_tags".into(), ExchangeAttributeKind::StringArray);
         assert!(description.validate().is_ok());
+
+        let mut unbound = description.clone();
+        unbound.exchange_issuers[0].clients.clear();
+        assert!(unbound.validate().is_err());
 
         let mut unknown = description.clone();
         unknown.exchange_issuers[0].clients = vec!["unregistered-client".into()];

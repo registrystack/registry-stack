@@ -505,6 +505,16 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 issuer.mapping == ExchangeMapping::FirstParty
                     && issuer.clients.iter().any(|id| id == &client.client_id)
             });
+            let allowed_connections = if let Some(issuer) = first_party {
+                vec![issuer.id.clone()]
+            } else {
+                description
+                    .exchange_issuers
+                    .iter()
+                    .filter(|issuer| issuer.mapping == ExchangeMapping::InstitutionalGrant)
+                    .map(|issuer| issuer.id.clone())
+                    .collect::<Vec<_>>()
+            };
             let mut exchange_attributes = if let Some(issuer) = first_party {
                 issuer.token_attributes.keys().cloned().collect::<Vec<_>>()
             } else {
@@ -531,6 +541,8 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 "validityPeriod": client.access_token_lifetime_seconds,
                 "attributes": exchange_attributes,
             });
+            config["token"]["accessToken"]["allowedExchangeConnectionIds"] =
+                json!(allowed_connections);
         }
         write_owner_only(
             &bootstrap_root
@@ -817,6 +829,10 @@ mod tests {
                 .collect::<Vec<_>>())
         );
         assert_eq!(
+            config["token"]["accessToken"]["allowedExchangeConnectionIds"],
+            json!(["0197aaaa-0000-7000-8000-0000000000d1"])
+        );
+        assert_eq!(
             config["token"]["accessToken"]["clientConfig"]["attributes"],
             json!(["synthetic_tag"])
         );
@@ -918,6 +934,11 @@ mod tests {
         .unwrap();
         let attributes = &agent["inboundAuthConfig"][0]["config"]["token"]["accessToken"]
             ["userConfig"]["attributes"];
+        assert_eq!(
+            agent["inboundAuthConfig"][0]["config"]["token"]["accessToken"]
+                ["allowedExchangeConnectionIds"],
+            json!(["0197aaaa-0000-7000-8000-0000000000d1"])
+        );
         assert!(attributes
             .as_array()
             .unwrap()

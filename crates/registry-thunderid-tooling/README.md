@@ -52,6 +52,12 @@ client and no signer can choose the value.
 The development container loads identity providers only from declarative
 resources.
 
+The renderer sets native `token.accessToken.allowedExchangeConnectionIds`
+for each exchange client. First-party clients name their one connection;
+other exchange clients name the declared institutional connections. A
+multi-connection session requires a ThunderID build that enforces this field,
+so the upstream image pin must be updated before using this configuration.
+
 A machine client's `token_exchange: Some(TokenExchangeClient { ... })` enables
 `client_credentials` and RFC 8693 token exchange on the same registered key.
 Every role assigned to that client must contain only its configured authority
