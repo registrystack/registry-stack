@@ -45,11 +45,23 @@ pub(super) struct LocalEventDestination {
 pub(super) struct LocalEvidenceProvider {
     pub base_url: String,
     pub trust_binding_id: String,
-    pub token_file: PathBuf,
+    pub token_file: Option<PathBuf>,
+    pub private_key_jwt: Option<LocalEvidencePrivateKeyJwt>,
     pub trusted_jwks_file: PathBuf,
     #[serde(default)]
     pub revoked_key_ids: Vec<String>,
     pub ca_bundle_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalEvidencePrivateKeyJwt {
+    pub token_endpoint: String,
+    pub client_id: String,
+    pub private_key_file: PathBuf,
+    pub assertion_audience: String,
+    pub resource: String,
+    pub scopes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -361,11 +373,42 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         {
             bail!("local Evidence providers need bounded IDs, trust bindings, and exact loopback origins");
         }
-        for file in [&provider.token_file, &provider.trusted_jwks_file]
-            .into_iter()
+        if provider.token_file.is_some() == provider.private_key_jwt.is_some() {
+            bail!("local Evidence providers require exactly one tokenFile or privateKeyJwt");
+        }
+        for file in std::iter::once(&provider.trusted_jwks_file)
+            .chain(provider.token_file.iter())
             .chain(provider.ca_bundle_file.iter())
         {
             private::check(file, false)?;
+        }
+        if let Some(credentials) = &provider.private_key_jwt {
+            let endpoint = reqwest::Url::parse(&credentials.token_endpoint)
+                .context("local Evidence tokenEndpoint must be an exact loopback HTTP URL")?;
+            if endpoint.scheme() != "http"
+                || endpoint.host_str() != Some("127.0.0.1")
+                || endpoint.port().is_none()
+                || !endpoint.username().is_empty()
+                || endpoint.password().is_some()
+                || endpoint.query().is_some()
+                || endpoint.fragment().is_some()
+                || credentials.client_id.is_empty()
+                || credentials.client_id.len() > 128
+                || !registry_platform_httputil::valid_resource_uri(&credentials.assertion_audience)
+                || !registry_platform_httputil::valid_resource_uri(&credentials.resource)
+                || credentials.scopes.is_empty()
+                || credentials.scopes.len() > 32
+                || credentials.scopes.iter().collect::<BTreeSet<_>>().len()
+                    != credentials.scopes.len()
+                || credentials.scopes.iter().any(|scope| {
+                    scope.len() > 128
+                        || scope.contains('*')
+                        || !registry_platform_httputil::valid_scope_token(scope)
+                })
+            {
+                bail!("local Evidence privateKeyJwt requires exact loopback token endpoint, client, audience, resource and scopes");
+            }
+            private::check(&credentials.private_key_file, false)?;
         }
     }
     for (id, destination) in &clients.event_destinations {
@@ -643,18 +686,22 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         private::create(&root.join("secrets").join(format!("webhook-{id}")), &key)?;
     }
     for (id, provider) in &clients.evidence_providers {
-        for (source, name, maximum) in [
-            (
-                &provider.token_file,
-                format!("evidence-token-{id}"),
-                16 * 1024,
-            ),
-            (
-                &provider.trusted_jwks_file,
-                format!("evidence-jwks-{id}"),
+        let mut files = vec![(
+            &provider.trusted_jwks_file,
+            format!("evidence-jwks-{id}"),
+            64 * 1024,
+        )];
+        if let Some(source) = &provider.token_file {
+            files.push((source, format!("evidence-token-{id}"), 16 * 1024));
+        }
+        if let Some(credentials) = &provider.private_key_jwt {
+            files.push((
+                &credentials.private_key_file,
+                format!("evidence-client-key-{id}"),
                 64 * 1024,
-            ),
-        ] {
+            ));
+        }
+        for (source, name, maximum) in files {
             let bytes = Zeroizing::new(private::read(source, maximum)?);
             private::create(&root.join("secrets").join(name), &bytes)?;
         }
@@ -1171,7 +1218,15 @@ pub(super) fn runtime(
             "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
                 "baseUrl":provider.base_url,
                 "trustBindingId":provider.trust_binding_id,
-                "tokenRef":format!("secret:file/evidence-token-{id}"),
+                "tokenRef":provider.token_file.as_ref().map(|_| format!("secret:file/evidence-token-{id}")),
+                "privateKeyJwt":provider.private_key_jwt.as_ref().map(|credentials| json!({
+                    "tokenEndpoint":credentials.token_endpoint,
+                    "clientId":credentials.client_id,
+                    "privateKeyRef":format!("secret:file/evidence-client-key-{id}"),
+                    "assertionAudience":credentials.assertion_audience,
+                    "resource":credentials.resource,
+                    "scopes":credentials.scopes
+                })),
                 "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
                 "revokedKeyIds":provider.revoked_key_ids,
                 "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))

@@ -279,6 +279,40 @@ credentials remain under `.breg/dev/credentials/<client-id>/`. Choose output pat
 only for the dedicated source client when configuring Evidence. Evidence's caller
 credential and BReg's operator credential retain separate authority.
 
+## Apply-time Evidence in development
+
+A registry with Evidence guards needs the exact provider bindings declared by
+its package. Put the binding in `dev-clients.yaml` before first start:
+
+```yaml
+evidenceProviders:
+  qualification:
+    baseUrl: http://127.0.0.1:8095
+    trustBindingId: reviewed-local-provider
+    trustedJwksFile: /absolute/private/evidence-signing-jwks.json
+    privateKeyJwt:
+      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
+      assertionAudience: http://127.0.0.1:8091
+      clientId: qualification-reader
+      privateKeyFile: /absolute/private/qualification-client.jwk
+      resource: urn:example:evidence
+      scopes: [evidence:invoke]
+```
+
+The provider URL and token endpoint use numeric loopback HTTP. Provision the
+client at the issuer with precisely that resource and scope. The session copies
+owner-only key and JWKS files to its private state; it gives the runtime secret
+references. The ordinary BREG credential provider refreshes expired service
+tokens. `tokenFile` is an alternative for a pre-issued token and cannot be
+combined with `privateKeyJwt`. An optional `caBundleFile` and `revokedKeyIds`
+retain their ordinary relying-party meanings.
+
+The same bindings apply to the disposable schema-test rehearsal and the local
+runtime. A journey that applies a guarded request needs a reachable configured
+Evidence provider and synthetic source facts. The development command does not
+skip guards or replace runtime activation checks. Edited provider bindings on a
+retained session follow the normal source-change refusal and recovery rules.
+
 ## Compose one local issuer
 
 One BREG dev session can own the issuer registrations for several local

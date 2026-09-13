@@ -2471,7 +2471,8 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
         config::LocalEvidenceProvider {
             base_url: "http://127.0.0.1:18093".into(),
             trust_binding_id: "exact-local-trust-v1".into(),
-            token_file: token,
+            token_file: Some(token),
+            private_key_jwt: None,
             trusted_jwks_file: jwks,
             revoked_key_ids: vec![],
             ca_bundle_file: None,
@@ -2502,6 +2503,80 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
         .unwrap()
         .base_url = "https://evidence.example.org".into();
     assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+}
+
+#[test]
+fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
+    let (_temp, state, mut clients, files) = fixture();
+    let key = state.project.join("assertion-key.jwk");
+    let jwks = state.project.join("provider-jwks");
+    config::keypair(&state.project).unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: None,
+            private_key_jwt: Some(config::LocalEvidencePrivateKeyJwt {
+                token_endpoint: "http://127.0.0.1:18091/oauth2/token".into(),
+                client_id: "guard-reader".into(),
+                private_key_file: key.clone(),
+                assertion_audience: "http://127.0.0.1:18091".into(),
+                resource: "urn:example:evidence".into(),
+                scopes: vec!["evidence:invoke".into()],
+            }),
+            trusted_jwks_file: jwks,
+            revoked_key_ids: vec![],
+            ca_bundle_file: None,
+        },
+    );
+    let serialized = serde_json::to_value(&clients).unwrap();
+    config::clients(&serde_json::to_vec(&serialized).unwrap()).unwrap();
+    for (name, value) in [
+        ("tokenEndpoint", json!("https://elsewhere.example/token")),
+        ("scopes", json!([])),
+        ("scopes", json!(["evidence:invoke", "evidence:invoke"])),
+        ("resource", json!("not-a-resource")),
+    ] {
+        let mut rejected = serialized.clone();
+        rejected["evidenceProviders"]["qualification"]["privateKeyJwt"][name] = value;
+        assert!(config::clients(&serde_json::to_vec(&rejected).unwrap()).is_err());
+    }
+    let mut both = serialized;
+    both["evidenceProviders"]["qualification"]["tokenFile"] = json!(key);
+    assert!(config::clients(&serde_json::to_vec(&both).unwrap()).is_err());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    for runtime in ["runtime-test.yaml"] {
+        let document: Value =
+            serde_norway::from_slice(&fs::read(state.root().join(runtime)).unwrap()).unwrap();
+        let provider = &document["evidenceProviders"]["qualification"];
+        assert!(provider["tokenRef"].is_null());
+        let credential = &provider["privateKeyJwt"];
+        assert_eq!(
+            credential["privateKeyRef"],
+            "secret:file/evidence-client-key-qualification"
+        );
+        assert_eq!(credential["resource"], "urn:example:evidence");
+        assert_eq!(credential["scopes"], json!(["evidence:invoke"]));
+        assert_eq!(credential["assertionAudience"], "http://127.0.0.1:18091");
+        assert!(!serde_json::to_string(provider)
+            .unwrap()
+            .contains("privateKeyFile"));
+    }
+    assert_eq!(
+        fs::read(
+            state
+                .root()
+                .join("secrets/evidence-client-key-qualification")
+        )
+        .unwrap(),
+        fs::read(key).unwrap()
+    );
+    assert!(!state
+        .root()
+        .join("secrets/evidence-token-qualification")
+        .exists());
 }
 
 #[test]
