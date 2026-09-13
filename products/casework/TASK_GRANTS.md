@@ -70,8 +70,10 @@ approval and a new grant ID. Listings omit retained subject selectors.
 
 ## Revocation and status
 
-An eligible current holder calls
+Any officer with a profile and team membership eligible under the grant template
+for the item's queue can call
 `POST /v1/work-items/{itemId}/task-grants/{grantId}/revoke` with an empty body.
+Revocation does not require holding the item or reading its source.
 Resource servers call `GET /v1/task-grants/{grantId}/status`; inactive status
 returns no grant detail. Machine callers cannot substitute resources or subjects.
 

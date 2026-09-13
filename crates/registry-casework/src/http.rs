@@ -1208,13 +1208,8 @@ async fn revoke_task_grant(
     if !body.is_empty() {
         return Err(HttpError::Invalid);
     }
-    let (actor, token) = authenticate(&state, &headers).await?;
-    Ok(Json(
-        state
-            .service
-            .revoke_task(&actor, item, grant, source_profile(&headers)?, token)
-            .await?,
-    ))
+    let (actor, _) = authenticate(&state, &headers).await?;
+    Ok(Json(state.service.revoke_task(&actor, item, grant).await?))
 }
 async fn task_client(
     state: &HttpState,

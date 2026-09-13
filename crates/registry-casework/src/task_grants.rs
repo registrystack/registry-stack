@@ -30,15 +30,26 @@ async fn eligible(
     item: &WorkItem,
     template: &TaskTemplate,
 ) -> Result<bool, StoreError> {
-    let Some(membership_kind) = membership_kind(actor.role) else {
-        return Ok(false);
-    };
-    if !template.eligible_profiles.contains(&actor.profile_id)
-        || item.holder.as_ref() != Some(&actor.principal)
+    if item.holder.as_ref() != Some(&actor.principal)
         || !template.item_states.contains(&item.state)
         || item.subject.source_id != template.source
         || !template.item_kinds.contains(&item.subject.kind)
     {
+        return Ok(false);
+    }
+    eligible_officer(transaction, actor, item, template).await
+}
+
+async fn eligible_officer(
+    transaction: &Transaction<'_>,
+    actor: &ActorContext,
+    item: &WorkItem,
+    template: &TaskTemplate,
+) -> Result<bool, StoreError> {
+    let Some(membership_kind) = membership_kind(actor.role) else {
+        return Ok(false);
+    };
+    if !template.eligible_profiles.contains(&actor.profile_id) {
         return Ok(false);
     }
     let row = transaction.query_one(
@@ -294,7 +305,7 @@ impl PostgresStore {
                 .await?
                 .get(0);
             let grant: TaskGrant = serde_json::from_value(record)?;
-            if !eligible(&transaction, actor, &item, &grant.template).await? {
+            if !eligible_officer(&transaction, actor, &item, &grant.template).await? {
                 return Err(StoreError::Forbidden);
             }
         }
@@ -599,10 +610,7 @@ impl crate::CaseworkService {
         actor: &ActorContext,
         item: Uuid,
         id: Uuid,
-        profile: &str,
-        token: &str,
     ) -> Result<TaskGrantRevocation, crate::ServiceError> {
-        self.caller_item(actor, item, profile, token).await?;
         let stored = self.store.task_grant(id).await?;
         if stored.grant.item_id != item {
             return Err(crate::ServiceError::NotFound);

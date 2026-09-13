@@ -62,6 +62,9 @@ impl SourceAdapter for Source {
         _: &str,
         _: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
+        if self.mode.load(Ordering::SeqCst) == 5 {
+            return Err(SourceAdapterError::Unavailable);
+        }
         Ok(CallerSubjectView {
             display_reference: None,
             subject: subject.clone(),
@@ -640,6 +643,60 @@ async fn delegated_or_grant_bearing_human_tokens_cannot_approve_or_revoke_task_g
             .unwrap()
             .invalidated
     );
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn eligible_officer_can_revoke_without_holding_the_item_or_reading_the_source() {
+    let f = fixture(900).await;
+    let holder = token("human", "human-client", "human", "casework:staff");
+    let base = format!("/v1/work-items/{}/task-grants", f.item);
+    let (status, grant) = request(
+        &f,
+        "POST",
+        &base,
+        &holder,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"1"})),
+        Some("approval-for-revocation"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let grant_id = grant["id"].as_str().unwrap();
+    let revoke = format!("{base}/{grant_id}/revoke");
+
+    f.mode.store(5, Ordering::SeqCst);
+    let outsider = token("outsider", "human-client", "human", "casework:staff");
+    assert_eq!(
+        request(&f, "POST", &revoke, &outsider, true, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN,
+        "a profile alone cannot revoke without eligible-team membership"
+    );
+
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,'revoker','staff')",
+        &[&ISSUER],
+    )
+    .await
+    .unwrap();
+    db.execute(
+        "UPDATE casework_meta SET directory_revision=directory_revision+1",
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let revoker = token("revoker", "human-client", "human", "casework:staff");
+    let (status, body) = request(&f, "POST", &revoke, &revoker, true, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["invalidated"], true);
+
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
         .await
