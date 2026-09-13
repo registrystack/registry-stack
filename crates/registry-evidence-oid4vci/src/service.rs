@@ -1704,6 +1704,104 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn offer_endpoint_refuses_malformed_expired_and_renamed_grants() {
+        use crate::authorizer::MintResourceServer;
+        use crate::config::{AccessTokenAlgorithm, ValidationMode};
+        use registry_platform_oidc::ClaimNames;
+
+        let directory = tempfile::tempdir().unwrap();
+        let key = private_jwk("offer-auth");
+        let public = public_jwk(&key);
+        let jwks = json!({"keys": [public]});
+        let key_server = TestServer::builder()
+            .http_transport()
+            .build(Router::new().route(
+                "/jwks",
+                axum::routing::get(move || {
+                    let jwks = jwks.clone();
+                    async move { axum::Json(jwks) }
+                }),
+            ));
+        let issuer_url = key_server
+            .server_address()
+            .unwrap()
+            .to_string()
+            .trim_end_matches('/')
+            .to_owned();
+        let now = chrono::Utc::now().timestamp();
+        for renamed in [false, true] {
+            let mut config = load_deployment(directory.path());
+            config.offers.algorithms = vec![AccessTokenAlgorithm::ES256];
+            config.offers.issuer = issuer_url.clone();
+            config.offers.jwks_uri = format!("{issuer_url}/jwks");
+            let mut names = ClaimNames::default();
+            if renamed {
+                names.grant_id = "task_id".into();
+                names.grant_authority = "task_authority".into();
+                names.grant_source_issuer = "task_source".into();
+                names.grant_client = "task_client".into();
+                names.grant_resource = "task_resource".into();
+                names.grant_exp = "task_exp".into();
+                names.grant_bounds = "task_bounds".into();
+                names.approver = "task_approver".into();
+            }
+            config.offers.claims = names.clone();
+            let authorizer = MintResourceServer::from_config(
+                &config.offers,
+                ValidationMode::SupervisedLocalDevelopment,
+            );
+            let issuer = Arc::new(RecordingIssuer::new());
+            let server = TestServer::new(build_app(Arc::new(DeliveryService::with_halves(
+                config,
+                Arc::new(authorizer),
+                issuer.clone(),
+            ))));
+            for state in ["ordinary", "malformed", "expired", "live"] {
+                let mut claims = json!({
+                    "iss":issuer_url, "aud":"https://wallet.example.org",
+                    "sub":"offer-client", "client_id":"offer-client", "iat":now, "exp":now+300,
+                    "registry_actor_kind": if state == "ordinary" { "service" } else { "agent" }, "registry_purpose":"delivery",
+                });
+                if state != "ordinary" {
+                    claims[&names.grant_id] = json!("grant-a");
+                    claims[&names.grant_authority] = json!("authority-a");
+                    claims[&names.grant_source_issuer] = json!("https://casework.example.org");
+                    claims[&names.grant_client] = json!("offer-client");
+                    claims[&names.grant_resource] = json!("https://wallet.example.org");
+                    claims[&names.grant_exp] =
+                        json!(if state == "expired" { now } else { now + 300 });
+                    claims[&names.grant_bounds] =
+                        json!({"type":"evidence","requirement":CONFIGURATION_ID});
+                    claims[&names.approver] = json!("approver-pseudonym");
+                    if state == "malformed" {
+                        claims[&names.grant_id] = json!(42);
+                    }
+                }
+                let token = proof_jwt_with_header(
+                    &key,
+                    json!({"alg":"ES256","typ":"at+jwt","kid":"offer-auth"}),
+                    claims,
+                );
+                let response = server
+                    .post(OFFERS_PATH)
+                    .add_header("authorization", format!("Bearer {token}"))
+                    .json(&offer_body(false))
+                    .await;
+                assert_eq!(
+                    response.status_code(),
+                    if state == "ordinary" {
+                        StatusCode::CREATED
+                    } else {
+                        StatusCode::UNAUTHORIZED
+                    },
+                    "renamed={renamed}, state={state}"
+                );
+            }
+            assert!(issuer.requests().is_empty());
+        }
+    }
+
+    #[tokio::test]
     async fn the_offer_boundary_shares_no_code_path_with_the_mint_client_identity() {
         // The client key on disk is not a usable identity, so the client half
         // cannot be built from it. The offer boundary is built from its own

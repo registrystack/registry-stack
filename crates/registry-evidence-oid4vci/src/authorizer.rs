@@ -68,6 +68,7 @@ pub trait OfferAuthorizer: Send + Sync {
 #[derive(Debug)]
 pub struct MintResourceServer {
     verifier: Arc<TokenVerifier>,
+    claims: ClaimNames,
     /// Scopes every offer token must carry. Checked against the verified
     /// token's scope set after verification, with the same closed refusal a
     /// refused client gets, before any offer is stored or Evidence contacted.
@@ -91,6 +92,7 @@ impl MintResourceServer {
         Self {
             verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
             required_scopes,
+            claims: config.claims.clone(),
         }
     }
 
@@ -102,7 +104,16 @@ impl MintResourceServer {
         Self {
             verifier,
             required_scopes: Vec::new(),
+            claims: ClaimNames::default(),
         }
+    }
+
+    /// Apply the issuer's contextual claim names when supplying a verifier
+    /// directly. Invalid mappings are refused during authorization.
+    #[must_use]
+    pub fn with_claim_names(mut self, claims: ClaimNames) -> Self {
+        self.claims = claims;
+        self
     }
 
     /// State scopes every offer token must carry, for a deployment that built
@@ -183,10 +194,7 @@ impl OfferAuthorizer for MintResourceServer {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|_| AuthorizationError::Refused)?
                     .as_secs();
-                if !matches!(
-                    grant_claims(&verified.claims, &ClaimNames::default(), now),
-                    Ok(None)
-                ) {
+                if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None)) {
                     // A wallet offer creates a deferred bearer lifecycle whose
                     // later redemption cannot recheck the task authority. No
                     // complete, partial, malformed, or expired task grant may

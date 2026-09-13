@@ -202,6 +202,14 @@ Set `offers.requiredScopes` when the issuer grants a dedicated offer capability.
 scope must occur in the verified offer token before the adapter creates an offer.
 {/* Evidence: crates/registry-evidence-oid4vci/src/{config,authorizer}.rs required_scopes OfferAuthorizer */}
 
+Set `offers.claims` when the offer issuer uses custom contextual claim names.
+It accepts the same claim-name mapping as Evidence's `authentication.claims`;
+omitted members use the standard `registry_*` names. Keep both configurations
+aligned with the issuer. Names must be distinct and cannot shadow standard JWT
+claims. Offers refuse live, expired, partial, and malformed task grants under
+the configured names because later wallet redemption cannot recheck their authority.
+{/* Evidence: crates/registry-evidence-oid4vci/src/{config,authorizer}.rs OfferAuthorizationConfig MintResourceServer::authorize; crates/registry-platform-oidc/src/authorization_claims.rs ClaimNames::validate */}
+
 `validationMode` defaults to `strict`, which requires every published and called origin
 (`credentialIssuer`, `evidence.baseUrl`, `tokenClient.tokenEndpoint`, the client assertion audience,
 `offers.issuer`, and `offers.jwksUri`) to be an absolute `https` URL with a host and no embedded

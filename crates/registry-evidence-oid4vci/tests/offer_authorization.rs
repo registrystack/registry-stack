@@ -70,6 +70,7 @@ fn resource_server(config: &OfferAuthorizationConfig, key_set: &Value) -> MintRe
         verifier_profile(config),
         fetcher,
     )))
+    .with_claim_names(config.claims.clone())
     .with_required_scopes(config.required_scopes.clone().unwrap_or_default())
 }
 
@@ -79,6 +80,7 @@ fn offer_config(
     algorithm: AccessTokenAlgorithm,
 ) -> OfferAuthorizationConfig {
     OfferAuthorizationConfig {
+        claims: Default::default(),
         issuer: issuer.to_owned(),
         jwks_uri: format!("{issuer}/oauth2/jwks"),
         audiences: vec![audience.to_owned()],
@@ -169,6 +171,7 @@ async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
     let (task_bound, keys) = signed_offer_fixture(json!({
         "registry_actor_kind":"agent",
         "registry_grant_id":"grant-a",
+        "registry_approver":"approver-pseudonym",
         "registry_grant_authority":"authority-a",
         "registry_grant_source_issuer":"https://casework.example",
         "registry_grant_client":"offer-caller",

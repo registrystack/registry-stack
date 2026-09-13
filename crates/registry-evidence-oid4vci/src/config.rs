@@ -265,6 +265,10 @@ fn default_maximum_token_lifetime_seconds() -> u64 {
 #[derive(Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OfferAuthorizationConfig {
+    /// Contextual claim names used by this offer-token issuer. Keep these
+    /// aligned with Evidence when both verify tokens from the same deployment.
+    #[serde(default)]
+    pub claims: registry_platform_oidc::ClaimNames,
     /// The authorization server that issues offer tokens, compared exactly
     /// against a token's `iss`.
     pub issuer: String,
@@ -291,6 +295,9 @@ pub struct OfferAuthorizationConfig {
 
 impl OfferAuthorizationConfig {
     fn validate(&self) -> Result<(), ConfigError> {
+        self.claims.validate().map_err(|_| {
+            ConfigError::Invalid("offer contextual claim names must be valid and distinct")
+        })?;
         if self.audiences.is_empty() {
             return Err(ConfigError::Invalid(
                 "the offer endpoint must state at least one audience",
@@ -897,6 +904,17 @@ store:
             ),
         ] {
             assert!(matches!(load_from(&text), Err(ConfigError::Document(_))));
+        }
+    }
+
+    #[test]
+    fn offer_claim_names_load_and_reject_shadowing() {
+        let configured = VALID.replace("offers:\n", "offers:\n  claims:\n    grantId: task_id\n");
+        let config = load_from(&configured).expect("custom contextual claim names load");
+        assert_eq!(config.offers.claims.grant_id, "task_id");
+        for name in ["sub", "registry_grant_authority"] {
+            let invalid = configured.replace("grantId: task_id", &format!("grantId: {name}"));
+            assert!(matches!(load_from(&invalid), Err(ConfigError::Invalid(_))));
         }
     }
 
