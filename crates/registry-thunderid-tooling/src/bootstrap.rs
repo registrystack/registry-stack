@@ -7,6 +7,7 @@
 //! HTTP admin surface, and this crate adds none of those.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::ToolingError;
 
@@ -23,6 +24,18 @@ pub trait CommandRunner {
         args: &[String],
         secret_environment: &[(String, PathBuf)],
     ) -> Result<CommandOutcome, ToolingError>;
+
+    /// Run one command with a caller-selected timeout when the runner bounds
+    /// command duration. Unbounded runners preserve their existing behavior.
+    fn run_with_timeout(
+        &mut self,
+        program: &str,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+        _timeout: Duration,
+    ) -> Result<CommandOutcome, ToolingError> {
+        self.run(program, args, secret_environment)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
