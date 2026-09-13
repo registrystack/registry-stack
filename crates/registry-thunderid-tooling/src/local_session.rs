@@ -30,9 +30,19 @@ struct DockerRunner<'a> {
 impl CommandRunner for DockerRunner<'_> {
     fn run(
         &mut self,
+        program: &str,
+        args: &[String],
+        secret_environment: &[(String, PathBuf)],
+    ) -> Result<CommandOutcome, ToolingError> {
+        self.run_with_timeout(program, args, secret_environment, COMMAND_TIMEOUT)
+    }
+
+    fn run_with_timeout(
+        &mut self,
         _: &str,
         args: &[String],
         secret_environment: &[(String, PathBuf)],
+        timeout: Duration,
     ) -> Result<CommandOutcome, ToolingError> {
         if (self.cancelled)() {
             return Err(cancelled_error());
@@ -126,7 +136,7 @@ impl CommandRunner for DockerRunner<'_> {
                 captured
             })
         });
-        let deadline = Instant::now() + COMMAND_TIMEOUT;
+        let deadline = Instant::now() + timeout;
         let result = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status.success()),

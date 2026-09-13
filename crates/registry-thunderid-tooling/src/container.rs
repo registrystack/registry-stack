@@ -8,6 +8,7 @@
 //! configured port is reported, never stopped or adopted.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::bootstrap::CommandRunner;
 use crate::ToolingError;
@@ -16,6 +17,8 @@ use crate::ToolingError;
 pub const SESSION_LABEL: &str = "registry.stack.thunderid.session";
 /// The persistent identity label: present only on this session's resources.
 pub const SESSION_ID_LABEL: &str = "registry.stack.thunderid.session-id";
+
+const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The retained state of one development session, persisted owner-only under
 /// the description's state root. Completion markers are written only after
@@ -110,6 +113,32 @@ impl Session<'_> {
         let database_is_empty = std::fs::read_dir(&database)
             .map(|entries| entries.count() == 0)
             .unwrap_or(false);
+        let image_present = runner.run(
+            "docker",
+            &["image".into(), "inspect".into(), self.image.to_owned()],
+            &[],
+        )?;
+        if !image_present.success {
+            let download = runner.run_with_timeout(
+                "docker",
+                &["pull".into(), self.image.to_owned()],
+                &[],
+                IMAGE_DOWNLOAD_TIMEOUT,
+            );
+            match download {
+                Ok(outcome) if outcome.success => {}
+                Err(
+                    error @ ToolingError::CommandFailed {
+                        step: "local issuer startup was cancelled",
+                    },
+                ) => return Err(error),
+                Ok(_) | Err(_) => {
+                    return Err(ToolingError::CommandFailed {
+                        step: "the pinned ThunderID image could not be downloaded",
+                    });
+                }
+            }
+        }
         if database_is_empty {
             let seed: Vec<String> = vec![
                 "run".into(),
@@ -470,6 +499,8 @@ mod tests {
     struct Runner {
         commands: Vec<Vec<String>>,
         owned_id: Option<String>,
+        fail_commands: bool,
+        timeouts: Vec<Duration>,
     }
 
     impl CommandRunner for Runner {
@@ -481,7 +512,7 @@ mod tests {
         ) -> Result<CommandOutcome, ToolingError> {
             self.commands.push(args.to_vec());
             Ok(CommandOutcome {
-                success: true,
+                success: !self.fail_commands,
                 container_ids: if args.first().is_some_and(|arg| arg == "ps") {
                     self.owned_id
                         .as_ref()
@@ -492,6 +523,58 @@ mod tests {
                 },
             })
         }
+
+        fn run_with_timeout(
+            &mut self,
+            program: &str,
+            args: &[String],
+            secret_environment: &[(String, PathBuf)],
+            timeout: Duration,
+        ) -> Result<CommandOutcome, ToolingError> {
+            self.timeouts.push(timeout);
+            self.run(program, args, secret_environment)
+        }
+    }
+
+    #[test]
+    fn a_missing_image_download_failure_is_reported_before_database_seeding() {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-image-download-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = Session {
+            label: "owned-test",
+            id: "0197aaaa-0000-7000-8000-0000000000a1",
+            port: 18091,
+            state_root: &root,
+            image: "pinned-test-image",
+        };
+        session.save_state(&SessionState::default()).unwrap();
+        let mut runner = Runner {
+            fail_commands: true,
+            ..Runner::default()
+        };
+
+        let error = session.prepare(&mut runner).unwrap_err();
+
+        assert!(matches!(
+            error,
+            ToolingError::CommandFailed {
+                step: "the pinned ThunderID image could not be downloaded"
+            }
+        ));
+        assert_eq!(
+            runner.commands,
+            vec![
+                vec!["image", "inspect", "pinned-test-image"],
+                vec!["pull", "pinned-test-image"],
+            ]
+        );
+        assert_eq!(runner.timeouts, [IMAGE_DOWNLOAD_TIMEOUT]);
+        assert!(runner.timeouts[0] > Duration::from_secs(120));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -607,12 +690,20 @@ mod tests {
 
         session.prepare(&mut runner).unwrap();
 
-        assert_eq!(runner.commands.len(), 2);
+        assert_eq!(runner.commands.len(), 3);
+        assert_eq!(
+            runner.commands[0],
+            ["image", "inspect", "pinned-test-image"]
+        );
+        assert_eq!(runner.commands[1][0], "run");
+        assert!(runner.commands[1]
+            .iter()
+            .any(|argument| argument.contains("dst=/seed")));
         let owner = bind_mount_user();
-        for command in &runner.commands {
+        for command in &runner.commands[1..] {
             assert!(command.windows(2).any(|pair| pair == ["--user", &owner]));
         }
-        assert!(!runner.commands[0].join(" ").contains("chown"));
+        assert!(!runner.commands[1].join(" ").contains("chown"));
         assert!(session.load_state().unwrap().setup_complete);
         std::fs::remove_dir_all(root).unwrap();
     }
