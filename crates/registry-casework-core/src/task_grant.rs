@@ -162,6 +162,7 @@ impl TaskTemplate {
                         .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
             })
             || !bounded(&self.purpose, 128)
+            || !matches!(self.purpose.as_bytes().first(), Some(b'a'..=b'z'))
             || self.purpose.bytes().any(|byte| {
                 !(byte.is_ascii_lowercase()
                     || byte.is_ascii_digit()
@@ -316,7 +317,7 @@ fn unique(values: &[String], maximum: usize) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn governed_scopes_require_explicit_bounded_oauth_names() {
+    fn governed_scopes_and_purposes_require_explicit_bounded_oauth_names() {
         let project: CaseworkProject = serde_json::from_value(serde_json::json!({
             "apiVersion": crate::CASEWORK_API_VERSION, "kind": crate::CASEWORK_KIND,
             "casework": {"id":"tasks", "version":"1"},
@@ -353,6 +354,16 @@ mod tests {
                 "invalid governed OAuth scopes accepted"
             );
         }
+        template.scopes = vec!["records:get".into()];
+        for purpose in ["1-record-review", ":review"] {
+            template.purpose = purpose.into();
+            assert!(
+                template.check(&project).is_err(),
+                "purpose refused by grant parsing was accepted: {purpose}"
+            );
+        }
+        template.purpose = "record:review".into();
+        assert!(template.check(&project).is_ok());
     }
 
     #[test]
