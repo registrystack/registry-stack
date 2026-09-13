@@ -265,6 +265,29 @@ pub(crate) fn selector_field_matches_field_type(
     selector: &registry_evidence_client::SelectorField,
     field_type: &FieldTypeSource,
 ) -> bool {
+    if let registry_evidence_client::SelectorField::String {
+        minimum_bytes,
+        maximum_bytes,
+        ..
+    } = selector
+    {
+        match field_type {
+            FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+                return (*minimum_bytes..=*maximum_bytes).contains(&36);
+            }
+            FieldTypeSource::String {
+                min_length,
+                max_length,
+            } => {
+                return u64::from(*min_length) <= *maximum_bytes
+                    && *minimum_bytes <= u64::from(*max_length) * 4;
+            }
+            FieldTypeSource::Text { max_length } => {
+                return *minimum_bytes <= u64::from(*max_length) * 4;
+            }
+            _ => {}
+        }
+    }
     matches!(
         (selector, field_type),
         (

@@ -376,6 +376,13 @@ pub(crate) fn prepare(
                 intake
                     .get(&field)
                     .cloned()
+                    .or_else(|| {
+                        request_entity
+                            .fields
+                            .get(&field)
+                            .filter(|field| !field.required)
+                            .map(|_| Value::Null)
+                    })
                     .map(|value| (field, value))
                     .ok_or(MutationError::PreconditionFailed)
             })

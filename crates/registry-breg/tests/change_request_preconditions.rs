@@ -108,6 +108,13 @@ fn project() -> Value {
 fn compile(
     source: Value,
 ) -> Result<registry_breg::CompiledRegistry, registry_breg::CompileFailure> {
+    compile_with_contract(source, contracts())
+}
+
+fn compile_with_contract(
+    source: Value,
+    contract: Value,
+) -> Result<registry_breg::CompiledRegistry, registry_breg::CompileFailure> {
     let source = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project_with_assets(
         &source,
@@ -115,10 +122,60 @@ fn compile(
         &[ModuleAssetSource {
             module: None,
             path: "evidence/contracts.json".into(),
-            bytes: serde_json::to_vec(&contracts()).unwrap(),
+            bytes: serde_json::to_vec(&contract).unwrap(),
         }],
         CompileProfile::Authoring,
     )
+}
+
+#[test]
+fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
+    for field_type in [
+        json!({"type":"uuid"}),
+        json!({"type":"reference","target":"lot"}),
+    ] {
+        let mut source = project();
+        source["entities"][0]["fields"][1]
+            .as_object_mut()
+            .unwrap()
+            .retain(|key, _| key != "maxLength" && key != "minLength");
+        for (key, value) in field_type.as_object().unwrap() {
+            source["entities"][0]["fields"][1][key] = value.clone();
+        }
+        let mut contract = contracts();
+        contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] =
+            json!(35);
+        let failure = format!(
+            "{:?}",
+            compile_with_contract(source.clone(), contract.clone()).unwrap_err()
+        );
+        assert!(
+            failure.contains("change_request.preconditions.selector_binding_invalid"),
+            "{failure}"
+        );
+
+        contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] =
+            json!(36);
+        compile_with_contract(source, contract).unwrap();
+    }
+
+    let mut source = project();
+    source["entities"][0]["fields"][1]["minLength"] = json!(8);
+    let mut contract = contracts();
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(7);
+    assert!(
+        format!("{:?}", compile_with_contract(source, contract).unwrap_err())
+            .contains("change_request.preconditions.selector_binding_invalid")
+    );
+
+    let source = project();
+    let mut contract = contracts();
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] = json!(257);
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(300);
+    assert!(
+        format!("{:?}", compile_with_contract(source, contract).unwrap_err())
+            .contains("change_request.preconditions.selector_binding_invalid")
+    );
 }
 
 #[test]

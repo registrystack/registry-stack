@@ -13,7 +13,11 @@ const PACKAGE: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const TARGET: &str = "00000000-0000-4000-8000-000000000001";
 
 fn fixture(effects: Value) -> CompiledRegistry {
-    let source = json!({
+    fixture_with_application(effects, None)
+}
+
+fn fixture_with_application(effects: Value, application: Option<Value>) -> CompiledRegistry {
+    let mut source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
         "registry":{"id":"request-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
         "entities":[{
@@ -41,8 +45,40 @@ fn fixture(effects: Value) -> CompiledRegistry {
           "rowBoundaries": []
         }]}]
     });
+    if let Some(application) = application {
+        source["entities"][1]["fields"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"optional-note","type":"string","maxLength":32,"classification":"internal"}));
+        source["entities"][1]["changeRequest"]["application"] = application;
+    }
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).expect("preparation fixture compiles")
+}
+
+#[test]
+fn omitted_optional_request_field_freezes_as_materialized_null() {
+    let registry = fixture_with_application(
+        json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
+        Some(
+            json!({"mode":"manual","preconditions":{"request":[{"field":"optional-note","equals":null}]}}),
+        ),
+    );
+    let before = map(json!({"first":"old"}));
+    for intake in [
+        map(json!({"one":TARGET,"value":"changed"})),
+        map(json!({"one":TARGET,"value":"changed","optional-note":null})),
+    ] {
+        let prepared = existing(&registry, intake, before.clone()).unwrap();
+        assert_eq!(
+            prepared
+                .proposal
+                .application_preconditions()
+                .unwrap()
+                .request_values["optional-note"],
+            Value::Null
+        );
+    }
 }
 
 fn map(value: Value) -> Map<String, Value> {
