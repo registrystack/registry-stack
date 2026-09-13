@@ -1,4 +1,5 @@
 name: Deploy RegistryStack Docs
+run-name: Deploy RegistryStack Docs ${{ inputs.released_tag }} (${{ inputs.request_id }})
 
 on:
   push:
@@ -12,6 +13,10 @@ on:
         type: string
       docs_sha256:
         description: Optional SHA-256 of that released documentation archive
+        required: false
+        type: string
+      request_id:
+        description: Optional release publication correlation ID
         required: false
         type: string
 
@@ -36,6 +41,7 @@ jobs:
         env:
           REQUESTED_TAG: ${{ inputs.released_tag }}
           REQUESTED_DOCS_SHA256: ${{ inputs.docs_sha256 }}
+          REQUEST_ID: ${{ inputs.request_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -47,6 +53,10 @@ jobs:
           if [[ -n "${REQUESTED_TAG}" && -z "${REQUESTED_DOCS_SHA256}" ]] || \
              [[ -z "${REQUESTED_TAG}" && -n "${REQUESTED_DOCS_SHA256}" ]]; then
             echo "released_tag and docs_sha256 must be supplied together" >&2
+            exit 1
+          fi
+          if [[ -n "${REQUEST_ID}" && ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]; then
+            echo "request_id must be empty or 32 lowercase hexadecimal characters" >&2
             exit 1
           fi
           if [[ -n "${REQUESTED_TAG}" && ! "${REQUESTED_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then

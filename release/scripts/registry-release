@@ -31,6 +31,9 @@ ARCHIVE_LOCK_SCHEMA = "registry-docs.archive-lock.v1"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
 SEMVER_TAG = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+$")
+CONVENTIONAL_COMMIT_SUBJECT = re.compile(
+    r"^[a-z][a-z0-9-]*(?:\([^()\r\n]+\))?!?: [^\r\n]+$"
+)
 IMAGE_DIGEST_REF = re.compile(r"^([^@]+)@(sha256:[0-9a-f]{64})$")
 RELAY_V2_RELEASE_MINIMUM_VERSION = (0, 19, 0)
 RELAY_INSTALLER_MINIMUM_VERSION = (0, 19, 1)
@@ -55,6 +58,7 @@ BREG_RELEASE_MINIMUM_VERSION = (0, 26, 0)
 CASEWORK_RELEASE_MINIMUM_VERSION = (0, 30, 0)
 UNIFIED_CLIENT_PACKAGE_MINIMUM_VERSION = (0, 26, 1)
 RELEASE_PLAN_SCHEMA = "registry-release.plan.v1"
+CANDIDATE_VERIFICATION_PLAN_SCHEMA = "registry-release.candidate-verification.v3"
 RELEASE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
@@ -1080,6 +1084,64 @@ def resolve_commit(repo: Path, revision: str, description: str) -> str:
     if HEX40.fullmatch(resolved) is None:
         raise ReleasePlanError(f"{description} did not resolve to one exact commit SHA")
     return resolved
+
+
+def validate_candidate_source_commit(repo: Path, source_sha: str) -> dict[str, str]:
+    """Require a conventional subject and an author-matching parsed DCO trailer."""
+
+    resolved_source = resolve_commit(repo, source_sha, "candidate source")
+    subject = run_checked(
+        ["git", "show", "-s", "--format=%s", resolved_source],
+        cwd=repo,
+    ).rstrip("\n")
+    if CONVENTIONAL_COMMIT_SUBJECT.fullmatch(subject) is None:
+        raise ReleasePlanError(
+            "candidate source commit subject must use conventional-commit form "
+            "type(scope): summary"
+        )
+    author = run_checked(
+        ["git", "show", "-s", "--format=%an%x00%ae", resolved_source],
+        cwd=repo,
+    ).rstrip("\n")
+    author_parts = author.split("\0")
+    if len(author_parts) != 2 or not all(author_parts):
+        raise ReleasePlanError("candidate source commit has malformed author identity")
+    expected_signoff = f"{author_parts[0]} <{author_parts[1]}>"
+    trailer_output = run_checked(
+        [
+            "git",
+            "show",
+            "-s",
+            "--format=%(trailers:key=Signed-off-by,valueonly,separator=%x00)",
+            resolved_source,
+        ],
+        cwd=repo,
+    ).rstrip("\n")
+    signoffs = [value.strip() for value in trailer_output.split("\0") if value.strip()]
+    if expected_signoff.casefold() not in {value.casefold() for value in signoffs}:
+        raise ReleasePlanError(
+            "candidate source commit must have a parseable Signed-off-by trailer "
+            f"matching its author: {expected_signoff}"
+        )
+    return {
+        "source_sha": resolved_source,
+        "subject": subject,
+        "signoff": expected_signoff,
+    }
+
+
+def validate_source_commit_command(repo: Path, source_sha: str) -> int:
+    try:
+        if HEX40.fullmatch(source_sha) is None:
+            raise ReleasePlanError("source-sha must be one exact commit")
+        result = validate_candidate_source_commit(repo.resolve(), source_sha)
+        result["operation"] = "validate-source-commit"
+        result["status"] = "passed"
+        print(json.dumps(result, indent=2, sort_keys=True))
+    except (OSError, UnicodeError, ReleasePlanError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
 
 
 def is_ancestor(repo: Path, ancestor: str, descendant: str) -> bool:
@@ -2226,15 +2288,17 @@ def workflow_runs(
     workflow: str,
     *,
     event: str,
-    head_sha: str,
+    head_sha: str | None = None,
 ) -> list[dict[str, Any]]:
+    query = f"event={event}&per_page=100"
+    if head_sha is not None:
+        query = f"event={event}&head_sha={head_sha}&per_page=100"
     document = json.loads(
         run_checked(
             [
                 "gh",
                 "api",
-                f"repos/{repository}/actions/workflows/{workflow}/runs"
-                f"?event={event}&head_sha={head_sha}&per_page=100",
+                f"repos/{repository}/actions/workflows/{workflow}/runs?{query}",
             ]
         )
     )
@@ -2244,7 +2308,8 @@ def workflow_runs(
     return [
         run
         for run in runs
-        if run.get("event") == event and run.get("head_sha") == head_sha
+        if run.get("event") == event
+        and (head_sha is None or run.get("head_sha") == head_sha)
     ]
 
 
@@ -2345,28 +2410,49 @@ def wait_for_dispatched_run(
     display_title: str,
     request_id: str,
 ) -> dict[str, Any]:
+    return wait_for_titled_workflow_run(
+        repository,
+        workflow="release-candidate.yml",
+        event="repository_dispatch",
+        source_sha=source_sha,
+        display_title=display_title,
+        label="release candidate",
+        request_id=request_id,
+    )
+
+
+def wait_for_titled_workflow_run(
+    repository: str,
+    *,
+    workflow: str,
+    event: str,
+    source_sha: str | None,
+    display_title: str,
+    label: str,
+    request_id: str,
+) -> dict[str, Any]:
     deadline = time.monotonic() + 60
     while True:
         matches = [
             run
             for run in workflow_runs(
                 repository,
-                "release-candidate.yml",
-                event="repository_dispatch",
+                workflow,
+                event=event,
                 head_sha=source_sha,
             )
             if run.get("display_title") == display_title
         ]
         if len(matches) == 1:
-            workflow_run_identity(matches[0], "release candidate")
+            workflow_run_identity(matches[0], label)
             return matches[0]
         if len(matches) > 1:
             raise ReleasePlanError(
-                f"candidate request {request_id} resolved to multiple workflow runs"
+                f"{label} request {request_id} resolved to multiple workflow runs"
             )
         if time.monotonic() >= deadline:
             raise ReleasePlanError(
-                "candidate dispatch may have been accepted, but its exact run could not "
+                f"{label} dispatch may have been accepted, but its exact run could not "
                 f"be resolved for request {request_id}; do not dispatch it again"
             )
         time.sleep(1)
@@ -2537,6 +2623,7 @@ def request_release_candidate(
                 f"candidate source {resolved_source} must equal the protected "
                 f"default-branch workflow revision {remote_default} when requested"
             )
+        validate_candidate_source_commit(context["repo"], resolved_source)
         if (
             "source_ref" in selected_stack
             or "status" in selected_stack
@@ -2921,6 +3008,629 @@ def validate_recovery_release(
     return "draft"
 
 
+def candidate_docs_sha256(manifest: dict[str, Any], version: str) -> str | None:
+    if strict_semver(version) < DOCS_RELEASE_RESUMPTION_VERSION:
+        return None
+    docs = manifest.get("docs")
+    digest = docs.get("sha256") if isinstance(docs, dict) else None
+    if not isinstance(digest, str) or SHA256_HEX.fullmatch(digest) is None:
+        raise ReleasePlanError("candidate manifest has no valid release docs SHA-256")
+    return digest
+
+
+def load_candidate_verification_plan(path: Path) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file():
+        raise ReleasePlanError(
+            f"candidate verification plan must be a regular, non-symlink file: {path}"
+        )
+    try:
+        plan = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleasePlanError(
+            f"cannot read candidate verification plan {path}: {exc}"
+        ) from exc
+    if not isinstance(plan, dict):
+        raise ReleasePlanError("candidate verification plan must be a JSON object")
+    expected_keys = {
+        "schema_version",
+        "operation",
+        "status",
+        "repository",
+        "release",
+        "candidate",
+        "checks",
+        "tag_command",
+        "release_command",
+    }
+    if set(plan) != expected_keys:
+        raise ReleasePlanError(
+            "candidate verification plan fields do not match its schema"
+        )
+    if (
+        plan.get("schema_version") != CANDIDATE_VERIFICATION_PLAN_SCHEMA
+        or plan.get("operation") != "verify-candidate"
+        or plan.get("status") != "ready"
+    ):
+        raise ReleasePlanError("candidate verification plan is not a ready v3 plan")
+    repository = plan.get("repository")
+    if (
+        not isinstance(repository, str)
+        or re.fullmatch(
+            r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
+            repository,
+        )
+        is None
+    ):
+        raise ReleasePlanError("candidate verification plan repository is invalid")
+    release = plan.get("release")
+    candidate = plan.get("candidate")
+    if not isinstance(release, dict) or set(release) != {
+        "version",
+        "release_id",
+        "tag",
+        "source_sha",
+    }:
+        raise ReleasePlanError(
+            "candidate verification plan release identity is malformed"
+        )
+    if not isinstance(candidate, dict) or set(candidate) != {
+        "run_id",
+        "run_attempt",
+        "workflow_revision",
+        "manifest_sha256",
+        "docs_sha256",
+    }:
+        raise ReleasePlanError(
+            "candidate verification plan candidate identity is malformed"
+        )
+    version = release.get("version")
+    release_id = release.get("release_id")
+    tag = release.get("tag")
+    source_sha = release.get("source_sha")
+    if not isinstance(version, str):
+        raise ReleasePlanError("candidate verification plan version is invalid")
+    parsed_version = strict_semver(version)
+    if parsed_version[0] != 0:
+        raise ReleasePlanError("Beta publication accepts only v0.x.y release tags")
+    if parsed_version < RELAY_V2_RELEASE_MINIMUM_VERSION:
+        raise ReleasePlanError(
+            "pre-v0.19 releases are immutable historical evidence; use their "
+            "existing Git tags and archived assets"
+        )
+    if not isinstance(release_id, str):
+        raise ReleasePlanError("candidate verification plan release ID is invalid")
+    validate_release_id(release_id)
+    if (
+        not isinstance(tag, str)
+        or tag != f"v{version}"
+        or SEMVER_TAG.fullmatch(tag) is None
+    ):
+        raise ReleasePlanError("candidate verification plan tag does not match its version")
+    if not isinstance(source_sha, str) or HEX40.fullmatch(source_sha) is None:
+        raise ReleasePlanError("candidate verification plan source SHA is invalid")
+    for field in ("run_id", "run_attempt"):
+        value = candidate.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise ReleasePlanError(f"candidate verification plan {field} is invalid")
+    for field in ("workflow_revision", "manifest_sha256"):
+        value = candidate.get(field)
+        pattern = HEX40 if field == "workflow_revision" else SHA256_HEX
+        if not isinstance(value, str) or pattern.fullmatch(value) is None:
+            raise ReleasePlanError(f"candidate verification plan {field} is invalid")
+    docs_sha256 = candidate.get("docs_sha256")
+    if docs_sha256 is not None and (
+        not isinstance(docs_sha256, str) or SHA256_HEX.fullmatch(docs_sha256) is None
+    ):
+        raise ReleasePlanError("candidate verification plan docs_sha256 is invalid")
+    if (
+        parsed_version >= DOCS_RELEASE_RESUMPTION_VERSION
+        and docs_sha256 is None
+    ):
+        raise ReleasePlanError(
+            "candidate verification plan must bind the release docs digest"
+        )
+    checks = plan.get("checks")
+    if not isinstance(checks, list) or not checks:
+        raise ReleasePlanError("candidate verification plan checks are malformed")
+    manifest_sha256 = candidate["manifest_sha256"]
+    binding = release_candidate.render_tag_binding(
+        candidate["run_id"],
+        candidate["run_attempt"],
+        manifest_sha256,
+    )
+    expected_tag_command = (
+        f"git tag -a {shlex.quote(tag)} {shlex.quote(source_sha)} "
+        f"-m {shlex.quote(binding.rstrip())}"
+    )
+    expected_release_command = (
+        "gh workflow run release.yml "
+        f"--repo {shlex.quote(repository)} --ref main "
+        f"-f {shlex.quote(f'tag={tag}')}"
+    )
+    if plan.get("tag_command") != expected_tag_command:
+        raise ReleasePlanError("candidate verification plan tag command is inconsistent")
+    if plan.get("release_command") != expected_release_command:
+        raise ReleasePlanError("candidate verification plan release command is inconsistent")
+    return plan
+
+
+def verify_candidate_verification_plan(
+    repo: Path,
+    plan: dict[str, Any],
+    *,
+    protected_main_sha: str,
+) -> tuple[dict[str, Any], str]:
+    release = plan["release"]
+    candidate = plan["candidate"]
+    manifest, rendered_binding = verify_candidate_run(
+        repo,
+        repository=plan["repository"],
+        candidate_run=candidate["run_id"],
+        version=release["version"],
+        release_id=release["release_id"],
+        source_sha=release["source_sha"],
+    )
+    expected_binding = release_candidate.parse_tag_binding(
+        release_candidate.render_tag_binding(
+            candidate["run_id"],
+            candidate["run_attempt"],
+            candidate["manifest_sha256"],
+        )
+    )
+    if release_candidate.parse_tag_binding(rendered_binding) != expected_binding:
+        raise ReleasePlanError("candidate plan binding differs from the verified candidate")
+    workflow_revision = resolve_commit(
+        repo,
+        manifest["workflow"]["revision"],
+        "candidate workflow revision",
+    )
+    if workflow_revision != candidate["workflow_revision"]:
+        raise ReleasePlanError("candidate workflow revision differs from the verified plan")
+    if manifest["workflow"]["run_attempt"] != candidate["run_attempt"]:
+        raise ReleasePlanError("candidate run attempt differs from the verified plan")
+    if (
+        candidate_docs_sha256(manifest, release["version"])
+        != candidate["docs_sha256"]
+    ):
+        raise ReleasePlanError(
+            "candidate docs digest differs from the verified plan"
+        )
+    validate_candidate_ancestry(
+        repo,
+        source_sha=release["source_sha"],
+        workflow_revision=workflow_revision,
+        protected_main_sha=protected_main_sha,
+    )
+    validate_candidate_source_commit(repo, release["source_sha"])
+    return manifest, rendered_binding
+
+
+def local_candidate_tag(
+    repo: Path,
+    tag: str,
+) -> tuple[str, str, dict[str, Any]] | None:
+    reference = f"refs/tags/{tag}"
+    probe = subprocess.run(
+        ["git", "show-ref", "--verify", "--quiet", reference],
+        cwd=repo,
+        capture_output=True,
+        check=False,
+    )
+    if probe.returncode == 1:
+        return None
+    if probe.returncode != 0:
+        raise ReleasePlanError(f"could not inspect local tag {tag}")
+    if run_checked(["git", "cat-file", "-t", reference], cwd=repo).strip() != "tag":
+        raise ReleasePlanError(f"local tag {tag} is not annotated")
+    object_sha = run_checked(["git", "rev-parse", reference], cwd=repo).strip()
+    if HEX40.fullmatch(object_sha) is None:
+        raise ReleasePlanError(f"local tag {tag} has an invalid object identity")
+    source_sha = resolve_commit(repo, reference, f"annotated tag {tag} target")
+    message = run_checked(
+        ["git", "for-each-ref", "--format=%(contents)", reference],
+        cwd=repo,
+    )
+    return object_sha, source_sha, release_candidate.parse_tag_binding(message)
+
+
+def remote_candidate_tag(repo: Path, tag: str) -> dict[str, str] | None:
+    reference = f"refs/tags/{tag}"
+    peeled = f"{reference}^{{}}"
+    lines = run_checked(
+        ["git", "ls-remote", "--tags", "origin", reference, peeled],
+        cwd=repo,
+    ).splitlines()
+    if not lines:
+        return None
+    remote: dict[str, str] = {}
+    for line in lines:
+        parts = line.split("\t", 1)
+        if (
+            len(parts) != 2
+            or HEX40.fullmatch(parts[0]) is None
+            or parts[1] not in {reference, peeled}
+            or parts[1] in remote
+        ):
+            raise ReleasePlanError(f"origin returned malformed state for tag {tag}")
+        remote[parts[1]] = parts[0]
+    if set(remote) != {reference, peeled}:
+        raise ReleasePlanError(f"remote tag {tag} is not one annotated source tag")
+    return remote
+
+
+def ensure_candidate_tag(
+    repo: Path,
+    *,
+    tag: str,
+    source_sha: str,
+    binding: str,
+) -> str:
+    reference = f"refs/tags/{tag}"
+    expected_binding = release_candidate.parse_tag_binding(binding)
+    remote = remote_candidate_tag(repo, tag)
+    local = local_candidate_tag(repo, tag)
+    if remote is not None and local is None:
+        run_checked(
+            ["git", "fetch", "--no-tags", "origin", f"{reference}:{reference}"],
+            cwd=repo,
+        )
+        local = local_candidate_tag(repo, tag)
+    if local is None:
+        run_checked(
+            ["git", "tag", "-a", tag, source_sha, "-m", binding.rstrip()],
+            cwd=repo,
+        )
+        local = local_candidate_tag(repo, tag)
+    if local is None:
+        raise ReleasePlanError(f"local annotated tag {tag} was not created")
+    local_object, local_source, local_binding = local
+    if local_source != source_sha or local_binding != expected_binding:
+        raise ReleasePlanError(
+            f"local annotated tag {tag} does not match the verified candidate plan"
+        )
+    if remote is None:
+        run_checked(
+            ["git", "push", "origin", f"{reference}:{reference}"],
+            cwd=repo,
+        )
+        remote = remote_candidate_tag(repo, tag)
+        state = "pushed"
+    else:
+        state = "existing"
+    if remote != {reference: local_object, f"{reference}^{{}}": local_source}:
+        raise ReleasePlanError(
+            f"local annotated tag {tag} does not exactly match immutable origin state"
+        )
+    return state
+
+
+def publication_run_title(tag: str, request_id: str) -> str:
+    return f"Publish RegistryStack {tag} ({request_id})"
+
+
+def docs_run_title(tag: str, request_id: str) -> str:
+    return f"Deploy RegistryStack Docs {tag} ({request_id})"
+
+
+def request_id_from_publication_run(run: dict[str, Any], tag: str) -> str | None:
+    title = run.get("display_title")
+    if not isinstance(title, str):
+        return None
+    match = re.fullmatch(
+        rf"Publish RegistryStack {re.escape(tag)} \(([0-9a-f]{{32}})\)",
+        title,
+    )
+    return match.group(1) if match is not None else None
+
+
+def validate_main_workflow_run(
+    repo: Path,
+    run: dict[str, Any],
+    *,
+    protected_main_sha: str,
+    label: str,
+) -> None:
+    if run.get("event") != "workflow_dispatch" or run.get("head_branch") != "main":
+        raise ReleasePlanError(f"{label} was not dispatched from main")
+    head_sha = run.get("head_sha")
+    if not isinstance(head_sha, str) or HEX40.fullmatch(head_sha) is None:
+        raise ReleasePlanError(f"{label} has an invalid workflow revision")
+    resolve_commit(repo, head_sha, f"{label} workflow revision")
+    if not is_ancestor(repo, head_sha, protected_main_sha):
+        raise ReleasePlanError(
+            f"{label} workflow revision {head_sha} is not reachable from protected main"
+        )
+
+
+def publication_runs_for_tag(repository: str, tag: str) -> list[dict[str, Any]]:
+    return [
+        run
+        for run in workflow_runs(
+            repository,
+            "release.yml",
+            event="workflow_dispatch",
+        )
+        if isinstance(run.get("display_title"), str)
+        and re.fullmatch(
+            rf"Publish RegistryStack {re.escape(tag)} \((?:[0-9a-f]{{32}})?\)",
+            run["display_title"],
+        )
+        is not None
+    ]
+
+
+def dispatch_publication_run(
+    repository: str,
+    *,
+    tag: str,
+) -> tuple[dict[str, Any], str]:
+    request_id = secrets.token_hex(16)
+    run_checked(
+        [
+            "gh",
+            "workflow",
+            "run",
+            "release.yml",
+            "--repo",
+            repository,
+            "--ref",
+            "main",
+            "-f",
+            f"tag={tag}",
+            "-f",
+            f"request_id={request_id}",
+        ]
+    )
+    run = wait_for_titled_workflow_run(
+        repository,
+        workflow="release.yml",
+        event="workflow_dispatch",
+        source_sha=None,
+        display_title=publication_run_title(tag, request_id),
+        label="release publication",
+        request_id=request_id,
+    )
+    return run, request_id
+
+
+def wait_for_docs_publication(
+    repo: Path,
+    repository: str,
+    *,
+    tag: str,
+    request_id: str,
+    verbose: bool,
+) -> int:
+    run = wait_for_titled_workflow_run(
+        repository,
+        workflow="docs-pages.yml",
+        event="workflow_dispatch",
+        source_sha=None,
+        display_title=docs_run_title(tag, request_id),
+        label="release docs",
+        request_id=request_id,
+    )
+    run_id, url = workflow_run_identity(run, "release docs")
+    protected_main = refresh_protected_main(repo, repository)
+    validate_main_workflow_run(
+        repo,
+        run,
+        protected_main_sha=protected_main,
+        label="release docs",
+    )
+    print(f"release docs: run {run_id} {url}")
+    watch_workflow_run(repository, run_id, "release docs", verbose=verbose)
+    return run_id
+
+
+def publish_candidate_plan(
+    repo: Path,
+    *,
+    plan_path: Path,
+    repository: str,
+    wait: bool,
+    verbose_wait: bool,
+) -> int:
+    try:
+        repo = repo.resolve()
+        plan = load_candidate_verification_plan(plan_path)
+        if plan["repository"].casefold() != repository.casefold():
+            raise ReleasePlanError(
+                "publish repository differs from the verified candidate plan"
+            )
+        verify_origin_repository(repo, repository)
+        release_identity = plan["release"]
+        candidate_identity = plan["candidate"]
+        tag = release_identity["tag"]
+        source_sha = release_identity["source_sha"]
+        binding = release_candidate.render_tag_binding(
+            candidate_identity["run_id"],
+            candidate_identity["run_attempt"],
+            candidate_identity["manifest_sha256"],
+        )
+        protected_main = refresh_protected_main(repo, repository)
+        release = release_for_tag(repository, tag)
+        remote_before = remote_candidate_tag(repo, tag)
+        if release is not None and release.get("draft") is False:
+            if remote_before is None:
+                raise ReleasePlanError(
+                    f"published release {tag} has no immutable remote tag"
+                )
+            ensure_candidate_tag(
+                repo,
+                tag=tag,
+                source_sha=source_sha,
+                binding=binding,
+            )
+            validate_candidate_source_commit(repo, source_sha)
+            result = verify_public_release.verify(
+                repo=repo,
+                repository=repository,
+                tag=tag,
+            )
+            result.update(
+                {
+                    "operation": "publish",
+                    "status": "complete",
+                    "release_state": "published",
+                }
+            )
+            if wait and candidate_identity["docs_sha256"] is not None:
+                successful_runs = [
+                    run
+                    for run in publication_runs_for_tag(repository, tag)
+                    if run.get("status") == "completed"
+                    and run.get("conclusion") == "success"
+                ]
+                if not successful_runs:
+                    raise ReleasePlanError(
+                        f"published release {tag} has no correlated successful "
+                        "publication run"
+                    )
+                publication_run = max(
+                    successful_runs,
+                    key=lambda item: workflow_run_identity(
+                        item,
+                        "release publication",
+                    )[0],
+                )
+                request_id = request_id_from_publication_run(publication_run, tag)
+                if request_id is None:
+                    raise ReleasePlanError("successful publication run has no request ID")
+                result["docs_run_id"] = wait_for_docs_publication(
+                    repo,
+                    repository,
+                    tag=tag,
+                    request_id=request_id,
+                    verbose=verbose_wait,
+                )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+
+        manifest, _ = verify_candidate_verification_plan(
+            repo,
+            plan,
+            protected_main_sha=protected_main,
+        )
+        if remote_before is None:
+            if release is not None:
+                raise ReleasePlanError(
+                    f"GitHub Release destination {tag} exists before its remote tag"
+                )
+            verify_absent_image_destinations(manifest["images"])
+        else:
+            validate_recovery_release(
+                release,
+                tag=tag,
+                manifest_sha256=candidate_identity["manifest_sha256"],
+            )
+        tag_state = ensure_candidate_tag(
+            repo,
+            tag=tag,
+            source_sha=source_sha,
+            binding=binding,
+        )
+        runs = publication_runs_for_tag(repository, tag)
+        active_runs = [
+            run
+            for run in runs
+            if run.get("status")
+            in {"requested", "queued", "in_progress", "pending", "waiting"}
+        ]
+        if len(active_runs) > 1:
+            raise ReleasePlanError(f"multiple active publication runs exist for {tag}")
+        if active_runs:
+            publication_run = active_runs[0]
+            request_id = request_id_from_publication_run(publication_run, tag)
+            if request_id is None:
+                raise ReleasePlanError("active publication run has no request ID")
+        else:
+            successful_runs = [
+                run
+                for run in runs
+                if run.get("status") == "completed"
+                and run.get("conclusion") == "success"
+            ]
+            if successful_runs:
+                raise ReleasePlanError(
+                    f"a successful publication run exists for {tag}, but the release "
+                    "is not public and verified"
+                )
+            publication_run, request_id = dispatch_publication_run(
+                repository,
+                tag=tag,
+            )
+        publication_run_id, publication_url = workflow_run_identity(
+            publication_run,
+            "release publication",
+        )
+        publication_main = refresh_protected_main(repo, repository)
+        validate_main_workflow_run(
+            repo,
+            publication_run,
+            protected_main_sha=publication_main,
+            label="release publication",
+        )
+        print(
+            f"release publication: run {publication_run_id} {publication_url} "
+            f"(tag {tag_state})"
+        )
+        if not wait:
+            print(
+                json.dumps(
+                    {
+                        "operation": "publish",
+                        "status": "dispatched",
+                        "tag": tag,
+                        "tag_state": tag_state,
+                        "publication_run_id": publication_run_id,
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        watch_workflow_run(
+            repository,
+            publication_run_id,
+            "release publication",
+            verbose=verbose_wait,
+        )
+        result = verify_public_release.verify(
+            repo=repo,
+            repository=repository,
+            tag=tag,
+        )
+        result.update(
+            {
+                "operation": "publish",
+                "status": "complete",
+                "tag_state": tag_state,
+                "publication_run_id": publication_run_id,
+            }
+        )
+        if candidate_identity["docs_sha256"] is not None:
+            result["docs_run_id"] = wait_for_docs_publication(
+                repo,
+                repository,
+                tag=tag,
+                request_id=request_id,
+                verbose=verbose_wait,
+            )
+        print(json.dumps(result, indent=2, sort_keys=True))
+    except (
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ReleasePlanError,
+        release_candidate.CandidateError,
+        verify_public_release.PublicReleaseError,
+    ) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def verify_release_recovery(
     repo: Path,
     *,
@@ -3057,6 +3767,7 @@ def verify_candidate_for_tag(
             workflow_revision=workflow_revision,
             protected_main_sha=remote_main,
         )
+        validate_candidate_source_commit(context["repo"], source_sha)
         tag = release["tag"]
         verify_absent_tag_and_release(
             context["repo"],
@@ -3074,9 +3785,10 @@ def verify_candidate_for_tag(
             f"-f {shlex.quote(f'tag={tag}')}"
         )
         plan = {
-            "schema_version": "registry-release.candidate-verification.v2",
+            "schema_version": CANDIDATE_VERIFICATION_PLAN_SCHEMA,
             "operation": "verify-candidate",
             "status": "ready",
+            "repository": repository,
             "release": {
                 "version": version,
                 "release_id": release_id,
@@ -3090,6 +3802,7 @@ def verify_candidate_for_tag(
                 "manifest_sha256": release_candidate.parse_tag_binding(binding)[
                     "manifest_sha256"
                 ],
+                "docs_sha256": candidate_docs_sha256(manifest, version),
             },
             "checks": [
                 passed_check(
@@ -3107,14 +3820,27 @@ def verify_candidate_for_tag(
             "release_command": release_command,
         }
         emit_release_plan(plan, plan_output)
-        print(
-            "Candidate verification passed. Run the annotated-tag command, push "
-            "that tag, then dispatch publication from protected main:\n"
-            f"{command}\n"
-            f"git push origin {shlex.quote(f'refs/tags/{tag}')}\n"
-            f"{release_command}",
-            file=sys.stderr,
-        )
+        if plan_output is not None:
+            publish_command = (
+                "release/scripts/registry-release publish "
+                f"--plan {shlex.quote(str(plan_output))} --wait"
+            )
+            print(
+                "Candidate verification passed. Review the saved plan, then run "
+                "the resumable publication command:\n"
+                f"{publish_command}",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Candidate verification passed. Save a reviewed plan with "
+                "--plan-output to use the resumable publish command. The low-level "
+                "operator commands are:\n"
+                f"{command}\n"
+                f"git push origin {shlex.quote(f'refs/tags/{tag}')}\n"
+                f"{release_command}",
+                file=sys.stderr,
+            )
     except (
         OSError,
         UnicodeError,
@@ -3148,6 +3874,12 @@ def main() -> int:
     source_parser.add_argument("--tag", required=True)
     source_parser.add_argument("--repo", type=Path, default=ROOT)
     source_parser.add_argument("--default-branch", default="origin/main")
+    source_commit_parser = subparsers.add_parser(
+        "validate-source-commit",
+        help="validate one exact candidate source commit subject and DCO trailer",
+    )
+    source_commit_parser.add_argument("--source-sha", required=True)
+    source_commit_parser.add_argument("--repo", type=Path, default=ROOT)
     audit_parser = subparsers.add_parser("audit")
     audit_parser.add_argument("import_map", type=Path)
     bind_spdx_parser = subparsers.add_parser("bind-spdx-subject")
@@ -3228,6 +3960,25 @@ def main() -> int:
     verify_candidate_parser.add_argument(
         "--repository", default="registrystack/registry-stack"
     )
+    publish_parser = subparsers.add_parser(
+        "publish",
+        help="tag and publish one reviewed candidate verification plan",
+    )
+    publish_parser.add_argument("--plan", type=Path, required=True)
+    publish_parser.add_argument("--repo", type=Path, default=ROOT)
+    publish_parser.add_argument(
+        "--repository", default="registrystack/registry-stack"
+    )
+    publish_parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="wait for publication and docs, then verify the public release",
+    )
+    publish_parser.add_argument(
+        "--verbose-wait",
+        action="store_true",
+        help="show raw gh run watch output instead of compact state changes",
+    )
     verify_public_parser = subparsers.add_parser("verify-public")
     verify_public_parser.add_argument("--tag", required=True)
     verify_public_parser.add_argument("--repo", type=Path, default=ROOT)
@@ -3255,6 +4006,8 @@ def main() -> int:
         )
     if args.command == "validate-source":
         return validate_source(args.manifest, args.tag, args.repo, args.default_branch)
+    if args.command == "validate-source-commit":
+        return validate_source_commit_command(args.repo, args.source_sha)
     if args.command == "audit":
         return audit(args.import_map)
     if args.command == "bind-spdx-subject":
@@ -3316,6 +4069,14 @@ def main() -> int:
             default_branch=args.default_branch,
             repository=args.repository,
             plan_output=args.plan_output,
+        )
+    if args.command == "publish":
+        return publish_candidate_plan(
+            args.repo,
+            plan_path=args.plan,
+            repository=args.repository,
+            wait=args.wait,
+            verbose_wait=args.verbose_wait,
         )
     if args.command == "verify-public":
         try:

@@ -585,11 +585,16 @@ display when detailed live job output is useful.
 Omit either flag when another operator or monitor owns the corresponding wait.
 
 The request is accepted only when `source_sha` is the exact protected-main
-workflow revision. Builds may run while that revision's CI is pending, but a
-failed, cancelled, or timed-out CI wait prevents candidate attestation and
-publication. Only unadmitted candidate artifacts and private candidate images
-can be produced before CI passes. Request the candidate immediately after the release PR merges. If `main` advances
-before dispatch, the CLI stops without creating a candidate. Inspect the
+workflow revision. Before dispatch, the CLI also requires that exact commit to
+have a conventional subject and a Git-parseable `Signed-off-by` trailer matching
+its author. The candidate workflow repeats the same commit-message validation,
+so literal escape text such as `\\n\\nSigned-off-by:` is rejected before build or
+publication destinations are touched. Builds may run while that revision's CI
+is pending, but a failed, cancelled, or timed-out CI wait prevents candidate
+attestation and publication. Only unadmitted candidate artifacts and private
+candidate images can be produced before CI passes. Request the candidate
+immediately after the release PR merges. If `main` advances before dispatch,
+the CLI stops without creating a candidate. Inspect the
 intervening commits, rerun `prepare` and the applicable validators and
 rehearsal against the new tip, and use the new protected-main revision only
 when the release identity and notes remain accurate. Otherwise update them in
@@ -766,7 +771,8 @@ Use the successful candidate run ID for local verification:
 release/scripts/registry-release verify-candidate \
   --version <version> \
   --release-id <release-id> \
-  --candidate-run <run-id>
+  --candidate-run <run-id> \
+  --plan-output <candidate-plan.json>
 ```
 
 The command verifies the exact source and workflow ancestry, candidate
@@ -776,24 +782,35 @@ GitHub Release, and final image destinations to be unused.
 
 ## Tag and publish
 
-On success, `verify-candidate` prints all three operator commands:
-
-1. Create the exact annotated tag bound to the candidate run, attempt, and
-   manifest SHA-256.
-2. Push only that tag ref.
-3. Dispatch publication from protected `main` with the exact tag.
-
-The final command has this form:
+Review the saved plan as the human publication checkpoint. It binds the source,
+release identity, candidate run and attempt, manifest, documentation archive,
+repository, tag command, and publication command. Then run:
 
 ```sh
-gh workflow run release.yml \
-  --repo registrystack/registry-stack \
-  --ref main \
-  -f tag=v<version>
+release/scripts/registry-release publish \
+  --plan <candidate-plan.json> \
+  --wait
 ```
 
-Run the printed commands without editing the annotation. Inspect the tag before
-pushing it. The tag is annotated but not cryptographically signed.
+The command re-verifies the plan against the exact candidate, protected-main
+ancestry, source commit policy, and current public destinations. It creates and
+inspects the exact annotated candidate tag, pushes only that tag ref, dispatches
+publication with a unique correlation ID, follows only the correlated run, runs
+the public verifier, and waits for the correlated documentation deployment. The
+tag is annotated but not cryptographically signed. The command never approves a
+protected environment. It prints the environment and exact run URL when an
+authorized reviewer must use **Review deployments**.
+
+The command is resumable. Rerun the same `publish --plan ... --wait` invocation
+after an interruption. It accepts only an exact local-only or immutable remote
+tag, resumes one active correlated publication, retries a stopped publication
+through the fail-closed workflow, and treats an already public release as
+complete only after public verification. It never moves a tag or overwrites
+mismatched public state. Add `--verbose-wait` only when raw job output is useful.
+
+For break-glass manual operation, omitting `--plan-output` from
+`verify-candidate` still prints the three low-level tag, push, and dispatch
+commands. The reviewed-plan path is the maintained default.
 
 The publication workflow runs from protected `main`, while the candidate and
 tag remain bound to the release source commit. This separation permits a
@@ -834,8 +851,9 @@ verifier requires the provenance asset from v0.27.1 and verifies it whenever it
 is present. Pre-v0.19 release finalizers remain only in their immutable
 historical release tags.
 
-After publication, run the minimum public verifier from a checkout whose
-`origin` is the Registry Stack repository:
+`publish --wait` runs the minimum public verifier automatically. It can also be
+rerun independently from a checkout whose `origin` is the Registry Stack
+repository:
 
 ```sh
 release/scripts/registry-release verify-public --tag v<version>
@@ -851,8 +869,8 @@ package before docs promotion. The verifier selects the historical individual
 projects through v0.26.0 and only the unified projects from v0.26.1. It is
 read-only and can be rerun independently.
 
-For an interrupted publication after the annotated tag exists, classify the
-exact recovery state before retrying:
+For read-only incident classification, or when the original reviewed plan is
+unavailable, inspect an interrupted publication after the annotated tag exists:
 
 ```sh
 release/scripts/registry-release verify-recovery --tag v<version>
@@ -876,7 +894,7 @@ workflow, and it adds no release gate.
 | Candidate infrastructure failure before sealing | Rerun the candidate workflow |
 | Candidate byte, recipe, scan, or advisory decision changes | Build and verify a new candidate |
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
-| Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then dispatch `release.yml` again with the same tag |
+| Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
 | Documentation deployment fails after publication | Rerun `docs-pages.yml`; its optional exact tag and digest inputs fail closed if the request is stale |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
 | npm or PyPI already has every expected client byte | Retry; publication accepts and re-verifies the exact registry state |
