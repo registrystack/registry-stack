@@ -329,6 +329,12 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
             issuer: "https://casework.example.test".into(),
             jwks_endpoint: "https://casework.example.test/oauth2/jwks".into(),
             mapping: config::IssuerConnectionMapping::FirstParty,
+            clients: vec!["source".into()],
+            token_attributes: [(
+                "registry_principal".into(),
+                registry_thunderid_tooling::description::ExchangeAttributeKind::String,
+            )]
+            .into(),
         });
     clients.issuer.exchange_clients.push("source".into());
     clients
@@ -379,6 +385,12 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
     config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
+    let portal = &description.exchange_issuers[0];
+    assert_eq!(portal.clients, vec!["source"]);
+    assert_eq!(
+        portal.token_attributes["registry_principal"],
+        registry_thunderid_tooling::description::ExchangeAttributeKind::String
+    );
     let evidence = description
         .resource_servers
         .iter()

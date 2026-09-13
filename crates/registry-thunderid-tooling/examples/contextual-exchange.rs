@@ -243,6 +243,8 @@ fn description(
                 jwks_endpoint: format!("{}/jwks", keys.issuer(which)),
                 mapping:
                     registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
+                clients: vec![],
+                token_attributes: Default::default(),
             })
             .collect(),
     }

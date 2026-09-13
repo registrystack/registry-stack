@@ -73,6 +73,11 @@ pub(super) struct IssuerConnection {
     pub issuer: String,
     pub jwks_endpoint: String,
     pub mapping: IssuerConnectionMapping,
+    #[serde(default)]
+    pub clients: Vec<String>,
+    #[serde(default)]
+    pub token_attributes:
+        BTreeMap<String, registry_thunderid_tooling::description::ExchangeAttributeKind>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
@@ -810,6 +815,8 @@ pub(super) fn issuer_description(
                 IssuerConnectionMapping::InstitutionalGrant => ExchangeMapping::InstitutionalGrant,
                 IssuerConnectionMapping::FirstParty => ExchangeMapping::FirstParty,
             },
+            clients: issuer.clients.clone(),
+            token_attributes: issuer.token_attributes.clone(),
         });
     }
     for app in &clients.issuer.interactive_applications {
