@@ -149,6 +149,15 @@ pub(crate) fn compile_request_evidence(
                 + usize::from(requirement.at_least.is_some())
                 + usize::from(requirement.at_most.is_some());
             choices == 1
+                && requirement
+                    .at_least
+                    .or(requirement.at_most)
+                    .is_none_or(|value| {
+                        registry_evidence_verifier::model::safe_json_integer(
+                            &serde_json::Number::from(value),
+                        )
+                        .is_some()
+                    })
                 && definition.concepts.iter().any(|concept| {
                     concept.handle == requirement.output
                         && concept.scalar_expected_output().is_some_and(|expected| {
@@ -286,8 +295,9 @@ pub(crate) fn selector_field_matches_field_type(
                 return *minimum_bytes <= u64::from(*max_length) * 4;
             }
             FieldTypeSource::Timestamp => {
-                // PostgreSQL's JSONB timestamptz projection includes a UTC offset.
-                return *maximum_bytes >= 25;
+                // PostgreSQL's JSONB projection uses at least 25 bytes with
+                // a UTC offset; snapshot sizing allows 37 including JSON quotes.
+                return *maximum_bytes >= 25 && *minimum_bytes <= 35;
             }
             _ => {}
         }

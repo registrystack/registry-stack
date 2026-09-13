@@ -176,6 +176,24 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     compile_with_contract(source, contract).unwrap();
 
     let mut source = project();
+    source["entities"][0]["fields"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxLength");
+    source["entities"][0]["fields"][1]["type"] = json!("timestamp");
+    let mut contract = contracts();
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] = json!(36);
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] =
+        json!(8192);
+    assert!(format!(
+        "{:?}",
+        compile_with_contract(source.clone(), contract.clone()).unwrap_err()
+    )
+    .contains("change_request.preconditions.selector_binding_invalid"));
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["minimumBytes"] = json!(35);
+    compile_with_contract(source, contract).unwrap();
+
+    let mut source = project();
     source["entities"][0]["fields"][1]["minLength"] = json!(8);
     let mut contract = contracts();
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(7);
@@ -191,6 +209,83 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     assert!(
         format!("{:?}", compile_with_contract(source, contract).unwrap_err())
             .contains("change_request.preconditions.selector_binding_invalid")
+    );
+}
+
+#[test]
+fn evidence_integer_thresholds_stay_within_verified_safe_integer_range() {
+    for (operator, value) in [
+        ("atLeast", 9_007_199_254_740_992_i64),
+        ("atMost", -9_007_199_254_740_992_i64),
+    ] {
+        let mut source = project();
+        source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
+            ["requires"][1]
+            .as_object_mut()
+            .unwrap()
+            .remove("atLeast");
+        source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
+            ["requires"][1][operator] = json!(value);
+        assert!(format!("{:?}", compile(source.clone()).unwrap_err())
+            .contains("change_request.preconditions.evidence_invalid"));
+        source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
+            ["requires"][1][operator] = json!(value.signum() * 9_007_199_254_740_991_i64);
+        compile(source).unwrap();
+    }
+}
+
+#[test]
+fn guard_predicates_and_target_selectors_share_the_context_field_ceiling() {
+    let mut source = project();
+    let mut contract = contracts();
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["targets"][0]
+        ["requires"] =
+        json!([{"field":"owner-reference","equalsFromRequestField":"owner-reference"}]);
+    let mut subjects = Vec::new();
+    let mut bindings = serde_json::Map::new();
+    for role_index in 0..8 {
+        let role = format!("subject-{role_index}");
+        let mut fields = Vec::new();
+        let mut selectors = serde_json::Map::new();
+        for field_index in 0..16 {
+            let field = if role_index == 0 && field_index == 0 {
+                "owner-reference".to_owned()
+            } else {
+                format!("guard-{role_index}-{field_index}")
+            };
+            if field != "owner-reference" {
+                source["entities"][0]["fields"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":field,"type":"string","maxLength":64,"required":true,"classification":"restricted"}));
+            }
+            fields.push(json!({"type":"string","name":field,"minimumBytes":1,"maximumBytes":64}));
+            selectors.insert(
+                field.clone(),
+                json!({"source":"target_field","target":"lot","field":field}),
+            );
+        }
+        subjects.push(json!({"role":role,"cardinality":"one","selector":{
+            "profile":format!("profile-{role_index}"),"valueOrigin":"request","fields":fields
+        }}));
+        bindings.insert(
+            role,
+            json!({"profile":format!("profile-{role_index}"),"selectors":selectors}),
+        );
+    }
+    contract["definitions"][0]["subjects"] = json!(subjects);
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
+        ["subjects"] = Value::Object(bindings);
+    compile_with_contract(source.clone(), contract.clone()).unwrap();
+
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["targets"][0]
+        ["requires"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"field":"active","equals":true}));
+    assert!(
+        format!("{:?}", compile_with_contract(source, contract).unwrap_err())
+            .contains("change_request.preconditions.target_fields_exceeded")
     );
 }
 

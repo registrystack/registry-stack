@@ -1783,6 +1783,7 @@ impl MutationCoordinator {
             registry,
             entity,
             &submission.intake,
+            current.record_uuid,
             current.record_revision,
             &self.expected.package_revision,
             resolved,

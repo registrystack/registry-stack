@@ -115,6 +115,7 @@ pub(crate) fn prepare(
     registry: &CompiledRegistry,
     request_entity: &CompiledEntity,
     intake: &Map<String, Value>,
+    request_record_id: Uuid,
     request_record_revision: i64,
     package_fingerprint: &str,
     resolved: &ResolvedRequestTargets,
@@ -392,6 +393,9 @@ pub(crate) fn prepare(
             let (record_id, revision, data) = guard_bases
                 .get(&guard.id)
                 .ok_or(MutationError::PreconditionFailed)?;
+            if guard.entity_id == request_entity.id && *record_id == request_record_id {
+                return Err(MutationError::PreconditionFailed);
+            }
             if *revision <= 0 {
                 return Err(MutationError::PreconditionFailed);
             }

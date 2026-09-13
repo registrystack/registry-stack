@@ -18,6 +18,8 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::physical_names::PhysicalNameInventory;
 
+pub(crate) const MAX_TARGET_CONTEXT_FIELDS: usize = 128;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledField {

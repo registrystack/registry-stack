@@ -11,12 +11,14 @@ use std::time::{Duration, Instant};
 
 const PACKAGE: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const TARGET: &str = "00000000-0000-4000-8000-000000000001";
+const REQUEST: &str = "00000000-0000-4000-8000-000000000002";
+const OTHER_REQUEST: &str = "00000000-0000-4000-8000-000000000003";
 
 fn fixture(effects: Value) -> CompiledRegistry {
-    fixture_with_application(effects, None)
+    fixture_with(effects, |_| {})
 }
 
-fn fixture_with_application(effects: Value, application: Option<Value>) -> CompiledRegistry {
+fn fixture_with(effects: Value, customize: impl FnOnce(&mut Value)) -> CompiledRegistry {
     let mut source = json!({
         "apiVersion":"registry.registrystack.org/v1alpha1", "kind":"RegistryProject",
         "registry":{"id":"request-preparation","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
@@ -45,24 +47,22 @@ fn fixture_with_application(effects: Value, application: Option<Value>) -> Compi
           "rowBoundaries": []
         }]}]
     });
-    if let Some(application) = application {
-        source["entities"][1]["fields"]
-            .as_array_mut()
-            .unwrap()
-            .push(json!({"id":"optional-note","type":"string","maxLength":32,"classification":"internal"}));
-        source["entities"][1]["changeRequest"]["application"] = application;
-    }
+    customize(&mut source);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     compile_project(&project, &[], CompileProfile::Authoring).expect("preparation fixture compiles")
 }
 
 #[test]
 fn omitted_optional_request_field_freezes_as_materialized_null() {
-    let registry = fixture_with_application(
+    let registry = fixture_with(
         json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
-        Some(
-            json!({"mode":"manual","preconditions":{"request":[{"field":"optional-note","equals":null}]}}),
-        ),
+        |source| {
+            source["entities"][1]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"optional-note","type":"string","maxLength":32,"classification":"internal"}));
+            source["entities"][1]["changeRequest"]["application"] = json!({"mode":"manual","preconditions":{"request":[{"field":"optional-note","equals":null}]}});
+        },
     );
     let before = map(json!({"first":"old"}));
     for intake in [
@@ -79,6 +79,76 @@ fn omitted_optional_request_field_freezes_as_materialized_null() {
             Value::Null
         );
     }
+}
+
+#[test]
+fn preparation_refuses_a_guard_on_its_own_request_record() {
+    let registry = fixture_with(
+        json!([{"target":{"fromField":"one"},"operation":"patch","set":{"first":{"fromField":"value"}}}]),
+        |source| {
+            source["entities"][1]["fields"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"id":"guard-reference","type":"reference","target":"request","required":true,"classification":"internal"}));
+            source["entities"][1]["changeRequest"]["application"] = json!({
+                "mode":"manual","preconditions":{"targets":[{
+                    "id":"guard","entity":"request","fromField":"guard-reference",
+                    "requires":[{"field":"value","equals":"changed"}]
+                }]}
+            });
+            let permission = &mut source["accessProfiles"][0]["permissions"][0];
+            permission["reviewStages"][0]["targets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"entity":"request","readableFields":["value"],"rowBoundaries":[]}));
+            permission["applyTargets"]
+                .as_array_mut()
+                .unwrap()
+                .push(json!({"entity":"request","rowBoundaries":[]}));
+        },
+    );
+    let request_entity = &registry.entities()["request"];
+    let request_id = Uuid::parse_str(REQUEST).unwrap();
+    let prepare_with_guard = |guard_id: Uuid| {
+        let intake =
+            map(json!({"one":TARGET,"value":"changed","guard-reference":guard_id.to_string()}));
+        let candidate = crate::rhai_planner::plan_change_request_effects(
+            request_entity.change_request.as_ref().unwrap(),
+            &intake,
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        let resolved = resolve_targets(
+            &registry,
+            request_entity,
+            &intake,
+            candidate,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        prepare(
+            &registry,
+            request_entity,
+            &intake,
+            request_id,
+            1,
+            PACKAGE,
+            &resolved,
+            BTreeMap::from([(
+                ("target".to_owned(), Uuid::parse_str(TARGET).unwrap()),
+                (7, map(json!({"first":"old"}))),
+            )]),
+            BTreeMap::from([(
+                "guard".to_owned(),
+                (guard_id, 4, map(json!({"value":"changed"}))),
+            )]),
+        )
+    };
+    assert!(matches!(
+        prepare_with_guard(request_id),
+        Err(MutationError::PreconditionFailed)
+    ));
+    assert!(prepare_with_guard(Uuid::parse_str(OTHER_REQUEST).unwrap()).is_ok());
 }
 
 fn map(value: Value) -> Map<String, Value> {
@@ -102,6 +172,7 @@ fn existing(
         registry,
         entity,
         &intake,
+        Uuid::parse_str(REQUEST).unwrap(),
         1,
         PACKAGE,
         &resolved,
@@ -245,6 +316,7 @@ fn declarative_and_rhai_paths_produce_byte_equivalent_canonical_effects() {
             registry,
             request_entity,
             &intake,
+            Uuid::parse_str(REQUEST).unwrap(),
             1,
             PACKAGE,
             &resolved,
@@ -317,6 +389,7 @@ fn create_references_reuse_reserved_ids_across_preparation_attempts() {
             &registry,
             entity,
             &intake,
+            Uuid::parse_str(REQUEST).unwrap(),
             1,
             PACKAGE,
             &resolved,

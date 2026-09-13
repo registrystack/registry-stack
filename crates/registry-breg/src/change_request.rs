@@ -1028,6 +1028,34 @@ fn compile_preconditions(
         });
     }
     evidence.sort_by(|left, right| left.capability.id.cmp(&right.capability.id));
+    for target in &targets {
+        let fields = target
+            .requires
+            .iter()
+            .map(|predicate| predicate.field.as_str())
+            .chain(
+                evidence
+                    .iter()
+                    .flat_map(|item| item.subjects.values())
+                    .flat_map(|subject| subject.selectors.values())
+                    .filter_map(|selector| match selector {
+                        CompiledChangeRequestSelector::TargetField { target: id, field }
+                            if id == &target.id =>
+                        {
+                            Some(field.as_str())
+                        }
+                        _ => None,
+                    }),
+            )
+            .collect::<BTreeSet<_>>();
+        if fields.len() > crate::model::MAX_TARGET_CONTEXT_FIELDS {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_fields_exceeded",
+                format!("{base}.targets[id={}]", target.id),
+                "a guard cannot bind more than 128 distinct predicate and Evidence selector fields",
+            ));
+        }
+    }
     CompiledChangeRequestPreconditions {
         request: request_predicates,
         targets,
