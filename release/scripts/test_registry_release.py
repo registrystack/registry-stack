@@ -1713,9 +1713,11 @@ class RegistryReleaseTest(TestCase):
             }
         )
         self.assertEqual([], module.artifact_inventory_errors("0.30.0", future))
-        retired = {name: "0.30.1" for name in future if name != "mint"}
-        self.assertEqual([], module.artifact_inventory_errors("0.30.1", retired))
-        self.assertNotEqual([], module.artifact_inventory_errors("0.30.0", retired))
+        patch = {name: "0.30.1" for name in future}
+        self.assertEqual([], module.artifact_inventory_errors("0.30.1", patch))
+        retired = {name: "0.31.0" for name in future if name != "mint"}
+        self.assertEqual([], module.artifact_inventory_errors("0.31.0", retired))
+        self.assertNotEqual([], module.artifact_inventory_errors("0.30.1", retired))
         del future["caseworkctl"]
         self.assertNotEqual([], module.artifact_inventory_errors("0.30.0", future))
 
@@ -3047,10 +3049,11 @@ def write_manifest(
         artifacts["registry-client-node"] = version
         artifacts["registry-client-python"] = version
     if version_tuple >= (0, 30, 0):
-        artifacts.pop("mint")
         artifacts["casework"] = version
         artifacts["caseworkctl"] = version
         artifacts["casework-installer"] = version
+    if version_tuple >= (0, 31, 0):
+        artifacts.pop("mint")
     manifest = {
         "stack": {
             "release": "beta-6",

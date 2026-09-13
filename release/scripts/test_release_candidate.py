@@ -155,7 +155,7 @@ class ReleaseCandidateTest(TestCase):
             "release/scripts/build-release-image.sh",
             "release/scripts/cleanup-release-candidates.py",
         ]
-        for image_name in self.module._candidate_image_names("0.30.1"):
+        for image_name in self.module._candidate_image_names("0.31.0"):
             paths.append(f"release/docker/Dockerfile.{image_name}")
             paths.append(
                 "products/relay-v2/security/advisory-baseline.json"
@@ -851,8 +851,12 @@ class ReleaseCandidateTest(TestCase):
         self.assertEqual("installer", future["casework-v0.30.0-install.sh"])
         self.assertEqual("installer", future["casework-install.sh"])
 
-    def test_retirement_preserves_published_v0_30_0(self) -> None:
-        for version, expected in (("0.30.0", True), ("0.30.1", False)):
+    def test_retirement_preserves_every_v0_30_release(self) -> None:
+        for version, expected in (
+            ("0.30.0", True),
+            ("0.30.1", True),
+            ("0.31.0", False),
+        ):
             with self.subTest(version=version):
                 self.assertEqual(expected, "mint" in self.module._candidate_image_names(version))
                 inventory = self.module._relay_v2_payload_inventory(version)
@@ -866,7 +870,8 @@ class ReleaseCandidateTest(TestCase):
             ("0.26.0", "breg discovery evidence mint relay\n"),
             ("0.29.0", "breg discovery evidence mint relay\n"),
             ("0.30.0", "breg casework discovery evidence mint relay\n"),
-            ("0.30.1", "breg casework discovery evidence relay\n"),
+            ("0.30.1", "breg casework discovery evidence mint relay\n"),
+            ("0.31.0", "breg casework discovery evidence relay\n"),
         )
         for version, expected in cases:
             with self.subTest(version=version):
@@ -879,7 +884,7 @@ class ReleaseCandidateTest(TestCase):
                 self.assertEqual(expected, stdout.getvalue())
 
     def test_image_onboarding_accepts_every_current_version_roster(self) -> None:
-        for version in ("0.30.1",):
+        for version in ("0.31.0",):
             with self.subTest(version=version):
                 self.assertEqual(
                     self.module._candidate_image_names(version),
@@ -893,19 +898,19 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "casework advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.30.1")
+            self.module.check_image_onboarding(root, "0.31.0")
         self.assertEqual(
-            self.module._candidate_image_names("0.30.1"),
+            self.module._candidate_image_names("0.31.0"),
             self.module.check_image_onboarding(
-                root, "0.30.1", allow_missing_baseline=True
+                root, "0.31.0", allow_missing_baseline=True
             ),
         )
         (root / "release/security/casework-advisory-baseline.json").write_text(
             json.dumps({"version": 4, "service": "casework"}), encoding="utf-8"
         )
         self.assertEqual(
-            self.module._candidate_image_names("0.30.1"),
-            self.module.check_image_onboarding(root, "0.30.1"),
+            self.module._candidate_image_names("0.31.0"),
+            self.module.check_image_onboarding(root, "0.31.0"),
         )
 
     def test_image_onboarding_rejects_a_noncanonical_version(self) -> None:
@@ -924,7 +929,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.30.1",
+                "0.31.0",
                 allow_missing_baseline=True,
             )
 
@@ -947,7 +952,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.30.1",
+                        "0.31.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)
@@ -968,7 +973,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.30.1",
+                "0.31.0",
                 allow_missing_baseline=True,
             )
 
@@ -988,7 +993,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.30.1",
+                "0.31.0",
                 allow_missing_baseline=True,
             )
 
@@ -1000,10 +1005,10 @@ class ReleaseCandidateTest(TestCase):
             self.module.CandidateError,
             "breg advisory baseline is missing",
         ):
-            self.module.check_image_onboarding(root, "0.30.1")
+            self.module.check_image_onboarding(root, "0.31.0")
         self.module.check_image_onboarding(
             root,
-            "0.30.1",
+            "0.31.0",
             allow_missing_baseline=True,
         )
         cleanup = root / "release/scripts/cleanup-release-candidates.py"
@@ -1020,7 +1025,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.30.1",
+                "0.31.0",
                 allow_missing_baseline=True,
             )
 
@@ -1035,7 +1040,7 @@ class ReleaseCandidateTest(TestCase):
                 [
                     "check-image-onboarding",
                     "--version",
-                    "0.30.1",
+                    "0.31.0",
                     "--root",
                     str(root),
                 ]
@@ -1048,7 +1053,7 @@ class ReleaseCandidateTest(TestCase):
                 [
                     "check-image-onboarding",
                     "--version",
-                    "0.30.1",
+                    "0.31.0",
                     "--root",
                     str(root),
                     "--allow-missing-baseline",
@@ -1070,7 +1075,7 @@ class ReleaseCandidateTest(TestCase):
         ):
             self.module.check_image_onboarding(
                 root,
-                "0.30.1",
+                "0.31.0",
                 allow_missing_baseline=True,
             )
 
@@ -1086,7 +1091,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.30.1",
+                        "0.31.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)
@@ -1114,7 +1119,7 @@ class ReleaseCandidateTest(TestCase):
                 with self.assertRaisesRegex(self.module.CandidateError, error):
                     self.module.check_image_onboarding(
                         root,
-                        "0.30.1",
+                        "0.31.0",
                         allow_missing_baseline=True,
                     )
                 shutil.rmtree(root)

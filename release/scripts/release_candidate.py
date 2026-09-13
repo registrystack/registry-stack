@@ -55,8 +55,8 @@ RELEASE_PROVENANCE_ASSET_MINIMUM_VERSION = (0, 27, 1)
 BREG_RUNTIME_IMAGE_NAMES = DISCOVERY_RUNTIME_IMAGE_NAMES | {
     "breg"
 }
-MINT_RETIREMENT_VERSION = (0, 30, 1)
-# v0.30.0 is already released. Every later version omits Mint.
+MINT_RETIREMENT_VERSION = (0, 31, 0)
+# Every v0.30.x release retains Mint. v0.31.0 and later omit it.
 CASEWORK_RUNTIME_IMAGE_NAMES = (BREG_RUNTIME_IMAGE_NAMES - {"mint"}) | {"casework"}
 V2_TOP_LEVEL_FIELDS = {
     "schema_version",
