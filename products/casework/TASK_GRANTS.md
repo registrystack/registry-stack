@@ -30,11 +30,17 @@ invalidates its live grants; reactivation does not restore those grants.
 
 ## Configure the authority
 
-Runtime `taskAuthority` declares `id`, assertion `issuer`, `exchangeAudience`,
+Runtime `taskAuthority` declares assertion `issuer`, `exchangeAudience`,
 `signingKeyRef`, and `statusClients`. Register its public JWKS, served at
 `/.well-known/jwks.json`, with the token-exchange issuer. Keep the private ES256
 or RS256 signing key in the configured secret provider, with its registered key
 identifier.
+
+The signed assertion identifies the grant and its immutable bounds. The token
+exchange issuer derives `registry_grant_source_issuer` from the verified
+assertion issuer instead of accepting an assertion-supplied source issuer.
+Casework retains that issuer and returns it as `sourceIssuer` from the status
+endpoint.
 
 Include agent and resource status clients in OIDC `allowedClients`. Template
 agent issuers must match that verifier. Register the agent's client-credentials

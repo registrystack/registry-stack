@@ -354,9 +354,6 @@
         "exchangeAudience": {
           "type": "string"
         },
-        "id": {
-          "type": "string"
-        },
         "issuer": {
           "type": "string"
         },
@@ -373,7 +370,6 @@
         }
       },
       "required": [
-        "id",
         "issuer",
         "exchangeAudience",
         "signingKeyRef",

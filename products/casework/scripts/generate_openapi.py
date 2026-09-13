@@ -1193,7 +1193,7 @@ def task_schemas() -> dict:
     template = {**preview, "eligibleTeams":array(text), "eligibleProfiles":array(text), "source":text, "itemKinds":array(text), "itemStates":{"type":"array","items":{"enum":["claimed","waiting_applicant","waiting_application"]}}}
     template["subjects"] = {"type":"object", "minProperties":1, "maxProperties":32, "additionalProperties":text}
     view = {"id":uuid, "templateId":text, "templateVersion":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "expiresAt":number, "invalidated":{"type":"boolean"}}
-    details = {"grantId":uuid, "authority":text, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
+    details = {"grantId":uuid, "sourceIssuer":text, "principal":text, "client":text, "resource":text, "purpose":text, "bounds":ref("TaskGrantBounds"), "subjects":subjects, "expiresAt":number}
     return {
         "EvidenceRequesterContext":evidence_context,
         "TaskTemplate":obj(template,[name for name in template if name != "evidenceContext"]),

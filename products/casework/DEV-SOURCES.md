@@ -53,7 +53,6 @@ integrations:
     - id: breg-status
       scopes: [casework:grants:status]
   taskAuthority:
-    id: casework
     issuer: https://casework.local.example
     jwksPort: 8094
     statusClients:
@@ -67,7 +66,7 @@ admission, actor category, required scopes and source profiles. Add those source
 scopes to the corresponding human teaching client's `scopes`. A shared audience
 alone grants no source access. In particular, BREG human profiles must exclude
 the task agent and status clients. BREG task profiles still require their
-configured authority, original issuer, client, purpose, operations and identity
+configured source issuer, client, purpose, operations and identity
 bounds. The template's BREG bounds must match the selected task profile's full
 effective permissions. A bootstrap token has no grant fields.
 
@@ -83,8 +82,8 @@ governed template. Static grant attributes and caller-selected actor markers
 are refused. Task clients cannot act as local humans.
 
 Only an explicit `taskAuthority` enables signing. Its `issuer` is a logical HTTPS
-authority identifier, distinct from the loopback Casework API URL. Configure
-BREG task profiles and status validation with this exact authority identifier;
+issuer, distinct from the loopback Casework API URL. Configure
+BREG task profiles and status validation with this exact source issuer;
 the local issuer maps it to the explicit public JWKS listener. Its private key stays in the
 owner-only retained session. The supervisor owns a public-key-only listener on
 `0.0.0.0:<jwksPort>` so the issuer container can verify actual Casework

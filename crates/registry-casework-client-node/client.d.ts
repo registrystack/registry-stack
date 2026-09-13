@@ -40,7 +40,7 @@ export interface TaskGrantRevocation { id: string; invalidated: boolean }
 /** A short-lived credential. Do not persist or log the assertion. */
 export interface TaskAssertionResponse { assertion: string; expiresAt: SafeInteger; grantExpiresAt: SafeInteger }
 export interface TaskGrantStatusDetails {
-  grantId: string; authority: string; sourceIssuer: string; principal: string; client: string; resource: string; purpose: string
+  grantId: string; sourceIssuer: string; principal: string; client: string; resource: string; purpose: string
   bounds: TaskGrantBounds; subjects: { readonly [key: string]: Exclude<JsonScalar, null> }; expiresAt: SafeInteger
 }
 export interface TaskGrantStatus { active: boolean; grant?: TaskGrantStatusDetails }

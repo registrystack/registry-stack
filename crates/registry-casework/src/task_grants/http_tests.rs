@@ -220,7 +220,6 @@ fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUs
     key.alg = Some("RS256".into());
     let authority = TaskAuthority {
         config: crate::TaskAuthorityConfig {
-            id: "casework-tasks".into(),
             issuer: "https://task-authority.test".into(),
             exchange_audience: "https://issuer.test/token".into(),
             signing_key_ref: "secret:env/TEST_ONLY".into(),
@@ -477,6 +476,11 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
     assert_eq!(status, StatusCode::OK, "{active}");
     assert_eq!(active["active"], true);
     assert_eq!(active["grant"]["grantId"], id);
+    assert_eq!(
+        active["grant"]["sourceIssuer"],
+        "https://task-authority.test"
+    );
+    assert!(active["grant"].get("authority").is_none());
     let other = token(
         "resource",
         "other-resource",

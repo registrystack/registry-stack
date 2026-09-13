@@ -10,7 +10,7 @@ The binding does not retain credentials and exposes no browser credential API.
 Task delegation uses the current human profile for template previews, grant
 approval, listing, and revocation. Approval accepts only the template ID and
 version, with the item revision and a caller-owned idempotency key. The preview
-contains the exact destination, purpose, authority bounds, derived subjects,
+contains the exact destination, purpose, immutable bounds, derived subjects,
 and lifetime; the grant list omits stored subjects. Agent assertion and grant
 status calls take only a bearer token and grant ID, without human or source
 profile headers. Neither binding retains credentials or retries a mutation.
