@@ -28,6 +28,7 @@ use evidence_client_sdk::PreparedEvidenceRequest as RealPreparedEvidenceRequest;
 use evidence_client_sdk::PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch;
 use evidence_client_sdk::RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse;
 use evidence_client_sdk::RawEvidenceResponse as RealRawEvidenceResponse;
+use evidence_client_sdk::RetainedEvidenceVerification as RealRetainedEvidenceVerification;
 use evidence_client_sdk::SdJwtVcBatchResponse as RealSdJwtVcBatchResponse;
 use evidence_client_sdk::SubjectBindingReceipt as RealSubjectBindingReceipt;
 use evidence_client_sdk::SubjectContinuity as RealSubjectContinuity;
@@ -571,6 +572,8 @@ struct VerifiedAssertion {
     subject_continuity: Py<SubjectContinuity>,
     #[pyo3(get)]
     assertion: Vec<u8>,
+    #[pyo3(get)]
+    retained_verification: Vec<u8>,
 }
 
 #[pymethods]
@@ -608,6 +611,8 @@ struct VerifiedAudienceScopedCredential {
     subject_continuity: Py<SubjectContinuity>,
     #[pyo3(get)]
     credential: String,
+    #[pyo3(get)]
+    retained_verification: Vec<u8>,
 }
 
 #[pymethods]
@@ -773,6 +778,10 @@ fn progressive_result_to_python(
                     values,
                     subject_continuity,
                     assertion: result.assertion_bytes().to_vec(),
+                    retained_verification: serde_json::to_vec(result.retained_verification())
+                        .map_err(|error| {
+                            serialization_error("the retained verification context", error)
+                        })?,
                 },
             )
             .map(|result| result.into_any())
@@ -788,6 +797,10 @@ fn progressive_result_to_python(
                     values,
                     subject_continuity,
                     credential: result.credential().to_owned(),
+                    retained_verification: serde_json::to_vec(result.retained_verification())
+                        .map_err(|error| {
+                            serialization_error("the retained verification context", error)
+                        })?,
                 },
             )
             .map(|result| result.into_any())
@@ -1237,6 +1250,35 @@ impl EvidenceClient {
     }
 }
 
+/// Offline verification of exact retained bytes as a current decision.
+#[pyfunction]
+fn verify_retained(py: Python<'_>, context: &[u8], response: &[u8]) -> PyResult<VerifiedEvidence> {
+    let context = RealRetainedEvidenceVerification::from_slice(context)
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+    let verified = context
+        .verify(response)
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+    verified_evidence_to_python(py, &verified)
+}
+
+/// Replay an earlier decision at the recorded instant, without I/O.
+#[pyfunction]
+fn verify_retained_as_of(
+    py: Python<'_>,
+    context: &[u8],
+    response: &[u8],
+    as_of_unix_seconds: f64,
+) -> PyResult<VerifiedEvidence> {
+    let now = datetime_from_unix_seconds(as_of_unix_seconds)
+        .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+    let context = RealRetainedEvidenceVerification::from_slice(context)
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+    let verified = context
+        .verify_as_of(response, now)
+        .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+    verified_evidence_to_python(py, &verified)
+}
+
 // `pub` so `tests/happy_path.rs` (a separate integration-test crate) can call
 // this directly rather than going through a real `import`: building a
 // `PyModule` and handing it to this function is the same registration path
@@ -1247,6 +1289,8 @@ impl EvidenceClient {
 // test below).
 #[pymodule]
 pub fn registry_evidence_client(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(verify_retained, module)?)?;
+    module.add_function(wrap_pyfunction!(verify_retained_as_of, module)?)?;
     module.add_class::<EvidenceClient>()?;
     module.add_class::<PreparedEvidenceRequest>()?;
     module.add_class::<PreparedEvidenceRequestBatch>()?;

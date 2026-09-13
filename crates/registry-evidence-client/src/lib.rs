@@ -208,10 +208,10 @@ pub use private_key_jwt::{
     MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS,
 };
 pub use profile::{
-    ContractsProfile, EvidenceClientProfile, ExpectedServiceProfile, PrivateKeyReference,
-    ReviewedContracts, TrustProfile, VerificationProfile, DEFAULT_METADATA_CACHE_SECONDS,
-    EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1, EVIDENCE_CLIENT_PROFILE_SCHEMA_V1,
-    MAXIMUM_METADATA_CACHE_SECONDS,
+    ContractsProfile, EvidenceClientProfile, ExpectedDefinitionProfile, ExpectedServiceProfile,
+    PrivateKeyReference, ReviewedContracts, TrustProfile, VerificationProfile,
+    DEFAULT_METADATA_CACHE_SECONDS, EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1,
+    EVIDENCE_CLIENT_PROFILE_SCHEMA_V1, MAXIMUM_METADATA_CACHE_SECONDS,
 };
 pub use progressive::{
     AudienceScopedRequest, AudienceScopedResult, EvidenceClientContracts,

@@ -1,6 +1,7 @@
 //! Strict, application-owned configuration for the progressive client.
 
 use std::{
+    collections::BTreeMap,
     env, fmt,
     fs::File,
     io::Read as _,
@@ -12,7 +13,10 @@ use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::{is_cloud_metadata_ip, valid_resource_uri};
 use serde::{Deserialize, Serialize};
 
-use crate::{error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, JwksDocument};
+use crate::{
+    error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, EvidenceResponseFormat,
+    JwksDocument,
+};
 
 pub const EVIDENCE_CLIENT_PROFILE_SCHEMA_V1: &str = "registry.evidence-client-profile/v1";
 pub const EVIDENCE_CLIENT_CONTRACTS_SCHEMA_V1: &str = "registry.evidence-client-contracts/v1";
@@ -92,6 +96,34 @@ impl EvidenceClientProfile {
             .into_iter()
             .flatten()
             .any(|value| !valid_expected_identity(value))
+            || self.expected.definitions.len() > 128
+            || self.expected.definitions.iter().any(|(handle, expected)| {
+                handle.is_empty()
+                    || handle.len() > 128
+                    || !handle.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_' | b'.')
+                    })
+                    || !expected
+                        .configuration_revision
+                        .strip_prefix("sha256:")
+                        .is_some_and(|digest| {
+                            digest.len() == 64
+                                && digest.bytes().all(|byte| {
+                                    byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                                })
+                        })
+                    || !valid_expected_identity(&expected.evidence_type)
+                    || expected.purpose.is_empty()
+                    || expected.purpose.len() > 128
+                    || !expected.purpose.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'.' | b'_' | b'-' | b':')
+                    })
+                    || !expected.response_format.is_verifiable_alone()
+            })
             || self.maximum_metadata_cache_seconds == 0
             || self.maximum_metadata_cache_seconds > MAXIMUM_METADATA_CACHE_SECONDS
             || self.verification.maximum_assertion_lifetime_seconds == 0
@@ -413,6 +445,20 @@ pub struct ExpectedServiceProfile {
     pub issuer: Option<String>,
     #[serde(default)]
     pub provider: Option<String>,
+    /// Pins for selected requirement handles. A service may publish other
+    /// definitions without changing the meaning of this relying procedure.
+    #[serde(default)]
+    pub definitions: BTreeMap<String, ExpectedDefinitionProfile>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExpectedDefinitionProfile {
+    pub configuration_revision: String,
+    pub evidence_type: String,
+    pub purpose: String,
+    pub assurance_profile: registry_evidence_verifier::AssuranceProfile,
+    pub response_format: EvidenceResponseFormat,
 }
 
 /// The token-request parameters a profile fixes ahead of discovery.
@@ -695,6 +741,7 @@ mod tests {
             audience: Some("urn:example:audience".to_owned()),
             issuer: Some("https://issuer.example.org".to_owned()),
             provider: Some("urn:example:provider".to_owned()),
+            ..ExpectedServiceProfile::default()
         })
         .validate()
         .expect("bounded expected identities");

@@ -26,6 +26,7 @@ pub const RETAINED_EVIDENCE_VERIFICATION_SCHEMA_V1: &str =
 
 /// Maximum signed response size both portable verifiers accept.
 const MAXIMUM_SIGNED_RESPONSE_BYTES: usize = 256 * 1024;
+const MAXIMUM_RETAINED_CONTEXT_BYTES: usize = 2 * 1024 * 1024;
 
 /// Trusted state sufficient to verify one retained response without I/O.
 ///
@@ -63,6 +64,21 @@ enum RetainedSubjectExpectation {
 }
 
 impl RetainedEvidenceVerification {
+    /// Decode a bounded, previously retained trust snapshot. This reads no
+    /// deployment metadata or current keys.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, EvidenceClientError> {
+        if bytes.len() > MAXIMUM_RETAINED_CONTEXT_BYTES {
+            return Err(EvidenceClientError::configuration(
+                "the retained verification context is invalid",
+            ));
+        }
+        let context: Self = serde_json::from_slice(bytes).map_err(|_| {
+            EvidenceClientError::configuration("the retained verification context is invalid")
+        })?;
+        context.validate()?;
+        Ok(context)
+    }
+
     pub(crate) fn new(prepared: &PreparedEvidenceRequest, trusted_jwks: JwksDocument) -> Self {
         let subject_expectation = match prepared.subject_expectations() {
             SubjectExpectations::Pinned(_) => RetainedSubjectExpectation::Pinned,
@@ -380,8 +396,8 @@ mod tests {
             .expect("the request is prepared");
         let serialized = serde_json::to_vec(&client.retain_verification(&prepared))
             .expect("the retained context serializes");
-        let retained: RetainedEvidenceVerification =
-            serde_json::from_slice(&serialized).expect("the retained context parses");
+        let retained = RetainedEvidenceVerification::from_slice(&serialized)
+            .expect("the retained context parses and validates");
         let verified = retained
             .verify_as_of(&fixture.sign(prepared.request_nonce()), fixture.now)
             .expect("the retained response verifies");
@@ -501,6 +517,15 @@ mod tests {
 
         let mut wrong_schema = serde_json::to_value(&context).expect("the context serializes");
         wrong_schema["schema"] = serde_json::json!("registry.example/unknown");
+        assert!(RetainedEvidenceVerification::from_slice(
+            &serde_json::to_vec(&wrong_schema).unwrap()
+        )
+        .is_err());
+        assert!(RetainedEvidenceVerification::from_slice(&vec![
+            b' ';
+            MAXIMUM_RETAINED_CONTEXT_BYTES + 1
+        ])
+        .is_err());
         let wrong_schema: RetainedEvidenceVerification =
             serde_json::from_value(wrong_schema).expect("the altered shape parses");
         assert!(matches!(

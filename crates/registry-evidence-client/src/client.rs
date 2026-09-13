@@ -346,6 +346,12 @@ impl EvidenceClient {
         let state = self.progressive_state()?;
         let snapshot = self.progressive_snapshot(state).await?;
         let definition = select_definition(&snapshot.definitions, &request)?.clone();
+        validate_definition_expectation(
+            &state.profile,
+            &snapshot.definitions,
+            &definition,
+            request.response_format,
+        )?;
         let spec = spec_from_definition(
             &snapshot.definitions,
             &definition,
@@ -364,9 +370,17 @@ impl EvidenceClient {
             Vec::new(),
         ))?;
         let prepared = client.prepare(spec)?;
+        let retained = client.retain_verification(&prepared);
         let raw = client.send(&prepared).await?;
         let verified = client.verify(&prepared, &raw)?;
-        progressive_result(&definition, request.response_format, raw, verified, matched)
+        progressive_result(
+            &definition,
+            request.response_format,
+            raw,
+            verified,
+            matched,
+            retained,
+        )
     }
 
     /// Fetch the requester-scoped, client-safe catalog candidate for review.
@@ -391,6 +405,12 @@ impl EvidenceClient {
         let state = self.progressive_state()?;
         let snapshot = self.progressive_snapshot(state).await?;
         let definition = select_definition(&snapshot.definitions, &request)?.clone();
+        validate_definition_expectation(
+            &state.profile,
+            &snapshot.definitions,
+            &definition,
+            request.response_format,
+        )?;
         let spec = spec_from_definition(
             &snapshot.definitions,
             &definition,
@@ -1531,6 +1551,37 @@ fn validate_profile_expectations(
         return Err(EvidenceClientError::configuration(
             "the discovered service does not match the profile's expected identity",
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_definition_expectation(
+    profile: &EvidenceClientProfile,
+    definitions: &EvidenceDefinitionsDocument,
+    definition: &crate::EvidenceDefinition,
+    response_format: EvidenceResponseFormat,
+) -> Result<(), EvidenceClientError> {
+    if !profile.expected.definitions.is_empty()
+        && !profile
+            .expected
+            .definitions
+            .contains_key(&definition.handle)
+    {
+        return Err(EvidenceClientError::configuration(
+            "the selected definition has no profile expectation",
+        ));
+    }
+    if let Some(expected) = profile.expected.definitions.get(&definition.handle) {
+        if expected.configuration_revision != definition.configuration_revision
+            || expected.evidence_type != definition.evidence_type
+            || expected.purpose != definition.purpose
+            || expected.assurance_profile != definitions.assurance_profile
+            || expected.response_format != response_format
+        {
+            return Err(EvidenceClientError::configuration(
+                "the selected definition does not match the profile's expected contract",
+            ));
+        }
     }
     Ok(())
 }
