@@ -25,6 +25,7 @@ use crate::ToolingError;
 /// renames, or drops upstream fields, and a deployment sharing this schema
 /// with other agents merges rather than overwrites.
 const PINNED_DEFAULT_AGENT_TYPE: &str = include_str!("../fixtures/default-agent-type-v1.0.1.yaml");
+const INSTITUTIONAL_REQUESTER_ATTRIBUTES: [&str; 2] = ["evidence_audience", "evidence_tags"];
 
 /// Where serving-time documents land, relative to the description's state
 /// root. The pinned release reads these through composite stores, so the
@@ -141,6 +142,10 @@ pub fn agent_type_document(description: &IssuerDescription) -> Result<String, To
             reason: "the pinned default agent schema did not parse with a schema map",
         });
     };
+    let institutional = description
+        .exchange_issuers
+        .iter()
+        .any(|issuer| issuer.mapping == ExchangeMapping::InstitutionalGrant);
     let names: BTreeSet<_> = description
         .schema_attributes
         .iter()
@@ -152,15 +157,23 @@ pub fn agent_type_document(description: &IssuerDescription) -> Result<String, To
                 .filter(|issuer| issuer.mapping == ExchangeMapping::FirstParty)
                 .flat_map(|issuer| issuer.token_attributes.keys().cloned()),
         )
+        .chain(
+            INSTITUTIONAL_REQUESTER_ATTRIBUTES
+                .iter()
+                .filter(|_| institutional)
+                .map(|name| (*name).to_owned()),
+        )
         .collect();
     for name in names {
-        let array = description.exchange_issuers.iter().any(|issuer| {
-            issuer.token_attributes.get(&name) == Some(&ExchangeAttributeKind::StringArray)
-        }) || description
-            .machine_clients
-            .iter()
-            .filter_map(|client| client.attributes.get(&name))
-            .any(Value::is_array);
+        let array = (institutional && name == "evidence_tags")
+            || description.exchange_issuers.iter().any(|issuer| {
+                issuer.token_attributes.get(&name) == Some(&ExchangeAttributeKind::StringArray)
+            })
+            || description
+                .machine_clients
+                .iter()
+                .filter_map(|client| client.attributes.get(&name))
+                .any(Value::is_array);
         schema.insert(
             name.clone(),
             if array {
@@ -317,9 +330,11 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                 "user_type_resolution": {"default": "registry-exchange"},
                 "user_type_attribute_mappings": [{
                     "user_type": "registry-exchange", "attributes": match issuer.mapping {
-                        ExchangeMapping::InstitutionalGrant => json!([{
-                            "external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"
-                        }]),
+                        ExchangeMapping::InstitutionalGrant => json!([
+                            {"external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"},
+                            {"external_attribute": "evidence_audience", "local_attribute": "evidence_audience"},
+                            {"external_attribute": "evidence_tags", "local_attribute": "evidence_tags"},
+                        ]),
                         ExchangeMapping::FirstParty => json!(issuer.token_attributes.keys().map(|name| {
                             json!({"external_attribute": name, "local_attribute": name})
                         }).collect::<Vec<_>>()),
@@ -481,6 +496,7 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             } else {
                 crate::description::GRANT_ATTRIBUTES
                     .iter()
+                    .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES.iter())
                     .map(|attribute| (*attribute).to_owned())
                     .collect::<Vec<_>>()
             };
@@ -775,6 +791,7 @@ mod tests {
             json!(GRANT_ATTRIBUTES
                 .iter()
                 .copied()
+                .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES)
                 .chain(["synthetic_tag"])
                 .collect::<Vec<_>>())
         );
@@ -799,8 +816,16 @@ mod tests {
         );
         assert_eq!(
             connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
-            json!([{"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"}])
+            json!([
+                {"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"},
+                {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
+                {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
+            ])
         );
+        let schema: Value = serde_yaml_parse(&rendered.agent_type_document).unwrap();
+        assert_eq!(schema["schema"]["evidence_audience"]["type"], "string");
+        assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
+        assert_eq!(schema["schema"]["evidence_tags"]["items"]["type"], "string");
         assert!(
             render(&description).is_err(),
             "a second render must not overwrite session resources"
