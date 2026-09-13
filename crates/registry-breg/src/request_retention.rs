@@ -1458,6 +1458,7 @@ async fn append_retention_audit(
         transaction,
         profile,
         TerminalAudit {
+            grant: None,
             outcome: TerminalAuditOutcome::Committed,
             method: HttpMethod::Delete,
             operation_id: RETENTION_OPERATION_ID.to_owned(),

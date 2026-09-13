@@ -2273,6 +2273,7 @@ async fn audited_mutation_refusal(
     }
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
+            grant: context.grant_audit().cloned(),
             method: route.method,
             operation_id: &route.id,
             target_record,
@@ -2312,6 +2313,7 @@ async fn audited_mutation_concealment(
     };
     match mutations
         .record_refusal(crate::audit::HttpRefusalAudit {
+            grant: crate::audit::GrantAuditContext::from_claims(claims),
             method: route.method,
             operation_id: &route.id,
             target_record,
@@ -2538,7 +2540,8 @@ fn authorize_direct_route_base<'a>(
         selected_profile.to_owned(),
         row_boundaries,
     )
-    .with_task_grant(task_grant_binding(profile, claims).ok()?);
+    .with_task_grant(task_grant_binding(profile, claims).ok()?)
+    .with_grant_audit(claims);
     let submitter_targets = profile
         .submitter_targets
         .iter()
@@ -2634,7 +2637,8 @@ fn authorize_read_path_route<'a>(
             selected_profile.to_owned(),
             row_boundaries,
         )
-        .with_task_grant(task_grant_binding(profile, claims).ok()?),
+        .with_task_grant(task_grant_binding(profile, claims).ok()?)
+        .with_grant_audit(claims),
         readable_fields,
         read_path: Some(read_path),
     })

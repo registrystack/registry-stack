@@ -102,6 +102,7 @@ async fn mutate(
         return attachment_refusal(
             mutations,
             crate::audit::HttpRefusalAudit {
+                grant: crate::audit::GrantAuditContext::from_claims(&claims),
                 method: attachment_route.method,
                 operation_id: &attachment_route.id,
                 target_record: Some(record_id),
@@ -120,6 +121,7 @@ async fn mutate(
         attachment_refusal(
             mutations,
             crate::audit::HttpRefusalAudit {
+                grant: surface.context.grant_audit().cloned(),
                 method: attachment_route.method,
                 operation_id: &attachment_route.id,
                 target_record: Some(record_id),

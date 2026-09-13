@@ -308,7 +308,7 @@ fn app(
 }
 fn human(idp: &MockIdp, subject: &str, purpose: &str) -> String {
     idp.mint_token(
-        json!({"aud":AUDIENCE,"client_id":"human-client","sub":subject,"tenant_claim":"tenant-a","registry_purpose":purpose}),
+        json!({"aud":AUDIENCE,"client_id":"human-client","registry_actor_kind":"human","sub":subject,"tenant_claim":"tenant-a","registry_purpose":purpose}),
     )
 }
 fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
@@ -327,7 +327,7 @@ fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
     let subjects = json!({"tenant_claim":"tenant-a"});
     let binding:TaskGrantBinding=serde_json::from_value(json!({"grantId":id,"authority":"casework","sourceIssuer":SOURCE,"principal":"agent-subject","client":"task-agent","resource":AUDIENCE,"purpose":"review","bounds":bounds,"subjects":subjects,"expiresAt":expires})).unwrap();
     status.bindings.lock().unwrap().insert(id.clone(), binding);
-    let token=idp.mint_token(json!({"aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent","registry_actor_kind":"agent","registry_grant_id":id,"registry_grant_authority":"casework","registry_grant_source_issuer":SOURCE,"registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,"registry_purpose":"review","registry_grant_exp":expires,"registry_grant_bounds":bounds,"identity":subjects}));
+    let token=idp.mint_token(json!({"aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent","registry_actor_kind":"agent","registry_grant_id":id,"registry_approver":"synthetic-approver","registry_grant_authority":"casework","registry_grant_source_issuer":SOURCE,"registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,"registry_purpose":"review","registry_grant_exp":expires,"registry_grant_bounds":bounds,"identity":subjects}));
     (id, token)
 }
 struct Response {
@@ -467,6 +467,64 @@ async fn counts(db: &TestDatabase) -> Vec<i64> {
     }
     counts
 }
+async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome: &str) {
+    let hasher = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
+        .unwrap()
+        .key_hasher();
+    let pseudonym = hasher
+        .audit_reference_hash("breg-grant-v1", REVISION, grant)
+        .unwrap();
+    let rows = db
+        .admin
+        .query(
+            "SELECT convert_from(envelope, 'UTF8') FROM registry_internal.registry_audit",
+            &[],
+        )
+        .await
+        .unwrap();
+    let records: Vec<Value> = rows
+        .iter()
+        .map(|row| serde_json::from_str::<Value>(row.get(0)).unwrap()["record"].clone())
+        .collect();
+    let record = records
+        .iter()
+        .find(|record| {
+            record["phase"] == phase && record["authorization"]["grantPseudonym"] == pseudonym
+        })
+        .expect("grant-bound write and refusal retain minimized grant audit context");
+    let authorization = &record["authorization"];
+    assert_eq!(authorization["outcome"], outcome);
+    assert_eq!(authorization["authority"], "casework");
+    assert_eq!(authorization["sourceIssuer"], SOURCE);
+    assert!(authorization["expiresAt"].as_u64().is_some());
+    assert!(authorization["approverPseudonym"]
+        .as_str()
+        .unwrap()
+        .starts_with("hmac-sha256:"));
+    for field in ["grantPseudonym", "principalPseudonym", "clientPseudonym"] {
+        assert!(authorization[field]
+            .as_str()
+            .unwrap()
+            .starts_with("hmac-sha256:"));
+    }
+    let rendered = authorization.to_string();
+    for sensitive in [
+        grant,
+        "agent-subject",
+        "task-agent",
+        "tenant-a",
+        "subjects",
+        "bounds",
+        "synthetic-approver",
+        "purpose",
+    ] {
+        assert!(
+            !rendered.contains(sensitive),
+            "audit must not contain {sensitive}"
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn task_http_to_postgres_preserves_original_authority_and_completed_receipts() {
     let db = TestDatabase::create(8).await;
@@ -526,6 +584,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
             before_calls + 1,
             "HTTP grant must reach the SQL coordinator"
         );
+        assert_grant_audit(&db, &grant, "terminal", "allowed").await;
         let record = id(&draft);
         let read = get(&app, &record, "submitter", &token).await;
         let submit = action(&read, "submit_request");
@@ -567,6 +626,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
                     .status,
                 StatusCode::PRECONDITION_FAILED
             );
+            assert_grant_audit(&db, &grant, "refusal", "denied").await;
             assert_eq!(counts(&db).await, before);
             let call_count = status.calls();
             let recovered=create(&app,"/v1/records/correction-requests?accessProfile=submitter",&token,&create_key,json!({"tenant":"tenant-a","placement":id(&target),"proposedSite":id(&new),"reason":"synthetic correction"})).await;

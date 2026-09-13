@@ -111,6 +111,7 @@ pub struct AuthenticatedContext {
     requester_tags: Vec<String>,
     evidence_audience: String,
     task_grant: Result<Option<GrantClaims>, TaskGrantError>,
+    audit_grant_id: Option<String>,
     verified_claims: Value,
 }
 
@@ -153,7 +154,9 @@ impl AuthenticatedContext {
     }
 
     pub fn grant_id(&self) -> Option<&str> {
-        self.grant().ok().flatten().map(GrantClaims::id)
+        self.audit_grant_id
+            .as_deref()
+            .or_else(|| self.grant().ok().flatten().map(GrantClaims::id))
     }
 
     pub fn grant_authority(&self) -> Option<&str> {
@@ -192,6 +195,7 @@ impl AuthenticatedContext {
             requester_tags,
             evidence_audience: evidence_audience.to_owned(),
             task_grant,
+            audit_grant_id: None,
             verified_claims,
         }
     }
@@ -517,6 +521,17 @@ impl Authenticator {
         let claims =
             serde_json::to_value(&verified.claims).map_err(|_| AuthenticationError::Context)?;
         let claims_object = claims.as_object().ok_or(AuthenticationError::Context)?;
+        // Retain a bounded identifier from the verified token for denial audit
+        // even when expiry or another grant member fails validation. This is
+        // never an authorization input and is emitted only as a keyed pseudonym.
+        let audit_grant_id = optional_direct_string(
+            claims_object,
+            &self.claims.contextual_claims.grant_id,
+            MAX_PRINCIPAL_BYTES,
+        )
+        .ok()
+        .flatten()
+        .filter(|id| !id.chars().any(char::is_control));
 
         // Version one validates no proof of possession. Treating a
         // sender-constrained token as an ordinary bearer would silently discard
@@ -583,6 +598,7 @@ impl Authenticator {
             requester_tags,
             evidence_audience,
             task_grant,
+            audit_grant_id,
             verified_claims: claims,
         })
     }

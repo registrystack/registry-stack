@@ -1605,6 +1605,7 @@ impl MutationCoordinator {
                 transaction.transaction(),
                 &self.audit_profile,
                 TerminalAudit {
+                    grant: request.claims.grant_audit().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
@@ -1757,6 +1758,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &self.audit_profile,
             TerminalAudit {
+                grant: request.claims.grant_audit().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),
@@ -1847,6 +1849,7 @@ impl MutationCoordinator {
                 transaction.transaction(),
                 &self.audit_profile,
                 TerminalAudit {
+                    grant: request.claims.grant_audit().cloned(),
                     outcome: TerminalAuditOutcome::Replayed,
                     method: request.plan.route.method,
                     operation_id: request.plan.route.id.clone(),
@@ -2021,6 +2024,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &self.audit_profile,
             TerminalAudit {
+                grant: request.claims.grant_audit().cloned(),
                 outcome: TerminalAuditOutcome::Committed,
                 method: request.plan.route.method,
                 operation_id: request.plan.route.id.clone(),

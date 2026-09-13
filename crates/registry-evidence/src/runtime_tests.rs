@@ -2363,6 +2363,42 @@ async fn authorization_refusal_is_minimally_audited() {
 }
 
 #[tokio::test]
+async fn invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    for (identifier, keep) in [
+        (json!("expired-grant-canary"), true),
+        (json!({"bad":"shape"}), false),
+        (json!(""), false),
+    ] {
+        let mut claims = parent_grant_claims();
+        claims["registry_grant_id"] = identifier;
+        claims["registry_grant_exp"] = json!(Utc::now().timestamp() - 1);
+        http.post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token(Some(claims))),
+            )
+            .json(&parent_request())
+            .await
+            .assert_status_forbidden();
+        let audit = fs::read_to_string(&fixture.audit_path).unwrap();
+        let event: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+        let pseudonym = event["record"]["grantPseudonym"].as_str();
+        assert_eq!(
+            pseudonym.is_some(),
+            keep,
+            "a valid grant identifier survives grant refusal"
+        );
+        if let Some(pseudonym) = pseudonym {
+            assert!(pseudonym.starts_with("hmac-sha256:"));
+        }
+        assert!(!audit.contains("expired-grant-canary"));
+    }
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn authorization_refusal_requester_pseudonym_stays_scoped() {
     let fixture = acceptance_runtime().await;
     let principal = "scoped-refusal-principal-canary";

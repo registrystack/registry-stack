@@ -287,6 +287,7 @@ pub struct AuthorizedRequestContext {
     request_presence: Vec<VerifiedRequestPresence>,
     submitter_targets: BTreeMap<String, Vec<VerifiedRowBoundary>>,
     task_grant: Option<TaskGrantBinding>,
+    grant_audit: Option<crate::audit::GrantAuditContext>,
 }
 
 impl AuthorizedRequestContext {
@@ -305,6 +306,7 @@ impl AuthorizedRequestContext {
             request_presence: Vec::new(),
             submitter_targets: BTreeMap::new(),
             task_grant: None,
+            grant_audit: None,
         }
     }
 
@@ -314,6 +316,14 @@ impl AuthorizedRequestContext {
     ) -> Self {
         self.submitter_targets = targets;
         self
+    }
+
+    pub(crate) fn with_grant_audit(mut self, claims: &VerifiedRequestClaims) -> Self {
+        self.grant_audit = crate::audit::GrantAuditContext::from_claims(claims);
+        self
+    }
+    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
+        self.grant_audit.as_ref()
     }
 
     pub(crate) fn with_task_grant(mut self, grant: Option<TaskGrantBinding>) -> Self {

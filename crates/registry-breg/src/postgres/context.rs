@@ -196,6 +196,7 @@ pub struct ClaimContext {
     canonical_row_boundaries: String,
     submitter_targets: BTreeMap<String, ClaimContext>,
     task_grant: Option<crate::task_grant::TaskGrantBinding>,
+    grant_audit: Option<crate::audit::GrantAuditContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -221,6 +222,17 @@ impl SpatialBboxContext {
 }
 
 impl ClaimContext {
+    pub(crate) fn with_grant_audit(
+        mut self,
+        grant: Option<crate::audit::GrantAuditContext>,
+    ) -> Self {
+        self.grant_audit = grant;
+        self
+    }
+    pub(crate) fn grant_audit(&self) -> Option<&crate::audit::GrantAuditContext> {
+        self.grant_audit.as_ref()
+    }
+
     pub(crate) fn with_task_grant(
         mut self,
         grant: crate::task_grant::TaskGrantBinding,
@@ -311,6 +323,7 @@ impl ClaimContext {
             canonical_row_boundaries,
             submitter_targets: BTreeMap::new(),
             task_grant: None,
+            grant_audit: None,
         })
     }
 
@@ -343,6 +356,7 @@ impl ClaimContext {
             canonical_row_boundaries,
             submitter_targets: BTreeMap::new(),
             task_grant: None,
+            grant_audit: None,
         })
     }
 

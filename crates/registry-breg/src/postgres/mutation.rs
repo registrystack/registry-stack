@@ -676,6 +676,7 @@ fn strict_claim_context(
         context.purpose().map(str::to_owned),
         row_boundaries,
     )
+    .map(|claims| claims.with_grant_audit(context.grant_audit().cloned()))
     .and_then(|claims| claims.with_api_submitter_targets(registry, context))
     .and_then(|claims| match context.task_grant() {
         Some(grant) => claims.with_task_grant(grant.clone()),

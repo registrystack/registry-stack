@@ -925,6 +925,7 @@ impl PostgresRecordReadService {
             &request.selected_fields,
         )?;
         Ok(TerminalAudit {
+            grant: None,
             outcome,
             method: request.method,
             operation_id: request.operation_id.clone(),
@@ -1022,6 +1023,7 @@ impl RecordReadService for PostgresRecordReadService {
                 &self.expected,
                 &self.audit_profile,
                 crate::audit::HttpRefusalAudit {
+                    grant: None,
                     method: request.method,
                     operation_id: &request.operation_id,
                     target_record: request.target_record.as_deref(),

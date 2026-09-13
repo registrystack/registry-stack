@@ -54,6 +54,7 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_is_minimally_audited}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: authorization_refusal_audit_failure_returns_service_unavailable}
   - id: sec-selector-possession-no-authority
     tests: [{file: crates/registry-evidence/src/runtime_tests.rs, name: security_contract_rejects_unknown_and_unauthorized_requests_before_source_access}]

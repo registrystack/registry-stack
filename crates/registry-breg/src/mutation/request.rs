@@ -1865,6 +1865,7 @@ impl MutationCoordinator {
         outcome: TerminalAuditOutcome,
     ) -> TerminalAudit {
         TerminalAudit {
+            grant: claims.grant_audit().cloned(),
             outcome,
             method: route.method,
             operation_id: route.id.clone(),
