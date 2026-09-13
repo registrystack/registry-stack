@@ -2269,7 +2269,12 @@ impl MutationCoordinator {
                     },
                 )?;
             }
-            verify_request_evidence(frozen, frozen_evidence.unwrap_or_default())?;
+            verify_request_evidence(frozen, frozen_evidence.unwrap_or_default(), |field| {
+                entity
+                    .fields
+                    .get(field)
+                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+            })?;
         }
         Ok(observed)
     }
@@ -2921,6 +2926,7 @@ fn predicate_values_equal(actual: &Value, expected: &Value, timestamp: bool) -> 
 fn verify_request_evidence(
     frozen: &crate::request_workflow::FrozenApplicationPreconditions,
     acquisitions: &[crate::action_evidence_client::VerifiedAcquisition],
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     if acquisitions.len() != frozen.contract.evidence.len() {
         return Err(MutationError::PreconditionFailed);
@@ -2936,6 +2942,7 @@ fn verify_request_evidence(
             &evidence.requires,
             &frozen.request_values,
             acquisition.outputs(),
+            &is_timestamp,
         )?;
     }
     Ok(())
@@ -2945,6 +2952,7 @@ fn verify_request_evidence_requirements(
     requirements: &[crate::model::CompiledChangeRequestEvidenceRequirement],
     request_values: &BTreeMap<String, Value>,
     outputs: &BTreeMap<String, Value>,
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     for requirement in requirements {
         let actual = outputs.get(&requirement.output);
@@ -2952,9 +2960,11 @@ fn verify_request_evidence_requirements(
             crate::model::CompiledChangeRequestEvidenceExpected::Literal { value } => {
                 actual == Some(value)
             }
-            crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } => {
-                actual == request_values.get(field)
-            }
+            crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } => actual
+                .zip(request_values.get(field))
+                .is_some_and(|(actual, expected)| {
+                    predicate_values_equal(actual, expected, is_timestamp(field))
+                }),
             crate::model::CompiledChangeRequestEvidenceExpected::AtLeast { value } => actual
                 .and_then(Value::as_i64)
                 .is_some_and(|actual| actual >= *value),
@@ -3274,9 +3284,13 @@ mod application_precondition_tests {
             ("germination".into(), json!(9000)),
             ("purity".into(), json!(9920)),
         ]);
-        assert!(
-            super::verify_request_evidence_requirements(&requirements, &frozen, &passing).is_ok()
-        );
+        assert!(super::verify_request_evidence_requirements(
+            &requirements,
+            &frozen,
+            &passing,
+            |_| false
+        )
+        .is_ok());
         for (field, wrong) in [
             ("report-reference", json!("other-report")),
             ("germination", json!(8999)),
@@ -3285,10 +3299,54 @@ mod application_precondition_tests {
             let mut outputs = passing.clone();
             outputs.insert(field.into(), wrong);
             assert_eq!(
-                super::verify_request_evidence_requirements(&requirements, &frozen, &outputs),
+                super::verify_request_evidence_requirements(
+                    &requirements,
+                    &frozen,
+                    &outputs,
+                    |_| false
+                ),
                 Err(MutationError::PreconditionFailed)
             );
         }
+    }
+
+    #[test]
+    fn evidence_timestamp_request_binding_compares_instants_only_for_timestamp_fields() {
+        let requirements = [CompiledChangeRequestEvidenceRequirement {
+            output: "observed-at".into(),
+            expected: CompiledChangeRequestEvidenceExpected::RequestField {
+                field: "requested-at".into(),
+            },
+        }];
+        let requested = BTreeMap::from([("requested-at".into(), json!("2026-09-13T10:00:00Z"))]);
+        let observed = BTreeMap::from([("observed-at".into(), json!("2026-09-13T12:00:00+02:00"))]);
+        assert!(super::verify_request_evidence_requirements(
+            &requirements,
+            &requested,
+            &observed,
+            |field| field == "requested-at",
+        )
+        .is_ok());
+        assert_eq!(
+            super::verify_request_evidence_requirements(
+                &requirements,
+                &requested,
+                &observed,
+                |_| false
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
+        let different =
+            BTreeMap::from([("observed-at".into(), json!("2026-09-13T12:00:01+02:00"))]);
+        assert_eq!(
+            super::verify_request_evidence_requirements(
+                &requirements,
+                &requested,
+                &different,
+                |_| true,
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
     }
 }
 
