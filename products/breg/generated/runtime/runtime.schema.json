@@ -327,9 +327,6 @@
         "approver": {
           "type": "string"
         },
-        "grantAuthority": {
-          "type": "string"
-        },
         "grantBounds": {
           "type": "string"
         },
@@ -356,7 +353,6 @@
         "actorKind",
         "purpose",
         "grantId",
-        "grantAuthority",
         "grantSourceIssuer",
         "grantClient",
         "grantResource",
@@ -1045,9 +1041,6 @@
     "TaskGrantStatusConfig": {
       "additionalProperties": false,
       "properties": {
-        "authority": {
-          "type": "string"
-        },
         "baseUrl": {
           "type": "string"
         },
@@ -1077,7 +1070,6 @@
         }
       },
       "required": [
-        "authority",
         "sourceIssuer",
         "baseUrl",
         "tokenEndpoint",

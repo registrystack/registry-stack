@@ -78,7 +78,6 @@ impl GrantAuditContext {
             .as_object_mut()
             .ok_or(RegistryAuditError::InvalidContext)?
             .remove("purpose");
-        value["authority"] = json!(self.grant.authority());
         value["sourceIssuer"] = json!(self.grant.source_issuer());
         value["expiresAt"] = json!(self.grant.exp());
         Ok(value)

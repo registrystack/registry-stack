@@ -3653,15 +3653,11 @@
     "TaskGrantSource": {
       "additionalProperties": false,
       "properties": {
-        "authority": {
-          "type": "string"
-        },
         "sourceIssuer": {
           "type": "string"
         }
       },
       "required": [
-        "authority",
         "sourceIssuer"
       ],
       "type": "object"

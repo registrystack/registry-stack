@@ -461,7 +461,7 @@ impl RuntimeConfig {
             .flat_map(|entity| entity.access_profiles.values())
         {
             if let Some(grant) = &profile.task_grant {
-                if !status.contains(&grant.authority, &grant.source_issuer) {
+                if !status.contains(&grant.source_issuer) {
                     return Err(RuntimeConfigError::InvalidBinding);
                 }
             }
@@ -2072,7 +2072,6 @@ struct RawContextualClaimNames {
     actor_kind: String,
     purpose: String,
     grant_id: String,
-    grant_authority: String,
     grant_source_issuer: String,
     grant_client: String,
     grant_resource: String,
@@ -2087,7 +2086,6 @@ impl From<RawContextualClaimNames> for ClaimNames {
             actor_kind: value.actor_kind,
             purpose: value.purpose,
             grant_id: value.grant_id,
-            grant_authority: value.grant_authority,
             grant_source_issuer: value.grant_source_issuer,
             grant_client: value.grant_client,
             grant_resource: value.grant_resource,

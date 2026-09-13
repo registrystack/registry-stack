@@ -2824,8 +2824,7 @@ fn task_grant_binding(
         return Ok(None);
     };
     let grant = claims.grant().ok_or("task_grant_missing")?;
-    if grant.authority() != expected.authority
-        || grant.source_issuer() != expected.source_issuer
+    if grant.source_issuer() != expected.source_issuer
         || Some(grant.client()) != claims.requester_client()
         || !profile.required_purposes.contains(grant.purpose())
     {

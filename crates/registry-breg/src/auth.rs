@@ -433,7 +433,6 @@ fn validate_claim_mapping(
         actor_kind,
         purpose: contextual_purpose,
         grant_id,
-        grant_authority,
         grant_source_issuer,
         grant_client,
         grant_resource,
@@ -444,7 +443,6 @@ fn validate_claim_mapping(
     let contextual_claims_with_distinct_roles = [
         actor_kind,
         grant_id,
-        grant_authority,
         grant_source_issuer,
         grant_client,
         grant_resource,

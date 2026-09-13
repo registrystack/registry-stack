@@ -277,7 +277,6 @@ fn starter_runtime_config(
         "actorKind": "registry_actor_kind",
         "purpose": "registry_purpose",
         "grantId": "registry_grant_id",
-        "grantAuthority": "registry_grant_authority",
         "grantSourceIssuer": "registry_grant_source_issuer",
         "grantClient": "registry_grant_client",
         "grantResource": "registry_grant_resource",

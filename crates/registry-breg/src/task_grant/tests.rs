@@ -53,7 +53,7 @@ async fn status(State(state): State<StateData>, headers: HeaderMap) -> Json<Valu
     Json(state.response.lock().unwrap().clone())
 }
 fn binding() -> TaskGrantBinding {
-    serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"authority":"casework","sourceIssuer":"https://casework.test","principal":"agent","client":"agent-client","resource":"urn:breg:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get","patch"]}]},"subjects":{"subject_reference":"synthetic-subject","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
+    serde_json::from_value(serde_json::json!({"grantId":Uuid::new_v4().to_string(),"sourceIssuer":"https://casework.test","principal":"agent","client":"agent-client","resource":"urn:breg:test","purpose":"review","bounds":{"type":"breg","permissions":[{"collection":"records","operations":["get","patch"]}]},"subjects":{"subject_reference":"synthetic-subject","active":true},"expiresAt":chrono::Utc::now().timestamp()+900})).unwrap()
 }
 
 #[tokio::test]
@@ -101,7 +101,6 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
     let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
     let config: TaskGrantStatusConfig = serde_json::from_value(serde_json::json!({
-        "authority":"casework",
         "sourceIssuer":"https://casework.test",
         "baseUrl":issuer,
         "tokenEndpoint":format!("http://{address}/token"),
@@ -127,7 +126,6 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));
     for field in [
         "grantId",
-        "authority",
         "sourceIssuer",
         "principal",
         "client",
@@ -156,7 +154,7 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     }
     *response.lock().unwrap() = serde_json::json!({"active":true,"grant":binding});
     client.check(&binding).await.unwrap();
-    assert_eq!(state.status_calls.load(Ordering::SeqCst), 13);
+    assert_eq!(state.status_calls.load(Ordering::SeqCst), 12);
     assert_eq!(
         state.token_calls.load(Ordering::SeqCst),
         1,
@@ -167,7 +165,7 @@ async fn activated_status_client_uses_the_configured_assertion_audience_and_chec
     assert_eq!(client.check(&expired).await, Err(TaskGrantError::Refused));
     assert_eq!(
         state.status_calls.load(Ordering::SeqCst),
-        13,
+        12,
         "expired authority is refused before I/O"
     );
     server.abort();

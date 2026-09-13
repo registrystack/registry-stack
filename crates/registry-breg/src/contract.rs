@@ -2255,7 +2255,6 @@ pub struct ProjectAccessProfileSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct TaskGrantSource {
-    pub authority: String,
     pub source_issuer: String,
 }
 
@@ -2263,7 +2262,6 @@ pub struct TaskGrantSource {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledTaskGrantSource {
-    pub authority: String,
     pub source_issuer: String,
     pub permissions: Vec<CompiledTaskGrantPermissionSource>,
 }

@@ -1628,16 +1628,13 @@ fn expand_project_access(
             ));
         }
         if let Some(task_grant) = &profile.task_grant {
-            if task_grant.authority.is_empty()
-                || task_grant.authority.len() > 512
-                || task_grant.authority.chars().any(char::is_control)
-                || !task_grant.source_issuer.starts_with("https://")
+            if !task_grant.source_issuer.starts_with("https://")
                 || task_grant.source_issuer.chars().any(char::is_whitespace)
             {
                 errors.push(Diagnostic::error(
                     "access_profile.task_grant.invalid",
                     "project.accessProfiles[].taskGrant",
-                    "taskGrant must declare a bounded authority and an absolute sourceIssuer URI",
+                    "taskGrant must declare an absolute sourceIssuer URI",
                 ));
             }
             if profile.permissions.iter().any(|permission| {
@@ -1676,7 +1673,6 @@ fn expand_project_access(
                 })
                 .collect();
             crate::contract::CompiledTaskGrantSource {
-                authority: task_grant.authority.clone(),
                 source_issuer: task_grant.source_issuer.clone(),
                 permissions,
             }

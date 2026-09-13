@@ -8,8 +8,8 @@ use change-request drafts and lifecycle operations; a task grant does not
 authorize direct changes to the target records.
 
 The authored access profile selects `actorKind: agent`, exact
-`requesterClients`, `requiredPurposes`, and a `taskGrant` containing `authority`
-and `sourceIssuer`. The token must match that profile, BREG's configured audience,
+`requesterClients`, `requiredPurposes`, and a `taskGrant` containing the exact
+`sourceIssuer`. The token must match that profile, BREG's configured audience,
 and the compiled collection and operation bounds. A task token cannot fall back
 to a standing access profile. Ordinary profiles retain their own authority.
 
@@ -40,13 +40,12 @@ existing issuer, are configured together in the closed `contextual` object.
 
 ## Configure current status
 
-Configure BREG's runtime with one entry for each trusted authority and original
-source issuer used by its task profiles:
+Configure BREG's runtime with one entry for each original source issuer used by
+its task profiles:
 
 ```yaml
 taskGrantStatus:
-  - authority: https://casework.example.gov/tasks
-    sourceIssuer: https://casework.example.gov
+  - sourceIssuer: https://casework.example.gov
     baseUrl: https://casework.example.gov
     tokenEndpoint: https://identity.example.gov/oauth2/token
     clientAssertionAudience: https://identity.example.gov
@@ -65,8 +64,8 @@ its issuer URL. The private JWK must include its registered key identifier.
 `caBundleRef` can refer to a private CA PEM bundle for both outbound connections.
 Production endpoints use HTTPS; loopback HTTP is available for local development.
 
-Startup refuses a task profile without its configured authority/source-issuer
-mapping. A failed status request refuses the mutation. No positive status result
+Startup refuses a task profile without its configured source-issuer mapping. A
+failed status request refuses the mutation. No positive status result
 is cached. BREG compares all retained authorization fields, including the
 original principal, client, resource, purpose, bounds, subjects, and deadline.
 
@@ -97,7 +96,7 @@ retained task subjects, under the existing operator retention boundary.
 Terminal and refusal records for a request carrying a verified task grant include
 an `authorization` object using the shared authorization audit fields. Grant,
 principal, client and approver identifiers are keyed pseudonyms, scoped to the
-package revision. The object also records the authority, source issuer and grant
-deadline. It contains no subjects, bounds values or purpose value. BREG continues
+package revision. The object also records the source issuer and grant deadline.
+It contains no subjects, bounds values or purpose value. BREG continues
 to record purpose presence separately. Later human review remains a separate
 actor, and the retained original grant continues to govern status checks.
