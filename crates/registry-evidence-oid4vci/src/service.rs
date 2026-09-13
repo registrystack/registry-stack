@@ -1756,13 +1756,21 @@ mod tests {
                 Arc::new(authorizer),
                 issuer.clone(),
             ))));
-            for state in ["ordinary", "malformed", "expired", "live"] {
+            for state in [
+                "ordinary",
+                "malformed",
+                "expired",
+                "live",
+                "reserved-default",
+            ] {
                 let mut claims = json!({
                     "iss":issuer_url, "aud":"https://wallet.example.org",
                     "sub":"offer-client", "client_id":"offer-client", "iat":now, "exp":now+300,
                     "registry_actor_kind": if state == "ordinary" { "service" } else { "agent" }, "registry_purpose":"delivery",
                 });
-                if state != "ordinary" {
+                if state == "reserved-default" {
+                    claims["registry_grant_id"] = json!("grant-a");
+                } else if state != "ordinary" {
                     claims[&names.grant_id] = json!("grant-a");
                     claims[&names.grant_authority] = json!("authority-a");
                     claims[&names.grant_source_issuer] = json!("https://casework.example.org");

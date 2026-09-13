@@ -194,11 +194,16 @@ impl OfferAuthorizer for MintResourceServer {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_err(|_| AuthorizationError::Refused)?
                     .as_secs();
-                if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None)) {
+                if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None))
+                    || !matches!(
+                        grant_claims(&verified.claims, &ClaimNames::default(), now),
+                        Ok(None)
+                    )
+                {
                     // A wallet offer creates a deferred bearer lifecycle whose
                     // later redemption cannot recheck the task authority. No
-                    // complete, partial, malformed, or expired task grant may
-                    // cross this boundary.
+                    // complete, partial, malformed, or expired task grant under
+                    // either configured or reserved claim names may cross it.
                     return Err(AuthorizationError::Refused);
                 }
                 // The scope gate runs only on the verified token's scope set:
