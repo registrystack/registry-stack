@@ -82,20 +82,17 @@ fn initialization_keeps_distinct_keys_and_private_state_without_service_dependen
     let server: Value =
         serde_norway::from_slice(&private::read(&server_file, MAX_BYTES).unwrap()).unwrap();
     let resources = server["resources"].as_array().unwrap();
-    assert!(resources
-        .iter()
-        .any(|resource| resource["handle"] == "registry"));
     assert!(
         resources.iter().any(|resource| {
-            resource["handle"] == "generic"
-                && resource["parent"] == "registry"
+            resource["handle"] == "registry"
+                && resource["parent"].is_null()
                 && resource["actions"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|action| action["handle"] == "operate")
+                    .any(|action| action["handle"] == "generic:operate")
         }),
-        "three-segment authored scopes need the upstream parent resource chain"
+        "three-segment authored scopes retain their exact permission under one resource"
     );
     let operator = private::read(
         &root.join("credentials/operator/assertion-key.jwk"),
