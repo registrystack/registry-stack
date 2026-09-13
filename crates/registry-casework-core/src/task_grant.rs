@@ -84,11 +84,11 @@ pub struct TaskPermission {
 impl TaskGrantBounds {
     pub fn check(&self) -> Result<(), TaskGrantError> {
         match self {
-            Self::Evidence { requirement } if bounded(requirement, 512) => Ok(()),
+            Self::Evidence { requirement } if bounded_grant_identifier(requirement, 512) => Ok(()),
             Self::Breg { permissions } if !permissions.is_empty() && permissions.len() <= 64 => {
                 let mut collections = BTreeSet::new();
                 for permission in permissions {
-                    if !bounded(&permission.collection, 512)
+                    if !bounded_grant_identifier(&permission.collection, 512)
                         || !collections.insert(&permission.collection)
                         || !unique(&permission.operations, 32)
                         || permission
@@ -306,6 +306,9 @@ fn bounded(value: &str, maximum: usize) -> bool {
         && !value.chars().any(char::is_control)
         && !value.contains('*')
 }
+fn bounded_grant_identifier(value: &str, maximum: usize) -> bool {
+    bounded(value, maximum) && !value.chars().any(char::is_whitespace)
+}
 fn unique(values: &[String], maximum: usize) -> bool {
     !values.is_empty()
         && values.len() <= maximum
@@ -385,6 +388,8 @@ mod tests {
         for value in [
             serde_json::json!({"type":"breg","permissions":[]}),
             serde_json::json!({"type":"evidence","requirement":"*"}),
+            serde_json::json!({"type":"evidence","requirement":"urn:requirement:one review"}),
+            serde_json::json!({"type":"breg","permissions":[{"collection":"case records","operations":["get"]}]}),
             serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get","get"]}]}),
             serde_json::json!({"type":"breg","permissions":[{"collection":"records","operations":["get"]},{"collection":"records","operations":["list"]}]}),
         ] {
