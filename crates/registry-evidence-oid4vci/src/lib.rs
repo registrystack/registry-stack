@@ -4,8 +4,8 @@
 //! to an authoritative source. It deliberately speaks no wallet protocol. A
 //! stock holder wallet, on the other hand, accepts a credential over exactly one
 //! protocol, so something has to speak it. This crate is that something: a
-//! delivery front end that runs beside Evidence the way Registry Mint runs
-//! beside it, as a supporting service rather than a third pattern.
+//! delivery front end that runs beside Evidence as a supporting service rather
+//! than a separate runtime product.
 //!
 //! Three properties define the service, and none of them is negotiable.
 //!

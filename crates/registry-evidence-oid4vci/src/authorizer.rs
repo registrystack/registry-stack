@@ -1,17 +1,19 @@
 //! The authorization boundary of the adopter-facing offer endpoint.
 //!
-//! This is the resource-server half of the process. It verifies a Mint-issued
-//! access token through `registry-platform-oidc`, on the same strict profile
-//! Evidence's own authenticator builds: an exact issuer, a closed audience
-//! list, a closed algorithm list, a closed access-token `typ` list, a ceiling
-//! on token lifetime, and keys resolved only through the configured key set.
+//! This is the resource-server half of the process. It verifies an access token
+//! from the configured issuer through `registry-platform-oidc`, on the strict
+//! profile Evidence's own authenticator builds: an exact issuer, a closed
+//! audience list, a closed algorithm list, a closed access-token `typ` list, a
+//! ceiling on token lifetime, and keys resolved only through the configured key
+//! set.
 //!
-//! The client half of the process, which authenticates *to* Mint with this
-//! service's own private key, is [`crate::issuer`]. The two never share a code
-//! path: nothing here reads the client key, nothing here is derived from the
-//! client identity, and the two are configured by separate documents. A
-//! deployment whose client key is unusable still authorizes offers, and a
-//! deployment whose offer issuer is unreachable still requests credentials.
+//! The client half of the process, which authenticates to the configured token
+//! endpoint with this service's own private key, is [`crate::issuer`]. The two
+//! never share a code path: nothing here reads the client key, nothing here is
+//! derived from the client identity, and the two are configured by separate
+//! documents. A deployment whose client key is unusable still authorizes
+//! offers, and a deployment whose offer issuer is unreachable still requests
+//! credentials.
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
@@ -62,7 +64,7 @@ pub trait OfferAuthorizer: Send + Sync {
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError>;
 }
 
-/// The Mint-issued access token verifier.
+/// The configured issuer's access-token verifier.
 #[derive(Debug)]
 pub struct MintResourceServer {
     verifier: Arc<TokenVerifier>,
@@ -75,8 +77,8 @@ pub struct MintResourceServer {
 impl MintResourceServer {
     /// Build the resource server from its own configuration document.
     ///
-    /// Nothing about the client identity this service authenticates to Mint
-    /// with is read here, on purpose: the offer boundary must be configurable,
+    /// Nothing about the outbound token-client identity is read here, on
+    /// purpose: the offer boundary must be configurable,
     /// and auditable, without reference to who this service is elsewhere.
     #[must_use]
     pub fn from_config(config: &OfferAuthorizationConfig, mode: ValidationMode) -> Self {
@@ -276,8 +278,8 @@ mod tests {
     #[test]
     fn the_resource_server_is_built_from_the_offer_document_alone() {
         // The construction takes the offer boundary and the validation mode.
-        // There is no parameter for the Mint client identity, so no key or
-        // identifier belonging to the client half can reach this one.
+        // There is no parameter for the outbound token-client identity, so no
+        // key or identifier belonging to the client half can reach this one.
         let config = valid_config();
         let _server = MintResourceServer::from_config(&config.offers, config.validation_mode);
     }

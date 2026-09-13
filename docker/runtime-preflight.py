@@ -5,29 +5,24 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import re
-import shlex
 import subprocess
 import sys
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Any, Sequence, TextIO
+from typing import Any, Sequence
 
 
 MAXIMUM_COMPOSE_BYTES = 4 * 1024 * 1024
 MAXIMUM_NATIVE_CHECK_STDERR_BYTES = 4 * 1024
 CAPTURE_CHUNK_BYTES = 64 * 1024
 CAPTURE_DRAIN_SECONDS = 5
-MINIMUM_DEPENDENCY_TIMEOUT_SECONDS = 5
-MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS = 10 * 60
 MINIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 30
 MAXIMUM_NATIVE_CHECK_TIMEOUT_SECONDS = 6 * 60 * 60
 DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS = 30 * 60
-PRODUCTS = ("evidence", "mint", "relay")
+PRODUCTS = ("evidence", "relay")
 SERVICE_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?")
 IMAGE_PATTERNS = {
     product: re.compile(rf"ghcr\.io/registrystack/{product}@sha256:[0-9a-f]{{64}}")
@@ -35,13 +30,9 @@ IMAGE_PATTERNS = {
 }
 AUDIT_PREFIXES = {
     "evidence": "/var/lib/registry-evidence",
-    "mint": "/var/lib/registry-mint",
     "relay": "/var/lib/relay/audit",
 }
 EXECUTABLE_PATHS = {product: f"/usr/local/bin/{product}" for product in PRODUCTS}
-OFFICIAL_IMAGE_REPOSITORIES = tuple(
-    f"ghcr.io/registrystack/{product}" for product in PRODUCTS
-)
 AUDIT_CONTAINMENT_FLAG = "--require-audit-under"
 # An image whose check command predates the containment flag rejects it as an
 # unknown argument. These are the argument parsers' phrasings for that refusal.
@@ -100,14 +91,6 @@ NATIVE_CHECKS = {
         AUDIT_CONTAINMENT_FLAG,
         AUDIT_PREFIXES["evidence"],
     ],
-    "mint": [
-        "check",
-        "--config",
-        "/etc/registry-mint/config.yaml",
-        "--require-runtime-dependencies",
-        AUDIT_CONTAINMENT_FLAG,
-        AUDIT_PREFIXES["mint"],
-    ],
     "relay": [
         "check",
         "--runtime",
@@ -116,7 +99,6 @@ NATIVE_CHECKS = {
         AUDIT_PREFIXES["relay"],
     ],
 }
-DEPENDENCY_HEALTHCHECKS = {"mint": ["/usr/local/bin/mint", "healthcheck"]}
 
 
 class PreflightError(RuntimeError):
@@ -137,7 +119,7 @@ def parse_service(raw: str) -> ServiceSelection:
         or SERVICE_PATTERN.fullmatch(service) is None
     ):
         raise PreflightError(
-            "service selection must be PRODUCT=SERVICE for evidence, mint, or relay"
+            "service selection must be PRODUCT=SERVICE for evidence or relay"
         )
     return ServiceSelection(product, service)
 
@@ -452,20 +434,6 @@ def validate_healthcheck(service: dict[str, Any], executable: PurePosixPath) -> 
         )
 
 
-def names_official_image(image: Any) -> bool:
-    """Whether the reference names an official product image, by tag or digest.
-
-    Recognizing one is not accepting it: a service the preflight cannot check
-    is named so the operator can select it or remove the edge.
-    """
-    if not isinstance(image, str):
-        return False
-    return any(
-        image == repository or image.startswith((f"{repository}:", f"{repository}@"))
-        for repository in OFFICIAL_IMAGE_REPOSITORIES
-    )
-
-
 def validate_ports(service: dict[str, Any]) -> None:
     network_mode = service.get("network_mode")
     if network_mode is not None and not isinstance(network_mode, str):
@@ -548,7 +516,6 @@ def validate_service(selection: ServiceSelection, document: dict[str, Any]) -> N
             "REGISTRY_EVIDENCE_RUNTIME",
             "/etc/registry-evidence/runtime.yaml",
         ),
-        "mint": ("MINT_CONFIG", "/etc/registry-mint/config.yaml"),
     }.get(selection.product)
     if fixed_config is not None:
         name, expected = fixed_config
@@ -691,134 +658,6 @@ def native_check(
     )
 
 
-def native_check_plan(
-    selections: list[ServiceSelection], document: dict[str, Any]
-) -> tuple[list[ServiceSelection], set[str]]:
-    services = document.get("services")
-    if not isinstance(services, dict):
-        raise PreflightError("rendered Compose configuration has no services")
-    selected_by_service = {selection.service: selection for selection in selections}
-    selected_services = set(selected_by_service)
-    dependencies: dict[str, set[str]] = {}
-    dependency_services: set[str] = set()
-    for selection in selections:
-        service = services.get(selection.service)
-        if not isinstance(service, dict):
-            raise PreflightError(
-                "selected service is absent from the Compose deployment"
-            )
-        raw = service.get("depends_on", {})
-        if isinstance(raw, dict):
-            names = raw.keys()
-        elif isinstance(raw, list) and all(isinstance(item, str) for item in raw):
-            names = raw
-        else:
-            raise PreflightError("service dependency posture is invalid")
-        selected_dependencies = set(names) & selected_services
-        for dependency in sorted(set(names) - selected_services):
-            declared = services.get(dependency)
-            if isinstance(declared, dict) and names_official_image(
-                declared.get("image")
-            ):
-                # Ignoring the edge would check the dependent against a
-                # Registry Stack service this run never checked or started.
-                raise PreflightError(
-                    f"selected service {selection.service} depends on Registry "
-                    f"Stack service {dependency}, which was not selected. Select "
-                    "it so the preflight checks and starts it, or remove the edge"
-                )
-        for dependency in selected_dependencies:
-            if selected_by_service[dependency].product not in DEPENDENCY_HEALTHCHECKS:
-                raise PreflightError(
-                    "only Mint can be started as a preflight dependency"
-                )
-        dependencies[selection.service] = selected_dependencies
-        dependency_services.update(selected_dependencies)
-
-    ordered: list[ServiceSelection] = []
-    remaining = list(selections)
-    completed: set[str] = set()
-    while remaining:
-        ready = next(
-            (
-                selection
-                for selection in remaining
-                if dependencies[selection.service] <= completed
-            ),
-            None,
-        )
-        if ready is None:
-            raise PreflightError("selected services contain a dependency cycle")
-        remaining.remove(ready)
-        ordered.append(ready)
-        completed.add(ready.service)
-    return ordered, dependency_services
-
-
-def start_dependency(
-    selection: ServiceSelection, deadline: float, frozen_compose: str
-) -> None:
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise PreflightError(
-            f"dependency service {selection.service} did not become ready"
-        )
-    not_started = f"dependency service {selection.service} could not be started"
-    result = run_compose(
-        [
-            "docker",
-            "compose",
-            "--file",
-            "-",
-            "up",
-            "--detach",
-            "--no-deps",
-            selection.service,
-        ],
-        timeout=max(1, math.ceil(remaining)),
-        capture_output=False,
-        input_text=frozen_compose,
-        timeout_message=not_started,
-    )
-    if result.returncode != 0:
-        raise PreflightError(not_started)
-
-
-def wait_for_dependency(
-    selection: ServiceSelection, deadline: float, frozen_compose: str
-) -> None:
-    healthcheck = DEPENDENCY_HEALTHCHECKS.get(selection.product)
-    if healthcheck is None:
-        raise PreflightError("only Mint can be started as a preflight dependency")
-    not_ready = f"dependency service {selection.service} did not become ready"
-    while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            raise PreflightError(not_ready)
-        result = run_compose(
-            [
-                "docker",
-                "compose",
-                "--file",
-                "-",
-                "exec",
-                "--no-TTY",
-                selection.service,
-                *healthcheck,
-            ],
-            timeout=max(1, min(6, int(remaining))),
-            capture_output=False,
-            input_text=frozen_compose,
-            timeout_is_failure=False,
-        )
-        remaining = deadline - time.monotonic()
-        if result.returncode == 0 and remaining > 0:
-            return
-        if remaining <= 0:
-            raise PreflightError(not_ready)
-        time.sleep(min(1.0, remaining))
-
-
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Preflight official Registry Stack services through Docker Compose."
@@ -841,7 +680,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--service",
         action="append",
         required=True,
-        help="PRODUCT=SERVICE; repeat for each Evidence, Mint, or Relay service",
+        help="PRODUCT=SERVICE; repeat for each Evidence or Relay service",
     )
     parser.add_argument(
         "--native-check-timeout-seconds",
@@ -855,16 +694,6 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "bounded deadline for each native check; defaults to "
             f"{DEFAULT_NATIVE_CHECK_TIMEOUT_SECONDS} seconds"
         ),
-    )
-    parser.add_argument(
-        "--dependency-timeout-seconds",
-        type=lambda raw: bounded_seconds(
-            raw,
-            minimum=MINIMUM_DEPENDENCY_TIMEOUT_SECONDS,
-            maximum=MAXIMUM_DEPENDENCY_TIMEOUT_SECONDS,
-        ),
-        default=90,
-        help="bounded deadline for each declared Mint dependency to become ready",
     )
     return parser.parse_args(argv)
 
@@ -886,44 +715,9 @@ def bounded_seconds(raw: str, *, minimum: int, maximum: int) -> int:
     return value
 
 
-def report_started_dependencies(
-    running: Sequence[str],
-    uncertain: Sequence[str],
-    prefix: Sequence[str],
-    stream: TextIO,
-) -> None:
-    """Name the dependency services the operator now owns and how to stop them.
-
-    The preflight renders the deployment once and runs every later command
-    against that frozen configuration on stdin, so the recovery command has to
-    repeat the operator's own Compose invocation instead. Anything else targets
-    a different project and leaves the started services running. A start that
-    did not return successfully is reported separately, because Compose may have
-    created the container before failing and may not have.
-    """
-    if not running and not uncertain:
-        return
-    sentences = []
-    if running:
-        sentences.append(
-            "dependency services started by the preflight remain running under "
-            f"the operator's Compose lifecycle: {' '.join(running)}."
-        )
-    if uncertain:
-        sentences.append(
-            "the preflight could not confirm the start of, and may have left a "
-            f"container for: {' '.join(uncertain)}."
-        )
-    recovery = shlex.join([*prefix, "stop", *running, *uncertain])
-    sentences.append(f"Stop them with the same Compose files: {recovery}")
-    print(" ".join(sentences), file=stream)
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     prefix = compose_prefix(args)
-    running: list[str] = []
-    uncertain: list[str] = []
     try:
         selections = [parse_service(raw) for raw in args.service]
         if len(selections) != len({item.service for item in selections}):
@@ -932,45 +726,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         frozen_compose = json.dumps(document, separators=(",", ":"))
         for selection in selections:
             validate_service(selection, document)
-        ordered, dependency_services = native_check_plan(selections, document)
-        for selection in ordered:
+        for selection in selections:
             native_check(
                 selection,
                 args.native_check_timeout_seconds,
                 frozen_compose,
             )
-            if selection.service in dependency_services:
-                deadline = time.monotonic() + args.dependency_timeout_seconds
-                uncertain.append(selection.service)
-                start_dependency(
-                    selection,
-                    deadline,
-                    frozen_compose,
-                )
-                uncertain.remove(selection.service)
-                running.append(selection.service)
-                wait_for_dependency(
-                    selection,
-                    deadline,
-                    frozen_compose,
-                )
     except PreflightError as error:
         print(f"runtime preflight failed: {error}", file=sys.stderr)
-        report_started_dependencies(running, uncertain, prefix, sys.stderr)
         return 1
-    except BaseException:
-        # A failure the preflight does not model, an interrupt included, leaves
-        # the same services behind. The operator gets the list, and the failure
-        # is raised on rather than swallowed or renamed.
-        report_started_dependencies(running, uncertain, prefix, sys.stderr)
-        raise
 
     print(f"runtime preflight passed for {len(selections)} service(s)")
     print(
         "each configured audit sink resolves inside the declared persistent "
         "mount; that the storage behind that mount survives is not proven"
     )
-    report_started_dependencies(running, uncertain, prefix, sys.stdout)
     return 0
 
 

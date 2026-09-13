@@ -180,8 +180,8 @@ fn clients_require_explicit_unique_profile_bindings_and_closed_fields() {
 }
 
 /// A client may bind no access profile. Such a client still needs its own
-/// unique ID and explicit scopes; it registers with Mint but is excluded from
-/// BReg's `allowedClients`, and no journey or seed can resolve it.
+/// unique ID and explicit scopes; it is provisioned at the dev token issuer but
+/// excluded from BReg's `allowedClients`, and no journey or seed can resolve it.
 #[test]
 fn clients_accept_an_explicitly_unbound_profile_free_client() {
     let clients = config::clients(

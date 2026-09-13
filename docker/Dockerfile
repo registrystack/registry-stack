@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-# Adopter and development images for the `mint`, `evidence`, and `casework` services.
+# Adopter and development images for the `evidence` and `casework` services.
 #
 # These are not release evidence. Release images are assembled from
 # release/docker with binaries produced outside Docker by
@@ -10,7 +10,6 @@
 #
 # Build from the repository root:
 #
-#   docker build -f docker/Dockerfile --target mint -t registry-mint .
 #   docker build -f docker/Dockerfile --target evidence -t registry-evidence .
 #   docker build -f docker/Dockerfile --target casework -t registry-casework .
 #
@@ -32,39 +31,8 @@ FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY products ./products
-RUN cargo chef prepare --recipe-path recipe-mint.json --bin mint \
-    && cargo chef prepare --recipe-path recipe-evidence.json --bin evidence \
+RUN cargo chef prepare --recipe-path recipe-evidence.json --bin evidence \
     && cargo chef prepare --recipe-path recipe-casework.json --bin casework
-
-FROM chef AS mint-builder
-COPY --from=planner /workspace/recipe-mint.json recipe.json
-# No --locked here: the bin-filtered recipe carries a lockfile trimmed to the
-# closure, which cargo would refuse to reconcile. The final build is --locked.
-RUN cargo chef cook --release --recipe-path recipe.json --bin mint
-COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
-COPY products ./products
-RUN cargo build --release --locked -p registry-mint --bin mint \
-    && mkdir -p /workspace/runtime-root/etc/registry-mint \
-    && chown -R 65532:65532 /workspace/runtime-root
-
-# Distroless cc keeps glibc and CA certificates while dropping shell/package tools.
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:c31ff9abcb1910f3ab25c7957bdaf0bfe12a01eb546e8df2282f1c8f682b606c AS mint
-
-COPY --from=mint-builder /workspace/runtime-root/ /
-COPY --from=mint-builder /workspace/target/release/mint /usr/local/bin/mint
-COPY LICENSE /licenses/registry-mint/LICENSE
-
-# The configuration is a startup-only deployment artifact; mount it read-only
-# at /etc/registry-mint. Key material and the client registry live beside it
-# at whatever paths the configuration names.
-ENV MINT_CONFIG=/etc/registry-mint/config.yaml
-EXPOSE 8081
-
-# No HEALTHCHECK: distroless has no shell or curl and the binary has no
-# healthcheck subcommand. The service serves GET /health for HTTP probes.
-ENTRYPOINT ["/usr/local/bin/mint"]
-CMD ["serve"]
 
 FROM chef AS evidence-builder
 COPY --from=planner /workspace/recipe-evidence.json recipe.json

@@ -1814,8 +1814,8 @@ impl AuthenticationConfig {
 /// Registered JWT claims no authority claim may be read from. `sub` is handled
 /// separately, because the principal claim may legitimately name it.
 ///
-/// Mint refuses to write these when it mints. Evidence refuses to read them,
-/// which is the check that still applies when the issuer is not Mint.
+/// Evidence refuses to read these as authority regardless of what the
+/// configured issuer writes.
 ///
 /// `cnf` is reserved for a second reason: the authenticator denies any token
 /// carrying it, because Version 1 validates no proof of possession and will not
@@ -5969,7 +5969,7 @@ mod tests {
         config
             .validate()
             .expect("local profile accepts the supervised loopback identity");
-        // The JWKS path is the issuer's to choose now, not Mint's fixed route.
+        // The JWKS path is the configured issuer's to choose.
         config.authentication.jwks_uri = "http://127.0.0.1:8081/oauth2/jwks".to_owned();
         config
             .validate()
@@ -6307,10 +6307,8 @@ mod tests {
     /// Two authority claims naming one JWT member, or naming a member the token
     /// already defines, is a configuration the verifier must refuse.
     ///
-    /// Mint refuses the same shapes when it mints (`ClaimNames::validate`), but
-    /// Mint is one possible issuer. Evidence is documented against any OIDC
-    /// issuer, and no other issuer enforces Mint's rules, so the deployment with
-    /// no issuer-side check is exactly the one where this is the only check.
+    /// Evidence accepts any configured OIDC issuer, so it enforces this rule at
+    /// its own resource-server boundary without assuming an issuer-side check.
     /// A grant authority claim named `aud` would read Evidence's own audience
     /// as the authority that granted the request.
     #[test]

@@ -10,7 +10,7 @@ use crate::{check_clock_policies, check_routing_policy, CalendarPolicy, ClockPol
 
 pub const CASEWORK_API_VERSION: &str = "registry.registrystack.org/casework/v1alpha1";
 pub const CASEWORK_KIND: &str = "CaseworkProject";
-// Matches the maintained Mint issuer's bounded RFC 6749 scope-token contract.
+// Matches the maximum RFC 6749 scope-token size Casework accepts.
 const MAXIMUM_REQUIRED_SCOPE_BYTES: usize = 256;
 
 fn default_page_size() -> usize {

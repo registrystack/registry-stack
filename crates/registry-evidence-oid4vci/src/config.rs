@@ -34,9 +34,9 @@ pub enum ConfigError {
 
 /// The transport validation boundary selected for this process.
 ///
-/// The same two-axis vocabulary Mint uses, and deliberately no third assurance
-/// concept: a delivery front end that graded itself on its own scale would be
-/// inventing a security property nothing else in the stack recognizes.
+/// A two-axis transport vocabulary with deliberately no third assurance
+/// concept: a delivery front end that graded itself on its own scale would
+/// invent a security property nothing else in the stack recognizes.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum ValidationMode {
@@ -139,7 +139,8 @@ impl ListenerConfig {
     ///
     /// A zero body limit or a zero timeout leaves the service reporting itself
     /// ready while every request fails, which is an outage no probe can see.
-    /// The bounds match the Mint and Evidence listeners.
+    /// The bounds keep an unusable or excessively permissive listener from
+    /// passing startup validation.
     fn validate(&self) -> Result<(), ConfigError> {
         if self.port == 0 {
             return Err(ConfigError::Invalid(
@@ -719,8 +720,7 @@ fn validate_supervised_local_endpoint(value: &str) -> Result<(), ConfigError> {
 ///
 /// Exact reconstruction rejects URL-parser aliases such as a trailing slash,
 /// leading-zero port, alternate IPv4 spelling, credentials, query, or fragment.
-/// The same reasoning Mint applies to its own issuer: this string is compared,
-/// not merely resolved.
+/// The configured issuer identity is compared exactly, not merely resolved.
 fn parse_canonical_supervised_local_origin(value: &str) -> Result<u16, ConfigError> {
     let port = value
         .strip_prefix("http://127.0.0.1:")
@@ -917,8 +917,8 @@ store:
         assert_eq!(config.offers.algorithms, [AccessTokenAlgorithm::EdDSA]);
         assert_eq!(config.offers.authorized_clients, ["adopter-front-end"]);
         assert_eq!(config.offers.maximum_token_lifetime_seconds, 900);
-        // Nothing in the offer boundary is derived from the Mint client
-        // identity this service authenticates with.
+        // Nothing in the offer boundary is derived from the outbound
+        // token-client identity this service authenticates with.
         assert_ne!(config.offers.issuer, config.token_client.token_endpoint);
     }
 

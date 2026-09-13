@@ -80,30 +80,14 @@ python3 docker/runtime-preflight.py \
   --service evidence=evidence
 ```
 
-Every native check runs under a bounded deadline of 1800 seconds. Add
+The native check runs under a bounded deadline of 1800 seconds. Add
 `--native-check-timeout-seconds SECONDS` to select another deadline from 30 to
 21600 seconds when a retained audit chain needs longer, or when the deployment
-requires a shorter one. The preflight honors selected
-`depends_on` edges. If an Evidence overlay declares a selected Mint service as
-a dependency, it checks Mint, starts only that service with `--no-deps`,
-requires Mint's exact `/ready` response, and then checks Evidence. Relay cannot
-be started as a preflight dependency because its existing healthcheck is
-liveness-only. A `depends_on` edge to a Registry Stack service you did not
-select is refused and names both ends, since the dependent would otherwise be
-checked against a service this run never checked or started; an edge to any
-other service starts nothing. Add `--dependency-timeout-seconds SECONDS` to change the bounded
-shared Mint startup and readiness deadline. The overlay requires
-`MINT_HEALTHCHECK_URL` and refuses to render without it, because
-`mint healthcheck` otherwise falls back to its loopback default and would report
-readiness from a listener the Mint configuration may not bind. Name the numeric
-private `/ready` listener Mint binds, loopback included. A started Mint remains
-under the operator's Compose lifecycle; the preflight names every service it
-started, and the `docker compose stop` command that stops those containers,
-whether the run passed or failed. A Mint whose start did not return
-successfully is named as one the preflight could not confirm, since Compose may
-have created its container before failing. That command repeats the
-`--env-file` and `--compose-file` arguments you passed, so it targets the same
-project the preflight started them in.
+requires a shorter one. The preflight starts no Compose services or declared
+dependencies. It runs the selected native check with `docker compose run --rm
+--no-deps`, so any runtime dependency must already be available in the
+deployment network.
+
 The preflight accepts only Docker-managed local named audit volumes without
 driver options, or explicit bind mounts outside known ephemeral host paths. It
 rejects service-level tmpfs and every long-form tmpfs other than exactly one
@@ -124,53 +108,6 @@ made after preflight remain operator responsibilities.
 The bundle revision remains unchanged when only the container runtime changes. Run fixtures again
 only when the governed bundle changes. The runtime and bundle being read-only does not waive secret
 owner or mode checks for the container service identity.
-
-## Optional Mint
-
-Mint is a separate service and is intentionally absent from the base adapter, so an Evidence-only
-deployment has no Mint configuration dependency. When the deployment has no suitable OIDC issuer,
-add an operator-owned Mint service with its configuration, public signing keys, client registry,
-reviewed image, private listener, and dedicated Transit socket mounted independently. Mint receives
-no provider token or private signing key. Mint's configured issuer and JWKS URI remain public HTTPS
-identities. Operator routing or split DNS resolves that public identity within the Compose network.
-
-`docker-compose.mint.yaml` is that overlay. It adds the Mint service, the
-`mint-audit` volume, and the `evidence` to `mint` `depends_on` edge the preflight
-reads. Apply it after the base file, in overlay order, and set its inputs
-alongside the base adapter's:
-
-- `MINT_CONFIG_DIR`, the Mint configuration, public keys, and client registry.
-- `MINT_SECRET_ROOT`, owner-only Mint secret files.
-- `MINT_TRANSIT_SOCKET_DIR`, the dedicated directory containing `transit-proxy.sock`.
-- `MINT_HEALTHCHECK_URL`, the private `/ready` URL the Mint configuration binds.
-- `MINT_IMAGE`, a reviewed, digest-pinned Mint image.
-
-The Mint configuration is operator-owned; see
-[`crates/registry-mint/README.md`](../../crates/registry-mint/README.md). Inside
-the container it must keep `MINT_CONFIG` at `/etc/registry-mint/config.yaml`,
-resolve `secretProviders.file.root` to `/run/secrets/registry-mint`, resolve
-`signer.unixSocketPath` under `/run/registry-mint`, and place `audit.path` under
-`/var/lib/registry-mint`, which the `mint-audit` volume backs. Provision that
-volume so UID and GID `65532` can create and append the audit chain before the
-first start.
-
-```sh
-python3 docker/runtime-preflight.py \
-  --compose-file docker/compose/docker-compose.yaml \
-  --compose-file docker/compose/docker-compose.mint.yaml \
-  --service mint=mint \
-  --service evidence=evidence
-```
-
-From cold, that checks Mint in its real mounts, starts only Mint with
-`--no-deps`, probes `mint healthcheck` until Mint's exact `/ready` response
-arrives or the shared dependency deadline expires, and only then checks
-Evidence. Neither service publishes a host port. Evidence still reaches Mint by
-Mint's public issuer identity, so the operator's routing and TLS for that
-identity must already resolve inside this network before Evidence's issuer
-reachability check can pass. The overlay declares `condition: service_started`
-rather than `service_healthy` because neither official image declares a Docker
-`HEALTHCHECK`; readiness is the preflight's probe, not a Compose condition.
 
 This adapter does not establish image provenance, TLS, routing, client registration, or secret
 ownership. Those remain operator responsibilities.

@@ -388,14 +388,14 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
-    def test_mint_and_evidence_image_is_a_required_maintained_surface(self) -> None:
+    def test_adopter_image_is_a_required_maintained_surface(self) -> None:
         self.assertEqual(
             (Path("docker/Dockerfile"),),
             POLICY.ADOPTER_DOCKERFILES,
         )
         self.assertIn(Path("docker/Dockerfile"), POLICY.MAINTAINED_TEXT_PATHS)
 
-    def test_mint_and_evidence_image_requires_pinned_upstream_bases(self) -> None:
+    def test_adopter_image_requires_pinned_upstream_bases(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.repository_copy(root)
@@ -419,15 +419,15 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 failures,
             )
 
-    def test_mint_and_evidence_distroless_stages_forbid_shell_tooling(self) -> None:
+    def test_adopter_distroless_stages_forbid_shell_tooling(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.repository_copy(root)
             dockerfile = root / "docker/Dockerfile"
             dockerfile.write_text(
                 dockerfile.read_text(encoding="utf-8").replace(
-                    "COPY --from=mint-builder /workspace/runtime-root/ /\n",
-                    "COPY --from=mint-builder /workspace/runtime-root/ /\n"
+                    "COPY --from=evidence-builder /workspace/runtime-root/ /\n",
+                    "COPY --from=evidence-builder /workspace/runtime-root/ /\n"
                     "RUN /bin/sh -c true\n",
                     1,
                 ),

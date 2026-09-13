@@ -61,7 +61,6 @@ test('the maintained Compose adapter keeps Evidence deployment inputs explicit',
     readFile(resolve(repoRoot, 'docker/compose/runtime.docker.yaml'), 'utf8'),
   ]);
 
-  assert.match(readme, /intentionally absent from the base adapter/u);
   for (const name of [
     'EVIDENCE_CANDIDATE_DIR',
     'EVIDENCE_RUNTIME_FILE',

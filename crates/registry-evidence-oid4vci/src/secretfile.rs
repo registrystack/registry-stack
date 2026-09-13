@@ -1,9 +1,9 @@
 //! Bounded, owner-only reads of the client key this service authenticates with.
 //!
 //! The service holds exactly one piece of private material: the key that signs
-//! its client assertion to Mint. It holds no Evidence signing key and no holder
-//! key, so this module is the whole private-material read boundary and is
-//! deliberately small.
+//! its private-key-JWT client assertion for the configured token endpoint. It
+//! holds no Evidence signing key and no holder key, so this module is the whole
+//! private-material read boundary and is deliberately small.
 
 use std::{fs, io::Read, os::unix::fs::MetadataExt, path::Path};
 
