@@ -6627,6 +6627,10 @@ async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
         .map(|subject| subject["role"].as_str().expect("role is text").to_owned())
         .collect::<Vec<_>>();
     assert_eq!(roles, ["child", "candidate-parent"]);
+    assert!(first_event["record"]["authority"]["approverPseudonym"]
+        .as_str()
+        .is_some());
+    assert!(!audit.contains("h:synthetic-approver"));
 
     // The verifier accepts the expected subject set in any expectation order.
     let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
@@ -9590,6 +9594,7 @@ fn parent_grant_claims_for(candidate: Value) -> Value {
             "type": "evidence",
             "requirement": "urn:example:fixture:requirement:legal-parent-relationship:v1"
         },
+        "registry_approver": "h:synthetic-approver",
         "grant": {"candidate_parent": candidate}
     })
 }
@@ -11517,6 +11522,7 @@ fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
         AuditAuthority {
             kind: AuditAuthorityKind::Statutory,
             grant_pseudonym: None,
+            approver_pseudonym: None,
         },
         vec![AuditSubject {
             role: "subject".to_owned(),

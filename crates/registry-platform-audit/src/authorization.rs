@@ -32,6 +32,8 @@ pub struct AuthorizationAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     grant_pseudonym: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    approver_pseudonym: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     purpose: Option<String>,
     operation: String,
     outcome: AuthorizationOutcome,
@@ -45,6 +47,7 @@ impl AuthorizationAuditEvent {
         principal_pseudonym: impl Into<String>,
         client_pseudonym: impl Into<String>,
         grant_pseudonym: Option<String>,
+        approver_pseudonym: Option<String>,
         purpose: impl Into<String>,
         operation: impl Into<String>,
         outcome: AuthorizationOutcome,
@@ -55,6 +58,7 @@ impl AuthorizationAuditEvent {
             principal_pseudonym: principal_pseudonym.into(),
             client_pseudonym: client_pseudonym.into(),
             grant_pseudonym,
+            approver_pseudonym,
             purpose: Some(purpose.into()),
             operation: operation.into(),
             outcome,
@@ -72,6 +76,7 @@ impl AuthorizationAuditEvent {
         principal_pseudonym: impl Into<String>,
         client_pseudonym: impl Into<String>,
         grant_pseudonym: Option<String>,
+        approver_pseudonym: Option<String>,
         operation: impl Into<String>,
         reason: impl Into<String>,
     ) -> Result<Self, AuthorizationAuditError> {
@@ -80,6 +85,7 @@ impl AuthorizationAuditEvent {
             principal_pseudonym: principal_pseudonym.into(),
             client_pseudonym: client_pseudonym.into(),
             grant_pseudonym,
+            approver_pseudonym,
             purpose: None,
             operation: operation.into(),
             outcome: AuthorizationOutcome::Denied,
@@ -107,6 +113,11 @@ impl AuthorizationAuditEvent {
     #[must_use]
     pub fn grant_pseudonym(&self) -> Option<&str> {
         self.grant_pseudonym.as_deref()
+    }
+
+    #[must_use]
+    pub fn approver_pseudonym(&self) -> Option<&str> {
+        self.approver_pseudonym.as_deref()
     }
 
     #[must_use]
@@ -139,6 +150,10 @@ impl AuthorizationAuditEvent {
                 .grant_pseudonym
                 .as_deref()
                 .is_some_and(|value| !valid_pseudonym(value))
+            || self
+                .approver_pseudonym
+                .as_deref()
+                .is_some_and(|value| !valid_pseudonym(value))
         {
             return Err(AuthorizationAuditError::InvalidPseudonym);
         }
@@ -165,6 +180,10 @@ impl fmt::Debug for AuthorizationAuditEvent {
             .field(
                 "grant_pseudonym",
                 &self.grant_pseudonym.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "approver_pseudonym",
+                &self.approver_pseudonym.as_ref().map(|_| "<redacted>"),
             )
             .field("purpose", &"<redacted>")
             .field("operation", &self.operation)
@@ -240,6 +259,7 @@ mod tests {
             format!("hmac-sha256:{}", digest('a')),
             format!("hmac-sha256:v2:{}", digest('b')),
             Some(format!("hmac-sha256:v2:{}", digest('c'))),
+            Some(format!("hmac-sha256:v2:{}", digest('d'))),
             "benefit-review",
             "get",
             AuthorizationOutcome::Allowed,
@@ -247,6 +267,10 @@ mod tests {
         )
         .expect("valid event");
         assert_eq!(event.actor_kind(), "agent");
+        assert_eq!(
+            event.approver_pseudonym(),
+            Some(format!("hmac-sha256:v2:{}", digest('d')).as_str())
+        );
         assert_eq!(event.outcome(), AuthorizationOutcome::Allowed);
     }
 
@@ -257,6 +281,7 @@ mod tests {
             "service",
             format!("hmac-sha256:v2:{}", digest('a')),
             format!("hmac-sha256:v2:{}", digest('b')),
+            None,
             None,
             "benefit-review",
             operation,
@@ -275,6 +300,7 @@ mod tests {
             "raw-principal-canary",
             format!("sha256:{}", digest('b')),
             None,
+            None,
             "review",
             "get",
             AuthorizationOutcome::Denied,
@@ -290,6 +316,7 @@ mod tests {
             "service",
             format!("sha256:{}", digest('a')),
             format!("sha256:{}", digest('b')),
+            None,
             None,
             "registry-operations",
             "list",
@@ -318,6 +345,7 @@ mod tests {
             format!("sha256:{}", digest('a')),
             format!("sha256:{}", digest('b')),
             None,
+            None,
             "evaluate",
             "authorization.profile",
         )
@@ -333,6 +361,7 @@ mod tests {
             format!("hmac-sha256:{}", digest('a')),
             format!("hmac-sha256:{}", digest('b')),
             Some(format!("hmac-sha256:{}", digest('c'))),
+            Some(format!("hmac-sha256:{}", digest('d'))),
             "sensitive-purpose-canary",
             "patch",
             AuthorizationOutcome::Allowed,
@@ -344,6 +373,7 @@ mod tests {
             digest('a'),
             digest('b'),
             digest('c'),
+            digest('d'),
             "sensitive-purpose-canary".to_owned(),
         ] {
             assert!(!rendered.contains(&canary));

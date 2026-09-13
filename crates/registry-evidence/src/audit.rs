@@ -152,6 +152,7 @@ impl EvidenceAuthorizationRefusalAuditEvent {
                 self.requester_pseudonym.clone(),
                 client.clone(),
                 self.grant_pseudonym.clone(),
+                None,
                 self.operation.clone(),
                 self.reason.clone(),
             )
@@ -194,6 +195,8 @@ pub struct AuditAuthority {
     pub kind: AuthorityKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_pseudonym: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approver_pseudonym: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -480,6 +483,11 @@ fn valid_batch_item_groups(
                 .grant_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
+            || group
+                .authority
+                .approver_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
             || group.subjects.is_empty()
             || group.subjects.len() > 8
             || group.subjects.iter().any(|subject| {
@@ -727,6 +735,11 @@ impl EvidenceAuditEvent {
                 .grant_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
+            || self
+                .authority
+                .approver_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
             || self.subjects.is_empty()
             || self.subjects.len() > 8
             || !(16..=128).contains(&self.operation.len())
@@ -771,6 +784,7 @@ impl EvidenceAuditEvent {
                 self.requester_pseudonym.clone(),
                 client.clone(),
                 self.authority.grant_pseudonym.clone(),
+                self.authority.approver_pseudonym.clone(),
                 self.purpose.clone(),
                 self.operation.clone(),
                 AuthorizationOutcome::Allowed,
@@ -1391,6 +1405,7 @@ mod tests {
             authority: AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             subjects: vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -1646,6 +1661,7 @@ mod tests {
             AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             vec![AuditSubject {
                 role: "subject".to_string(),
@@ -1677,6 +1693,7 @@ mod tests {
             AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -1743,6 +1760,7 @@ mod tests {
             authority: AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             subjects: vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -2812,6 +2830,14 @@ mod tests {
                     log.pseudonym("grant-v1", "urn:example:trust", b"raw-grant-token-canary")
                         .expect("grant pseudonym builds"),
                 ),
+                approver_pseudonym: Some(
+                    log.pseudonym(
+                        "approver-v1",
+                        "urn:example:trust",
+                        b"raw-approver-token-canary",
+                    )
+                    .expect("approver pseudonym builds"),
+                ),
             },
             vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -3387,6 +3413,7 @@ mod tests {
             "bundleRevision",
             "raw-requester-token-canary",
             "raw-grant-token-canary",
+            "raw-approver-token-canary",
             "raw-actor-token-canary",
             "person-id-raw-selector-canary",
             "source-private-canary",

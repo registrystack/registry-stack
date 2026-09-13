@@ -1188,7 +1188,15 @@ impl EvidenceRuntime {
                     return Err(map_authority(error));
                 }
             };
-            let audit = self.request_batch_item_audit_material(&issuance_scope, &resolved)?;
+            let audit = self.request_batch_item_audit_material(
+                &issuance_scope,
+                &resolved,
+                context
+                    .grant()
+                    .ok()
+                    .flatten()
+                    .map(registry_platform_oidc::GrantClaims::approver),
+            )?;
             authorized.push(AuthorizedRequestBatchItem {
                 request,
                 resolved,
@@ -1702,6 +1710,11 @@ impl EvidenceRuntime {
                 client_pseudonym,
             },
             &resolved,
+            context
+                .grant()
+                .ok()
+                .flatten()
+                .map(registry_platform_oidc::GrantClaims::approver),
             format,
         )?;
         let requirement = self
@@ -2457,6 +2470,7 @@ impl EvidenceRuntime {
         &self,
         scope: &str,
         resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
     ) -> Result<RequestBatchItemAuditMaterial, RuntimeFailure> {
         let grant_pseudonym = resolved
             .grant_id
@@ -2464,6 +2478,7 @@ impl EvidenceRuntime {
             .map(|grant| self.audit.pseudonym("grant", scope, grant.as_bytes()))
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let approver_pseudonym = self.approver_audit_pseudonym(scope, resolved, approver)?;
         let subjects = resolved
             .subjects
             .iter()
@@ -2486,6 +2501,7 @@ impl EvidenceRuntime {
             authority: AuditAuthority {
                 kind: map_authority_kind(resolved.authority_kind),
                 grant_pseudonym,
+                approver_pseudonym,
             },
             subjects,
         })
@@ -3188,6 +3204,7 @@ impl EvidenceRuntime {
         scope: &str,
         caller: AuditCaller,
         resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
         format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
         let AuditCaller {
@@ -3202,6 +3219,7 @@ impl EvidenceRuntime {
             .map(|grant| self.audit.pseudonym("grant", scope, grant.as_bytes()))
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let approver_pseudonym = self.approver_audit_pseudonym(scope, resolved, approver)?;
         let subjects = resolved
             .subjects
             .iter()
@@ -3232,10 +3250,28 @@ impl EvidenceRuntime {
             authority: AuditAuthority {
                 kind: map_authority_kind(resolved.authority_kind),
                 grant_pseudonym,
+                approver_pseudonym,
             },
             subjects,
             response_protection: map_response_protection(format),
         })
+    }
+
+    fn approver_audit_pseudonym(
+        &self,
+        scope: &str,
+        resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
+    ) -> Result<Option<String>, RuntimeFailure> {
+        if resolved.grant_id.is_none() {
+            return Ok(None);
+        }
+        let approver =
+            approver.ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        self.audit
+            .pseudonym("approver", scope, approver.as_bytes())
+            .map(Some)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))
     }
 
     async fn append_authorization_refusal(

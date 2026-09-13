@@ -49,6 +49,7 @@ entries:
       - {file: crates/registry-evidence/src/config.rs, name: complete_authority_paths_cannot_be_unioned_across_partial_grants}
       - {file: crates/registry-evidence/src/config.rs, name: task_grant_profiles_bind_trusted_source_and_verified_client}
       - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
+      - {file: crates/registry-evidence/src/runtime_tests.rs, name: reordered_grant_subjects_resolve_by_role_and_emit_declaration_order}
   - id: sec-authenticated-authorization-refusal-audited
     tests:
       - {file: crates/registry-evidence/src/audit.rs, name: audit_contract_schema_accepts_each_native_shape_and_rejects_mixed_shapes}

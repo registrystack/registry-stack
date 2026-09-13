@@ -242,7 +242,7 @@ pub struct GrantClaims {
     purpose: String,
     exp: u64,
     bounds: GrantBounds,
-    approver: Option<String>,
+    approver: String,
 }
 
 impl GrantClaims {
@@ -292,8 +292,8 @@ impl GrantClaims {
     }
 
     #[must_use]
-    pub fn approver(&self) -> Option<&str> {
-        self.approver.as_deref()
+    pub fn approver(&self) -> &str {
+        &self.approver
     }
 
     /// Bind immutable grant context to identities already selected by the verifier.
@@ -329,7 +329,7 @@ impl fmt::Debug for GrantClaims {
             .field("purpose", &"<redacted>")
             .field("exp", &self.exp)
             .field("bounds", &self.bounds)
-            .field("approver", &self.approver.as_ref().map(|_| "<redacted>"))
+            .field("approver", &"<redacted>")
             .finish()
     }
 }
@@ -466,7 +466,7 @@ pub fn grant_claims(
     let bounds: GrantBounds = serde_json::from_value(bounds_value.clone())
         .map_err(|_| ClaimError::Malformed(ClaimMember::GrantBounds))?;
     bounds.validate()?;
-    let approver = optional_extra_string(claims, &names.approver, ClaimMember::Approver)?;
+    let approver = required_extra_string(claims, &names.approver, ClaimMember::Approver)?;
 
     Ok(Some(GrantClaims {
         principal,
@@ -499,20 +499,6 @@ fn required_extra_string_with_bound(
     match claims.extra.get(name) {
         None => Err(ClaimError::Missing(member)),
         Some(Value::String(value)) if valid_text(value, maximum_bytes) => Ok(value.clone()),
-        Some(_) => Err(ClaimError::Malformed(member)),
-    }
-}
-
-fn optional_extra_string(
-    claims: &Claims,
-    name: &str,
-    member: ClaimMember,
-) -> Result<Option<String>, ClaimError> {
-    match claims.extra.get(name) {
-        None => Ok(None),
-        Some(Value::String(value)) if valid_text(value, MAX_CLAIM_VALUE_BYTES) => {
-            Ok(Some(value.clone()))
-        }
         Some(_) => Err(ClaimError::Malformed(member)),
     }
 }
@@ -639,6 +625,21 @@ mod tests {
                 Err(ClaimError::Partial)
             );
         }
+    }
+
+    #[test]
+    fn grant_without_approver_is_rejected() {
+        let mut grant =
+            complete_grant(json!({"type":"evidence","requirement":"urn:requirement:one"}));
+        grant
+            .as_object_mut()
+            .expect("grant is an object")
+            .remove("registry_approver");
+
+        assert_eq!(
+            grant_claims(&claims(grant), &ClaimNames::default(), 1_500),
+            Err(ClaimError::Missing(ClaimMember::Approver))
+        );
     }
 
     #[test]

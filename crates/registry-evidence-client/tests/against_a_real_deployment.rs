@@ -1812,6 +1812,7 @@ impl SyntheticAssertionAuthority {
             "scope": "evidence:invoke",
             "registry_actor_kind": "agent",
             "registry_grant_id": grant_id,
+            "registry_approver": "h:synthetic-approver",
             "registry_grant_authority": TASK_AUTHORITY_PROFILE,
             "registry_grant_client": TASK_CLIENT_ID,
             "registry_grant_resource": TOKEN_AUDIENCE,
@@ -2436,6 +2437,10 @@ fn assert_stock_task_context(token: &str, authority_issuer: &str, grant_expires_
     assert!(
         claims["registry_grant_client"] == TASK_CLIENT_ID,
         "the exchanged token retains the original grant client"
+    );
+    assert!(
+        claims["registry_approver"] == "h:synthetic-approver",
+        "the exchanged token retains the pseudonymous approver"
     );
     assert!(
         claims["registry_grant_resource"] == TOKEN_AUDIENCE,

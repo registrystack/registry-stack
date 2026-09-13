@@ -683,6 +683,7 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
             status_clients: BTreeMap::from([("breg-status".into(), BREG_RESOURCE.into())]),
         },
         key,
+        identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
     };
     let service = crate::CaseworkService::new(
         store,

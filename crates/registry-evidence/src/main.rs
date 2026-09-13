@@ -6370,6 +6370,7 @@ mod tests {
             AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             vec![AuditSubject {
                 role: "subject".to_owned(),

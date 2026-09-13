@@ -870,6 +870,10 @@ pub fn resolve_offline_fixture_authorization(
             names.grant_bounds.clone(),
             serde_json::json!({"type": "evidence", "requirement": request.requirement}),
         );
+        object.insert(
+            names.approver.clone(),
+            Value::String("h:offline-fixture-approver".to_owned()),
+        );
         let parsed: registry_platform_oidc::Claims =
             serde_json::from_value(grant_claims).map_err(|_| AuthorizationError::Unauthorized)?;
         let grant = registry_platform_oidc::grant_claims(

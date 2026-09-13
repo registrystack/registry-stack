@@ -88,8 +88,9 @@ async fn write_audit_event() -> Result<(), registry_platform_audit::AuditError> 
   instead of concatenating ad hoc hash inputs in each service. Keep service
   semantics and canonicalization in the consuming service.
 - `AuthorizationAuditEvent` accepts only platform hash handles and Evidence's
-  established key-versioned pseudonyms for identity-bearing fields. It does
-  not derive keys or replace a product's pseudonym scope policy.
+  established key-versioned pseudonyms for principal, client, grant, and
+  approver identity fields. It does not derive keys or replace a product's
+  pseudonym scope policy.
 - Redaction helpers intentionally avoid preserving email local parts, phone
   digits, or sensitive query values.
 

@@ -72,9 +72,9 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
 - If `allowed_clients` is set, `azp` takes precedence over `client_id`; `sub` is
   never used as a client identity.
 - Task-grant parsing is optional until any configured core grant claim is
-  present. Once present, every core member and both token and grant deadlines
-  are required. Product runtimes still own trusted-authority mappings and the
-  supported operation vocabulary.
+  present. Once present, every core member, the configured approver claim, and
+  both token and grant deadlines are required. Product runtimes still own
+  trusted-authority mappings and the supported operation vocabulary.
 - Store replay state, authorization decisions, and tenant boundaries in the
   consuming service.
 

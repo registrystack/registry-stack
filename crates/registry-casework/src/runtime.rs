@@ -103,19 +103,21 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         keys,
         config.authentication.oidc.human_identity.clone(),
     ));
-    let task_authority = config
-        .task_authority
-        .as_ref()
-        .map(|authority| crate::task_grants::TaskAuthority::load(authority, &secrets))
-        .transpose()?;
-    let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
-        .with_task_authority(task_authority);
-
     let audit_secret = resolve_audit_secret(&secrets, &config.audit.hash_key_ref)?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(
         audit_secret.expose_secret().to_vec(),
     ))
     .map_err(|_| RuntimeError::Audit)?;
+    let task_authority = config
+        .task_authority
+        .as_ref()
+        .map(|authority| {
+            crate::task_grants::TaskAuthority::load(authority, &secrets, audit_profile.key_hasher())
+        })
+        .transpose()?;
+    let service = CaseworkService::new(store.clone(), project.clone(), adapters)?
+        .with_task_authority(task_authority);
+
     let audit_sink = Arc::new(
         JsonlFileSink::new_single_writer(&config.audit.path).map_err(|_| RuntimeError::Audit)?,
     );

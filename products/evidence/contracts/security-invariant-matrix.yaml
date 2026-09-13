@@ -23,9 +23,9 @@ invariants:
     enforcement: Strict authentication profile, one configured principal claim, and one strict shared actor-kind claim with no fallback.
     negative_test: sec-missing-principal-no-fallback
   - id: V1-I05
-    rule: One authorization decision binds requester, actor kind, optional actor identity, verified client, requirement revision, purpose, all role/profile/origin tuples, authority, and audience. A task-grant path additionally binds immutable grant id, principal, original client and resource, trusted source issuer, deadline, and exact Evidence requirement bound.
-    threat: Permission splicing or confused-deputy access across partially authorized dimensions.
-    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A present invalid grant cannot fall back to a standing profile. A refusal after successful authentication follows the separate minimal denial-audit invariant.
+    rule: One authorization decision binds requester, actor kind, optional actor identity, verified client, requirement revision, purpose, all role/profile/origin tuples, authority, and audience. A task-grant path additionally binds immutable grant id, principal, original client and resource, trusted source issuer, deadline, and exact Evidence requirement bound; requires its signed approver handle; and records a scoped keyed approver pseudonym on successful audit events.
+    threat: Permission splicing, confused-deputy access across partially authorized dimensions, or approved delegation without accountable approver attribution.
+    enforcement: Exact complete-entitlement match before authorized-material audit, credential resolution, or source access. A present grant is incomplete without its approver claim, and a present invalid grant cannot fall back to a standing profile. Successful grant audit derives the approver pseudonym with the existing scoped audit key. A refusal after successful authentication follows the separate minimal denial-audit invariant.
     negative_test: sec-no-entitlement-union
   - id: V1-I06
     rule: Selector profiles and values are provider-lookup inputs, never proof of authority.

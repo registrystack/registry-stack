@@ -53,6 +53,7 @@ fn sample_event() -> EvidenceAuditEvent {
         AuditAuthority {
             kind: AuthorityKind::Statutory,
             grant_pseudonym: Some(pseudonym(0x22)),
+            approver_pseudonym: Some(pseudonym(0x23)),
         },
         vec![AuditSubject {
             role: "subject".to_string(),

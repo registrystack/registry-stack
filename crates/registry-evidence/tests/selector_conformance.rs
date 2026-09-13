@@ -1267,6 +1267,7 @@ fn task_grant_claims(authority: &str, subject: Value) -> Value {
             "type": "evidence",
             "requirement": "urn:example:fixture:requirement:property-with-event:v1"
         },
+        "registry_approver": "h:synthetic-approver",
         "grant": {"subject": subject}
     })
 }
@@ -1528,6 +1529,7 @@ fn audit_authority(audit: &EvidenceAuditLog, resolved: &ResolvedAuthorization) -
                 .pseudonym("grant", "selector-conformance", grant.as_bytes())
                 .expect("grant pseudonymizes")
         }),
+        approver_pseudonym: None,
     }
 }
 

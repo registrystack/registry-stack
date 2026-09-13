@@ -211,6 +211,7 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
             ]),
         },
         key,
+        identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
     };
     let service = crate::CaseworkService::new(
         store.clone(),

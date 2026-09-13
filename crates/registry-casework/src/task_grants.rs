@@ -345,11 +345,13 @@ async fn task_event(
 pub(crate) struct TaskAuthority {
     config: crate::TaskAuthorityConfig,
     key: registry_platform_crypto::PrivateJwk,
+    identifiers: registry_platform_audit::AuditKeyHasher,
 }
 impl TaskAuthority {
     pub(crate) fn load(
         config: &crate::TaskAuthorityConfig,
         secrets: &registry_platform_config::SecretResolver,
+        identifiers: registry_platform_audit::AuditKeyHasher,
     ) -> Result<Self, StoreError> {
         let secret = secrets
             .resolve(&config.signing_key_ref)
@@ -366,10 +368,20 @@ impl TaskAuthority {
         Ok(Self {
             config: config.clone(),
             key,
+            identifiers,
         })
     }
     pub(crate) fn jwks(&self) -> Result<Value, StoreError> {
         Ok(json!({"keys":[self.key.public()]}))
+    }
+    fn approver_pseudonym(&self, grant: &TaskGrant) -> Result<String, StoreError> {
+        let approver = serde_json::to_string(&(
+            grant.approver.issuer.as_str(),
+            grant.approver.subject.as_str(),
+        ))?;
+        self.identifiers
+            .audit_reference_hash("casework-principal-v1", "", &approver)
+            .map_err(|_| StoreError::Invalid)
     }
     fn assertion(&self, grant: &TaskGrant, now: u64) -> Result<TaskAssertionResponse, StoreError> {
         use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -380,12 +392,14 @@ impl TaskAuthority {
             now.checked_add(registry_casework_core::TASK_ASSERTION_LIFETIME_SECONDS)
                 .ok_or(StoreError::Invalid)?,
         );
+        let approver = self.approver_pseudonym(grant)?;
         let mut payload = json!({"iss":self.config.issuer,"sub":grant.template.agent.subject,"aud":self.config.exchange_audience,
             "iat":now,"nbf":now,"exp":expires,"jti":Uuid::new_v4(),"registry_actor_kind":"agent",
             "registry_grant_id":grant.id,"registry_grant_authority":grant.authority,"registry_grant_source_issuer":grant.source_issuer,
             "registry_grant_client":grant.template.client,"registry_grant_resource":grant.template.resource,
             "registry_purpose":grant.template.purpose,"registry_grant_exp":grant.expires_at,
-            "registry_grant_bounds":grant.template.bounds,"scope":grant.template.scopes.join(" "),"identity":grant.subjects});
+            "registry_grant_bounds":grant.template.bounds,"registry_approver":approver,
+            "scope":grant.template.scopes.join(" "),"identity":grant.subjects});
         if let Some(context) = &grant.template.evidence_context {
             payload["evidence_tags"] = json!(context.requester_tags);
             payload["evidence_audience"] = json!(context.audience);
@@ -746,7 +760,7 @@ mod evidence_assertion_tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn evidence_requester_context_is_signed_as_two_explicit_claims() {
+    fn task_assertion_pseudonymizes_approver_and_keeps_evidence_context_explicit() {
         let mut key = registry_platform_crypto::generate_private_jwk(
             registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
         )
@@ -762,6 +776,7 @@ mod evidence_assertion_tests {
                 status_clients: BTreeMap::new(),
             },
             key,
+            identifiers: registry_platform_audit::AuditKeyHasher::unkeyed_dev_only(),
         };
         let template: TaskTemplate = serde_json::from_value(json!({
             "id":"evidence-check", "version":"1", "label":"Check evidence",
@@ -782,8 +797,8 @@ mod evidence_assertion_tests {
             authority: "statutory-caseworker-v1".into(),
             source_issuer: "https://casework.test".into(),
             approver: IssuerPrincipal {
-                issuer: "https://issuer.test".into(),
-                subject: "officer".into(),
+                issuer: "https://approver-issuer.test".into(),
+                subject: "approver-subject-canary".into(),
             },
             approver_profile: "staff".into(),
             source_subject: SubjectRef {
@@ -816,6 +831,16 @@ mod evidence_assertion_tests {
             payload["evidence_audience"],
             "https://relying.test/procedure"
         );
+        let approver =
+            serde_json::to_string(&("https://approver-issuer.test", "approver-subject-canary"))
+                .unwrap();
+        let expected_approver = registry_platform_audit::AuditKeyHasher::unkeyed_dev_only()
+            .audit_reference_hash("casework-principal-v1", "", &approver)
+            .unwrap();
+        assert_eq!(payload["registry_approver"], expected_approver);
+        let serialized = payload.to_string();
+        assert!(!serialized.contains("https://approver-issuer.test"));
+        assert!(!serialized.contains("approver-subject-canary"));
         assert!(payload.get("evidence_context").is_none());
     }
 }

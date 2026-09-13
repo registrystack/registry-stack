@@ -1138,6 +1138,7 @@ mod tests {
             "registry_grant_resource": "evidence-resource",
             "registry_grant_exp": now + 300,
             "registry_grant_bounds": {"type":"evidence", "requirement":"urn:example:requirement"},
+            "registry_approver": "h:synthetic-approver",
             "evidence_tags": ["caseworker"],
             "evidence_audience": "https://relying-party.invalid"
         }))
