@@ -141,7 +141,7 @@ class RegistryReleaseTest(TestCase):
                     "release: malformed DCO",
                     "-m",
                     "Prepare the release.\\n\\nSigned-off-by: "
-                    "Test Author <test@example.invalid>",
+                    + "Test Author <test@example.invalid>",
                 ],
                 cwd=repo,
                 check=True,
@@ -756,6 +756,117 @@ class RegistryReleaseTest(TestCase):
             request_id=request_id,
         )
 
+    def test_docs_recovery_dispatch_uses_exact_release_identity(self) -> None:
+        registry_release = load_registry_release()
+        request_id = "f" * 32
+        run = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+        }
+        with (
+            mock.patch.object(
+                registry_release.secrets,
+                "token_hex",
+                return_value=request_id,
+            ),
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_titled_workflow_run",
+                return_value=run,
+            ) as correlate,
+        ):
+            observed, observed_request_id = (
+                registry_release.dispatch_docs_publication_run(
+                    "registrystack/registry-stack",
+                    tag="v0.31.1",
+                    docs_sha256="d" * 64,
+                )
+            )
+
+        self.assertEqual(run, observed)
+        self.assertEqual(request_id, observed_request_id)
+        dispatch.assert_called_once_with(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "docs-pages.yml",
+                "--repo",
+                "registrystack/registry-stack",
+                "--ref",
+                "main",
+                "-f",
+                "released_tag=v0.31.1",
+                "-f",
+                f"docs_sha256={'d' * 64}",
+                "-f",
+                f"request_id={request_id}",
+            ]
+        )
+        correlate.assert_called_once_with(
+            "registrystack/registry-stack",
+            workflow="docs-pages.yml",
+            event="workflow_dispatch",
+            source_sha=None,
+            display_title=registry_release.docs_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+            label="release docs",
+            request_id=request_id,
+        )
+
+    def test_docs_recovery_reuses_latest_healthy_correlated_run(self) -> None:
+        registry_release = load_registry_release()
+        older_request = "e" * 32
+        newer_request = "f" * 32
+        older_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                older_request,
+            ),
+        }
+        newer_publication = {
+            "id": 89,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/89",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                newer_request,
+            ),
+        }
+        healthy_docs = {
+            "id": 98,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/98",
+            "status": "completed",
+            "conclusion": "success",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                older_request,
+            ),
+        }
+        failed_docs = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                newer_request,
+            ),
+        }
+
+        self.assertEqual(
+            (older_publication, healthy_docs),
+            registry_release.reusable_docs_publication_run(
+                [older_publication, newer_publication],
+                [healthy_docs, failed_docs],
+                tag="v0.31.1",
+            ),
+        )
+
     def test_publish_tags_dispatches_waits_and_verifies_docs(self) -> None:
         registry_release = load_registry_release()
         plan = candidate_verification_plan(registry_release)
@@ -1008,6 +1119,110 @@ class RegistryReleaseTest(TestCase):
         verify_candidate.assert_not_called()
         dispatch.assert_not_called()
         self.assertIn('"release_state": "published"', output.getvalue())
+
+    def test_publish_recovers_docs_after_publication_workflow_failure(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        failed_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": "e" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                "e" * 32,
+            ),
+        }
+        docs_run = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                registry_release,
+                "release_for_tag",
+                return_value={"draft": False},
+            ),
+            mock.patch.object(
+                registry_release,
+                "remote_candidate_tag",
+                return_value={"remote": "tag"},
+            ),
+            mock.patch.object(registry_release, "ensure_candidate_tag"),
+            mock.patch.object(registry_release, "validate_candidate_source_commit"),
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value={"tag": "v0.31.1", "status": "verified"},
+            ),
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[failed_publication],
+            ),
+            mock.patch.object(
+                registry_release,
+                "docs_runs_for_tag",
+                return_value=[],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_docs_publication_run",
+                return_value=(docs_run, "f" * 32),
+            ) as dispatch_docs,
+            mock.patch.object(
+                registry_release,
+                "watch_docs_publication_run",
+                return_value=99,
+            ) as watch_docs,
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+            ) as verify_candidate,
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+            ) as dispatch_publication,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=True,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(0, result)
+        dispatch_docs.assert_called_once_with(
+            "registrystack/registry-stack",
+            tag="v0.31.1",
+            docs_sha256="d" * 64,
+        )
+        watch_docs.assert_called_once_with(
+            ROOT.resolve(),
+            "registrystack/registry-stack",
+            run=docs_run,
+            verbose=False,
+        )
+        verify_candidate.assert_not_called()
+        dispatch_publication.assert_not_called()
+        self.assertIn('"docs_recovery": "dispatched"', output.getvalue())
+        self.assertIn('"docs_run_id": 99', output.getvalue())
 
     def test_recovery_draft_must_keep_the_candidate_binding(self) -> None:
         registry_release = load_registry_release()

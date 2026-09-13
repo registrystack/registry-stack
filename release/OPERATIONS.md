@@ -805,8 +805,11 @@ The command is resumable. Rerun the same `publish --plan ... --wait` invocation
 after an interruption. It accepts only an exact local-only or immutable remote
 tag, resumes one active correlated publication, retries a stopped publication
 through the fail-closed workflow, and treats an already public release as
-complete only after public verification. It never moves a tag or overwrites
-mismatched public state. Add `--verbose-wait` only when raw job output is useful.
+complete only after public verification. If publication became immutable before
+its documentation dispatch completed, the same command reuses a healthy
+correlated docs run or dispatches a new exact tag-and-digest-bound docs run. It
+never moves a tag or overwrites mismatched public state. Add `--verbose-wait`
+only when raw job output is useful.
 
 For break-glass manual operation, omitting `--plan-output` from
 `verify-candidate` still prints the three low-level tag, push, and dispatch
@@ -895,7 +898,7 @@ workflow, and it adds no release gate.
 | Candidate byte, recipe, scan, or advisory decision changes | Build and verify a new candidate |
 | Candidate expires before the tag is pushed | Request and verify a new candidate |
 | Bound draft or publication step fails while the candidate remains valid | Fix the workflow on protected `main` if needed, then rerun `registry-release publish --plan <candidate-plan.json> --wait` |
-| Documentation deployment fails after publication | Rerun `docs-pages.yml`; its optional exact tag and digest inputs fail closed if the request is stale |
+| Documentation dispatch or deployment fails after publication | Rerun `registry-release publish --plan <candidate-plan.json> --wait`; it verifies the immutable release and safely dispatches a new exact docs request when no healthy correlated run remains |
 | One final image tag already has the expected digest | Retry; publication accepts and re-verifies the exact digest |
 | npm or PyPI already has every expected client byte | Retry; publication accepts and re-verifies the exact registry state |
 | npm or PyPI has only an exact subset of the client packages | Retry; publication uploads only the absent exact packages |
