@@ -133,6 +133,7 @@ struct Fixture {
     item: Uuid,
     profile_id: &'static str,
     template: TaskTemplate,
+    project: CaseworkProject,
     admin: tokio_postgres::Client,
     schema: String,
     store: PostgresStore,
@@ -197,6 +198,21 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     let item = Uuid::new_v4();
     db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request','request-1','review','review-1',$2,'claimed','review',$3,'human',1,now(),now())",&[&item,&serde_json::to_value(binding()).unwrap(),&ISSUER]).await.unwrap();
     let mode = Arc::new(AtomicUsize::new(0));
+    let app = test_app(&store, &project, mode.clone());
+    Fixture {
+        app,
+        mode,
+        item,
+        profile_id,
+        template,
+        project,
+        admin,
+        schema,
+        store,
+    }
+}
+
+fn test_app(store: &PostgresStore, project: &CaseworkProject, mode: Arc<AtomicUsize>) -> Router {
     let mut key = registry_platform_crypto::generate_private_jwk(
         registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
     )
@@ -244,26 +260,16 @@ async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
     );
     let jwks=serde_json::from_value(json!({"keys":[{"kty":"oct","kid":"test","alg":"HS256","use":"sig","k":"MDEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MDE"}]})).unwrap();
     let authenticator = crate::CaseworkAuthenticator::new(
-        &project,
+        project,
         verifier,
         Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())),
         crate::HumanIdentityConfig::default(),
     );
-    let app = crate::router(crate::HttpState {
+    crate::router(crate::HttpState {
         service,
         authenticator: Arc::new(authenticator),
-        project: Arc::new(project),
-    });
-    Fixture {
-        app,
-        mode,
-        item,
-        profile_id,
-        template,
-        admin,
-        schema,
-        store,
-    }
+        project: Arc::new(project.clone()),
+    })
 }
 async fn request(
     f: &Fixture,
@@ -570,6 +576,96 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
         .await
         .unwrap();
     assert!(stored.invalidated);
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn task_grants_do_not_survive_an_approver_profile_role_change() {
+    let mut f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    let path = format!("/v1/work-items/{}/task-grants", f.item);
+    let approval = json!({"templateId":"summary","templateVersion":"1"});
+    let (_, assertion_grant) = request(
+        &f,
+        "POST",
+        &path,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("role-change-assertion"),
+    )
+    .await;
+    let (_, status_grant) = request(
+        &f,
+        "POST",
+        &path,
+        &human,
+        true,
+        Some(approval),
+        Some("role-change-status"),
+    )
+    .await;
+    let assertion_id = assertion_grant["id"].as_str().unwrap();
+    let status_id = status_grant["id"].as_str().unwrap();
+
+    let original_app = f.app.clone();
+    let mut changed_project = f.project.clone();
+    changed_project.access_profiles[0].role = CaseworkRole::Supervisor;
+    let mut replacement_staff = changed_project.access_profiles[0].clone();
+    replacement_staff.id = "replacement-staff".into();
+    replacement_staff.role = CaseworkRole::Staff;
+    replacement_staff.required_scopes = vec!["casework:replacement-staff".into()];
+    let mut administrator = replacement_staff.clone();
+    administrator.id = "administrator".into();
+    administrator.role = CaseworkRole::Administrator;
+    administrator.required_scopes = vec!["casework:admin".into()];
+    changed_project
+        .access_profiles
+        .extend([replacement_staff, administrator]);
+    changed_project
+        .check()
+        .expect("the changed project is valid");
+    f.app = test_app(&f.store, &changed_project, f.mode.clone());
+
+    let assertion_path = format!("/v1/task-grants/{assertion_id}/assertion");
+    let status_path = format!("/v1/task-grants/{status_id}/status");
+    let assertion_status = request(&f, "POST", &assertion_path, &agent, false, None, None)
+        .await
+        .0;
+    let changed_status = request(&f, "GET", &status_path, &resource, false, None, None)
+        .await
+        .1;
+    assert_eq!(assertion_status, StatusCode::FORBIDDEN);
+    assert_eq!(changed_status["active"], false);
+
+    f.app = original_app;
+    for grant_id in [assertion_id, status_id] {
+        let (_, restored_status) = request(
+            &f,
+            "GET",
+            &format!("/v1/task-grants/{grant_id}/status"),
+            &resource,
+            false,
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(
+            restored_status["active"], false,
+            "restoring the former role must not revive the grant"
+        );
+    }
+
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
         .await

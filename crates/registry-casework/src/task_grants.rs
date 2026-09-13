@@ -231,6 +231,7 @@ impl PostgresStore {
         &self,
         grant: &TaskGrant,
         template: &TaskTemplate,
+        configured_approver_role: Option<CaseworkRole>,
     ) -> Result<bool, StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -260,7 +261,8 @@ impl PostgresStore {
             profile_id: grant.approver_profile.clone(),
             role,
         };
-        let valid = template_active(&transaction, template).await?
+        let valid = Some(role) == configured_approver_role
+            && template_active(&transaction, template).await?
             && eligible(&transaction, &actor, &item, template).await?
             && TaskProposalIdentity::from(&item.binding) == grant.proposal;
         if !valid {
@@ -643,7 +645,17 @@ impl crate::CaseworkService {
                 .await?;
             return Err(crate::ServiceError::Forbidden);
         };
-        if !self.store.check_task_eligibility(grant, template).await? {
+        let configured_approver_role = self
+            .project
+            .access_profiles
+            .iter()
+            .find(|profile| profile.id == grant.approver_profile)
+            .map(|profile| profile.role);
+        if !self
+            .store
+            .check_task_eligibility(grant, template, configured_approver_role)
+            .await?
+        {
             return Err(crate::ServiceError::Forbidden);
         }
         let fields = template.subjects.values().cloned().collect::<Vec<_>>();
@@ -670,7 +682,10 @@ impl crate::CaseworkService {
             return Err(crate::ServiceError::Forbidden);
         }
         // Recheck after source I/O so revocation during the read cannot release an assertion.
-        if !self.store.check_task_eligibility(grant, template).await?
+        if !self
+            .store
+            .check_task_eligibility(grant, template, configured_approver_role)
+            .await?
             || now_seconds()? >= grant.expires_at
         {
             return Err(crate::ServiceError::Forbidden);
