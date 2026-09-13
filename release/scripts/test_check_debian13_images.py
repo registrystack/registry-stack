@@ -158,6 +158,193 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                         failures,
                     )
 
+    def test_runtime_libc6_overlay_is_fully_pinned(self) -> None:
+        mutations = (
+            (
+                POLICY.RUNTIME_LIBC6_VERSION,
+                "2.41-12+deb13u3",
+                "exact fixed runtime libc6 version",
+            ),
+            (
+                POLICY.RUNTIME_LIBC6_SHA256["amd64"],
+                "0" * 64,
+                "amd64 runtime libc6 checksum",
+            ),
+            (
+                POLICY.RUNTIME_LIBC6_SHA256["arm64"],
+                "0" * 64,
+                "arm64 runtime libc6 checksum",
+            ),
+        )
+        for original, replacement, expected in mutations:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+                installer.write_text(
+                    installer.read_text(encoding="utf-8").replace(
+                        original, replacement, 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(expected in failure for failure in failures), failures
+                )
+
+    def test_runtime_libc6_overlay_requires_complete_package_metadata(self) -> None:
+        mutations = (
+            ("sha256sum --check --strict", "sha256sum", "strict runtime libc6 checksum check"),
+            ("dpkg-deb --extract", "tar --extract", "runtime libc6 package extraction"),
+            ("dpkg-deb --control", "true", "runtime libc6 control extraction"),
+            ("libc6.md5sums", "libc6.stale-md5sums", "runtime libc6 package file metadata"),
+            ('dpkg-deb --field "$archive" Package', "printf libc6", "runtime libc6 package identity"),
+            ('dpkg-deb --field "$archive" Version', "printf 0", "runtime libc6 version identity"),
+            ('dpkg-deb --field "$archive" Architecture', "printf amd64", "runtime libc6 architecture identity"),
+        )
+        for original, replacement, expected in mutations:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+                installer.write_text(
+                    installer.read_text(encoding="utf-8").replace(
+                        original, replacement, 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(expected in failure for failure in failures), failures
+                )
+
+    def test_runtime_libc6_installer_rejects_remote_package_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+            installer.write_text(
+                installer.read_text(encoding="utf-8")
+                + "\ncurl https://packages.example.invalid/libc6.deb\n",
+                encoding="utf-8",
+            )
+
+            failures = POLICY.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "installer must not fetch remote sources" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
+    def test_release_images_pin_dated_libc6_package_inputs(self) -> None:
+        relative = Path("release/docker/Dockerfile.relay")
+        for runtime_libc6_add in POLICY.RUNTIME_LIBC6_ADDS:
+            with (
+                self.subTest(runtime_libc6_add=runtime_libc6_add),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / relative
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(
+                        runtime_libc6_add,
+                        runtime_libc6_add.replace(
+                            POLICY.RUNTIME_LIBC6_SNAPSHOT, "latest"
+                        ),
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(
+                        str(relative) in failure
+                        and "fixed libc6 package input" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_release_images_require_the_fixed_libc6_overlay(self) -> None:
+        for relative in POLICY.DOCKERFILES:
+            with (
+                self.subTest(relative=relative),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / relative
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(
+                        POLICY.RUNTIME_LIBC6_COMMAND,
+                        "/bin/true",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(
+                        str(relative) in failure
+                        and "fixed libc6 runtime overlay" in failure
+                        for failure in failures
+                    ),
+                    failures,
+                )
+
+    def test_adopter_images_keep_libc_root_owned_and_normalize_metadata(self) -> None:
+        relative = Path("docker/Dockerfile")
+        mutations = (
+            (
+                "chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-evidence",
+                "chown -R 65532:65532 /workspace/runtime-root",
+                "must not make the complete libc root nonroot-owned",
+            ),
+            (
+                POLICY.RUNTIME_ROOT_NORMALIZATION,
+                "/bin/true",
+                "each adopter runtime must normalize fixed libc6 metadata",
+            ),
+        )
+        for original, replacement, expected in mutations:
+            with (
+                self.subTest(expected=expected),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
+                root = Path(temporary)
+                self.repository_copy(root)
+                dockerfile = root / relative
+                dockerfile.write_text(
+                    dockerfile.read_text(encoding="utf-8").replace(
+                        original, replacement, 1
+                    ),
+                    encoding="utf-8",
+                )
+
+                failures = POLICY.check_repository(root)
+
+                self.assertTrue(
+                    any(expected in failure for failure in failures), failures
+                )
+
     def test_http_probed_images_bind_fixed_config_and_entrypoint(self) -> None:
         # Discovery reads no environment variable, so its configuration binding
         # is the command; the others bind it through the environment.

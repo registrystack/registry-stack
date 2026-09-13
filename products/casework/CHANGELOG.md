@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## v0.31.0 - 2026-09-13
+
+- Add institutional task grants. An officer approves a governed task template,
+  and an agent exchanges a short-lived Casework assertion for access bounded to
+  the approved client, resource, purpose, subjects, permissions, and deadline.
+- Sign explicit requester context for Evidence reads and retain the approved
+  source and deadline across restart and token re-exchange. Evidence and BReg
+  continue to enforce their own local policy and current grant status.
+- Expose task approval, exchange, status, and Evidence context through the
+  maintained Rust, Node.js, and Python clients and local development commands.
+- Add a source-backed development journey that reviews BReg changes through
+  Casework, and preflight every configured source credential before starting a
+  multi-source local project.
+- BREAKING: remove `taskAuthority.id` and the
+  `registry_grant_authority` claim. Task-grant source identity now comes from
+  the verified assertion issuer. Reset local development databases containing
+  pre-v0.31.0 task grants or drafts, then rebuild source configuration and
+  generated clients.
+
 ## v0.30.0 - 2026-09-12
 
 - Document the secret reference grammar, the owner-only file rules, and the

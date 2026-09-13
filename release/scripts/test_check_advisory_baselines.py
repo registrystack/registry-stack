@@ -26,18 +26,18 @@ LIVE_BASELINES = (
     ROOT / "release/security/evidence-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
-    "relay": "sha256:7d25a3324cfc459dbdc4f85a67fb0758a948230535a5b4c0d84b7bd05a614a0a",
-    "breg": "sha256:adc60c9f54f383c84496bb48d2675012e742e0ce8151d55a62ead5c0906e54a3",
-    "casework": "sha256:f2618e193c83f07501ec0af237dc7841c8cc279f06c7121f04815889fc90a7e2",
-    "discovery": "sha256:9151a7242173be13ee42cabfcc3604efaebc2561efc3d70881a580e10b78e36e",
-    "evidence": "sha256:0ff66e94c746ccad1fcc1913f2f0eb46e6fb21c590b27a9a0fbde60f21bc260b",
+    "relay": "sha256:d4d0090f1a4dd1d61a5a76850058e7dc7deb4944dbe494a7e1f99269fed223da",
+    "breg": "sha256:1a0a003a3720321291c5b74893742c8daeed495b4e5d5e0dddd29b653be875a1",
+    "casework": "sha256:9306e078661e70983d4c1b7d571a3d6189a3a155d44cad26cc0951469fd3d726",
+    "discovery": "sha256:d5b1cee3f30f7382321d5180cbc7a70d640312bcecddb09b5d8a58274de293cc",
+    "evidence": "sha256:3c415b47959675c06272fa97110bb67d188249dd3c3c649d81cfd1ed0a8bc719",
 }
-LIVE_REFERENCE_SOURCE_REVISION = "6bdeb66a8e37693ef13e0fa629e551a75f109f0c"
+LIVE_REFERENCE_SOURCE_REVISION = "2eb1a8f8a2904cf3eaa8ccbf74936997ce2ac85b"
 # The date the live exceptions below were reviewed against, stated here rather
 # than derived from the baselines: deriving it from their own reviewed_at values
 # would make the checker's future-dated guard unreachable for the newest
 # exception. Move it forward by hand when the baselines are renewed.
-LIVE_REVIEW_EVALUATION_DATE = "2026-09-12"
+LIVE_REVIEW_EVALUATION_DATE = "2026-09-13"
 LIVE_REFERENCE_PROVENANCE = {
     "relay": "local_reproduction",
     "breg": "local_reproduction",
@@ -1034,6 +1034,20 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
         self.assertEqual(1, self.check(changed_runtime, baseline))
         self.assertEqual(1, self.check(changed_component, baseline))
 
+    def test_application_layer_may_own_reviewed_component(self):
+        finding = self.finding(component_layer=self.APP_LAYER)
+        baseline = self.load_baseline(self.baseline(finding))
+
+        self.assertEqual(0, self.check(finding, baseline))
+
+    def test_unreviewed_layer_cannot_own_reviewed_component(self):
+        finding = self.finding()
+        baseline = self.baseline(finding)
+        baseline["exceptions"][0]["component_layer_id"] = "sha256:" + "f" * 64
+
+        with self.assertRaises(SystemExit):
+            self.load_baseline(baseline)
+
     def test_added_candidate_layer_blocks_unreviewed_loader_input(self):
         finding = self.finding()
         baseline = self.load_baseline(self.baseline(finding))
@@ -1061,6 +1075,22 @@ class AdvisoryBaselineCheckTest(unittest.TestCase):
                 candidate_image_digest="sha256:" + "c" * 64,
             ),
         )
+
+    def test_historical_reference_identity_may_precede_candidate(self):
+        finding = self.finding()
+        for provenance in ("official_candidate", "local_reproduction"):
+            with self.subTest(provenance=provenance):
+                baseline_data = self.baseline(finding)
+                assertion = baseline_data["exceptions"][0]["exposure_assertion"]
+                assertion["reference_provenance"] = provenance
+                assertion["reference_image_digest"] = "sha256:" + "c" * 64
+                assertion["reference_source_revision"] = "c" * 40
+                assertion["definition_digest"] = self.module.definition_digest(
+                    assertion
+                )
+                baseline = self.load_baseline(baseline_data)
+
+                self.assertEqual(0, self.check(finding, baseline))
 
     def test_empty_report_still_binds_candidate_image_identity(self):
         finding = self.finding()

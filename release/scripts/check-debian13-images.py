@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REMOTE_PACKAGE_SOURCE_RE = re.compile(r"\b(?:https?|ftp)://", re.IGNORECASE)
 
 RUST_BUILDER = (
     "rust:1.95-trixie@sha256:"
@@ -24,6 +25,37 @@ RUST_BUILDER_PIP = "python3-pip=25.1.1+dfsg-1"
 # Debian packages above are pinned by version.
 RUST_BUILDER_ZIG_REQUIREMENTS = "release/requirements/ziglang-0.12.1.txt"
 RUST_BUILDER_HASHED_INSTALL = "--require-hashes"
+RUNTIME_LIBC6_INSTALLER = Path("release/scripts/install-runtime-libc6.sh")
+RUNTIME_LIBC6_SNAPSHOT = "20260913T000000Z"
+RUNTIME_LIBC6_VERSION = "2.41-12+deb13u4"
+RUNTIME_LIBC6_SHA256 = {
+    "amd64": "967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9",
+    "arm64": "8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc",
+}
+RUNTIME_LIBC6_ADDS = tuple(
+    "ADD --checksum=sha256:{checksum} "
+    "https://snapshot.debian.org/archive/debian/{snapshot}/pool/main/g/glibc/"
+    "libc6_{version}_{architecture}.deb "
+    "/workspace/runtime-packages/libc6_{version}_{architecture}.deb".format(
+        checksum=RUNTIME_LIBC6_SHA256[architecture],
+        snapshot=RUNTIME_LIBC6_SNAPSHOT,
+        version=RUNTIME_LIBC6_VERSION,
+        architecture=architecture,
+    )
+    for architecture in ("amd64", "arm64")
+)
+RUNTIME_LIBC6_MOUNT = (
+    "--mount=type=bind,source=release/scripts/install-runtime-libc6.sh,"
+    "target=/workspace/install-runtime-libc6.sh,readonly"
+)
+RUNTIME_LIBC6_COMMAND = (
+    "/workspace/install-runtime-libc6.sh "
+    "/workspace/runtime-root /workspace/runtime-packages"
+)
+RUNTIME_ROOT_NORMALIZATION = (
+    'find /workspace/runtime-root -exec touch -h '
+    '--date="@${SOURCE_DATE_EPOCH}" {} +'
+)
 DEBIAN_PREPARATION = (
     "debian:trixie-slim@sha256:"
     "3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258"
@@ -72,6 +104,7 @@ MAINTAINED_TEXT_PATHS = (
         Path(".github/workflows/release-candidate.yml"),
         Path(".github/workflows/release.yml"),
         Path("release/scripts/build-release-binaries.sh"),
+        RUNTIME_LIBC6_INSTALLER,
     )
 )
 
@@ -80,9 +113,13 @@ RELAY_V2_DOCKERFILES = (Path("release/docker/Dockerfile.relay"),)
 RELAY_RUNTIME_ROOT_STAGE = f"""\
 FROM {DEBIAN_PREPARATION} AS runtime-root
 ARG SOURCE_DATE_EPOCH
+{RUNTIME_LIBC6_ADDS[0]}
+{RUNTIME_LIBC6_ADDS[1]}
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\
-    mkdir -p \\
+    {RUNTIME_LIBC6_MOUNT} \\
+    {RUNTIME_LIBC6_COMMAND} \\
+    && mkdir -p \\
         /workspace/runtime-root/licenses/relay \\
         /workspace/runtime-root/usr/local/bin \\
         /workspace/runtime-root/var/lib/relay/audit \\
@@ -274,6 +311,28 @@ def check_repository(root: Path = ROOT) -> list[str]:
                 f"{relative}: retired Debian image generation marker remains"
             )
 
+    installer = texts[RUNTIME_LIBC6_INSTALLER]
+    installer_requirements = (
+        (RUNTIME_LIBC6_VERSION, "exact fixed runtime libc6 version"),
+        (RUNTIME_LIBC6_SHA256["amd64"], "amd64 runtime libc6 checksum"),
+        (RUNTIME_LIBC6_SHA256["arm64"], "arm64 runtime libc6 checksum"),
+        ("sha256sum --check --strict", "strict runtime libc6 checksum check"),
+        ('dpkg-deb --field "$archive" Package', "runtime libc6 package identity"),
+        ('dpkg-deb --field "$archive" Version', "runtime libc6 version identity"),
+        ('dpkg-deb --field "$archive" Architecture', "runtime libc6 architecture identity"),
+        ("dpkg-deb --control", "runtime libc6 control extraction"),
+        ("dpkg-deb --extract", "runtime libc6 package extraction"),
+        ("dpkg-deb --field", "runtime libc6 package metadata"),
+        ("libc6.md5sums", "runtime libc6 package file metadata"),
+    )
+    for needle, detail in installer_requirements:
+        require(installer, needle, RUNTIME_LIBC6_INSTALLER, detail, failures)
+    if REMOTE_PACKAGE_SOURCE_RE.search(installer):
+        failures.append(
+            f"{RUNTIME_LIBC6_INSTALLER}: runtime package installer must not "
+            "fetch remote sources"
+        )
+
     for relative in DOCKERFILES:
         text = texts[relative]
         bases = FROM_RE.findall(text)
@@ -293,6 +352,26 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "Distroless Debian 13 non-root final runtime",
             failures,
         )
+        require(
+            text,
+            RUNTIME_LIBC6_MOUNT,
+            relative,
+            "read-only fixed libc6 installer mount",
+            failures,
+        )
+        require(
+            text,
+            RUNTIME_LIBC6_COMMAND,
+            relative,
+            "fixed libc6 runtime overlay",
+            failures,
+        )
+        for runtime_libc6_add in RUNTIME_LIBC6_ADDS:
+            if text.count(runtime_libc6_add) != 1:
+                failures.append(
+                    f"{relative}: fixed libc6 package input must appear exactly once: "
+                    f"{runtime_libc6_add!r}"
+                )
         runtime = runtime_stage(text)
         for forbidden in ("\nRUN ", "apt-get", "/bin/sh", "curl ", "wget "):
             if forbidden in runtime:
@@ -401,11 +480,20 @@ def check_repository(root: Path = ROOT) -> list[str]:
         )
         require(
             text,
-            'find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +',
+            RUNTIME_ROOT_NORMALIZATION,
             relative,
             "normalized release filesystem metadata",
             failures,
         )
+        if (
+            RUNTIME_LIBC6_COMMAND in text
+            and RUNTIME_ROOT_NORMALIZATION in text
+            and text.index(RUNTIME_LIBC6_COMMAND)
+            > text.index(RUNTIME_ROOT_NORMALIZATION)
+        ):
+            failures.append(
+                f"{relative}: fixed libc6 overlay must precede timestamp normalization"
+            )
 
     for relative in ADOPTER_DOCKERFILES:
         text = texts[relative]
@@ -438,6 +526,29 @@ def check_repository(root: Path = ROOT) -> list[str]:
             "numeric nonroot-owned runtime directories",
             failures,
         )
+        if re.search(
+            r"chown -R 65532:65532 /workspace/runtime-root(?:\s|$)", text
+        ):
+            failures.append(
+                f"{relative}: adopter runtime must not make the complete libc root nonroot-owned"
+            )
+        if text.count(RUNTIME_ROOT_NORMALIZATION) != 2:
+            failures.append(
+                f"{relative}: each adopter runtime must normalize fixed libc6 metadata"
+            )
+        if text.count(RUNTIME_LIBC6_MOUNT) != 2:
+            failures.append(
+                f"{relative}: each adopter runtime must mount the fixed libc6 installer"
+            )
+        if text.count(RUNTIME_LIBC6_COMMAND) != 2:
+            failures.append(
+                f"{relative}: each adopter runtime must install the fixed libc6 overlay"
+            )
+        for runtime_libc6_add in RUNTIME_LIBC6_ADDS:
+            if text.count(runtime_libc6_add) != 2:
+                failures.append(
+                    f"{relative}: each adopter runtime must use the fixed libc6 package input"
+                )
         stages = distroless_stages(text)
         if not stages:
             failures.append(

@@ -890,10 +890,13 @@ def validate_v4_exception(exception: Any, runtime: dict[str, Any]) -> None:
     if exception["runtime_definition_digest"] != runtime["definition_digest"]:
         fail("advisory exception is not bound to the reviewed runtime definition")
     component_layer_id = exception["component_layer_id"]
+    reviewed_layer_ids = (
+        runtime["layer_ids"] + runtime["application_layer_ids"]
+    )
     if (
         not isinstance(component_layer_id, str)
         or SHA256_DIGEST_RE.fullmatch(component_layer_id) is None
-        or component_layer_id not in runtime["layer_ids"]
+        or component_layer_id not in reviewed_layer_ids
     ):
         fail("advisory exception component layer must belong to the reviewed runtime")
     validate_exposure_assertion(exception["exposure_assertion"])
@@ -1769,11 +1772,12 @@ def evaluate_exposure_assertion(
 
 
 def runtime_base_mismatch(finding: Finding, runtime: dict[str, Any]) -> str:
-    expected = tuple(runtime["layer_ids"])
-    if finding.layer_ids[: len(expected)] != expected:
+    expected_base = tuple(runtime["layer_ids"])
+    if finding.layer_ids[: len(expected_base)] != expected_base:
         return f"candidate layers do not begin with pinned base {runtime['image']}"
-    if finding.component_layer_id not in expected:
-        return "candidate component layer is not part of the pinned runtime base"
+    expected_runtime = expected_base + tuple(runtime["application_layer_ids"])
+    if finding.component_layer_id not in expected_runtime:
+        return "candidate component layer is not part of the reviewed runtime"
     return ""
 
 

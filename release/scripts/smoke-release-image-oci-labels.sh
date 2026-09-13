@@ -21,7 +21,9 @@ buildkit_image="moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186
 trap 'docker buildx rm --force "${smoke_builder}" >/dev/null 2>&1 || true; rm -rf -- "${tmp_root}"' EXIT
 
 context_dir="${tmp_root}/context"
-mkdir -p "${context_dir}/dist/image-bin"
+mkdir -p \
+  "${context_dir}/dist/image-bin" \
+  "${context_dir}/release/scripts"
 true_binary=/bin/true
 if [[ ! -x "${true_binary}" ]]; then
   true_binary="$(type -P true)"
@@ -30,6 +32,9 @@ for image in "${images[@]}"; do
   cp "${true_binary}" "${context_dir}/dist/image-bin/${image}"
 done
 cp "${repo_root}/LICENSE" "${context_dir}/LICENSE"
+cp \
+  "${repo_root}/release/scripts/install-runtime-libc6.sh" \
+  "${context_dir}/release/scripts/install-runtime-libc6.sh"
 
 docker buildx create \
   --name "${smoke_builder}" \

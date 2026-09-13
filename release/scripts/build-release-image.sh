@@ -75,6 +75,17 @@ if [[ ! -d "${release_image_context}" ]]; then
   echo "RELEASE_IMAGE_CONTEXT must name an existing directory" >&2
   exit 2
 fi
+runtime_libc6_installer="${release_image_context}/release/scripts/install-runtime-libc6.sh"
+if [[ ! -f "${runtime_libc6_installer}" || -L "${runtime_libc6_installer}" ]]; then
+  echo "RELEASE_IMAGE_CONTEXT must contain the regular fixed libc6 installer" >&2
+  exit 2
+fi
+if ! cmp -s -- \
+  "${repo_root}/release/scripts/install-runtime-libc6.sh" \
+  "${runtime_libc6_installer}"; then
+  echo "RELEASE_IMAGE_CONTEXT fixed libc6 installer does not match the release source" >&2
+  exit 2
+fi
 
 buildx_version="$(docker buildx version)"
 if ! grep -Eq ' v0\.33\.0([[:space:]]|$)' <<<"${buildx_version}"; then
