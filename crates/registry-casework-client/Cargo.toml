@@ -12,6 +12,7 @@ publish = false
 workspace = true
 
 [dependencies]
+async-trait.workspace = true
 registry-casework-core.workspace = true
 registry-platform-httpsec.workspace = true
 registry-platform-httputil.workspace = true
@@ -24,4 +25,9 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
+base64.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+registry-platform-crypto.workspace = true
 tokio.workspace = true
+wiremock.workspace = true
