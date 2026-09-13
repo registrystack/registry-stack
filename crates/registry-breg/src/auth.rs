@@ -99,6 +99,8 @@ pub enum AuthenticationConfigError {
     InvalidVerifierProfile,
     #[error("an authority claim mapping is invalid")]
     InvalidClaimMapping,
+    #[error("a contextual authority claim overlaps another configured claim role")]
+    ConflictingClaimMapping,
     #[error("a compiled anonymous access profile carries a principal claim, required scopes, required purposes, or row boundaries")]
     AnonymousProfileCarriesAuthority,
     #[error("the configured principal claim is not the principal claim a compiled access profile requires")]
@@ -427,6 +429,38 @@ fn validate_claim_mapping(
         .contextual_claims
         .validate()
         .map_err(|_| AuthenticationConfigError::InvalidClaimMapping)?;
+    let ClaimNames {
+        actor_kind,
+        purpose: contextual_purpose,
+        grant_id,
+        grant_authority,
+        grant_source_issuer,
+        grant_client,
+        grant_resource,
+        grant_exp,
+        grant_bounds,
+        approver,
+    } = &claims.contextual_claims;
+    let contextual_claims_with_distinct_roles = [
+        actor_kind,
+        grant_id,
+        grant_authority,
+        grant_source_issuer,
+        grant_client,
+        grant_resource,
+        grant_exp,
+        grant_bounds,
+        approver,
+    ];
+    if contextual_claims_with_distinct_roles.iter().any(|name| {
+        *name == &claims.principal_claim
+            || *name == &verifier.scope_claim
+            || claims.purpose_claim.as_ref() == Some(*name)
+    }) || contextual_purpose == &claims.principal_claim
+        || contextual_purpose == &verifier.scope_claim
+    {
+        return Err(AuthenticationConfigError::ConflictingClaimMapping);
+    }
     if claims.trusted_actors.len() > 128
         || claims.trusted_actors.iter().any(|(client, actor)| {
             !valid_config_value(client)

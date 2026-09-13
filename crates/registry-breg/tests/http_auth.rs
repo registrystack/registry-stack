@@ -1468,6 +1468,40 @@ async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() 
     }
 }
 
+#[tokio::test]
+async fn constructor_rejects_contextual_claims_that_shadow_other_authority_roles() {
+    let harness = Harness::new().await;
+    let principal_collision = ClaimNames {
+        actor_kind: "registry_principal".to_owned(),
+        ..ClaimNames::default()
+    };
+    let purpose_collision = ClaimNames {
+        grant_id: "purpose".to_owned(),
+        ..ClaimNames::default()
+    };
+    let scope_collision = ClaimNames::default();
+
+    for (contextual, scope_claim) in [
+        (principal_collision, "scope"),
+        (purpose_collision, "scope"),
+        (scope_collision, "registry_actor_kind"),
+    ] {
+        let mut verifier = verifier_config(&harness.idp);
+        verifier.scope_claim = scope_claim.to_owned();
+        let claims = authority_claims().with_contextual_claims(contextual, BTreeMap::new());
+        let error = authenticator_with_verifier(&harness.registry, &harness.idp, verifier, claims)
+            .expect_err("one claim cannot supply two authority roles");
+        assert_eq!(error, AuthenticationConfigError::ConflictingClaimMapping);
+        assert!(error.to_string().contains("overlaps"), "{error}");
+    }
+
+    let shared_purpose =
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned()))
+            .with_contextual_claims(ClaimNames::default(), BTreeMap::new());
+    authenticator(&harness.registry, &harness.idp, shared_purpose)
+        .expect("the contextual purpose may share the configured purpose role");
+}
+
 /// The construction refusal is what an operator reads at startup, so each
 /// compiled-authority check reports itself. The message still carries no
 /// configured claim name or claim value.
