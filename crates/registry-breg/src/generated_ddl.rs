@@ -2504,6 +2504,14 @@ fn change_request_guard_application_expression(
                    AND cr_state.state = 'approved'
                    AND cr_proposal.contract_fingerprint = ({context} ->> 'contractFingerprint')
                    AND cr_proposal.effect_digest = ({context} ->> 'effectDigest')
+                   AND EXISTS (
+                       SELECT 1
+                         FROM jsonb_array_elements(cr_proposal.snapshot #> '{{applicationPreconditions,targets}}') AS cr_guard(value)
+                        WHERE cr_guard.value ->> 'id' = ({context} ->> 'effectId')
+                          AND cr_guard.value ->> 'entityId' = ({context} ->> 'targetEntityId')
+                          AND cr_guard.value ->> 'recordId' = ({context} ->> 'targetRecordId')
+                          AND cr_guard.value ->> 'expectedRevision' = ({context} ->> 'expectedRevision')
+                   )
             )"
         ),
         change_request_target_boundary_expression(target_entity, &grant.row_boundaries),

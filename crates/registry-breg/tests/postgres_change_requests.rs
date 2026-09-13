@@ -368,6 +368,48 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         wrong_digest_row.is_none(),
         "a different proposal digest cannot read or lock the guard"
     );
+    let other_guard_id: Uuid = database
+        .admin
+        .query_one(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id <> $1 LIMIT 1"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    for (key, value, queried_id) in [
+        (
+            "targetRecordId",
+            json!(other_guard_id.to_string()),
+            other_guard_id,
+        ),
+        ("expectedRevision", json!(guard_revision + 1), guard_id),
+    ] {
+        let mut forged = guard_context.clone();
+        forged[key] = value;
+        guard_transaction
+            .transaction_for_test()
+            .execute(
+                "SELECT set_config('registry.change_request_target_context', $1, true)",
+                &[&forged.to_string()],
+            )
+            .await
+            .unwrap();
+        let row = guard_transaction
+            .transaction_for_test()
+            .query_opt(
+                &format!(
+                    "SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"
+                ),
+                &[&queried_id],
+            )
+            .await
+            .unwrap();
+        assert!(
+            row.is_none(),
+            "forged {key} cannot read or lock a guard row"
+        );
+    }
     guard_transaction
         .transaction_for_test()
         .execute(
@@ -581,6 +623,157 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
 async fn real_postgres_attachment_downloads_bind_owner_projection_version_and_terminal_audit() {
     attachment_download_journey(registry_breg::attachment_storage::AttachmentStorage::Database)
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(attachment_project()).unwrap();
+    source["entities"][2]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
+            "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
+        }]}
+    });
+    let applier = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "applier")
+        .unwrap();
+    applier["permissions"][0]["applyTargets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "entity":"asset-site",
+            "rowBoundaries":[{"field":"tenant","claim":"guard_tenant_claim","operator":"equals"}]
+        }));
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry,
+        identity,
+        PACKAGE_ID,
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+    ));
+    let steward = claims("steward", "guard-attachment-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "guard-attachment-old-site",
+        json!({"tenant":TENANT,"name":"old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "guard-attachment-new-site",
+        json!({"tenant":TENANT,"name":"new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "guard-attachment-placement",
+        json!({"tenant":TENANT,"site":old_site.id}),
+    )
+    .await;
+    let draft = create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(),
+        "guard-attachment-request", json!({"tenant":TENANT,"placement":placement.id,"proposedSite":new_site.id,"reason":"guard attachment"})).await;
+    let record_uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        draft.id
+    );
+    let before = get_record(&app, &record_uri, submitter.clone()).await;
+    let upload_uri = format!(
+        "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+        draft.id
+    );
+    let uploaded = send(
+        &app,
+        Method::PATCH,
+        &upload_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "guard-attachment-upload"),
+            ("if-match", &before.etag),
+        ],
+        b"guard attachment".to_vec(),
+    )
+    .await;
+    assert_eq!(uploaded.status(), StatusCode::OK);
+    run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter,
+        "guard-attachment-submit",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+
+    let uri = format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=applier", draft.id);
+    let applier_claims = |guard_tenant: &str| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            APPLIER,
+            BTreeSet::new(),
+            Some("apply".to_owned()),
+            BTreeMap::from([
+                (
+                    "tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(TENANT).unwrap(),
+                ),
+                (
+                    "guard_tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(guard_tenant).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(applier_claims("tenant-b")),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "an excluded guard row cannot authorize attachment disclosure"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(applier_claims(TENANT)),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+        "the frozen guard row satisfies the current apply grant"
+    );
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
