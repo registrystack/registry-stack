@@ -62,3 +62,12 @@ test('the gate pins no extraction counts', async () => {
   assert.match(source, /EXPECTED_SERVICES=\(/u);
   assert.match(source, /EXPECTED_DEMO_ARTIFACTS=\d+/u);
 });
+
+test('the historical gate no longer requires Mint from the Registry Stack checkout', async () => {
+  const source = await readFile(gatePath, 'utf8');
+  const expectedServices = source.match(/EXPECTED_SERVICES=\([\s\S]*?\n\)/u)?.[0];
+
+  assert.ok(expectedServices, 'the expected service list must exist');
+  assert.doesNotMatch(expectedServices, /^\s*mint\s*$/mu);
+  assert.doesNotMatch(source, /Evidence and Mint images|Evidence or Mint binaries|builds both images/u);
+});

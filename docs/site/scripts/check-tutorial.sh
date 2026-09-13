@@ -23,8 +23,8 @@
 #                      tutorial itself tells readers to clone `main`.
 #   REGISTRY_STACK_SOURCE_DIR
 #                      clean Registry Stack checkout the lab builds the
-#                      Evidence and Mint images from, a documented tutorial
-#                      prerequisite until a release publishes them.
+#                      Evidence image from, a documented tutorial
+#                      prerequisite until a release publishes it.
 #                      Default: this repository.
 #
 # Exit codes:
@@ -50,9 +50,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TUTORIAL="${SOLMARA_TUTORIAL_PAGE:-$REPO_ROOT/src/content/docs/tutorials/first-run-with-solmara-lab.mdx}"
 EXPECTED_DEMO_ARTIFACTS=3
-# Every service the tutorial names or gives a host port. The topology holds far
-# more; EXPECTED_RUNNING_TOTAL below covers the rest as a count, because the
-# page states one.
+# Registry Stack services that this historical gate still owns by name. The
+# topology holds far more; EXPECTED_RUNNING_TOTAL below covers the rest as a
+# count, because the page states one.
 EXPECTED_SERVICES=(
 	cra-civil-relay
 	nia-population-relay
@@ -67,7 +67,6 @@ EXPECTED_SERVICES=(
 	scenario-runner
 	postgres
 	evidence-gateway
-	mint
 	cra-records-relay
 	cra-records-workload-agent
 	evidence
@@ -199,10 +198,10 @@ if [[ ! -f "$LAB_DIR/compose.evidence.yaml" ]]; then
 	exit 1
 fi
 
-# No Registry Stack release ships the Evidence or Mint binaries, so the lab
-# builds both images from a checkout the operator names, and refuses a dirty
-# one. This is a documented tutorial prerequisite until a release publishes
-# them; default it to the repository this script lives in.
+# No Registry Stack release ships the Evidence binary, so the lab builds its
+# Evidence image from a checkout the operator names and refuses a dirty one.
+# This is a documented tutorial prerequisite until a release publishes it;
+# default it to the repository this script lives in.
 REGISTRY_STACK_SOURCE_DIR="${REGISTRY_STACK_SOURCE_DIR:-$(cd "$REPO_ROOT/../.." && pwd)}"
 export REGISTRY_STACK_SOURCE_DIR
 if [[ -n "$(git -C "$REGISTRY_STACK_SOURCE_DIR" status --porcelain 2>&1)" ]]; then

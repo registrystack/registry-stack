@@ -213,7 +213,7 @@ The first complete journey must be possible without reading Rust code:
   status.
 - `bregctl webhook replay` replays one eligible dead letter using
   its event id, delivery id, and expected generation.
-- `products/breg/demo/run.sh --webhook` starts Mint, PostgreSQL,
+- `products/breg/demo/run.sh --webhook` starts ThunderID, PostgreSQL,
   Base Registry Engine, and a local HMAC-verifying receiver. Its smoke journey
   demonstrates automatic retry, dead-letter inspection, operator replay, and
   eventual authenticated success without printing the token or key.

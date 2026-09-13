@@ -97,21 +97,18 @@ shared/
 environments/
   local/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
   staging/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
     transit/{proxy-configs/,policies/}
   production/
     evidence/{governance.yaml,runtime.yaml,public-keys/}
-    mint/{mint.yaml,clients/,public-keys/}
     transit/{proxy-configs/,policies/}
 ```
 
-Omit the Mint directories when the deployment uses another OIDC issuer. Every environment target
-is complete. Do not use overlays, environment branches, symlinks, or runtime substitutions. Git
-contains public keys and nonsecret provider configuration, but never private JWKs, HMAC keys,
-provider tokens, auto-auth credentials, access tokens, live responses, or real identifiers.
+Every environment target is complete. Do not use overlays, environment branches, symlinks, or
+runtime substitutions. Git contains public keys and nonsecret provider configuration, but never
+private JWKs, HMAC keys, provider tokens, auto-auth credentials, access tokens, live responses, or
+real identifiers.
 
 `governance.yaml` provides bundle-owned production values. It contains version `1`,
 `assuranceProfile: production`, service and issuer, authentication, audit, subject binding, rate

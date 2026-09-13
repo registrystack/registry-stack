@@ -650,8 +650,8 @@ Evidence Gateway validates every value against its declared form before signing.
 
 ## Start the project
 
-Compile the editable source and question into one immutable local generation, then start Registry
-Mint and Evidence Gateway:
+Compile the editable source and question into one immutable local generation, then start Evidence
+Gateway and its local issuer:
 
 ```sh
 evidencectl dev start .
@@ -659,7 +659,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 This command validates the source schema, collection bounds, extractor, fact schema, question,
