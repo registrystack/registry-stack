@@ -10,12 +10,17 @@ First author the source description, queues, access profiles, and governed
 source request's explicit `projection`, and grant the reader and approving human
 profile disclosure of that field. The source reader must also disclose
 `review_state` so Casework can observe the source-owned review stage. Import the source description for the current
-compiled registry revision. Discover each task client's stable native
-subject before authoring its `agent.subject`:
+compiled registry revision. For a standalone Casework issuer, discover each task
+client's stable native subject before authoring its `agent.subject`:
 
 ```sh
 caseworkctl dev identity task-agent
 ```
+
+With `--issuer-project`, use the task client's native agent ID from the BREG
+issuer owner instead. That ID derives from the owner's `instanceId` and the
+same client ID. The standalone `caseworkctl dev identity` result does not
+describe a borrowed issuer's subject.
 
 Set `agent.issuer` to the exact local issuer URL, such as
 `http://127.0.0.1:8093`. The subject remains stable across local sessions; the

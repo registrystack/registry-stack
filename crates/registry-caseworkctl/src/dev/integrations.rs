@@ -139,9 +139,8 @@ impl Integrations {
                     .service_clients
                     .iter()
                     .any(|client| client.id == template.client && client.task_exchange)
-                    || template.agent.subject != config::principal(&template.client)
                 {
-                    bail!("task templates must bind a declared task-exchange client and its exact dev identity");
+                    bail!("task templates must bind a declared task-exchange client");
                 }
             }
         }
@@ -149,6 +148,32 @@ impl Integrations {
     }
 
     pub fn validate_session(&self, state: &State, policy: &CaseworkProject) -> Result<()> {
+        let owner_instance = if policy.task_templates.is_empty() {
+            None
+        } else {
+            super::borrowed_issuer(state)?
+                .map(|owner_root| -> Result<String> {
+                    let owner: Value = serde_json::from_slice(&private::read(
+                        &owner_root.join("state.json"),
+                        super::MAX_BYTES,
+                    )?)?;
+                    Ok(owner["instanceId"]
+                        .as_str()
+                        .filter(|id| !id.is_empty())
+                        .ok_or_else(|| anyhow::anyhow!("shared issuer owner has no instance ID"))?
+                        .to_owned())
+                })
+                .transpose()?
+        };
+        for template in &policy.task_templates {
+            let expected = owner_instance
+                .as_deref()
+                .map(|instance| local::agent_id(instance, &template.client))
+                .unwrap_or_else(|| config::principal(&template.client));
+            if template.agent.subject != expected {
+                bail!("task template agent must use its exact local issuer identity");
+            }
+        }
         for binding in self.sources.values() {
             let reader = self.service_clients.iter().find(|client| {
                 binding.client_id_ref == format!("secret:file/service-{}-id", client.id)
@@ -284,6 +309,8 @@ impl Integrations {
                 ),
                 mapping:
                     registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
+                clients: vec![],
+                token_attributes: BTreeMap::new(),
             });
             }
         }
@@ -365,7 +392,7 @@ impl Integrations {
                 });
             }
         }
-        if let Some(description) = description.as_deref_mut() {
+        if let Some(description) = description {
             for template in &policy.task_templates {
                 local::declare_resource(description, &template.resource, &template.scopes)?;
             }

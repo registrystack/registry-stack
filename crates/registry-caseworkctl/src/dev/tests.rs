@@ -2889,6 +2889,68 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
 }
 
 #[test]
+fn task_template_subject_follows_the_actual_local_issuer_owner() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    let client = "task-agent";
+    let owner_instance = "seed-demo-growers-local";
+    policy.task_templates.push(
+        serde_json::from_value(json!({
+            "id":"task","version":"1","label":"Task","eligibleTeams":[],
+            "eligibleProfiles":[],"source":"source","itemKinds":[],"itemStates":["claimed"],
+            "agent":{"issuer":"http://127.0.0.1:8093",
+                "subject":registry_thunderid_tooling::local::agent_id(owner_instance, client)},
+            "client":client,"resource":"urn:casework:source-group","scopes":["records:get"],
+            "purpose":"review","bounds":{"type":"breg","permissions":[
+                {"collection":"records","operations":["get"]}]},
+            "subjects":{},"lifetimeSeconds":900
+        }))
+        .unwrap(),
+    );
+    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":"urn:casework:source-group",
+        "serviceClients":[{"id":client,"scopes":["casework:grants:assert"],"taskExchange":true}],
+        "taskAuthority":{"issuer":"https://casework.local.example","jwksPort":8801,
+            "statusClients":{}}
+    }))
+    .unwrap();
+    integrations.validate(&clients, &policy).unwrap();
+    let mut no_exchange = integrations.clone();
+    no_exchange.service_clients[0].task_exchange = false;
+    assert!(no_exchange.validate(&clients, &policy).is_err());
+
+    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&json!({
+            "version":2,"project":owner_project,"owner":owner_id,
+            "status":"ready","issuerPort":8093,"issuerProject":null,
+            "instanceId":owner_instance
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut borrowed = session(&project);
+    borrowed.issuer_project = Some(owner_project);
+    borrowed.issuer_owner = Some(owner_id);
+    integrations.validate_session(&borrowed, &policy).unwrap();
+
+    let standalone = session(&project);
+    assert!(integrations.validate_session(&standalone, &policy).is_err());
+    policy.task_templates[0].agent.subject = config::principal(client);
+    integrations.validate_session(&standalone, &policy).unwrap();
+    assert!(integrations.validate_session(&borrowed, &policy).is_err());
+}
+
+#[test]
 fn borrowed_browser_admission_requires_exact_owner_resource() {
     let workspace = tempfile::tempdir().unwrap();
     let project = standalone(workspace.path());
