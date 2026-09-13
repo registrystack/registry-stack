@@ -260,6 +260,54 @@ fn answer_cases() -> Vec<Case<QuestionAnswer>> {
             message: "a controlled-category answer needs 2..=32 unique bounded values",
         },
         Case {
+            rule: "identifier constraints on another answer form",
+            build: || {
+                answer(json!({
+                    "concept": "marked",
+                    "type": "boolean",
+                    "prefix": "urn:example:report:"
+                }))
+            },
+            message: "identifier constraints require a bounded-identifier answer",
+        },
+        Case {
+            rule: "bounded-identifier shape",
+            build: || {
+                answer(json!({
+                    "concept": "marked",
+                    "type": "bounded-identifier",
+                    "prefix": "urn:example:report:",
+                    "minimumBytes": 20,
+                    "maximumBytes": 64,
+                    "values": ["A"]
+                }))
+            },
+            message: "a bounded identifier requires only prefix and byte bounds",
+        },
+        Case {
+            rule: "bounded-identifier prefix",
+            build: || {
+                answer(json!({
+                    "concept": "marked",
+                    "type": "bounded-identifier",
+                    "minimumBytes": 20,
+                    "maximumBytes": 64
+                }))
+            },
+            message: "a bounded identifier requires an ASCII prefix ending in a separator",
+        },
+        Case {
+            rule: "bounded-identifier byte bounds",
+            build: || {
+                answer(json!({
+                    "concept": "marked",
+                    "type": "bounded-identifier",
+                    "prefix": "urn:example:report:"
+                }))
+            },
+            message: "a bounded identifier requires minimumBytes and maximumBytes in 1..=1024",
+        },
+        Case {
             rule: "bounded-integer category values",
             build: || {
                 answer(json!({
@@ -444,7 +492,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
     for case in derivation_cases() {
         codes.push(first(&validate_authored_answer((case.build)())).code);
     }
-    assert_eq!(codes.len(), 40, "codes were: {codes:?}");
+    assert_eq!(codes.len(), 44, "codes were: {codes:?}");
     codes.sort_unstable();
     codes.dedup();
     assert_eq!(
@@ -455,6 +503,9 @@ fn the_set_of_rule_codes_is_the_expected_one() {
             "answer-count",
             "answer-schema-path",
             "boolean-answer",
+            "bounded-identifier-bounds",
+            "bounded-identifier-prefix",
+            "bounded-identifier-shape",
             "bounded-integer-bounds",
             "bounded-integer-bounds-missing",
             "bounded-integer-values",
@@ -471,6 +522,7 @@ fn the_set_of_rule_codes_is_the_expected_one() {
             "fact-count",
             "fact-name",
             "fact-path",
+            "identifier-constraints-form",
             "operation-identifier",
             "question-identifier",
             "question-text",
@@ -502,6 +554,16 @@ fn assert_case(rule: &str, expected: &str, findings: &[Finding]) {
         !finding.code.is_empty(),
         "the `{rule}` rule reports no code"
     );
+    let identifier_code = match rule {
+        "identifier constraints on another answer form" => Some("identifier-constraints-form"),
+        "bounded-identifier shape" => Some("bounded-identifier-shape"),
+        "bounded-identifier prefix" => Some("bounded-identifier-prefix"),
+        "bounded-identifier byte bounds" => Some("bounded-identifier-bounds"),
+        _ => None,
+    };
+    if let Some(code) = identifier_code {
+        assert_eq!(finding.code, code, "the `{rule}` rule changed its code");
+    }
 }
 
 fn first(findings: &[Finding]) -> &Finding {
