@@ -76,7 +76,7 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
     )
 }
 
-fn validate_pair(id: &[u8], key: &[u8], label: &str) -> Result<()> {
+pub(super) fn validate_pair(id: &[u8], key: &[u8], label: &str) -> Result<()> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     let valid = (|| -> Option<()> {
         if id != label.as_bytes() {

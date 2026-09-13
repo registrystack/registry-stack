@@ -86,6 +86,8 @@ pub fn synthetic_description() -> IssuerDescription {
             secret_file: "secrets/compatibility-client-secret".into(),
         }],
         exchange_issuers: vec![],
+        interactive_applications: vec![],
+        synthetic_users: vec![],
         schema_attributes: vec!["synthetic_tag".to_owned()],
     }
 }

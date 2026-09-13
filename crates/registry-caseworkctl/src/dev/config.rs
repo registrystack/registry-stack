@@ -73,6 +73,84 @@ pub(super) fn identifier(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
+/// Copy one pre-registered owner client into this private Casework session.
+/// Exact claim, scope, audience and key checks prevent an ambient owner file
+/// from silently changing the authority of the generated local workload.
+pub(super) fn borrow_client(
+    directory: &Path,
+    state: &State,
+    id: &str,
+    scopes: &[String],
+    claims: &Value,
+    resource: &str,
+    task_exchange: bool,
+) -> Result<()> {
+    let owner_root =
+        super::borrowed_issuer(state)?.context("no shared issuer owner is configured")?;
+    let clients: Value = serde_json::from_slice(&private::read(
+        &owner_root.join("clients.json"),
+        super::MAX_BYTES,
+    )?)?;
+    let registered = clients["clients"]
+        .as_array()
+        .and_then(|entries| entries.iter().find(|entry| entry["id"] == id))
+        .with_context(|| format!("shared issuer owner has no registration for {id}"))?;
+    let owner_resource = clients["issuer"]["clientResources"][id]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| {
+            format!(
+                "urn:breg:dev:{}",
+                state.issuer_owner.as_deref().unwrap_or_default()
+            )
+        });
+    if registered["scopes"] != json!(scopes)
+        || registered["claims"] != *claims
+        || owner_resource != resource
+        || (task_exchange
+            && !clients["issuer"]["exchangeClients"]
+                .as_array()
+                .is_some_and(|ids| ids.iter().any(|entry| entry == id)))
+    {
+        bail!("shared issuer registration differs from Casework client {id}");
+    }
+    let source = owner_root.join("credentials").join(id);
+    let client_id = Zeroizing::new(private::read(&source.join("client-id"), super::MAX_BYTES)?);
+    let key = Zeroizing::new(private::read(
+        &source.join("assertion-key.jwk"),
+        super::MAX_BYTES,
+    )?);
+    let public = private::read(&source.join("public.jwk"), 4096)?;
+    if client_id.as_slice() != id.as_bytes() {
+        bail!("shared issuer client ID differs from {id}");
+    }
+    let jwk: Value = serde_json::from_slice(&key)?;
+    let public_jwk: Value = serde_json::from_slice(&public)?;
+    let d = Zeroizing::new(
+        URL_SAFE_NO_PAD.decode(
+            jwk["d"]
+                .as_str()
+                .context("owner key has no private coordinate")?,
+        )?,
+    );
+    let signing = SigningKey::from_slice(&d).context("owner assertion key is invalid")?;
+    let point = signing.verifying_key().to_encoded_point(false);
+    if jwk["kty"] != "EC"
+        || jwk["crv"] != "P-256"
+        || jwk["alg"] != "ES256"
+        || jwk["x"] != URL_SAFE_NO_PAD.encode(point.x().context("owner key has no x")?)
+        || jwk["y"] != URL_SAFE_NO_PAD.encode(point.y().context("owner key has no y")?)
+        || public_jwk["x"] != jwk["x"]
+        || public_jwk["y"] != jwk["y"]
+        || public_jwk["kid"] != jwk["kid"]
+    {
+        bail!("shared issuer assertion key does not match its registered public key");
+    }
+    private::create(&directory.join("client-id"), &client_id)?;
+    private::create(&directory.join("assertion-key.jwk"), &key)?;
+    private::create(&directory.join("public.jwk"), &public)
+}
+
 // Apply OAuth scope-token syntax before rendering exact issuer permissions.
 fn valid_scope_token(value: &str) -> bool {
     !value.is_empty()
@@ -375,12 +453,23 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     ] {
         private::directory(&root.join(directory))?;
     }
-    let borrowed = !state.sources.is_empty();
+    let borrowed = !state.sources.is_empty() || state.issuer_project.is_some();
     let mut local_clients = Vec::new();
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
         private::directory(&directory)?;
         if borrowed {
+            if state.issuer_project.is_some() {
+                borrow_client(
+                    &directory,
+                    state,
+                    &client.id,
+                    &client.scopes,
+                    &serde_json::to_value(&client.claims)?,
+                    &state.audience(),
+                    false,
+                )?;
+            }
             continue;
         }
         let public = keypair(&directory)?;
@@ -408,9 +497,14 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         )?;
         if let Some(integrations) = &clients.integrations {
             let policy = crate::project::load_and_check_policy(&state.project)?;
-            integrations.prepare(root, state, &mut description, &policy)?;
+            integrations.prepare(root, state, Some(&mut description), &policy)?;
         }
         registry_thunderid_tooling::render::render(&description)?;
+    } else if state.issuer_project.is_some() {
+        if let Some(integrations) = &clients.integrations {
+            let policy = crate::project::load_and_check_policy(&state.project)?;
+            integrations.prepare(root, state, None, &policy)?;
+        }
     }
     private::create(
         &root.join("secrets/casework-audit-key"),

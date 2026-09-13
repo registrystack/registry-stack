@@ -33,6 +33,8 @@ seed: []
         status: Status::Stopped,
         breg_port: 8094,
         issuer_port: 8095,
+        issuer_project: None,
+        issuer_owner: None,
         issuer_image: None,
         database_port: 55448,
         requires_postgis: false,
@@ -224,6 +226,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     });
     clients.clients.push(config::Client {
         id: "casework-reviewer".into(),
@@ -235,6 +238,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     });
     clients.clients.push(config::Client {
         id: "casework-administrator".into(),
@@ -246,6 +250,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     });
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let root = state.root();
@@ -289,6 +294,107 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
             .filter(|client| !client.access_profiles.is_empty())
             .all(|client| allowed.iter().any(|id| id == &client.id)),
         "each profile-bound client remains in allowedClients: {allowed:?}"
+    );
+}
+
+#[test]
+fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
+    let (_temp, state, mut clients, files) = fixture();
+    let input = state.project.join("imported-key");
+    private::directory(&input).unwrap();
+    config::keypair(&input).unwrap();
+    let source = clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap();
+    source.assertion_key_input_file = Some(input.join("assertion-key.jwk"));
+    source
+        .claims
+        .insert("evidence_tags".into(), json!(["policy-one"]));
+    let app_secret = state.project.join("portal-secret");
+    private::create(&app_secret, b"synthetic-portal-secret-for-test").unwrap();
+    let user_secret = state.project.join("staff-password");
+    private::create(&user_secret, b"synthetic-staff-password-for-test").unwrap();
+    clients.issuer.resources.push(config::IssuerResource {
+        audience: "urn:evidence:dev:synthetic".into(),
+        scopes: vec!["registry:evidence:lookup".into()],
+    });
+    clients
+        .issuer
+        .client_resources
+        .insert("source".into(), "urn:evidence:dev:synthetic".into());
+    clients
+        .issuer
+        .exchange_issuers
+        .push(config::IssuerConnection {
+            id: "casework".into(),
+            issuer: "https://casework.example.test".into(),
+            jwks_endpoint: "https://casework.example.test/oauth2/jwks".into(),
+            mapping: config::IssuerConnectionMapping::FirstParty,
+        });
+    clients.issuer.exchange_clients.push("source".into());
+    clients
+        .issuer
+        .interactive_applications
+        .push(config::BrowserApplication {
+            id: "portal".into(),
+            client_secret_file: app_secret,
+            origin: "http://127.0.0.1:3000".into(),
+            redirect_uris: vec!["http://127.0.0.1:3000/callback".into()],
+            audience: None,
+            token_attributes: vec!["registry_actor_kind".into()],
+        });
+    clients.issuer.synthetic_users.push(config::BrowserUser {
+        username: "staff".into(),
+        email: "staff@example.test".into(),
+        password_file: user_secret,
+        attributes: BTreeMap::from([("registry_actor_kind".into(), "human".into())]),
+    });
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
+    let evidence = description
+        .resource_servers
+        .iter()
+        .find(|server| server.identifier == "urn:evidence:dev:synthetic")
+        .unwrap();
+    let source_role = description
+        .roles
+        .iter()
+        .find(|role| {
+            role.assigned_agents
+                .contains(&registry_thunderid_tooling::local::agent_id(
+                    &state.instance_id,
+                    "source",
+                ))
+        })
+        .unwrap();
+    assert_eq!(source_role.permissions[0].0, evidence.id);
+    assert!(description
+        .machine_clients
+        .iter()
+        .find(|client| client.client_id == "source")
+        .unwrap()
+        .token_exchange
+        .is_some());
+    assert_eq!(
+        description
+            .machine_clients
+            .iter()
+            .find(|client| client.client_id == "source")
+            .unwrap()
+            .attributes["evidence_tags"],
+        json!(["policy-one"])
+    );
+    assert_eq!(description.interactive_applications[0].client_id, "portal");
+    assert_eq!(description.synthetic_users[0].username, "staff");
+    assert_eq!(
+        private::read(
+            &state.root().join("credentials/source/assertion-key.jwk"),
+            MAX_BYTES
+        )
+        .unwrap(),
+        private::read(&input.join("assertion-key.jwk"), MAX_BYTES).unwrap()
     );
 }
 
@@ -342,6 +448,7 @@ fn rehearsal_binding_still_resolves_each_journey_step_despite_an_unbound_client(
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     });
     let captured = capture(&project, &client_bytes).expect("a fresh init project is a dev project");
     bind_journey_profiles(&captured.files["tests/journeys.yaml"], &clients)
@@ -533,6 +640,7 @@ fn rehearsal_tokens_request_only_the_exact_fixture_scope_subset() {
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
+        assertion_key_input_file: None,
     };
     let step = json!({"claims":{"scopes":["starter:reviewer"]}});
     let mut remembered = BTreeMap::new();
@@ -750,6 +858,7 @@ fn prerequisites_from_another_release_are_refused_before_the_session_starts() {
             clients_file: None,
             breg_port: Some(ports[0]),
             issuer_port: Some(ports[1]),
+            issuer_project: None,
             issuer_image: None,
             database_port: Some(ports[2]),
             breg_bin: Some(prerequisites.join("breg")),
@@ -1272,6 +1381,8 @@ fn retained_session(project: &Path, container_id: Option<String>) -> State {
         status: Status::Stopped,
         breg_port: 8094,
         issuer_port: 8095,
+        issuer_project: None,
+        issuer_owner: None,
         issuer_image: None,
         database_port: 55448,
         requires_postgis: false,
@@ -1302,6 +1413,7 @@ fn start_without_binaries(project: &Path) -> Result<Value> {
         clients_file: None,
         breg_port: None,
         issuer_port: None,
+        issuer_project: None,
         issuer_image: None,
         database_port: None,
         breg_bin: Some(project.join("missing-breg")),
@@ -1874,6 +1986,56 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
     invalid.webhook_port = Some(invalid.breg_port);
     invalid.save().unwrap();
     assert!(read_state(&root).is_err());
+}
+
+#[test]
+fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
+    let (_project_temp, project) = write_init_project();
+    let module = project.join("registry.yaml");
+    let mut source: Value = serde_norway::from_slice(&fs::read(&module).unwrap()).unwrap();
+    let entity = source["entities"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entity| entity["id"] == "record")
+        .unwrap();
+    entity["events"] = json!([{
+        "id":"record-created-v1","trigger":"created","projection":["code"],
+        "webhook":{"destinationId":"openfn"}
+    }]);
+    fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let mut clients = config::clients(&bytes).unwrap();
+    let (_temp, mut state, _, _) = fixture();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = project.join("event-key");
+    private::create(&key, b"synthetic-local-event-key-for-test").unwrap();
+    clients.event_destinations.insert(
+        "openfn".into(),
+        config::LocalEventDestination {
+            origin: "http://127.0.0.1:18888".into(),
+            path: "/inbox/registry".into(),
+            hmac_key_file: key,
+        },
+    );
+    let captured = capture(&project, &bytes).unwrap();
+    state.webhook_port = None;
+    initialize(&state.root(), &state, &clients, &captured.files).unwrap();
+    let root = state.root();
+    let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
+        .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+    let bindings =
+        config::external_event_destinations(&compiled, &clients.event_destinations).unwrap();
+    assert_eq!(bindings["openfn"]["origin"], "http://127.0.0.1:18888");
+    assert_eq!(bindings["openfn"]["path"], "/inbox/registry");
+    assert_eq!(
+        bindings["openfn"]["hmacSha256KeyRef"],
+        "secret:file/webhook-openfn"
+    );
+    let runtime: Value =
+        serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
+    assert_eq!(runtime["eventDestinations"], bindings);
+    assert!(config::external_event_destinations(&compiled, &BTreeMap::new()).is_err());
 }
 
 #[test]

@@ -541,6 +541,7 @@ fn start_issuer(
         name: "Casework task authority".into(),
         issuer: AUTHORITY.into(),
         jwks_endpoint: format!("http://host.docker.internal:{casework_port}/.well-known/jwks.json"),
+        mapping: registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
     });
     std::fs::create_dir_all(root.join("secrets")).unwrap();
     for name in ["direct_auth_secret", "throwaway-bootstrap-password"] {

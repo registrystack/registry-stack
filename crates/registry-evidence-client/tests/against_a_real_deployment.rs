@@ -2095,6 +2095,7 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
             name: "Synthetic assertion authority".to_owned(),
             issuer: authority_issuer.to_owned(),
             jwks_endpoint: format!("{authority_issuer}/jwks"),
+            mapping: registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
         });
         key
     });

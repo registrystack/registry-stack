@@ -127,6 +127,8 @@ fn description(state_root: &Path, public_jwks: String) -> IssuerDescription {
             secret_file: "secrets/compatibility-client-secret".into(),
         }],
         exchange_issuers: vec![],
+        interactive_applications: vec![],
+        synthetic_users: vec![],
         schema_attributes: vec!["evidence_tags".to_owned(), "synthetic_tag".to_owned()],
     }
 }

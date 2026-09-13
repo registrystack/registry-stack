@@ -22,6 +22,81 @@ pub(super) struct Clients {
     pub clients: Vec<Client>,
     #[serde(default)]
     pub seed: Vec<Seed>,
+    #[serde(default)]
+    pub issuer: IssuerComposition,
+    /// Optional exact local webhook bindings. An empty map keeps the inbox.
+    #[serde(default)]
+    pub event_destinations: BTreeMap<String, LocalEventDestination>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalEventDestination {
+    pub origin: String,
+    pub path: String,
+    pub hmac_key_file: PathBuf,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct IssuerComposition {
+    #[serde(default)]
+    pub resources: Vec<IssuerResource>,
+    #[serde(default)]
+    pub exchange_issuers: Vec<IssuerConnection>,
+    #[serde(default)]
+    pub interactive_applications: Vec<BrowserApplication>,
+    #[serde(default)]
+    pub synthetic_users: Vec<BrowserUser>,
+    /// Client IDs mapped to a non-default resource audience.
+    #[serde(default)]
+    pub client_resources: BTreeMap<String, String>,
+    /// Clients with one bootstrap scope that may exchange signed assertions.
+    #[serde(default)]
+    pub exchange_clients: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct IssuerResource {
+    pub audience: String,
+    pub scopes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct IssuerConnection {
+    pub id: String,
+    pub issuer: String,
+    pub jwks_endpoint: String,
+    pub mapping: IssuerConnectionMapping,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum IssuerConnectionMapping {
+    InstitutionalGrant,
+    FirstParty,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct BrowserApplication {
+    pub id: String,
+    pub client_secret_file: PathBuf,
+    pub origin: String,
+    pub redirect_uris: Vec<String>,
+    pub audience: Option<String>,
+    pub token_attributes: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct BrowserUser {
+    pub username: String,
+    pub email: String,
+    pub password_file: PathBuf,
+    pub attributes: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -49,6 +124,10 @@ pub(super) struct Client {
     pub test_bindings: Vec<TestBinding>,
     pub client_id_file: Option<PathBuf>,
     pub assertion_key_file: Option<PathBuf>,
+    /// Existing owner-only ES256 assertion key, for a client whose key is
+    /// already governed by another local tool such as Evidence access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assertion_key_input_file: Option<PathBuf>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -164,6 +243,108 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             }
             _ => bail!("declare both clientIdFile and assertionKeyFile or neither"),
         }
+        if let Some(path) = &client.assertion_key_input_file {
+            if !path.is_absolute() {
+                bail!("assertionKeyInputFile must be absolute");
+            }
+            private::check(path, false)?;
+        }
+    }
+    if clients.issuer.resources.len() > 7
+        || clients.issuer.exchange_issuers.len() > 8
+        || clients.issuer.interactive_applications.len() > 8
+        || clients.issuer.synthetic_users.len() > 32
+        || clients.issuer.client_resources.len() > 32
+        || clients.issuer.exchange_clients.len() > 32
+    {
+        bail!("local issuer composition exceeds its bounded inventory");
+    }
+    if clients.event_destinations.len() > 16 {
+        bail!("at most 16 local event destinations may be bound");
+    }
+    for (id, destination) in &clients.event_destinations {
+        let origin = reqwest::Url::parse(&destination.origin)
+            .context("local event destination origin must be an exact loopback HTTP URL")?;
+        if !identifier(id)
+            || origin.scheme() != "http"
+            || origin.host_str() != Some("127.0.0.1")
+            || origin.port().is_none()
+            || origin.path() != "/"
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+            || destination.path.len() > 256
+            || !destination.path.starts_with('/')
+            || destination.path.starts_with("//")
+            || destination.path.contains(['?', '#', '\\'])
+            || destination.path.chars().any(char::is_control)
+        {
+            bail!("local event destinations need bounded IDs, exact loopback origins, and absolute paths");
+        }
+        private::check(&destination.hmac_key_file, false)?;
+    }
+    let mut resource_ids = BTreeSet::new();
+    for resource in &clients.issuer.resources {
+        if !registry_platform_httputil::valid_resource_uri(&resource.audience)
+            || !resource_ids.insert(&resource.audience)
+            || resource.scopes.is_empty()
+            || resource.scopes.len() > 32
+            || resource
+                .scopes
+                .iter()
+                .any(|scope| !registry_platform_httputil::valid_scope_token(scope))
+        {
+            bail!("local issuer resources require distinct audiences and exact bounded scopes");
+        }
+    }
+    for (client, resource) in &clients.issuer.client_resources {
+        if !ids.contains(client) || !resource_ids.contains(resource) {
+            bail!("issuer client resource bindings need a declared client and audience");
+        }
+    }
+    let mut exchange_clients = BTreeSet::new();
+    for id in &clients.issuer.exchange_clients {
+        if !exchange_clients.insert(id)
+            || clients.issuer.exchange_issuers.is_empty()
+            || !clients
+                .clients
+                .iter()
+                .any(|client| &client.id == id && client.scopes.len() == 1)
+        {
+            bail!("exchange clients need one exact bootstrap scope and an exchange issuer");
+        }
+    }
+    let mut connection_ids = BTreeSet::new();
+    for connection in &clients.issuer.exchange_issuers {
+        if !identifier(&connection.id) || !connection_ids.insert(&connection.id) {
+            bail!("local exchange connections require distinct bounded IDs");
+        }
+    }
+    let mut app_ids = BTreeSet::new();
+    for app in &clients.issuer.interactive_applications {
+        if !identifier(&app.id)
+            || !app_ids.insert(&app.id)
+            || ids.contains(&app.id)
+            || app
+                .audience
+                .as_ref()
+                .is_some_and(|audience| !resource_ids.contains(audience))
+        {
+            bail!("browser applications need distinct IDs and declared audiences");
+        }
+        private::check(&app.client_secret_file, false)?;
+    }
+    let mut usernames = BTreeSet::new();
+    for user in &clients.issuer.synthetic_users {
+        if !identifier(&user.username) || !usernames.insert(&user.username) {
+            bail!("synthetic users need distinct bounded usernames");
+        }
+        private::check(&user.password_file, false)?;
+    }
+    for (id, destination) in &clients.event_destinations {
+        let key = Zeroizing::new(private::read(&destination.hmac_key_file, 1024)?);
+        if key.len() < 32 {
+            bail!("local event destination {id} needs at least 32 HMAC key bytes");
+        }
     }
     let mut seeds = BTreeSet::new();
     for seed in &clients.seed {
@@ -214,19 +395,94 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     ] {
         private::directory(&root.join(directory))?;
     }
+    let borrowed = super::borrowed_owner(state)?;
+    let owner_clients: Option<Clients> = borrowed
+        .as_ref()
+        .map(|owner| {
+            serde_json::from_slice(&private::read(
+                &owner.root().join("clients.json"),
+                MAX_BYTES,
+            )?)
+            .context("shared issuer owner has invalid retained clients")
+        })
+        .transpose()?;
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
-        keypair(&directory)?;
-        private::create(&directory.join("client-id"), client.id.as_bytes())?;
+        if let (Some(owner), Some(owner_clients)) = (&borrowed, &owner_clients) {
+            let registered = owner_clients
+                .clients
+                .iter()
+                .find(|entry| entry.id == client.id)
+                .with_context(|| {
+                    format!("shared issuer owner has no registration for {}", client.id)
+                })?;
+            if registered.scopes != client.scopes
+                || registered.claims != client.claims
+                || registered.allow_human_fixture != client.allow_human_fixture
+                || owner_clients
+                    .issuer
+                    .client_resources
+                    .contains_key(&client.id)
+            {
+                bail!("shared issuer registration differs from the local client or BREG audience for {}", client.id);
+            }
+            private::directory(&directory)?;
+            let source = owner.root().join("credentials").join(&client.id);
+            let id = Zeroizing::new(private::read(&source.join("client-id"), MAX_BYTES)?);
+            let key = Zeroizing::new(private::read(&source.join("assertion-key.jwk"), MAX_BYTES)?);
+            super::export_client::validate_pair(&id, &key, &client.id)?;
+            private::create(&directory.join("client-id"), &id)?;
+            private::create(&directory.join("assertion-key.jwk"), &key)?;
+            private::create(
+                &directory.join("public.jwk"),
+                &private::read(&source.join("public.jwk"), 4096)?,
+            )?;
+        } else {
+            if let Some(input) = &client.assertion_key_input_file {
+                import_keypair(&directory, input, &client.id)?;
+            } else {
+                keypair(&directory)?;
+            }
+            private::create(&directory.join("client-id"), client.id.as_bytes())?;
+        }
+    }
+    if !clients.issuer.interactive_applications.is_empty()
+        || !clients.issuer.synthetic_users.is_empty()
+    {
+        private::directory(&root.join("issuer/secrets"))?;
+    }
+    for app in &clients.issuer.interactive_applications {
+        let secret = Zeroizing::new(private::read(&app.client_secret_file, 1024)?);
+        private::create(
+            &root
+                .join("issuer/secrets")
+                .join(format!("application-{}", app.id)),
+            &secret,
+        )?;
+    }
+    for user in &clients.issuer.synthetic_users {
+        let password = Zeroizing::new(private::read(&user.password_file, 1024)?);
+        private::create(
+            &root
+                .join("issuer/secrets")
+                .join(format!("user-{}", user.username)),
+            &password,
+        )?;
+    }
+    for (id, destination) in &clients.event_destinations {
+        let key = Zeroizing::new(private::read(&destination.hmac_key_file, 1024)?);
+        private::create(&root.join("secrets").join(format!("webhook-{id}")), &key)?;
     }
     // The dev session's issuer is the pinned upstream ThunderID container,
     // rendered and provisioned through the shared tooling crate from these
     // same authored declarations. BREG keeps its database, seeding, retained
     // state, private outputs, and ownership behavior; only the token issuer
     // changes hands.
-    let description = issuer_description(state, clients, root)?;
-    registry_thunderid_tooling::render::render(&description)
-        .map_err(|error| anyhow::anyhow!("the dev issuer registration was refused: {error}"))?;
+    if borrowed.is_none() {
+        let description = issuer_description(state, clients, root)?;
+        registry_thunderid_tooling::render::render(&description)
+            .map_err(|error| anyhow::anyhow!("the dev issuer registration was refused: {error}"))?;
+    }
     for filename in ["audit-key", "cursor-key"] {
         let mut bytes = Zeroizing::new([0u8; 32]);
         getrandom::fill(bytes.as_mut()).context("cannot generate local secret")?;
@@ -324,6 +580,19 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     Ok(())
 }
 
+fn import_keypair(directory: &Path, input: &Path, id: &str) -> Result<()> {
+    private::directory(directory)?;
+    let key = Zeroizing::new(private::read(input, 16 * 1024)?);
+    super::export_client::validate_pair(id.as_bytes(), &key, id)?;
+    let private: Value = serde_json::from_slice(&key)?;
+    let public = json!({
+        "kty": private["kty"], "crv": private["crv"], "alg": private["alg"],
+        "kid": private["kid"], "x": private["x"], "y": private["y"]
+    });
+    private::create(&directory.join("assertion-key.jwk"), &key)?;
+    private::create(&directory.join("public.jwk"), &serde_json::to_vec(&public)?)
+}
+
 /// The dev session's issuer description: one resource server whose
 /// identifier is BREG's exact access-token audience, one role per authored
 /// client carrying that client's scopes, and one machine agent per client
@@ -336,32 +605,26 @@ pub(super) fn issuer_description(
     root: &Path,
 ) -> Result<registry_thunderid_tooling::description::IssuerDescription> {
     use registry_thunderid_tooling::{
-        description::SessionIdentity,
-        local::{local_description, LocalClient},
+        description::{
+            ExchangeIssuer, ExchangeMapping, InteractiveApplication, SessionIdentity,
+            SyntheticUser, TokenExchangeClient,
+        },
+        local::{typed_local_description, TypedLocalClient},
     };
     let local_clients = clients
         .clients
         .iter()
         .map(|client| {
-            let mut claims = client
-                .claims
-                .iter()
-                .map(|(name, value)| {
-                    let value = value.as_str().with_context(|| {
-                        format!("claim {name:?} must be a string to ride a machine token")
-                    })?;
-                    Ok((name.clone(), value.to_owned()))
-                })
-                .collect::<Result<BTreeMap<_, _>>>()?;
+            let mut claims = client.claims.clone();
             // An omitted local marker describes the ordinary machine client.
             // Explicit human and agent teaching identities retain their kind.
             claims
                 .entry("registry_actor_kind".to_owned())
-                .or_insert_with(|| "service".to_owned());
+                .or_insert_with(|| json!("service"));
             let directory = root.join("credentials").join(&client.id);
             let public: Value =
                 serde_json::from_slice(&private::read(&directory.join("public.jwk"), 4096)?)?;
-            Ok(LocalClient {
+            Ok(TypedLocalClient {
                 client_id: client.id.clone(),
                 public_jwks: serde_json::to_string(&json!({"keys":[public]}))?,
                 claims,
@@ -370,7 +633,7 @@ pub(super) fn issuer_description(
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    local_description(
+    let mut description = typed_local_description(
         SessionIdentity {
             label: format!("breg-dev-{}", state.instance_id),
             id: state.instance_id.clone(),
@@ -379,8 +642,94 @@ pub(super) fn issuer_description(
         root.join("issuer"),
         state.audience(),
         local_clients,
-    )
-    .map_err(Into::into)
+    )?;
+    for resource in &clients.issuer.resources {
+        registry_thunderid_tooling::local::declare_resource(
+            &mut description,
+            &resource.audience,
+            &resource.scopes,
+        )?;
+    }
+    for (client_id, audience) in &clients.issuer.client_resources {
+        let server = description
+            .resource_servers
+            .iter()
+            .find(|server| &server.identifier == audience)
+            .context("a declared issuer resource is missing")?;
+        let agent = registry_thunderid_tooling::local::agent_id(&state.instance_id, client_id);
+        let role = description
+            .roles
+            .iter_mut()
+            .find(|role| role.assigned_agents.contains(&agent))
+            .context("a declared issuer client role is missing")?;
+        role.permissions[0].0 = server.id.clone();
+    }
+    for id in &clients.issuer.exchange_clients {
+        let client = clients
+            .clients
+            .iter()
+            .find(|client| &client.id == id)
+            .context("an exchange client is missing")?;
+        let machine = description
+            .machine_clients
+            .iter_mut()
+            .find(|machine| machine.client_id == *id)
+            .context("an exchange registration is missing")?;
+        let role = description
+            .roles
+            .iter()
+            .find(|role| role.assigned_agents.contains(&machine.agent_id))
+            .context("an exchange bootstrap role is missing")?;
+        machine.token_exchange = Some(TokenExchangeClient {
+            assertion_resource_server_id: role.permissions[0].0.clone(),
+            assertion_scope: client.scopes[0].clone(),
+        });
+    }
+    for issuer in &clients.issuer.exchange_issuers {
+        description.exchange_issuers.push(ExchangeIssuer {
+            id: registry_thunderid_tooling::local::agent_id(
+                &state.instance_id,
+                &format!("connection-{}", issuer.id),
+            ),
+            name: format!("Local {}", issuer.id),
+            issuer: issuer.issuer.clone(),
+            jwks_endpoint: issuer.jwks_endpoint.clone(),
+            mapping: match issuer.mapping {
+                IssuerConnectionMapping::InstitutionalGrant => ExchangeMapping::InstitutionalGrant,
+                IssuerConnectionMapping::FirstParty => ExchangeMapping::FirstParty,
+            },
+        });
+    }
+    for app in &clients.issuer.interactive_applications {
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: registry_thunderid_tooling::local::agent_id(
+                    &state.instance_id,
+                    &format!("application-{}", app.id),
+                ),
+                client_id: app.id.clone(),
+                client_secret_file: format!("secrets/application-{}", app.id).into(),
+                origin: app.origin.clone(),
+                redirect_uris: app.redirect_uris.clone(),
+                audience: app.audience.clone().unwrap_or_else(|| state.audience()),
+                token_attributes: app.token_attributes.clone(),
+            });
+    }
+    for user in &clients.issuer.synthetic_users {
+        description.synthetic_users.push(SyntheticUser {
+            id: registry_thunderid_tooling::local::agent_id(
+                &state.instance_id,
+                &format!("user-{}", user.username),
+            ),
+            username: user.username.clone(),
+            email: user.email.clone(),
+            password_file: format!("secrets/user-{}", user.username).into(),
+            attributes: user.attributes.clone(),
+        });
+    }
+    description.validate()?;
+    Ok(description)
 }
 
 /// Re-render an explicitly prepared, stopped-session successor in a separate
@@ -389,6 +738,9 @@ pub(super) fn issuer_description(
 /// repeatable. Existing client keys and unrelated issuer database state stay
 /// untouched.
 pub(super) fn refresh_issuer_registration(state: &State, clients: &Clients) -> Result<()> {
+    if state.issuer_project.is_some() {
+        return Ok(());
+    }
     fn publish_tree(source: &Path, destination: &Path) -> Result<()> {
         private::directory(destination)?;
         for entry in fs::read_dir(source)? {
@@ -437,10 +789,14 @@ pub(super) fn runtime(
 ) -> Result<()> {
     let final_root = state.root();
     let prefix = if test { "test-" } else { "" };
-    let destinations = if let Some(port) = state.webhook_port {
+    let destinations = if state.webhook_port.is_some() || !clients.event_destinations.is_empty() {
         let compiled = crate::compile(&root.join("project"), crate::ProfileArg::Production, "dev")
             .map_err(|_| anyhow::anyhow!("captured event project no longer compiles"))?;
-        event_destinations(&compiled, port)
+        if let Some(port) = state.webhook_port {
+            event_destinations(&compiled, port)
+        } else {
+            external_event_destinations(&compiled, &clients.event_destinations)?
+        }
     } else {
         json!({})
     };
@@ -461,6 +817,43 @@ pub(super) fn runtime(
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )
+}
+
+pub(super) fn external_event_destinations(
+    compiled: &registry_breg::CompiledRegistry,
+    bindings: &BTreeMap<String, LocalEventDestination>,
+) -> Result<Value> {
+    let inventory = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .map(|delivery| delivery.destination_id.clone())
+        .collect::<BTreeSet<_>>();
+    if inventory != bindings.keys().cloned().collect() {
+        bail!("local event destinations must bind every compiled destination ID exactly");
+    }
+    let mut destinations = BTreeMap::new();
+    for delivery in &compiled.event_deliveries().deliveries {
+        let (classification, timeout, attempts) =
+            destinations.entry(&delivery.destination_id).or_insert((
+                delivery.classification_ceiling,
+                delivery.attempt_timeout_ms,
+                delivery.maximum_attempts,
+            ));
+        *classification = (*classification).max(delivery.classification_ceiling);
+        *timeout = (*timeout).min(delivery.attempt_timeout_ms);
+        *attempts = (*attempts).min(delivery.maximum_attempts);
+    }
+    Ok(Value::Object(destinations.into_iter().map(|(id, (classification, timeout, attempts))| {
+        let binding = &bindings[id];
+        (id.clone(), json!({
+            "origin":binding.origin,"path":binding.path,
+            "networkProfile":"loopbackDevelopmentHttp","dnsFamily":"dualStackStrict",
+            "allowedPrivateCidrs":[],"hmacSha256KeyRef":format!("secret:file/webhook-{id}"),
+            "classificationCeiling":classification,
+            "deliveryCeilings":{"attemptTimeoutMilliseconds":timeout,"maximumAttempts":attempts}
+        }))
+    }).collect()))
 }
 
 pub(super) fn webhook_secret(root: &Path) -> Result<()> {
