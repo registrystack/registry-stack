@@ -11,7 +11,7 @@ use crate::postgres::{
     RegistryLockKey,
 };
 use registry_platform_httputil::FetchUrlPolicy;
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig};
+use registry_platform_oidc::{ClaimNames, JwksFetcher, JwksFetcherConfig};
 use registry_platform_testing::{oidc_verifier_config, MockIdp};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
@@ -61,6 +61,19 @@ accessProfiles:
         operations: [invoke]
         targets: [{entity: case, rowBoundaries: []}]
         results: []
+  - id: standing-agent
+    principalClaim: registry_principal
+    actorKind: agent
+    requesterClients: [agent-client]
+    requiredScopes: [case.rename]
+    requiredPurposes: [case-management]
+    permissions:
+      - action: rename-case
+        operations: [invoke]
+        targets:
+          - entity: case
+            rowBoundaries: [{field: region, claim: regions, operator: in}]
+        results: [renamed]
 "#;
 
 fn compiled() -> Arc<CompiledRegistry> {
@@ -468,6 +481,62 @@ fn action_authority_has_no_crud_requirement_or_profile_fallback() {
         &QueryOptions::default()
     )
     .is_empty());
+}
+
+#[tokio::test]
+async fn standing_agent_action_requires_a_trusted_actor_subject() {
+    let registry = compiled();
+    let idp = MockIdp::start().await;
+    let audience = "urn:example:breg";
+    let actor = "00000000-0000-4000-8000-0000000000aa";
+    let mut verifier = oidc_verifier_config(idp.issuer(), vec![audience.to_owned()]);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
+    let auth = RegistryAuthenticator::new(
+        &registry,
+        verifier,
+        Arc::new(JwksFetcher::new_with_fetch_url_policy(
+            idp.jwks_uri(),
+            JwksFetcherConfig::defaults(),
+            FetchUrlPolicy::dev(),
+        )),
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned()))
+            .with_contextual_claims(
+                ClaimNames::default(),
+                BTreeMap::from([("agent-client".to_owned(), actor.to_owned())]),
+            ),
+    )
+    .expect("standing agent verifier config is valid");
+    let service = service_for(registry.clone(), true);
+    let route = registry
+        .actions()
+        .routes
+        .iter()
+        .find(|route| route.kind == ActionRouteKind::Invoke)
+        .unwrap();
+    let options = QueryOptions::parse(Some("accessProfile=standing-agent"), false).unwrap();
+    let claims = json!({
+        "aud": audience,
+        "sub": "citizen-sub",
+        "azp": "agent-client",
+        "registry_principal": "citizen-sub",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "case-management",
+        "regions": ["north"],
+        "scope": "case.rename"
+    });
+    let missing_actor = auth
+        .authenticate(&idp.mint_token(claims.clone()))
+        .await
+        .expect("standing agent token without act still authenticates");
+    assert!(authorize_action(&service, route, &missing_actor, &options).is_none());
+
+    let mut trusted_claims = claims;
+    trusted_claims["act"] = json!({"sub": actor});
+    let trusted_actor = auth
+        .authenticate(&idp.mint_token(trusted_claims))
+        .await
+        .expect("registered client and actor pair authenticates");
+    assert!(authorize_action(&service, route, &trusted_actor, &options).is_some());
 }
 
 #[tokio::test]

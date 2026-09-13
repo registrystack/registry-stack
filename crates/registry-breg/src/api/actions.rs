@@ -161,6 +161,9 @@ fn authorize_action<'a>(
         ) {
             return None;
         }
+        if expected == crate::contract::ActorKindSource::Agent && claims.actor_subject().is_none() {
+            return None;
+        }
     }
     if !grant.requester_clients.is_empty()
         && !claims
