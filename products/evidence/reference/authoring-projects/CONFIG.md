@@ -412,8 +412,10 @@ both are named. A question whose facts visit no collection therefore writes
 |---|---|---|
 | `answers[].concept` | yes | The concept's local name. Lowercase local identifier, unique within the question. |
 | `answers[].id` | for production | The stable URI a relying party matches on. A local compile invents one; a production compile requires it and refuses a disposable `urn:registrystack:evidence:local:` value. Bounded as a URI by the bundle check, not by the form. |
-| `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-integer`, or `reviewed-structured-value`. |
+| `answers[].type` | yes | `boolean`, `controlled-category`, `bounded-identifier`, `bounded-integer`, or `reviewed-structured-value`. |
 | `answers[].values` | for `controlled-category` | 2 to 32 unique values, each non-empty, at most 64 bytes, no control characters, and each spelled as a codelist code. |
+| `answers[].prefix` | for `bounded-identifier` | Exact ASCII namespace prefix, 1 to 512 bytes, using letters, digits, `.`, `_`, `-`, `:`, `/`, or `#`, and ending in one of those six separators. |
+| `answers[].minimumBytes`, `answers[].maximumBytes` | for `bounded-identifier` | Both required, in 1 to 1024, with `minimumBytes` no greater than `maximumBytes` and room for a nonempty suffix after the prefix. They bound the entire disclosed string. |
 | `answers[].minimum`, `answers[].maximum` | for `bounded-integer` | Both required together, both within plus or minus 9007199254740991, and `minimum` no greater than `maximum`. |
 | `answers[].schema` | for `reviewed-structured-value` | Exactly one `schemas/<name>.yaml` file: two path components, the first `schemas`, the extension `yaml`. The file must exist, and its own top-level `$id` must be an absolute URI, which becomes the concept's `schema` constraint under the same deferred bound. |
 | `answers[].maximumSerializedBytes` | for `reviewed-structured-value` | The serialized ceiling for the value, in 1 to 65536. |
@@ -422,7 +424,8 @@ both are named. A question whose facts visit no collection therefore writes
 Each type accepts only the keys its own row lists. A `boolean` answer declares
 no `values`, no bounds, no `schema`, no `maximumSerializedBytes`, and no
 `sdJwtVc`. A `controlled-category` answer declares no numeric bounds and no
-`sdJwtVc`. A `bounded-integer` answer declares no `values` and no `sdJwtVc`. A
+`sdJwtVc`. A `bounded-identifier` answer declares no `values`, numeric bounds,
+schema, or `sdJwtVc`. A `bounded-integer` answer declares no `values` and no `sdJwtVc`. A
 `reviewed-structured-value` answer declares no scalar constraints.
 
 A `controlled-category` answer's `values` are held to a second grammar the form
@@ -431,10 +434,13 @@ codes, and `validate_code` in `crates/registry-evidence/src/bundle.rs` requires
 each code to begin with an ASCII alphanumeric and to continue with ASCII
 alphanumerics, `.`, `_`, `:`, or `-`. A value such as `New York` satisfies
 every rule in the Answers table and is then refused as an invalid codelist code.
-The other three types carry no second grammar: a `boolean` compiles to an empty
+The other forms carry no codelist grammar: a `boolean` compiles to an empty
 constraint object, a `bounded-integer` states the same bound in both layers,
 and a `reviewed-structured-value`'s named schema is the only authority on its
-value's shape.
+value's shape. A `bounded-identifier` has its own output grammar: after the
+exact prefix, a nonempty suffix begins with an ASCII letter or digit, then uses
+only ASCII letters, digits, `.`, `_`, or `-`. The runtime checks it before
+constructing or signing Evidence.
 
 Four URIs an authoring project writes are bounded only after the form has
 accepted them. `validate_uri` in `crates/registry-evidence/src/config.rs` holds
@@ -731,8 +737,11 @@ answers[]
 answers[].concept
 answers[].id
 answers[].maximum
+answers[].maximumBytes
 answers[].maximumSerializedBytes
 answers[].minimum
+answers[].minimumBytes
+answers[].prefix
 answers[].schema
 answers[].sdJwtVc
 answers[].sdJwtVc.claim

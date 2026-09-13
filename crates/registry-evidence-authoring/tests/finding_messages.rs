@@ -525,6 +525,24 @@ fn answer(document: Value) -> QuestionAnswer {
     serde_json::from_value(document).expect("the corpus builds parseable answers")
 }
 
+#[test]
+fn bounded_identifier_answer_requires_exact_governed_constraints() {
+    let accepted = answer(
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64}),
+    );
+    assert!(validate_answer(&accepted).is_empty());
+    for document in [
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64,"values":["A"]}),
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20}),
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":65,"maximumBytes":64}),
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report/space ","minimumBytes":20,"maximumBytes":64}),
+        json!({"concept":"report","type":"bounded-identifier","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":19}),
+        json!({"concept":"report","type":"boolean","prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64}),
+    ] {
+        assert!(!validate_answer(&answer(document)).is_empty());
+    }
+}
+
 fn structured_answer(concept: &str, claim: &str) -> Value {
     json!({
         "concept": concept,

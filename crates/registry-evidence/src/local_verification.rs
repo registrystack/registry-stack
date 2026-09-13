@@ -246,7 +246,9 @@ fn local_expected_form(form: ConceptForm) -> Option<ExpectedScalarFormDocument> 
     match form {
         ConceptForm::Boolean => Some(ExpectedScalarFormDocument::Boolean),
         ConceptForm::BoundedInteger => Some(ExpectedScalarFormDocument::Integer),
-        ConceptForm::ControlledCategory => Some(ExpectedScalarFormDocument::String),
+        ConceptForm::ControlledCategory | ConceptForm::BoundedIdentifier => {
+            Some(ExpectedScalarFormDocument::String)
+        }
         ConceptForm::ReviewedStructuredValue => Some(ExpectedScalarFormDocument::Structured),
         _ => None,
     }
@@ -263,6 +265,14 @@ mod tests {
         assert!(matches!(
             local_expected_form(ConceptForm::BoundedInteger),
             Some(ExpectedScalarFormDocument::Integer)
+        ));
+    }
+
+    #[test]
+    fn bounded_identifier_has_an_exact_string_verification_form() {
+        assert!(matches!(
+            local_expected_form(ConceptForm::BoundedIdentifier),
+            Some(ExpectedScalarFormDocument::String)
         ));
     }
 

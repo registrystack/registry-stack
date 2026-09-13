@@ -915,7 +915,11 @@ fn valid_concept_state(concept: &ConceptState) -> bool {
         && valid_uri(&concept.uri)
         && matches!(
             concept.form.as_str(),
-            "boolean" | "controlled-category" | "bounded-integer" | "reviewed-structured-value"
+            "boolean"
+                | "controlled-category"
+                | "bounded-identifier"
+                | "bounded-integer"
+                | "reviewed-structured-value"
         )
 }
 
@@ -2186,6 +2190,7 @@ impl From<&CompiledQuestion> for QuestionState {
                     form: match concept.concept_form {
                         CompiledConceptForm::Boolean => "boolean".to_owned(),
                         CompiledConceptForm::ControlledCategory => "controlled-category".to_owned(),
+                        CompiledConceptForm::BoundedIdentifier => "bounded-identifier".to_owned(),
                         CompiledConceptForm::BoundedInteger => "bounded-integer".to_owned(),
                         CompiledConceptForm::Structured => "reviewed-structured-value".to_owned(),
                     },

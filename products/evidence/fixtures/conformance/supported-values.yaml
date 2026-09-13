@@ -16,6 +16,11 @@ forms:
     positive: [category-a]
     boundary: [category-bound]
     negative: [category-unknown, {category: category-a}, 1]
+  - form: bounded-identifier
+    declaration: {form: bounded-identifier, prefix: 'urn:example:report:', minimum_bytes: 20, maximum_bytes: 64}
+    positive: ['urn:example:report:A-01']
+    boundary: ['urn:example:report:A']
+    negative: ['urn:example:other:A-01', 'urn:example:report:', 'urn:example:report:/A', 'urn:example:report:A B', 1]
   - form: bounded-integer
     declaration: {form: bounded-integer, minimum: -10, maximum: 10}
     positive: [0, 7]

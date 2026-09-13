@@ -109,6 +109,7 @@ requirements:
       - {handle: boolean, id: urn:example:fixture:concept:boolean, form: boolean, required: true, constraints: {}}
       - {handle: controlled-code, id: urn:example:fixture:concept:controlled-code, form: controlled-code, required: false, constraints: {codelist: codelists/synthetic-codes.yaml, codelistVersion: '1', maximumBytes: 8}}
       - {handle: controlled-category, id: urn:example:fixture:concept:controlled-category, form: controlled-category, required: false, constraints: {categoryScheme: urn:example:fixture:scheme:category, schemeVersion: '1', maximumBytes: 16, codelist: codelists/categories.yaml}}
+      - {handle: bounded-identifier, id: urn:example:fixture:concept:bounded-identifier, form: bounded-identifier, required: false, constraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 64}}
       - {handle: bounded-integer, id: urn:example:fixture:concept:bounded-integer, form: bounded-integer, required: false, constraints: {minimum: -10, maximum: 10}}
       - {handle: bounded-decimal, id: urn:example:fixture:concept:bounded-decimal, form: bounded-decimal, required: false, constraints: {minimum: '-10.5', maximum: '10.5', maximumScale: 2}}
       - {handle: date-bucket, id: urn:example:fixture:concept:date-bucket, form: date-bucket, required: false, constraints: {bucketScheme: urn:example:fixture:scheme:date-bucket, schemeVersion: '1'}}
