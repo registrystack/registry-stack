@@ -577,6 +577,76 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
 }
 
 #[tokio::test]
+async fn task_approval_distinguishes_a_stale_holder_from_a_nonholder() {
+    let f = fixture(900).await;
+    let path = format!("/v1/work-items/{}/task-grants", f.item);
+    let approval = json!({"templateId":"summary","templateVersion":"1"});
+    let db = f.store.client().await.unwrap();
+    db.execute(
+        "INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,'other','staff')",
+        &[&ISSUER],
+    )
+    .await
+    .unwrap();
+    let nonholder = token("other", "human-client", "human", "casework:staff");
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &path,
+            &nonholder,
+            true,
+            Some(approval.clone()),
+            Some("nonholder-approval"),
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+
+    db.execute(
+        "UPDATE casework_items SET revision=2 WHERE item_id=$1",
+        &[&f.item],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &path,
+            &nonholder,
+            true,
+            Some(approval.clone()),
+            Some("stale-nonholder-approval"),
+        )
+        .await
+        .0,
+        StatusCode::FORBIDDEN
+    );
+    let holder = token("human", "human-client", "human", "casework:staff");
+    assert_eq!(
+        request(
+            &f,
+            "POST",
+            &path,
+            &holder,
+            true,
+            Some(approval),
+            Some("stale-holder-approval"),
+        )
+        .await
+        .0,
+        StatusCode::PRECONDITION_FAILED
+    );
+
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn delegated_or_grant_bearing_human_tokens_cannot_approve_or_revoke_task_grants() {
     let f = fixture(900).await;
     let human = token("human", "human-client", "human", "casework:staff");

@@ -541,8 +541,11 @@ impl crate::CaseworkService {
         let (item, _) = self
             .caller_item(actor, item_id, source_profile, token)
             .await?;
-        if item.revision != revision || item.holder.as_ref() != Some(&actor.principal) {
+        if item.holder.as_ref() != Some(&actor.principal) {
             return Err(crate::ServiceError::Forbidden);
+        }
+        if item.revision != revision {
+            return Err(StoreError::Conflict.into());
         }
         if !self
             .store
