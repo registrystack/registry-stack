@@ -256,6 +256,32 @@ fn evidence_integer_thresholds_stay_within_verified_safe_integer_range() {
 }
 
 #[test]
+fn evidence_string_literals_fit_verified_public_value_bounds() {
+    for literal in [String::new(), "x".repeat(1025)] {
+        let mut source = project();
+        let requirement = &mut source["entities"][1]["changeRequest"]["application"]
+            ["preconditions"]["evidence"][0]["requires"][0];
+        requirement
+            .as_object_mut()
+            .unwrap()
+            .remove("equalsFromRequestField");
+        requirement["equals"] = json!(literal);
+        assert!(format!("{:?}", compile(source).unwrap_err())
+            .contains("change_request.preconditions.evidence_invalid"));
+    }
+
+    let mut source = project();
+    let requirement = &mut source["entities"][1]["changeRequest"]["application"]["preconditions"]
+        ["evidence"][0]["requires"][0];
+    requirement
+        .as_object_mut()
+        .unwrap()
+        .remove("equalsFromRequestField");
+    requirement["equals"] = json!("é".repeat(1024));
+    compile(source).unwrap();
+}
+
+#[test]
 fn guard_predicates_and_target_selectors_share_the_context_field_ceiling() {
     let mut source = project();
     let mut contract = contracts();

@@ -2926,7 +2926,19 @@ fn predicate_values_equal(actual: &Value, expected: &Value, timestamp: bool) -> 
     }
     let parse = |value: &Value| {
         value.as_str().and_then(|value| {
-            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+            if let Some(bc) = value.strip_suffix(" BC") {
+                // Valid year-0001 inputs can cross into BC when PostgreSQL
+                // normalizes their offset. RFC3339 year 0000 is that instant.
+                let rest = bc.strip_prefix("0001-")?;
+                time::OffsetDateTime::parse(
+                    &format!("0000-{rest}"),
+                    &time::format_description::well_known::Rfc3339,
+                )
+                .ok()
+            } else {
+                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
+                    .ok()
+            }
         })
     };
     parse(actual)
@@ -3269,6 +3281,12 @@ mod application_precondition_tests {
             true
         ));
         assert!(!super::predicate_values_equal(&actual, &json!(null), true));
+        let stored_bc = json!("0001-12-31T23:00:00.123456+00:00 BC");
+        let submitted = json!("0001-01-01T00:00:00.123456+01:00");
+        assert!(super::predicate_values_equal(&stored_bc, &submitted, true));
+        assert!(!super::predicate_values_equal(
+            &stored_bc, &submitted, false
+        ));
     }
 
     #[test]

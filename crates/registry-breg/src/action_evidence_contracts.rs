@@ -220,7 +220,9 @@ fn evidence_requirement_value_valid(
             .as_number()
             .and_then(registry_evidence_verifier::model::safe_json_integer)
             .is_some(),
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => value.is_string(),
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => value
+            .as_str()
+            .is_some_and(|value| (1..=1024).contains(&value.chars().count())),
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
             value.get("form").and_then(serde_json::Value::as_str) == Some("date-bucket")
         }
