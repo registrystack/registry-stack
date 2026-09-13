@@ -309,6 +309,11 @@ borrower copies those client pairs and issuer keys, pins the owner session ID,
 and never starts or stops the shared issuer. Its own BREG package, database,
 profiles and outbox remain independently owned. A replaced or unavailable
 owner is refused before the borrower starts.
+To use an owner-registered browser app at the borrower's BREG resource, list
+its ID under `issuer.browserClients` in the borrower's clients file. The owner
+must have registered that app for the same audience. The borrower admits only
+those listed app IDs; its governed profiles and token scopes still decide each
+API call.
 
 ## Prepare a source after using a registry
 

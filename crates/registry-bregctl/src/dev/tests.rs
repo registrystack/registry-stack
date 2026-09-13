@@ -407,6 +407,27 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         .unwrap();
     assert!(allowed.iter().any(|id| id == "portal"));
     assert!(!allowed.iter().any(|id| id == "evidence-portal"));
+    config::check_borrowed_browser_clients(
+        &clients,
+        &["portal".into()],
+        &state.audience(),
+        &state.audience(),
+    )
+    .unwrap();
+    assert!(config::check_borrowed_browser_clients(
+        &clients,
+        &["evidence-portal".into()],
+        &state.audience(),
+        &state.audience(),
+    )
+    .is_err());
+    assert!(config::check_borrowed_browser_clients(
+        &clients,
+        &["unknown".into()],
+        &state.audience(),
+        &state.audience(),
+    )
+    .is_err());
     assert_eq!(description.synthetic_users[0].username, "staff");
     assert_eq!(
         private::read(
