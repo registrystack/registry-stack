@@ -1382,6 +1382,24 @@ fn validate_value(
             }
             Ok(PublicValue::String(text.to_owned()))
         }
+        ConceptForm::BoundedIdentifier => {
+            let text = derived_string(value)?;
+            let prefix = constraint_str(concept, "prefix")?;
+            let suffix = text.strip_prefix(prefix).ok_or(KernelError::Output)?;
+            let minimum = constraint_usize(concept, "minimumBytes")?;
+            let maximum = constraint_usize(concept, "maximumBytes")?;
+            if text.len() < minimum
+                || suffix.is_empty()
+                || !suffix.as_bytes()[0].is_ascii_alphanumeric()
+                || !suffix.as_bytes()[1..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+            {
+                return Err(KernelError::Output);
+            }
+            validate_public_string(text, maximum)?;
+            Ok(PublicValue::String(text.to_owned()))
+        }
         ConceptForm::BoundedInteger => {
             let integer = match value {
                 DerivedValue::Json(Value::Number(number)) => {
@@ -3005,7 +3023,7 @@ fn extract_batch(response, context) {
         let kernel = OfflineKernel::compile(Arc::clone(&bundle)).expect("kernel compiles");
         let requirement = &bundle.config.requirements[0];
         let forms = fixture["forms"].as_array().expect("forms are an array");
-        assert_eq!(forms.len(), 11, "all Version 1 forms remain covered");
+        assert_eq!(forms.len(), 12, "all Version 1 forms remain covered");
         assert_eq!(requirement.concepts.len(), forms.len());
 
         let signer = supported_values_signer().await;
@@ -3298,6 +3316,7 @@ fn extract_batch(response, context) {
                 "category_scheme" => "categoryScheme",
                 "scheme_version" => "schemeVersion",
                 "maximum_bytes" => "maximumBytes",
+                "minimum_bytes" => "minimumBytes",
                 "maximum_scale" => "maximumScale",
                 "bucket_scheme" => "bucketScheme",
                 "minimum_items" => "minimumItems",
@@ -3538,6 +3557,43 @@ fn extract_batch(response, context) {
             "handle: example-concept\nid: urn:example:concept\n{body}\n"
         ))
         .expect("concept parses")
+    }
+
+    #[test]
+    fn bounded_identifier_requires_exact_prefix_ascii_suffix_and_byte_bounds() {
+        let identifier = concept("form: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 32}");
+        let accepted = DerivedValue::Json(json!("urn:example:report:A-01"));
+        assert_eq!(
+            validate_value(
+                &identifier,
+                &accepted,
+                &projection(),
+                &BTreeMap::new(),
+                &BTreeMap::new()
+            ),
+            Ok(PublicValue::String("urn:example:report:A-01".to_owned()))
+        );
+        for rejected in [
+            json!("urn:example:other:A-01"),
+            json!("urn:example:report:"),
+            json!("urn:example:report:/A"),
+            json!("urn:example:report:A/B"),
+            json!("urn:example:report:A B"),
+            json!("urn:example:report:é"),
+            json!("urn:example:report:ABCDEFGHIJKLMNOPQRSTUVWXYZ"),
+            json!(12),
+        ] {
+            assert_eq!(
+                validate_value(
+                    &identifier,
+                    &DerivedValue::Json(rejected),
+                    &projection(),
+                    &BTreeMap::new(),
+                    &BTreeMap::new()
+                ),
+                Err(KernelError::Output)
+            );
+        }
     }
 
     fn observed_for_case(fixture: &Value, test_case: &Value) -> DateTime<Utc> {

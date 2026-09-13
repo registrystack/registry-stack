@@ -59,7 +59,7 @@ profiles and selector values never appear in it
 (`products/evidence/contracts/evidence.schema.yaml`).
 
 The value form is the minimization control, because the form decides what the number, code, or date
-behind the answer is allowed to become before it leaves the service. There are eleven forms and the
+behind the answer is allowed to become before it leaves the service. There are twelve forms and the
 set is closed (`products/evidence/contracts/supported-value-forms.yaml`).
 
 | Value form | What the caller learns |
@@ -67,6 +67,7 @@ set is closed (`products/evidence/contracts/supported-value-forms.yaml`).
 | `boolean` | one true or false, and nothing about how it was reached |
 | `controlled-code`, `controlled-code-list` | exact membership in a reviewed codelist; labels and source codes are not disclosed |
 | `controlled-category` | exact membership in a reviewed closed category set |
+| `bounded-identifier` | a source-owned identifier with an exact governed ASCII prefix, a constrained nonempty ASCII suffix, and a total length of at most 1024 bytes |
 | `bounded-integer`, `bounded-decimal` | a number inside declared bounds, at a declared scale |
 | `date-bucket`, `time-bucket` | which reviewed bucket applies; the underlying date, instant, or duration is not disclosed |
 | `audience-scoped-entity-reference`, `entity-reference-list` | an opaque reference meaningful to the named audience and to no other; unavailable to a holder-bound requirement, which has no audience |

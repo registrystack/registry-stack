@@ -153,6 +153,7 @@ supported_values:
     - boolean
     - controlled-code
     - controlled-category
+    - bounded-identifier
     - bounded-integer
     - bounded-decimal
     - date-bucket

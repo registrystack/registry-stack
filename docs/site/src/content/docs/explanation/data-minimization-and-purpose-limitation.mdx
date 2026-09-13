@@ -83,10 +83,10 @@ Minimization also applies to what leaves the boundary. Evidence Gateway has no c
 disclosure at all, so there is no request-time negotiation to review.
 
 Instead, a requirement declares one to sixteen *concepts*, and each concept fixes the exact *value
-form* its fact takes: a boolean, a code from a reviewed codelist, a bounded number, a date or time
+form* its fact takes: a boolean, a code from a reviewed codelist, a bounded identifier or number, a date or time
 bucket, an audience-scoped opaque reference, or a reviewed closed structure. The set of forms is
-closed at eleven, and a requirement issuing under the holder-bound subject binding mode may use
-nine of them: the two entity-reference forms take the audience as a derivation input, so a
+closed at twelve, and a requirement issuing under the holder-bound subject binding mode may use
+ten of them: the two entity-reference forms take the audience as a derivation input, so a
 holder-bound requirement declaring either is refused at startup rather than served with a
 degenerate reference. The answer carries a value for each declared concept and nothing else, and the
 assertion schema rejects additional properties.

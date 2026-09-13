@@ -98,6 +98,7 @@ entries:
   - id: sec-derived-value-output-gate
     tests:
       - {file: crates/registry-evidence/src/kernel.rs, name: extraction_failures_and_invalid_outputs_fail_closed}
+      - {file: crates/registry-evidence/src/kernel.rs, name: bounded_identifier_requires_exact_prefix_ascii_suffix_and_byte_bounds}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: runtime_output_gate_rejects_every_fixture_injected_derivation_without_release}
   - id: sec-evaluation-and-audit-fail-closed
     tests:
