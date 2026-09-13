@@ -295,6 +295,28 @@ fn request_predicates_distinguish_explicit_null_from_an_absent_equality() {
 }
 
 #[test]
+fn request_field_equality_requires_a_present_stored_value() {
+    let mut source = project();
+    source["entities"][1]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"optional-owner", "type":"string", "maxLength":64,
+            "required":false, "classification":"restricted"
+        }));
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["targets"][0]
+        ["requires"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"field":"lot-reference", "equalsFromRequestField":"optional-owner"}));
+    let failure = format!("{:?}", compile(source).unwrap_err());
+    assert!(
+        failure.contains("change_request.preconditions.predicate_request_field_invalid"),
+        "{failure}"
+    );
+}
+
+#[test]
 fn frozen_guard_values_are_counted_with_the_original_proposal_snapshot() {
     let mut source = project();
     let field = source["entities"][1]["fields"]

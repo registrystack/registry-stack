@@ -1100,7 +1100,8 @@ fn compile_predicates(
                 .fields
                 .get(field)
                 .is_some_and(|request_field| {
-                    scalar_field(request_field)
+                    request_field.required
+                        && scalar_field(request_field)
                         && compatible_field_types(
                             &request_field.field_type,
                             &target_field.field_type,

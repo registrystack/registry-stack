@@ -328,6 +328,12 @@ impl MutationCoordinator {
             &frozen.request_values,
             &frozen.request_values,
             &current_date,
+            |field| {
+                entity
+                    .fields
+                    .get(field)
+                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+            },
         )?;
         let targets = crate::request_store::load_targets(
             transaction.transaction(),
@@ -404,6 +410,12 @@ impl MutationCoordinator {
                 &values,
                 &frozen.request_values,
                 &current_date,
+                |field| {
+                    registry.entities()[&guard.entity_id]
+                        .fields
+                        .get(field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+                },
             )?;
         }
         let requests = request_evidence_subjects(frozen)?;
@@ -2205,6 +2217,12 @@ impl MutationCoordinator {
                 &frozen.request_values,
                 &frozen.request_values,
                 &current_date,
+                |field| {
+                    entity
+                        .fields
+                        .get(field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+                },
             )?;
             for guard in &frozen.targets {
                 let record_id = Uuid::parse_str(guard.record_id.as_str())
@@ -2241,6 +2259,14 @@ impl MutationCoordinator {
                         .collect(),
                     &frozen.request_values,
                     &current_date,
+                    |field| {
+                        registry.entities()[&guard.entity_id]
+                            .fields
+                            .get(field)
+                            .is_some_and(|field| {
+                                matches!(field.field_type, FieldTypeSource::Timestamp)
+                            })
+                    },
                 )?;
             }
             verify_request_evidence(frozen, frozen_evidence.unwrap_or_default())?;
@@ -2843,6 +2869,7 @@ fn verify_compiled_predicates(
     actual: &BTreeMap<String, Value>,
     request_values: &BTreeMap<String, Value>,
     current_date: &str,
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     for predicate in predicates {
         let value = actual
@@ -2850,10 +2877,12 @@ fn verify_compiled_predicates(
             .ok_or(MutationError::PreconditionFailed)?;
         let accepted = match &predicate.expected {
             crate::model::CompiledChangeRequestPredicateExpected::Literal { value: expected } => {
-                value == expected
+                predicate_values_equal(value, expected, is_timestamp(&predicate.field))
             }
             crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } => {
-                request_values.get(field) == Some(value)
+                request_values.get(field).is_some_and(|expected| {
+                    predicate_values_equal(value, expected, is_timestamp(&predicate.field))
+                })
             }
             crate::model::CompiledChangeRequestPredicateExpected::CurrentDate { relation } => {
                 value.as_str().is_some_and(|date| match relation {
@@ -2873,6 +2902,20 @@ fn verify_compiled_predicates(
         }
     }
     Ok(())
+}
+
+fn predicate_values_equal(actual: &Value, expected: &Value, timestamp: bool) -> bool {
+    if !timestamp || (actual.is_null() && expected.is_null()) {
+        return actual == expected;
+    }
+    let parse = |value: &Value| {
+        value.as_str().and_then(|value| {
+            time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339).ok()
+        })
+    };
+    parse(actual)
+        .zip(parse(expected))
+        .is_some_and(|(actual, expected)| actual == expected)
 }
 
 fn verify_request_evidence(
@@ -3127,16 +3170,84 @@ mod application_precondition_tests {
             ("valid-from".into(), json!("2026-09-12")),
             ("valid-through".into(), json!("2026-09-12")),
         ]);
-        assert!(
-            super::verify_compiled_predicates(&predicates, &request, &request, "2026-09-12")
-                .is_ok()
-        );
+        assert!(super::verify_compiled_predicates(
+            &predicates,
+            &request,
+            &request,
+            "2026-09-12",
+            |_| false
+        )
+        .is_ok());
         for date in ["2026-09-11", "2026-09-13"] {
             assert_eq!(
-                super::verify_compiled_predicates(&predicates, &request, &request, date),
+                super::verify_compiled_predicates(&predicates, &request, &request, date, |_| false),
                 Err(MutationError::PreconditionFailed)
             );
         }
+    }
+
+    #[test]
+    fn timestamp_equality_compares_instants_without_widening_string_equality() {
+        let actual = json!("2026-09-12T09:30:00+07:00");
+        let same_instant = json!("2026-09-12T02:30:00Z");
+        let different_instant = json!("2026-09-12T02:30:01Z");
+        let predicates = [CompiledChangeRequestPredicate {
+            field: "observed-at".into(),
+            expected: CompiledChangeRequestPredicateExpected::RequestField {
+                field: "requested-at".into(),
+            },
+        }];
+        let observed = BTreeMap::from([("observed-at".into(), actual.clone())]);
+        let requested = BTreeMap::from([("requested-at".into(), same_instant.clone())]);
+        assert!(super::verify_compiled_predicates(
+            &predicates,
+            &observed,
+            &requested,
+            "2026-09-12",
+            |_| true
+        )
+        .is_ok());
+        let literal = [CompiledChangeRequestPredicate {
+            field: "observed-at".into(),
+            expected: CompiledChangeRequestPredicateExpected::Literal {
+                value: same_instant.clone(),
+            },
+        }];
+        assert!(super::verify_compiled_predicates(
+            &literal,
+            &observed,
+            &requested,
+            "2026-09-12",
+            |_| true
+        )
+        .is_ok());
+        assert_eq!(
+            super::verify_compiled_predicates(
+                &predicates,
+                &observed,
+                &requested,
+                "2026-09-12",
+                |_| false,
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
+        assert!(super::predicate_values_equal(&actual, &same_instant, true));
+        assert!(!super::predicate_values_equal(
+            &actual,
+            &different_instant,
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &actual,
+            &same_instant,
+            false
+        ));
+        assert!(super::predicate_values_equal(
+            &json!(null),
+            &json!(null),
+            true
+        ));
+        assert!(!super::predicate_values_equal(&actual, &json!(null), true));
     }
 
     #[test]

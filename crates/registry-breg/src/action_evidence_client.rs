@@ -251,7 +251,14 @@ impl VerifiedAcquisition {
     }
 
     pub fn retained_bytes(&self) -> Result<usize, EvidenceAcquisitionFailure> {
-        serde_json::to_vec(&self.retained_serialization()?)
+        self.retained_bytes_for("registry.breg.action-evidence-use/v1")
+    }
+
+    pub(crate) fn retained_bytes_for(
+        &self,
+        schema: &'static str,
+    ) -> Result<usize, EvidenceAcquisitionFailure> {
+        serde_json::to_vec(&self.retained_serialization_for(schema)?)
             .map(|bytes| bytes.len())
             .map_err(|_| EvidenceAcquisitionFailure::Verification)
     }
@@ -506,6 +513,13 @@ mod tests {
         assert_eq!(
             acquired.retained_bytes().unwrap(),
             serde_json::to_vec(&retained).unwrap().len()
+        );
+        let request_schema = "registry.breg.request-application-evidence-use/v1";
+        assert_eq!(
+            acquired.retained_bytes_for(request_schema).unwrap(),
+            serde_json::to_vec(&acquired.retained_serialization_for(request_schema).unwrap())
+                .unwrap()
+                .len()
         );
         assert!(acquired
             .validate_acceptance(Utc::now() + chrono::Duration::seconds(61))
