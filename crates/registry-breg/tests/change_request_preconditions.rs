@@ -194,6 +194,27 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
     compile_with_contract(source, contract).unwrap();
 
     let mut source = project();
+    source["entities"][0]["fields"][1]
+        .as_object_mut()
+        .unwrap()
+        .remove("maxLength");
+    source["entities"][0]["fields"][1]["type"] = json!("vocabulary-code");
+    source["entities"][0]["fields"][1]["vocabulary"] = json!("lot-reference");
+    source["entities"][0]["fields"][1]["values"] = json!(["active", "inactive"]);
+    let mut contract = contracts();
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0] = json!({
+        "type":"controlled-code", "name":"lot-reference",
+        "scheme":"urn:example:lot-reference", "version":"1", "maximumBytes":5
+    });
+    assert!(format!(
+        "{:?}",
+        compile_with_contract(source.clone(), contract.clone()).unwrap_err()
+    )
+    .contains("change_request.preconditions.selector_binding_invalid"));
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(6);
+    compile_with_contract(source, contract).unwrap();
+
+    let mut source = project();
     source["entities"][0]["fields"][1]["minLength"] = json!(8);
     let mut contract = contracts();
     contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(7);

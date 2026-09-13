@@ -303,6 +303,15 @@ pub(crate) fn selector_field_matches_field_type(
             _ => {}
         }
     }
+    if let (
+        registry_evidence_client::SelectorField::ControlledCode { maximum_bytes, .. },
+        FieldTypeSource::VocabularyCode { values, .. },
+    ) = (selector, field_type)
+    {
+        return values
+            .iter()
+            .any(|value| !value.is_empty() && value.len() as u64 <= *maximum_bytes);
+    }
     matches!(
         (selector, field_type),
         (
@@ -314,9 +323,6 @@ pub(crate) fn selector_field_matches_field_type(
         ) | (
             registry_evidence_client::SelectorField::Date { .. },
             FieldTypeSource::Date
-        ) | (
-            registry_evidence_client::SelectorField::ControlledCode { .. },
-            FieldTypeSource::VocabularyCode { .. }
         ) | (
             registry_evidence_client::SelectorField::String { .. },
             FieldTypeSource::String { .. }
