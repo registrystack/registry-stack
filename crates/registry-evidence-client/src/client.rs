@@ -120,7 +120,7 @@ struct ProgressiveClientState {
 }
 
 enum ProgressiveAuthorization {
-    PrivateKey(PrivateJwk),
+    PrivateKey(Box<PrivateJwk>),
     Exchange(Arc<ExchangeAuthorization>),
 }
 
@@ -283,7 +283,10 @@ impl EvidenceClient {
         profile: EvidenceClientProfile,
         private_key: PrivateJwk,
     ) -> Result<Self, EvidenceClientError> {
-        Self::build_from_profile(profile, ProgressiveAuthorization::PrivateKey(private_key))
+        Self::build_from_profile(
+            profile,
+            ProgressiveAuthorization::PrivateKey(Box::new(private_key)),
+        )
     }
 
     /// Build a progressive client whose staff credential comes from one
@@ -710,7 +713,7 @@ impl EvidenceClient {
                     let mut config = PrivateKeyJwtConfig::new(
                         token_endpoint,
                         state.profile.client_id.clone(),
-                        private_key.clone(),
+                        private_key.as_ref().clone(),
                     )
                     .with_fetch_url_policy(fetch_policy);
                     if let Some(oauth) = &state.profile.oauth {
