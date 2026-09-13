@@ -2,7 +2,7 @@
 
 ARG SOURCE_DATE_EPOCH=0
 
-FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime-root
+FROM debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132 AS runtime-root
 ARG SOURCE_DATE_EPOCH
 
 ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 https://snapshot.debian.org/archive/debian/20260913T000000Z/pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb /workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb
