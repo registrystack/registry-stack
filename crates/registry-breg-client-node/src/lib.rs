@@ -34,6 +34,7 @@ use registry_breg_client::{
     StaticToken, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::exchange_authorization_from_json;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use url::Url;
@@ -656,7 +657,7 @@ fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>
     if object.len() != 1 {
         return Err(binding_error(
             "configuration",
-            "authorization must contain exactly one of static or privateKeyJwt",
+            "authorization must contain exactly one of static, privateKeyJwt, or exchange",
         ));
     }
     if let Some(value) = object.get("static") {
@@ -671,9 +672,14 @@ fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>
         return private_key_jwt(value)
             .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>));
     }
+    if let Some(value) = object.get("exchange") {
+        return exchange_authorization_from_json(value)
+            .map(|provider| Some(Arc::new(provider) as Arc<dyn TokenProvider>))
+            .map_err(|error| mapped_error(token_error_value(error)));
+    }
     Err(binding_error(
         "configuration",
-        "authorization must contain exactly one of static or privateKeyJwt",
+        "authorization must contain exactly one of static, privateKeyJwt, or exchange",
     ))
 }
 

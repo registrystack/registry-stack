@@ -440,6 +440,8 @@ export class CaseworkClient {
   approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: SafeInteger, idempotencyKey: string, approval: TaskApprovalRequest): Promise<CaseworkOutcome<TaskGrantView>>
   revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome<TaskGrantRevocation>>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome<TaskAssertionResponse>>
+  /** Exact empty-POST authority route for the shared remote exchange provider. */
+  taskAssertionEndpoint(grantId: string): string
   taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome<TaskGrantStatus>>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>
   releaseWorkItem(token: string, profile: string, sourceProfile: string, action: CaseworkAction, idempotencyKey: string): Promise<CaseworkOutcome<MutationResponse>>

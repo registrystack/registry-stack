@@ -24,6 +24,7 @@ export declare class CaseworkClient {
   approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
   revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome>
   taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome>
+  taskAssertionEndpoint(grantId: string): string
   taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
   releaseWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>

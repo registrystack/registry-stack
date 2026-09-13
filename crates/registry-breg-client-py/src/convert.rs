@@ -12,6 +12,7 @@ use pyo3::{
     IntoPyObjectExt,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::exchange_authorization_from_json;
 use serde::Serialize;
 use serde_json::{Map, Value};
 use url::Url;
@@ -474,13 +475,18 @@ fn authorization_provider(
             if let Some(value) = value.get("private_key_jwt") {
                 return Ok(Some(Arc::new(private_key_jwt(value, roots)?)));
             }
+            if let Some(value) = value.get("exchange") {
+                return Ok(Some(Arc::new(
+                    exchange_authorization_from_json(value).map_err(ConfigError::Token)?,
+                )));
+            }
             Err(ConversionError::new(
-                "authorization must contain exactly static or private_key_jwt",
+                "authorization must contain exactly static, private_key_jwt, or exchange",
             )
             .into())
         }
         _ => Err(ConversionError::new(
-            "authorization must be null or a mapping containing exactly static or private_key_jwt",
+            "authorization must be null or a mapping containing exactly static, private_key_jwt, or exchange",
         )
         .into()),
     }
