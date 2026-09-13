@@ -41,8 +41,8 @@ pub(crate) use registry_evidence_authoring::{
         SOURCES_DIRECTORY,
     },
     model::{
-        AccessPolicy, AnswerType, FactCombination, Question, QuestionAnswer, QuestionFact,
-        QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
+        AccessPolicy, AccessTaskGrant, AnswerType, FactCombination, Question, QuestionAnswer,
+        QuestionFact, QuestionResponseFormat, QuestionSdJwtVcDisclosure, QuestionSource,
     },
     validate::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
@@ -125,6 +125,7 @@ pub(crate) struct CompiledAccessPolicy {
     pub(crate) id: String,
     pub(crate) requester_tag: String,
     pub(crate) questions: Vec<String>,
+    pub(crate) task_grant: Option<AccessTaskGrant>,
 }
 
 /// A field-addressed refusal from a typed authored document.
@@ -189,12 +190,21 @@ enum CompileProfile {
         audience: String,
         active_public_jwk_file: String,
         active_public_jwk: Vec<u8>,
-        /// The machine clients the compiled bundle admits by name. Empty
-        /// leaves admission to the issuer, which is what a session owning its
-        /// own issuer wants.
-        allowed_clients: Vec<String>,
+        admission: LocalAdmission,
     },
     Production(Value),
+}
+
+/// The client admission a local bundle states. The default states none and
+/// leaves admission to the issuer, which is what a session owning its own
+/// issuer wants.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LocalAdmission {
+    /// The machine clients the compiled bundle admits by name.
+    pub(crate) allowed_clients: Vec<String>,
+    /// The assertion authorities each admitted exchange client may present,
+    /// as the issuer owner pairs them.
+    pub(crate) assertion_issuers: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -264,7 +274,7 @@ pub(crate) fn compile_local_project_with_ports(
         evidence_bin,
         ports,
         LOCAL_AUDIENCE,
-        &[],
+        &LocalAdmission::default(),
     )
 }
 
@@ -274,7 +284,7 @@ pub(crate) fn compile_local_project_with_ports_and_resource(
     evidence_bin: &Path,
     ports: LocalServicePorts,
     audience: &str,
-    allowed_clients: &[String],
+    admission: &LocalAdmission,
 ) -> Result<CompiledProject> {
     compile_local_project_with_target_inputs_and_resource(
         project_root,
@@ -284,7 +294,7 @@ pub(crate) fn compile_local_project_with_ports_and_resource(
         json!({}),
         json!({"systemRoots": true, "trustProfiles": {}}),
         audience,
-        allowed_clients,
+        admission,
     )
 }
 
@@ -305,7 +315,7 @@ pub(crate) fn compile_local_project_with_target_inputs(
         source_connections,
         outbound_tls,
         LOCAL_AUDIENCE,
-        &[],
+        &LocalAdmission::default(),
     )
 }
 
@@ -318,7 +328,7 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
     source_connections: Value,
     outbound_tls: Value,
     audience: &str,
-    allowed_clients: &[String],
+    admission: &LocalAdmission,
 ) -> Result<CompiledProject> {
     LocalServicePorts::new(ports.evidence, ports.issuer)?;
     if !valid_local_audience(audience) {
@@ -340,7 +350,7 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
             audience: audience.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
-            allowed_clients: allowed_clients.to_vec(),
+            admission: admission.clone(),
         },
         source_connections,
     )?;
@@ -500,7 +510,7 @@ pub(crate) fn compile_check_project(
             audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
             active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
-            allowed_clients: Vec::new(),
+            admission: LocalAdmission::default(),
         },
         json!({}),
     )?;
@@ -553,7 +563,7 @@ pub(crate) fn compile_fixture_project_with_connections(
             audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
-            allowed_clients: Vec::new(),
+            admission: LocalAdmission::default(),
         },
         source_connections,
     )?;
@@ -732,6 +742,7 @@ pub(crate) fn validate_offline_local_access(
             id: policy.id,
             requester_tag: policy.requester_tag,
             questions: policy.questions,
+            task_grant: policy.task_grant,
         })
         .collect())
 }
@@ -743,6 +754,7 @@ struct Inputs {
     schemas: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
     access_policies: Vec<AuthoredAccessPolicy>,
+    active_client_policies: BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -750,6 +762,7 @@ struct AuthoredAccessPolicy {
     id: String,
     requester_tag: String,
     questions: Vec<String>,
+    task_grant: Option<AccessTaskGrant>,
 }
 
 struct AuthoredQuestion {
@@ -1014,6 +1027,14 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
     } else {
         Vec::new()
     };
+    let active_client_policies = if access_policies
+        .iter()
+        .any(|policy| policy.task_grant.is_some())
+    {
+        crate::access::active_client_policies(project_root)?
+    } else {
+        BTreeMap::new()
+    };
 
     if require_local_secrets {
         let secrets = project_root.join(SECRETS_DIRECTORY);
@@ -1035,6 +1056,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         schemas,
         questions,
         access_policies,
+        active_client_policies,
     })
 }
 
@@ -1289,12 +1311,12 @@ fn read_access_policies(
             }
             .into());
         }
-        let questions = policy.questions;
-        let requester_tag = access_policy_requester_tag(&policy.id, &questions)?;
+        let requester_tag = access_policy_requester_tag_for(&policy)?;
         policies.push(AuthoredAccessPolicy {
             id: policy.id,
             requester_tag,
-            questions,
+            questions: policy.questions,
+            task_grant: policy.task_grant,
         });
     }
     Ok(policies)
@@ -1324,6 +1346,19 @@ pub(crate) fn access_policy_requester_tag(id: &str, questions: &[String]) -> Res
         write!(&mut tag, "{byte:02x}").expect("writing to a string cannot fail");
     }
     Ok(tag)
+}
+
+pub(crate) fn access_policy_requester_tag_for(policy: &AccessPolicy) -> Result<String> {
+    if policy.task_grant.is_none() {
+        return access_policy_requester_tag(&policy.id, &policy.questions);
+    }
+    if !validate_access_policy(policy).is_empty() {
+        bail!("task grant policy is outside the closed authored profile");
+    }
+    let canonical = canonicalize_json(&serde_json::to_value(policy)?)
+        .context("canonicalizing task grant policy")?;
+    let digest = domain_separated_sha256(b"registry-evidencectl-access-policy-v2\0", &canonical);
+    Ok(format!("policy-v2-{}", hex::encode(digest)))
 }
 
 fn read_named_objects(
@@ -1556,21 +1591,23 @@ fn compile_plan_with_connections(
     }
     prune_unused_source_alternatives(&mut questions)?;
     let access_policies = inputs.access_policies;
+    let active_client_policies = inputs.active_client_policies;
     match profile {
         CompileProfile::Local {
             ports,
             audience,
             active_public_jwk_file,
             active_public_jwk,
-            allowed_clients,
+            admission,
         } => {
             let mut bundle = render_local_bundle(
                 &questions,
                 &access_policies,
+                &active_client_policies,
                 ports,
                 &active_public_jwk_file,
                 &audience,
-                &allowed_clients,
+                &admission,
             )?;
             if source_connections
                 .as_object()
@@ -3462,10 +3499,11 @@ pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
     let mut governance = render_local_bundle(
         &[],
         &[],
+        &BTreeMap::new(),
         LocalServicePorts::new(8080, 8081)?,
         &key,
         LOCAL_AUDIENCE,
-        &[],
+        &LocalAdmission::default(),
     )?;
     let object = governance
         .as_object_mut()
@@ -3479,12 +3517,16 @@ pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
 fn render_local_bundle(
     questions: &[QuestionPlan],
     access_policies: &[AuthoredAccessPolicy],
+    active_client_policies: &BTreeMap<String, Vec<String>>,
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
     audience: &str,
-    allowed_clients: &[String],
+    admission: &LocalAdmission,
 ) -> Result<Value> {
     let issuer_origin = ports.issuer_origin();
+    let provider_id = local_resource_identity(audience, "provider");
+    let issuer_id = local_resource_identity(audience, "issuer");
+    let service_id = local_resource_identity(audience, "service");
     let selector_profiles = questions
         .iter()
         .flat_map(|question| &question.subjects)
@@ -3512,7 +3554,7 @@ fn render_local_bundle(
                 });
                 Ok((
                     policy.requester_tag.clone(),
-                    render_authority_profile(&policy.requester_tag, covered)?,
+                    render_policy_authority_profile(policy, covered, active_client_policies)?,
                 ))
             })
             .collect::<Result<Map<_, _>>>()?
@@ -3532,13 +3574,13 @@ fn render_local_bundle(
         "version": 1,
         "assuranceProfile": "local",
         "service": {
-            "providerId": local_uri("provider"),
+            "providerId": provider_id,
             "trustDomain": local_uri("trust-domain"),
             "publicOrigin": format!("http://127.0.0.1:{}", ports.evidence),
         },
-        "issuer": {"id": local_uri("issuer")},
+        "issuer": {"id": issuer_id},
         "publication": {
-            "serviceId": local_uri("service"),
+            "serviceId": service_id,
             "title": "Local Evidence service",
             "description": "Local minimum-disclosure Evidence authoring service",
             "endpointUrl": ports.evidence_origin(),
@@ -3589,10 +3631,121 @@ fn render_local_bundle(
         "authorityProfiles": authority_profiles,
         "requirements": requirements,
     });
-    if !allowed_clients.is_empty() {
-        bundle["authentication"]["allowedClients"] = json!(allowed_clients);
+    let has_task_grants = access_policies
+        .iter()
+        .any(|policy| policy.task_grant.is_some());
+    if has_task_grants && active_client_policies.is_empty() {
+        bail!("task grant policies require active local clients");
+    }
+    if !admission.allowed_clients.is_empty() {
+        bundle["authentication"]["allowedClients"] = json!(admission.allowed_clients);
+    } else if has_task_grants {
+        let admitted = active_client_policies.keys().collect::<Vec<_>>();
+        bundle["authentication"]["allowedClients"] = json!(admitted);
+    }
+    if !admission.assertion_issuers.is_empty() {
+        bundle["authentication"]["assertionIssuers"] = json!(admission.assertion_issuers);
     }
     Ok(bundle)
+}
+
+fn local_resource_identity(audience: &str, role: &str) -> String {
+    if audience == LOCAL_AUDIENCE {
+        local_uri(role)
+    } else if audience.starts_with("urn:") && !audience.contains('?') {
+        format!("{audience}:{role}")
+    } else {
+        format!("{audience}#{role}")
+    }
+}
+
+fn render_policy_authority_profile<'a>(
+    policy: &AuthoredAccessPolicy,
+    covered: impl Iterator<Item = &'a QuestionPlan>,
+    active_client_policies: &BTreeMap<String, Vec<String>>,
+) -> Result<Value> {
+    let Some(task) = &policy.task_grant else {
+        return render_authority_profile(&policy.requester_tag, covered);
+    };
+    for client in &task.requester_clients {
+        if !active_client_policies
+            .get(client)
+            .is_some_and(|policies| policies.contains(&policy.id))
+        {
+            bail!("task grant requester client {client} must be active and assigned this policy");
+        }
+    }
+    let questions = covered.collect::<Vec<_>>();
+    let mut expected = BTreeMap::new();
+    for question in &questions {
+        for subject in &question.subjects {
+            for selector in &subject.selectors {
+                expected.insert(
+                    (
+                        question.question_id.as_str(),
+                        subject.role.as_str(),
+                        selector.profile.as_str(),
+                    ),
+                    selector.fields.iter().collect::<BTreeSet<_>>(),
+                );
+            }
+        }
+    }
+    let supplied = task
+        .bindings
+        .iter()
+        .map(|binding| {
+            (
+                (
+                    binding.question.as_str(),
+                    binding.role.as_str(),
+                    binding.selector_profile.as_str(),
+                ),
+                binding.value_claims.keys().collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    if supplied != expected {
+        bail!("task grant bindings must cover every named question, role, selector profile, and exact selector field set");
+    }
+    let mut grants = Vec::new();
+    for question in questions {
+        for mut grant in question.grants.iter().cloned() {
+            let subjects = grant["subjects"]
+                .as_array_mut()
+                .context("compiled grant has no subjects")?;
+            for subject in subjects {
+                let role = subject["role"]
+                    .as_str()
+                    .context("compiled grant role missing")?;
+                let profile = subject["selectorProfile"]
+                    .as_str()
+                    .context("compiled grant selector profile missing")?;
+                let binding = task
+                    .bindings
+                    .iter()
+                    .find(|binding| {
+                        binding.question == question.question_id
+                            && binding.role == role
+                            && binding.selector_profile == profile
+                    })
+                    .context("task grant selector binding missing")?;
+                subject["valueOrigin"] = json!("authenticated-grant");
+                subject["valueClaims"] = json!(binding.value_claims);
+            }
+            grants.push(grant);
+        }
+    }
+    if grants.is_empty() || grants.len() > MAX_PROFILE_AUTHORITY_GRANTS {
+        bail!("task grant authority profile needs a bounded grant set");
+    }
+    Ok(json!({
+        "kind": task.kind,
+        "requesterTags": [policy.requester_tag],
+        "requesterClients": task.requester_clients,
+        "grantSourceIssuer": task.source_issuer,
+        "grants": grants,
+    }))
 }
 
 /// Gather the grants of the questions one generated profile covers, refusing
@@ -3749,6 +3902,7 @@ fn write_plan(
                 id: policy.id.clone(),
                 requester_tag: policy.requester_tag.clone(),
                 questions: policy.questions.clone(),
+                task_grant: policy.task_grant.clone(),
             })
             .collect(),
     })
@@ -4695,13 +4849,16 @@ properties:
             "urn:seed-demo:evidence:laboratory",
         ] {
             let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            let evidence_bin = std::env::var_os("EVIDENCE_BIN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| fixture.evidence.clone());
             let compiled = compile_local_project_with_ports_and_resource(
                 &fixture.project,
                 &fixture.staging,
-                &fixture.evidence,
+                &evidence_bin,
                 LocalServicePorts::default(),
                 audience,
-                &[],
+                &LocalAdmission::default(),
             )
             .unwrap();
             assert_eq!(compiled.local_audience, audience);
@@ -4710,6 +4867,15 @@ properties:
             )
             .unwrap();
             assert_eq!(bundle["authentication"]["audiences"], json!([audience]));
+            assert_eq!(
+                bundle["service"]["providerId"],
+                format!("{audience}:provider")
+            );
+            assert_eq!(bundle["issuer"]["id"], format!("{audience}:issuer"));
+            assert_eq!(
+                bundle["publication"]["serviceId"],
+                format!("{audience}:service")
+            );
         }
     }
 
@@ -4726,7 +4892,7 @@ properties:
             &own_issuer.evidence,
             LocalServicePorts::default(),
             LOCAL_AUDIENCE,
-            &[],
+            &LocalAdmission::default(),
         )
         .unwrap();
         let bundle: Value = serde_norway::from_slice(
@@ -4746,7 +4912,10 @@ properties:
             &shared_issuer.evidence,
             LocalServicePorts::default(),
             LOCAL_AUDIENCE,
-            &["age-checker".to_owned(), "records-reader".to_owned()],
+            &LocalAdmission {
+                allowed_clients: vec!["age-checker".to_owned(), "records-reader".to_owned()],
+                assertion_issuers: BTreeMap::new(),
+            },
         )
         .unwrap();
         let bundle: Value = serde_norway::from_slice(
@@ -4756,6 +4925,39 @@ properties:
         assert_eq!(
             bundle["authentication"]["allowedClients"],
             json!(["age-checker", "records-reader"])
+        );
+        assert!(
+            bundle["authentication"].get("assertionIssuers").is_none(),
+            "a session whose clients exchange nothing states no pairing: {}",
+            bundle["authentication"]
+        );
+
+        // An admitted exchange client may present only the assertion
+        // authorities the issuer owner pairs it with, so the bundle carries
+        // that pairing rather than admitting any authority the issuer trusts.
+        let exchanging = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        compile_local_project_with_ports_and_resource(
+            &exchanging.project,
+            &exchanging.staging,
+            &exchanging.evidence,
+            LocalServicePorts::default(),
+            LOCAL_AUDIENCE,
+            &LocalAdmission {
+                allowed_clients: vec!["age-checker".to_owned(), "task-agent".to_owned()],
+                assertion_issuers: BTreeMap::from([(
+                    "task-agent".to_owned(),
+                    vec!["https://casework.invalid".to_owned()],
+                )]),
+            },
+        )
+        .unwrap();
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(exchanging.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle["authentication"]["assertionIssuers"],
+            json!({"task-agent": ["https://casework.invalid"]})
         );
     }
 
@@ -6112,6 +6314,113 @@ factSchema: schemas/source-facts.schema.yaml
     }
 
     #[test]
+    fn task_grant_policy_binds_verified_claims_and_refuses_revoked_requester() {
+        fn fixture_with_task_client(status: &str, claim: &str) -> Fixture {
+            let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+            fixture.add_access_policy("casework-task", &["adult-status"]);
+            let policy = json!({
+                "version": 1,
+                "id": "casework-task",
+                "questions": ["adult-status"],
+                "taskGrant": {
+                    "kind": "delegated",
+                    "sourceIssuer": "https://casework.invalid",
+                    "requesterClients": ["task-agent"],
+                    "bindings": [{
+                        "question": "adult-status",
+                        "role": "person",
+                        "selectorProfile": "local-subject-adult-status-v1",
+                        "valueClaims": {"person_id": claim},
+                    }],
+                },
+            });
+            fs::write(
+                fixture.project.join("access/policies/casework-task.yaml"),
+                serde_norway::to_string(&policy).unwrap(),
+            )
+            .unwrap();
+            fs::create_dir_all(fixture.project.join("access/clients")).unwrap();
+            let key: Value = serde_json::from_str(OFFLINE_CHECK_PUBLIC_JWK).unwrap();
+            let client = json!({
+                "version": 1, "clientId": "task-agent", "status": status,
+                "policies": ["casework-task"],
+                "principal": "urn:registrystack:evidence:local:client:task-agent",
+                "evidenceAudience": "urn:registrystack:evidence:local:client:task-agent",
+                "keys": [key],
+            });
+            fs::write(
+                fixture.project.join("access/clients/task-agent.yaml"),
+                serde_norway::to_string(&client).unwrap(),
+            )
+            .unwrap();
+            fixture
+        }
+
+        let fixture = fixture_with_task_client("active", "identity.person_reference");
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("closed task grant compiles");
+        let policy = &compiled.access_policies[0];
+        assert!(policy.requester_tag.starts_with("policy-v2-"));
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle["authentication"]["allowedClients"],
+            json!(["task-agent"])
+        );
+        let profile = &bundle["authorityProfiles"][&policy.requester_tag];
+        assert_eq!(profile["kind"], "delegated");
+        assert_eq!(profile["grantSourceIssuer"], "https://casework.invalid");
+        assert_eq!(profile["requesterClients"], json!(["task-agent"]));
+        assert_eq!(
+            profile["grants"][0]["subjects"][0]["valueOrigin"],
+            "authenticated-grant"
+        );
+        assert_eq!(
+            profile["grants"][0]["subjects"][0]["valueClaims"],
+            json!({"person_id":"identity.person_reference"})
+        );
+
+        let changed = fixture_with_task_client("active", "identity.other_reference");
+        let changed_compiled =
+            compile_local_project(&changed.project, &changed.staging, &changed.evidence).unwrap();
+        assert_ne!(
+            policy.requester_tag,
+            changed_compiled.access_policies[0].requester_tag
+        );
+
+        let revoked = fixture_with_task_client("revoked", "identity.person_reference");
+        let error = compile_local_project(&revoked.project, &revoked.staging, &revoked.evidence)
+            .expect_err("revoked task agent cannot be admitted through policy declaration");
+        assert!(error.to_string().contains("must be active"));
+        assert!(revoked.staging_is_empty());
+
+        let incomplete = fixture_with_task_client("active", "identity.person_reference");
+        let policy_path = incomplete
+            .project
+            .join("access/policies/casework-task.yaml");
+        let mut policy: Value = serde_norway::from_slice(&fs::read(&policy_path).unwrap()).unwrap();
+        policy["taskGrant"]["bindings"][0]["valueClaims"] =
+            json!({"wrong_field":"identity.person_reference"});
+        fs::write(&policy_path, serde_norway::to_string(&policy).unwrap()).unwrap();
+        let error = compile_local_project(
+            &incomplete.project,
+            &incomplete.staging,
+            &incomplete.evidence,
+        )
+        .expect_err("task binding cannot omit the selector's exact field");
+        assert!(error.to_string().contains("exact selector field set"));
+        assert!(incomplete.staging_is_empty());
+
+        if let Some(evidence_bin) = std::env::var_os("EVIDENCE_BIN") {
+            let live = fixture_with_task_client("active", "identity.person_reference");
+            compile_local_project(&live.project, &live.staging, Path::new(&evidence_bin))
+                .expect("real Evidence binary accepts the task-grant bundle");
+        }
+    }
+
+    #[test]
     fn source_artifact_graph_validates_without_questions_target_or_secrets() {
         let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
         write_referenced_people_project(&fixture, "authentication: {kind: none}\n");
@@ -6255,7 +6564,7 @@ fn prepare(selectors, context) {
                 audience: LOCAL_AUDIENCE.to_owned(),
                 active_public_jwk_file: "public-keys/test.jwk".to_owned(),
                 active_public_jwk: vec![],
-                allowed_clients: Vec::new(),
+                admission: LocalAdmission::default(),
             },
         )
         .unwrap();

@@ -261,3 +261,122 @@ fn public_clients_without_local_keys_can_be_added_alongside_and_revoked() {
     .expect("governed client yaml");
     assert_eq!(governed["status"], "revoked");
 }
+
+#[test]
+fn institutional_exchange_keeps_bootstrap_binding_explicit_and_preserves_it_on_revocation() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+    success(&add_policy(project, "age-checks", &["adult-status"]));
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "task-checker",
+            "--policy",
+            "age-checks",
+            "--generate-local-key",
+            "--grant-bootstrap-scope",
+            "tasks:assert",
+            "--grant-bootstrap-resource",
+            "urn:local:task-authority",
+        ],
+    ));
+    let path = project.join("access/clients/task-checker.yaml");
+    let document: Value =
+        serde_norway::from_slice(&fs::read(&path).expect("client")).expect("yaml");
+    assert_eq!(
+        document["exchange"],
+        serde_json::json!({
+            "kind": "institutional-grant", "bootstrapScope": "tasks:assert",
+            "bootstrapResource": "urn:local:task-authority",
+        })
+    );
+    assert_eq!(
+        document["evidenceAudience"],
+        "urn:registrystack:evidence:local:client:task-checker"
+    );
+    let key_path = project.join(".evidence/clients/task-checker/private.jwk");
+    let key_before = fs::read(&key_path).expect("private key");
+    success(&evidencectl(project, &["access", "client", "list"]));
+    success(&evidencectl(
+        project,
+        &["access", "client", "revoke", "task-checker"],
+    ));
+    let revoked: Value = serde_norway::from_slice(&fs::read(path).expect("client")).expect("yaml");
+    assert_eq!(revoked["status"], "revoked");
+    assert_eq!(revoked["exchange"], document["exchange"]);
+    assert_eq!(fs::read(key_path).expect("retained key"), key_before);
+
+    success(&evidencectl(
+        project,
+        &[
+            "access",
+            "client",
+            "add",
+            "default-task-checker",
+            "--policy",
+            "age-checks",
+            "--generate-local-key",
+            "--grant-bootstrap-scope",
+            "tasks:assert",
+        ],
+    ));
+    let default: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/default-task-checker.yaml")).expect("client"),
+    )
+    .expect("yaml");
+    assert!(default["exchange"]["bootstrapResource"].is_null());
+}
+
+#[test]
+fn invalid_or_ambiguous_exchange_binding_cannot_publish_a_client() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+    success(&add_policy(project, "age-checks", &["adult-status"]));
+    for options in [
+        vec!["--grant-bootstrap-resource", "urn:local:tasks"],
+        vec!["--grant-bootstrap-scope", "tasks:assert evidence:invoke"],
+        vec![
+            "--grant-bootstrap-scope",
+            "tasks:assert",
+            "--grant-bootstrap-resource",
+            "not-a-uri",
+        ],
+    ] {
+        let mut args = vec![
+            "access",
+            "client",
+            "add",
+            "invalid-client",
+            "--policy",
+            "age-checks",
+            "--generate-local-key",
+        ];
+        args.extend(options);
+        assert!(!evidencectl(project, &args).status.success());
+        assert!(!project.join("access/clients/invalid-client.yaml").exists());
+        assert!(!project.join(".evidence/clients/invalid-client").exists());
+    }
+    success(&add_client(project, "direct-client", &["age-checks"]));
+    let path = project.join("access/clients/direct-client.yaml");
+    let original: Value =
+        serde_norway::from_slice(&fs::read(&path).expect("client")).expect("yaml");
+    assert!(original.get("exchange").is_none());
+    for exchange in [
+        serde_json::json!({"kind":"unknown-mode", "bootstrapScope":"tasks:assert"}),
+        serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert", "unexpected":true}),
+        serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert other"}),
+        serde_json::json!({"kind":"institutional-grant", "bootstrapScope":"tasks:assert", "bootstrapResource":"relative"}),
+    ] {
+        let mut document = original.clone();
+        document["exchange"] = exchange;
+        fs::write(&path, serde_norway::to_string(&document).expect("yaml")).expect("write client");
+        assert!(!evidencectl(project, &["access", "client", "list"])
+            .status
+            .success());
+    }
+}

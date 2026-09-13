@@ -63,7 +63,94 @@ pub fn validate_access_policy(policy: &AccessPolicy) -> Vec<Finding> {
             "access policy questions must be sorted and unique",
         );
     }
+    if let Some(grant) = &policy.task_grant {
+        if !matches!(
+            grant.kind.as_str(),
+            "statutory" | "organizational" | "consent" | "delegated"
+        ) {
+            return one(
+                FieldPath::root().key("taskGrant").key("kind"),
+                "access-policy-grant-kind",
+                "task grant needs one governed authority kind",
+            );
+        }
+        let source = url::Url::parse(&grant.source_issuer);
+        if grant.source_issuer.len() > 512
+            || source.is_err()
+            || source.is_ok_and(|uri| {
+                uri.fragment().is_some() || !uri.username().is_empty() || uri.password().is_some()
+            })
+        {
+            return one(
+                FieldPath::root().key("taskGrant").key("sourceIssuer"),
+                "access-policy-grant-source",
+                "task grant source issuer must be one exact absolute URI",
+            );
+        }
+        if grant.requester_clients.is_empty()
+            || grant.requester_clients.len() > 32
+            || !grant
+                .requester_clients
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+            || grant
+                .requester_clients
+                .iter()
+                .any(|client| !valid_local_identifier(client))
+        {
+            return one(
+                FieldPath::root().key("taskGrant").key("requesterClients"),
+                "access-policy-grant-clients",
+                "task grant requester clients must be sorted, unique local identifiers",
+            );
+        }
+        let bindings = &grant.bindings;
+        if bindings.is_empty()
+            || bindings.len() > 128
+            || !bindings.windows(2).all(|pair| {
+                (&pair[0].question, &pair[0].role, &pair[0].selector_profile)
+                    < (&pair[1].question, &pair[1].role, &pair[1].selector_profile)
+            })
+        {
+            return one(
+                FieldPath::root().key("taskGrant").key("bindings"),
+                "access-policy-grant-bindings",
+                "task grant bindings must be sorted, unique, and bounded",
+            );
+        }
+        for (index, binding) in bindings.iter().enumerate() {
+            let field = FieldPath::root()
+                .key("taskGrant")
+                .key("bindings")
+                .index(index);
+            if !policy.questions.contains(&binding.question)
+                || !valid_local_identifier(&binding.role)
+                || !valid_local_identifier(&binding.selector_profile)
+                || binding.value_claims.is_empty()
+                || binding.value_claims.len() > 16
+                || binding
+                    .value_claims
+                    .iter()
+                    .any(|(key, path)| !valid_local_identifier(key) || !valid_claim_path(path))
+            {
+                return one(field, "access-policy-grant-binding-shape",
+                    "task grant binding needs a named question, role, selector profile, and exact claim paths");
+            }
+        }
+    }
     Vec::new()
+}
+
+fn valid_claim_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && value.split('.').all(|part| {
+            let mut bytes = part.bytes();
+            bytes
+                .next()
+                .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+                && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        })
 }
 
 /// Check one authored question against the authoring form.
