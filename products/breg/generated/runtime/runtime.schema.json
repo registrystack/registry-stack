@@ -1060,6 +1060,9 @@
         "caseworkResource": {
           "type": "string"
         },
+        "clientAssertionAudience": {
+          "type": "string"
+        },
         "clientId": {
           "type": "string"
         },
@@ -1078,6 +1081,7 @@
         "sourceIssuer",
         "baseUrl",
         "tokenEndpoint",
+        "clientAssertionAudience",
         "clientId",
         "privateKeyRef",
         "caseworkResource"

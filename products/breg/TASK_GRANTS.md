@@ -49,6 +49,7 @@ taskGrantStatus:
     sourceIssuer: https://casework.example.gov
     baseUrl: https://casework.example.gov
     tokenEndpoint: https://identity.example.gov/oauth2/token
+    clientAssertionAudience: https://identity.example.gov
     clientId: breg-task-status
     privateKeyRef: secret:file/breg-task-status-private-jwk
     caseworkResource: urn:casework:case-management
@@ -58,9 +59,11 @@ Register this client for client credentials with the exact Casework resource and
 `casework:grants:status` scope. Register the same client in Casework's status
 client mapping for this BREG resource. BREG supplies its configured OIDC audience
 as that resource; neither a caller nor the grant chooses an outbound endpoint.
-The private JWK must include its registered key identifier. `caBundleRef` can
-refer to a private CA PEM bundle for both outbound connections. Production
-endpoints use HTTPS; loopback HTTP is available for local development.
+`clientAssertionAudience` is required and must exactly match the audience the
+identity provider accepts for the signed client assertion. Stock ThunderID uses
+its issuer URL. The private JWK must include its registered key identifier.
+`caBundleRef` can refer to a private CA PEM bundle for both outbound connections.
+Production endpoints use HTTPS; loopback HTTP is available for local development.
 
 Startup refuses a task profile without its configured authority/source-issuer
 mapping. A failed status request refuses the mutation. No positive status result

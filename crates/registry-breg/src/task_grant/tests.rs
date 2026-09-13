@@ -3,8 +3,12 @@ use axum::{
     extract::State,
     http::HeaderMap,
     routing::{get, post},
-    Json, Router,
+    Form, Json, Router,
 };
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use registry_platform_config::{SecretProvider, SecretResolver};
+use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Mutex,
@@ -15,12 +19,30 @@ struct StateData {
     response: Arc<Mutex<Value>>,
     status_calls: Arc<AtomicUsize>,
     token_calls: Arc<AtomicUsize>,
+    rejected_token_calls: Arc<AtomicUsize>,
+    client_assertion_audience: String,
 }
-async fn token(State(state): State<StateData>) -> Json<Value> {
+async fn token(
+    State(state): State<StateData>,
+    Form(form): Form<BTreeMap<String, String>>,
+) -> Result<Json<Value>, axum::http::StatusCode> {
+    let assertion = form
+        .get("client_assertion")
+        .ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
+    let claims = assertion
+        .split('.')
+        .nth(1)
+        .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok())
+        .and_then(|value| serde_json::from_slice::<Value>(&value).ok())
+        .ok_or(axum::http::StatusCode::UNAUTHORIZED)?;
+    if claims["aud"] != state.client_assertion_audience {
+        state.rejected_token_calls.fetch_add(1, Ordering::SeqCst);
+        return Err(axum::http::StatusCode::UNAUTHORIZED);
+    }
     state.token_calls.fetch_add(1, Ordering::SeqCst);
-    Json(
+    Ok(Json(
         serde_json::json!({"access_token":"synthetic-status-service","token_type":"Bearer","expires_in":300,"scope":"casework:grants:status"}),
-    )
+    ))
 }
 async fn status(State(state): State<StateData>, headers: HeaderMap) -> Json<Value> {
     assert_eq!(
@@ -35,45 +57,71 @@ fn binding() -> TaskGrantBinding {
 }
 
 #[tokio::test]
-async fn each_mutating_attempt_reads_fresh_status_and_compares_every_immutable_bound() {
+async fn activated_status_client_uses_the_configured_assertion_audience_and_checks_each_attempt() {
     let binding = binding();
     let response = Arc::new(Mutex::new(
         serde_json::json!({"active":true,"grant":binding}),
     ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let issuer = format!("http://{address}");
     let state = StateData {
         response: response.clone(),
         status_calls: Arc::new(AtomicUsize::new(0)),
         token_calls: Arc::new(AtomicUsize::new(0)),
+        rejected_token_calls: Arc::new(AtomicUsize::new(0)),
+        client_assertion_audience: issuer.clone(),
     };
     let app = Router::new()
         .route("/token", post(token))
         .route("/v1/task-grants/{id}/status", get(status))
         .with_state(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let mut key = registry_platform_crypto::generate_private_jwk(
         registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
     )
     .unwrap();
     key.alg = Some("RS256".into());
-    let config = registry_platform_httputil::client::PrivateKeyJwtConfig::new(
-        format!("http://{address}/token").parse().unwrap(),
-        "breg-status",
-        key,
-    )
-    .with_resource("urn:casework:test")
-    .with_scopes(["casework:grants:status"]);
-    let token = Arc::new(PrivateKeyJwt::new(config).unwrap());
-    let client = TaskGrantStatusClient::new(
-        "casework".into(),
-        "https://casework.test".into(),
-        "urn:breg:test".into(),
-        format!("http://{address}").parse().unwrap(),
-        token,
-        None,
-    )
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("status-key");
+    let mut private = serde_json::to_value(&key).unwrap();
+    for (name, value) in [
+        ("d", &key.d),
+        ("p", &key.p),
+        ("q", &key.q),
+        ("dp", &key.dp),
+        ("dq", &key.dq),
+        ("qi", &key.qi),
+    ] {
+        if let Some(value) = value {
+            private[name] = Value::String(value.clone());
+        }
+    }
+    std::fs::write(&path, serde_json::to_vec(&private).unwrap()).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
+    let config: TaskGrantStatusConfig = serde_json::from_value(serde_json::json!({
+        "authority":"casework",
+        "sourceIssuer":"https://casework.test",
+        "baseUrl":issuer,
+        "tokenEndpoint":format!("http://{address}/token"),
+        "clientAssertionAudience":issuer,
+        "clientId":"breg-status",
+        "privateKeyRef":"secret:file/status-key",
+        "caseworkResource":"urn:casework:test"
+    }))
     .unwrap();
+    let mut wrong = config.clone();
+    wrong.client_assertion_audience = format!("http://{address}/token");
+    let wrong = TaskGrantStatusRegistry::activate(&[wrong], "urn:breg:test", &secrets).unwrap();
+    assert_eq!(
+        wrong.check(&binding).await,
+        Err(TaskGrantError::Unavailable)
+    );
+    assert_eq!(state.rejected_token_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(state.status_calls.load(Ordering::SeqCst), 0);
+
+    let client = TaskGrantStatusRegistry::activate(&[config], "urn:breg:test", &secrets).unwrap();
     client.check(&binding).await.unwrap();
     *response.lock().unwrap() = serde_json::json!({"active":false});
     assert_eq!(client.check(&binding).await, Err(TaskGrantError::Refused));

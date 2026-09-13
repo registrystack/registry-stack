@@ -3,7 +3,8 @@
 use super::native_resource as resource;
 use axum::http::{Method, StatusCode};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig};
+use registry_breg::task_grant::{TaskGrantStatusConfig, TaskGrantStatusRegistry};
+use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::{json, Value};
 use std::{
     fs,
@@ -278,36 +279,26 @@ async fn source_backed_dev_approves_exchanges_and_revokes_on_stock_issuer() {
     let jwks: Value =
         serde_json::from_slice(&fs::read(session.root().join("secrets/issuer-jwks")).unwrap())
             .unwrap();
-    let status_key = registry_platform_crypto::PrivateJwk::parse(
-        &fs::read_to_string(
-            session
-                .root()
-                .join("credentials/status-client/assertion-key.jwk"),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let provider = PrivateKeyJwt::new(
-        PrivateKeyJwtConfig::new(
-            format!("{}/oauth2/token", session.issuer())
-                .parse()
-                .unwrap(),
-            "status-client",
-            status_key,
-        )
-        .with_audience(session.issuer())
-        .with_resource(AUDIENCE)
-        .with_scopes(["casework:grants:status"]),
+    let secrets = SecretResolver::new(
+        [SecretProvider::File],
+        session.root().join("credentials/status-client"),
     )
     .unwrap();
     let checker = Arc::new(
-        registry_breg::task_grant::TaskGrantStatusClient::new(
-            "casework".into(),
-            AUTHORITY.into(),
-            AUDIENCE.into(),
-            session.url().parse().unwrap(),
-            Arc::new(provider),
-            None,
+        TaskGrantStatusRegistry::activate(
+            &[TaskGrantStatusConfig {
+                authority: "casework".into(),
+                source_issuer: AUTHORITY.into(),
+                base_url: session.url(),
+                token_endpoint: format!("{}/oauth2/token", session.issuer()),
+                client_assertion_audience: session.issuer(),
+                client_id: "status-client".into(),
+                private_key_ref: "secret:file/assertion-key.jwk".into(),
+                casework_resource: AUDIENCE.into(),
+                ca_bundle_ref: None,
+            }],
+            AUDIENCE,
+            &secrets,
         )
         .unwrap(),
     );

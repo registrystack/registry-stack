@@ -12,6 +12,7 @@ pub struct TaskGrantStatusConfig {
     pub source_issuer: String,
     pub base_url: String,
     pub token_endpoint: String,
+    pub client_assertion_audience: String,
     pub client_id: String,
     pub private_key_ref: String,
     pub casework_resource: String,
@@ -58,6 +59,7 @@ impl TaskGrantStatusRegistry {
                 &config.client_id,
                 key,
             )
+            .with_audience(&config.client_assertion_audience)
             .with_resource(&config.casework_resource)
             .with_scopes(["casework:grants:status"]);
             if let Some(ca) = &ca {
@@ -140,6 +142,7 @@ mod tests {
             source_issuer: "https://casework.test".into(),
             base_url: "https://casework.test".into(),
             token_endpoint: "https://identity.test/oauth2/token".into(),
+            client_assertion_audience: "https://identity.test".into(),
             client_id: "breg-status".into(),
             private_key_ref: "secret:file/status-key".into(),
             casework_resource: "urn:casework:test".into(),
