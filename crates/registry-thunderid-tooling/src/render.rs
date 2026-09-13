@@ -8,6 +8,7 @@
 //! `token.accessToken.clientConfig`; the JWKS `certificate`), never from a
 //! parallel Registry-side schema.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -15,7 +16,7 @@ use std::path::Path;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::description::{ExchangeMapping, IssuerDescription};
+use crate::description::{ExchangeAttributeKind, ExchangeMapping, IssuerDescription};
 use crate::ToolingError;
 
 /// The pinned release's default `agent_type` document for the `default`
@@ -140,11 +141,25 @@ pub fn agent_type_document(description: &IssuerDescription) -> Result<String, To
             reason: "the pinned default agent schema did not parse with a schema map",
         });
     };
-    for name in &description.schema_attributes {
-        let array = description
+    let names: BTreeSet<_> = description
+        .schema_attributes
+        .iter()
+        .cloned()
+        .chain(
+            description
+                .exchange_issuers
+                .iter()
+                .filter(|issuer| issuer.mapping == ExchangeMapping::FirstParty)
+                .flat_map(|issuer| issuer.token_attributes.keys().cloned()),
+        )
+        .collect();
+    for name in names {
+        let array = description.exchange_issuers.iter().any(|issuer| {
+            issuer.token_attributes.get(&name) == Some(&ExchangeAttributeKind::StringArray)
+        }) || description
             .machine_clients
             .iter()
-            .filter_map(|client| client.attributes.get(name))
+            .filter_map(|client| client.attributes.get(&name))
             .any(Value::is_array);
         schema.insert(
             name.clone(),
@@ -305,7 +320,9 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                         ExchangeMapping::InstitutionalGrant => json!([{
                             "external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"
                         }]),
-                        ExchangeMapping::FirstParty => json!([]),
+                        ExchangeMapping::FirstParty => json!(issuer.token_attributes.keys().map(|name| {
+                            json!({"external_attribute": name, "local_attribute": name})
+                        }).collect::<Vec<_>>()),
                     }
                 }]
             }
@@ -455,10 +472,18 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
         });
         if client.token_exchange.is_some() {
             let config = &mut document["inboundAuthConfig"][0]["config"];
-            let mut exchange_attributes = crate::description::GRANT_ATTRIBUTES
-                .iter()
-                .map(|attribute| (*attribute).to_owned())
-                .collect::<Vec<_>>();
+            let first_party = description.exchange_issuers.iter().find(|issuer| {
+                issuer.mapping == ExchangeMapping::FirstParty
+                    && issuer.clients.iter().any(|id| id == &client.client_id)
+            });
+            let mut exchange_attributes = if let Some(issuer) = first_party {
+                issuer.token_attributes.keys().cloned().collect::<Vec<_>>()
+            } else {
+                crate::description::GRANT_ATTRIBUTES
+                    .iter()
+                    .map(|attribute| (*attribute).to_owned())
+                    .collect::<Vec<_>>()
+            };
             for attribute in &client.token_attributes {
                 if !exchange_attributes.contains(attribute) {
                     exchange_attributes.push(attribute.clone());
@@ -720,6 +745,8 @@ mod tests {
             issuer: "https://authority.example".into(),
             jwks_endpoint: "https://authority.example/jwks".into(),
             mapping: ExchangeMapping::InstitutionalGrant,
+            clients: vec![],
+            token_attributes: Default::default(),
         });
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
@@ -782,8 +809,8 @@ mod tests {
     }
 
     #[test]
-    fn first_party_exchange_does_not_invent_grant_provenance() {
-        use crate::description::{ExchangeIssuer, TokenExchangeClient};
+    fn first_party_exchange_projects_only_declared_signed_claims() {
+        use crate::description::{ExchangeAttributeKind, ExchangeIssuer, TokenExchangeClient};
         let mut description = crate::testing::synthetic_description();
         description.compatibility_clients.clear();
         description.state_root = std::env::temp_dir().join(format!(
@@ -798,6 +825,13 @@ mod tests {
             issuer: "http://127.0.0.1:3030".into(),
             jwks_endpoint: "http://host.docker.internal:3030/.well-known/jwks.json".into(),
             mapping: ExchangeMapping::FirstParty,
+            clients: vec!["synthetic-machine-client".into()],
+            token_attributes: [
+                ("evidence_audience".into(), ExchangeAttributeKind::String),
+                ("evidence_tags".into(), ExchangeAttributeKind::StringArray),
+                ("registry_principal".into(), ExchangeAttributeKind::String),
+            ]
+            .into(),
         });
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
@@ -815,8 +849,33 @@ mod tests {
         .unwrap();
         assert_eq!(
             connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
-            json!([])
+            json!([
+                {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
+                {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
+                {"external_attribute":"registry_principal","local_attribute":"registry_principal"},
+            ])
         );
+        let agent: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .bootstrap_dir
+                    .join("agents/0197aaaa-0000-7000-8000-0000000000a1.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let attributes = &agent["inboundAuthConfig"][0]["config"]["token"]["accessToken"]
+            ["userConfig"]["attributes"];
+        assert!(attributes
+            .as_array()
+            .unwrap()
+            .contains(&json!("evidence_tags")));
+        assert!(!attributes
+            .as_array()
+            .unwrap()
+            .contains(&json!("registry_grant_id")));
+        let schema: Value = serde_yaml_parse(&rendered.agent_type_document).unwrap();
+        assert_eq!(schema["schema"]["evidence_tags"]["type"], "array");
         fs::remove_dir_all(&description.state_root).unwrap();
     }
 

@@ -40,10 +40,12 @@ from this command, never from hand editing.
 as native `connection` resources. `InstitutionalGrant` fixes user-type
 resolution to an internal mapping label and copies the verified subject-token
 `iss` into `registry_grant_source_issuer`. Incoming claims cannot select a
-different mapping or replace that derived value. `FirstParty` carries verified
-claims without assigning institutional grant provenance, for an explicitly
-trusted application authority. The development container loads identity
-providers only from declarative resources.
+different mapping or replace that derived value. `FirstParty` names its exact
+exchange clients and a bounded map of signed `string` or `string-array`
+attributes to project into access tokens. Each such client belongs to one
+declared signer. First-party mapping cannot project grant-provenance fields.
+The development container loads identity providers only from declarative
+resources.
 
 A machine client's `token_exchange: Some(TokenExchangeClient { ... })` enables
 `client_credentials` and RFC 8693 token exchange on the same registered key.

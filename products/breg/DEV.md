@@ -277,7 +277,15 @@ issuer:
       issuer: https://casework.example.test
       jwksEndpoint: http://host.docker.internal:8094/oauth2/jwks
       mapping: institutional_grant
-  exchangeClients: [task-agent]
+    - id: portal
+      issuer: http://127.0.0.1:8095
+      jwksEndpoint: http://host.docker.internal:8095/oauth2/jwks
+      mapping: first_party
+      clients: [portal-exchange]
+      tokenAttributes:
+        registry_principal: string
+        evidence_tags: string-array
+  exchangeClients: [task-agent, portal-exchange]
   interactiveApplications:
     - id: staff-portal
       clientSecretFile: /absolute/owner-only/staff-portal-secret

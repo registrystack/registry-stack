@@ -161,12 +161,23 @@ pub struct ExchangeIssuer {
     pub jwks_endpoint: String,
     /// First-party assertions do not acquire institutional grant provenance.
     pub mapping: ExchangeMapping,
+    /// Bootstrap clients that may project this first-party signer's reviewed claims.
+    pub clients: Vec<String>,
+    /// Exact signed claim names and schema types for this first-party issuer.
+    pub token_attributes: BTreeMap<String, ExchangeAttributeKind>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum ExchangeMapping {
     InstitutionalGrant,
     FirstParty,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExchangeAttributeKind {
+    String,
+    StringArray,
 }
 
 /// Closed exchange-token profile. The issuer derives source issuer from verified
@@ -433,6 +444,8 @@ impl IssuerDescription {
         let mut issuer_ids = BTreeSet::new();
         let mut issuer_names = BTreeSet::new();
         let mut issuer_urls = BTreeSet::new();
+        let mut first_party_clients = BTreeSet::new();
+        let mut first_party_attributes = BTreeMap::new();
         if self.exchange_issuers.len() > 8 {
             return refuse("at most eight external exchange issuers are supported");
         }
@@ -446,6 +459,37 @@ impl IssuerDescription {
                 return refuse(
                     "exchange issuer IDs, names and issuer URLs must be distinct and bounded",
                 );
+            }
+            if issuer.clients.len() > 32 || issuer.token_attributes.len() > 16 {
+                return refuse("first-party issuer clients and token attributes are bounded");
+            }
+            if issuer.mapping == ExchangeMapping::InstitutionalGrant
+                && (!issuer.clients.is_empty() || !issuer.token_attributes.is_empty())
+            {
+                return refuse("institutional grant mapping has no first-party claim projection");
+            }
+            for client_id in &issuer.clients {
+                if issuer.mapping != ExchangeMapping::FirstParty
+                    || !first_party_clients.insert(client_id)
+                {
+                    return refuse("each first-party client selects one signer");
+                }
+            }
+            for (name, kind) in &issuer.token_attributes {
+                if issuer.mapping != ExchangeMapping::FirstParty
+                    || protected_attribute(name)
+                    || !bounded(name, 128)
+                    || !name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                    || first_party_attributes
+                        .insert(name, kind)
+                        .is_some_and(|prior| prior != kind)
+                {
+                    return refuse(
+                        "first-party token attributes are distinct typed non-grant claims",
+                    );
+                }
             }
             for address in [&issuer.issuer, &issuer.jwks_endpoint] {
                 let valid = url::Url::parse(address).is_ok_and(|url| {
@@ -549,6 +593,14 @@ impl IssuerDescription {
                 }
             }
         }
+        if first_party_clients.iter().any(|id| {
+            !self
+                .machine_clients
+                .iter()
+                .any(|client| &client.client_id == *id && client.token_exchange.is_some())
+        }) {
+            return refuse("first-party clients must be registered exchange clients");
+        }
         for client in &self.compatibility_clients {
             if !valid_uuid(&client.agent_id) || !agent_ids.insert(client.agent_id.clone()) {
                 return refuse("each compatibility client carries a distinct UUID agent id");
@@ -642,6 +694,16 @@ impl IssuerDescription {
                 }
             }
         }
+        for (name, kind) in first_party_attributes {
+            if self
+                .machine_clients
+                .iter()
+                .filter_map(|client| client.attributes.get(name))
+                .any(|value| value.is_array() != (*kind == ExchangeAttributeKind::StringArray))
+            {
+                return refuse("first-party claims must match the stated agent attribute type");
+            }
+        }
         for client in &self.machine_clients {
             for name in client.attributes.keys() {
                 if !attribute_names.contains(name) {
@@ -673,6 +735,8 @@ mod tests {
             issuer: "https://authority.example".into(),
             jwks_endpoint: "https://authority.example/jwks".into(),
             mapping: ExchangeMapping::InstitutionalGrant,
+            clients: vec![],
+            token_attributes: Default::default(),
         });
         description.machine_clients[0].token_exchange = Some(TokenExchangeClient {
             assertion_resource_server_id: description.resource_servers[0].id.clone(),
@@ -751,5 +815,35 @@ mod tests {
             description.exchange_issuers[0].jwks_endpoint = address.into();
             assert!(description.validate().is_err());
         }
+    }
+
+    #[test]
+    fn first_party_signer_binding_rejects_unknown_or_second_client_source() {
+        let mut description = exchange_description();
+        description.exchange_issuers[0].mapping = ExchangeMapping::FirstParty;
+        description.exchange_issuers[0].clients = vec!["synthetic-machine-client".into()];
+        description.exchange_issuers[0]
+            .token_attributes
+            .insert("evidence_tags".into(), ExchangeAttributeKind::StringArray);
+        assert!(description.validate().is_ok());
+
+        let mut unknown = description.clone();
+        unknown.exchange_issuers[0].clients = vec!["unregistered-client".into()];
+        assert!(unknown.validate().is_err());
+
+        let mut another_signer = description.clone();
+        let mut second = another_signer.exchange_issuers[0].clone();
+        second.id = "0197aaaa-0000-7000-8000-0000000000d2".into();
+        second.name = "Another signer".into();
+        second.issuer = "https://other.example".into();
+        second.jwks_endpoint = "https://other.example/jwks".into();
+        another_signer.exchange_issuers.push(second);
+        assert!(another_signer.validate().is_err());
+
+        let mut grant = description;
+        grant.exchange_issuers[0]
+            .token_attributes
+            .insert("registry_grant_id".into(), ExchangeAttributeKind::String);
+        assert!(grant.validate().is_err());
     }
 }
