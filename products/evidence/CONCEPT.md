@@ -84,9 +84,12 @@ Evidence runs behind an existing gateway or identity boundary and produces asser
 
 The same core may later sit behind an OOTS Data Service boundary. OOTS RegRep XML, Evidence Broker and DSD registration, Semantic Repository profiles, preview, AS4, and OOTS retention rules remain in an explicit interoperability profile.
 
-### Delegated software agents
+### Institutional software agents
 
-AI agents may later invoke fixed evidence operations under an external, task-bound authority grant. The agent is an authenticated actor, not the source of authority. Agent protocols and orchestration remain outside the core.
+Institutional software agents may invoke fixed evidence operations under an
+external, task-bound authority grant. The agent is an authenticated actor, not
+the source of authority. Agent protocols and orchestration remain outside the
+core.
 
 These are profiles around one evidence engine, not separate product editions.
 
@@ -145,7 +148,22 @@ to invoke. This is the same reasoning that already admits a fixed HTTP request:
 a bundle-fixed instruction to a source that no request input may reshape is not
 a query language, whatever syntax it happens to be written in.
 
-Document evidence, credential status and revocation, transaction-bound replay protection, OOTS execution, a public requester-entitlement or definition catalog, searchable, mutable, aggregate, or federated catalogs, response-led multi-source fulfillment, source-planning scripts, and the delegated-agent grant profile of section 15.3 are explicitly deferred. A multi-verifier holder credential is not among them: section 15.8 defines the declared holder-bound subject binding that produces one, together with the privacy analysis that binding requires, and it still adds no credential lifecycle and no delivery protocol. A fixed set of sources the bundle declares and orders is not response-led and is included under section 15.7. Deferring that profile does not defer the optional delegated actor identity of section 8.1: version one carries an actor in the authenticated authority context and authorizes it there, but consumes no agent grant record and exposes no agent-facing operations. The closed requester-scoped definition response is not a catalog or authorization source. The closed public provider advertisement remains allowed because it is a package-derived publication for indexing, not a catalog runtime.
+Document evidence, credential status and revocation, transaction-bound replay
+protection, OOTS execution, citizen-to-agent delegation and federation, a
+public requester-entitlement or definition catalog, searchable, mutable,
+aggregate, or federated catalogs, response-led multi-source fulfillment, and
+source-planning scripts are explicitly deferred. A multi-verifier holder
+credential is not among them: section 15.8 defines the declared holder-bound
+subject binding that produces one, together with the privacy analysis that
+binding requires, and it still adds no credential lifecycle and no delivery
+protocol. A fixed set of sources the bundle declares and orders is not
+response-led and is included under section 15.7. Version one carries actor kind
+and optional actor identity in the authenticated authority context and consumes
+a complete externally issued task-grant context for configured institutional
+agent authority. It exposes no agent-facing operations. The closed
+requester-scoped definition response is not a catalog or authorization source.
+The closed public provider advertisement remains allowed because it is a
+package-derived publication for indexing, not a catalog runtime.
 
 ## 5. Design principles
 
@@ -360,8 +378,9 @@ Each deployment supports one reviewed authentication profile. It produces a norm
 
 - requester principal;
 - configured requester attributes;
-- optional delegated actor identity;
-- authority basis and optional grant identifier;
+- verified actor kind and optional actor identity;
+- verified client;
+- authority basis and optional authenticated task-grant context;
 - derived audience, which scopes the subject binding under the audience-scoped
   mode of section 8.6 and is not an input to a holder-bound one;
 - permitted purposes and requirement revisions;
@@ -375,11 +394,14 @@ Before source access, Rust binds one decision over:
 
 ```text
 requester principal
-+ optional delegated actor
++ actor kind and optional actor identity
++ verified client
 + requirement revision
 + purpose
 + subject roles, selector profiles, value origins, and authority
 + audience
++ optional task-grant principal, client, resource, source issuer, authority,
+  deadline, requirement bound, and approver
 ```
 
 Every element must be authorized together. Authorization for a purpose does not automatically authorize every subject, requirement revision, or audience.
@@ -466,9 +488,21 @@ types in the Evidence core.
 
 ### 8.4 Consent, statutory authority, and delegation
 
-Evidence consumes an authenticated authority context. Its basis may be statutory authority, organizational authority, consent, delegation, or an OOTS explicit request. A per-request grant reference is optional because statutory flows may derive authority from the requester and configured procedure. Evidence does not issue, manage, revoke, or infer that authority.
+Evidence consumes an authenticated authority context. Its basis may be
+statutory authority, organizational authority, consent, delegation, or an OOTS
+explicit request. A per-request grant reference is optional because statutory
+flows may derive authority from the requester and configured procedure.
+Evidence does not issue, manage, revoke, or infer that authority.
 
-Where the basis is delegation, version one carries the actor identity in that context and confines an actor-bearing request to authority paths declared `delegated`. It does not resolve a delegating principal, enforce call constraints, or consume an agent grant record; section 15.3 covers those.
+For an institutional agent task, Evidence consumes a complete signed grant
+context issued by an external task authority. It confines the request to a
+configured `delegated` authority path whose subjects derive from the
+authenticated grant. The agent actor kind, authenticated principal, verified
+client and resource, trusted source issuer, grant authority, purpose, exact
+Evidence requirement bound, effective deadline, and signed approver handle
+must all match that one path. An invalid present grant cannot fall back to
+standing authority. Citizen-to-agent delegation and federation remain deferred
+under section 15.3.
 
 A caller-supplied consent or approval reference never creates authority by itself.
 
@@ -1740,7 +1774,10 @@ An OpenFn workflow calls Evidence as one atomic step and routes the minimized re
 
 ## 15. Future profiles and guarded extensions
 
-The following capabilities require separate profiles or design decisions. They are not latent version-one features.
+The following capabilities require separate profiles or design decisions. They
+are not latent version-one features. Section 15.3 records the boundary between
+the approved Version 1 institutional task-grant path and the personal delegation
+that remains deferred; it does not introduce a second agent subsystem.
 
 ### 15.1 OOTS assertion-evidence profile
 
@@ -1776,21 +1813,30 @@ where the relying party verifies possession against a challenge it issued and
 retained itself. What stays here is everything that would need server state:
 server-issued challenges, one-time consumption, and replay prevention.
 
-### 15.3 Delegated-agent profile
+### 15.3 Institutional task grants and deferred personal delegation
 
-An AI agent is an authenticated workload actor operating under an external authority grant. The grant binds:
+Version one supports an institutional software agent as an authenticated
+workload actor operating under an external task grant. The complete signed grant
+context binds the agent principal, verified client and Evidence resource,
+trusted source issuer, configured grant authority, fixed requirement, purpose,
+subject values, effective deadline, and approver. Evidence accepts it only on a
+configured `delegated` authority path whose subjects use
+`authenticated-grant`; a partial, malformed, expired, mismatched, or non-agent
+grant is refused without falling back to standing authority.
 
-- delegating principal;
-- agent workload identity;
-- fixed requirement;
-- purpose;
-- subject authority;
-- audience;
-- validity and call constraints.
+The agent invokes the same fixed Evidence operations as any other authenticated
+caller. It cannot submit a free-form evidence query. Prompt text, conversation
+history, model names, and agent reasoning never enter Evidence or audit.
 
-The agent invokes fixed operations such as `getAdultStatus` or `confirmLegalParentage`. It cannot submit a free-form evidence query. Prompt text, conversation history, model names, and agent reasoning never enter Evidence or audit.
+Personal or citizen-to-agent delegation remains a future profile. It would need
+to represent the delegating natural person, consent or other personal authority,
+revocation and status semantics, and trust across institutional domains. None of
+those semantics is inferred from the institutional task grant.
 
-An MCP or other tool facade may compile static tool descriptions from the trusted bundle and call the JSON API. It remains outside the core. Direct delivery to the relying party may allow the agent to receive only a receipt rather than the assertion value.
+An MCP or other tool facade may compile static tool descriptions from the
+trusted bundle and call the JSON API. It remains outside the core. Direct
+delivery to the relying party may allow the agent to receive only a receipt
+rather than the assertion value.
 
 ### 15.4 Document evidence
 
@@ -2320,6 +2366,9 @@ mandatory default and includes:
   acquisition postures with no overclaiming of minimization;
 - one strict OIDC access-token reference profile;
 - one reviewed statutory-agency subject-authority profile;
+- authenticated institutional task-grant authority for agent workloads, bound
+  to an exact requester client, resource, source issuer, authority, requirement,
+  purpose, deadline, and approver;
 - configured identifier, compound demographic, and multi-role selector profiles
   with provider-owned `match`, `no_match`, and `ambiguous` outcomes;
 - bounded Rhai extraction and requirement-specific derivation;
@@ -2452,6 +2501,8 @@ The complete Version 1 sequence is:
 
 - Add the selected authentication profile.
 - Add selector value-origin, subject-authority, and authorization enforcement.
+- Add authenticated institutional task-grant authority for agent workloads,
+  with complete grant binding and no fallback from an invalid present grant.
 - Add a standalone minimal native audit event for every authorization refusal
   after successful authentication, durably accepted before the generic `403`.
 - Add production signing-key resolution, fail-closed signing, and public JWKS publication.
