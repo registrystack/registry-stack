@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.31.0 - 2026-09-13
+
+- Add the closed contextual task-grant claim contract used by Casework,
+  ThunderID, Evidence, and Base Registry Engine, including bounded clients,
+  resources, purposes, subjects, permissions, approval, and expiry.
+- BREAKING: remove `registry_grant_authority`. The exchange issuer derives
+  `registry_grant_source_issuer` from the verified subject-token issuer instead
+  of trusting a signer-chosen authority label or assertion-supplied source.
+
 ## v0.30.0 - 2026-09-12
 
 - OIDC access-token type matching treats `at+jwt` and

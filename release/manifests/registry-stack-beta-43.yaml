@@ -1,0 +1,37 @@
+stack:
+  release: beta-43
+  version: 0.31.0
+  source_repo: registrystack/registry-stack
+  source_tag: v0.31.0
+
+artifacts:
+  registry-manifest: 0.31.0
+  relay: 0.31.0
+  relayctl: 0.31.0
+  evidence: 0.31.0
+  evidencectl: 0.31.0
+  evidence-oid4vci: 0.31.0
+  evidencectl-installer: 0.31.0
+  relay-installer: 0.31.0
+  registry-docs: 0.31.0
+  discovery: 0.31.0
+  breg: 0.31.0
+  bregctl: 0.31.0
+  breg-installer: 0.31.0
+  casework: 0.31.0
+  caseworkctl: 0.31.0
+  casework-installer: 0.31.0
+  registry-client-node: 0.31.0
+  registry-client-python: 0.31.0
+
+identifier_catalog:
+  path: products/identifiers/generated/catalog.v1.json
+  sha256: 0998d04cc833053d5dc8a274936d78f2953d6c00102ffa79846c1c8a51eb1bf7
+  entry_count: 118
+
+external: {}
+
+warnings:
+  - code: mint-retired
+    classification: breaking-product-retirement
+    detail: Registry Mint is absent from this release. Historical Mint manifests and release evidence remain immutable. Replace Mint development and deployment configuration with the stock ThunderID issuer or another compatible identity provider, and rebuild current projects without Mint before upgrading.
