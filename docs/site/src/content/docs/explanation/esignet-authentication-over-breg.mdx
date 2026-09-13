@@ -272,19 +272,6 @@ Version 0.3.0 draws its lines deliberately:
   loaded as a plugin, and ships as an OCI image with checksums, an SBOM, and provenance. Publishing
   that image and running it as a hosted service are separate operator actions.
 
-## Try it in Solmara Lab
-
-[Solmara Lab](../../tutorials/first-run-with-solmara-lab/) carries a synthetic population registry
-authored for BReg and an isolated eSignet fixture that embeds this provider. Its journey exercises
-each guarantee above in order: a wrong code is rejected before any registry call, the account check
-projects only the identifier and status, consent is explicit and can be refused on a later login, a
-missing required claim ends the login, and the relying party verifies the signed UserInfo and
-correlates the pairwise subject. It also proves the negative: the eSignet client cannot list, cannot
-write, and cannot read inactive or ungranted records or fields.
-
-{/* TODO[evidence]: the Solmara Lab eSignet topology and journey checks are maintained in the
-separate registrystack/solmara-lab repository (docs/esignet.md) and cannot be anchored here. */}
-
 ## Next
 
 - [Configure BReg access profiles](../../configure/breg-access/) to define the lookup-only grant.
