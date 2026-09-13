@@ -582,6 +582,47 @@ mod tests {
         })
     }
 
+    fn complete_grant_claims() -> Claims {
+        claims(complete_grant(
+            json!({"type":"evidence","requirement":"urn:requirement:one"}),
+        ))
+    }
+
+    fn string_grant_members() -> [(&'static str, ClaimMember, usize); 6] {
+        [
+            ("sub", ClaimMember::Principal, MAX_CLAIM_VALUE_BYTES),
+            (
+                "registry_grant_id",
+                ClaimMember::GrantId,
+                MAX_CLAIM_VALUE_BYTES,
+            ),
+            (
+                "registry_grant_source_issuer",
+                ClaimMember::GrantSourceIssuer,
+                MAX_CLAIM_VALUE_BYTES,
+            ),
+            (
+                "registry_grant_client",
+                ClaimMember::GrantClient,
+                MAX_CLAIM_VALUE_BYTES,
+            ),
+            (
+                "registry_grant_resource",
+                ClaimMember::GrantResource,
+                MAX_CLAIM_VALUE_BYTES,
+            ),
+            ("registry_purpose", ClaimMember::Purpose, MAX_PURPOSE_BYTES),
+        ]
+    }
+
+    fn set_string_grant_member(input: &mut Claims, name: &str, value: String) {
+        if name == "sub" {
+            input.sub = Some(value);
+        } else {
+            input.extra.insert(name.to_owned(), Value::String(value));
+        }
+    }
+
     #[test]
     fn standing_service_token_with_purpose_has_no_grant() {
         let input = claims(json!({
@@ -641,6 +682,103 @@ mod tests {
         assert_eq!(
             grant_claims(&claims(grant), &ClaimNames::default(), 1_500),
             Err(ClaimError::Missing(ClaimMember::Approver))
+        );
+    }
+
+    #[test]
+    fn grant_without_purpose_is_rejected_as_missing() {
+        let mut grant =
+            complete_grant(json!({"type":"evidence","requirement":"urn:requirement:one"}));
+        grant
+            .as_object_mut()
+            .expect("grant is an object")
+            .remove("registry_purpose");
+
+        assert_eq!(
+            grant_claims(&claims(grant), &ClaimNames::default(), 1_500),
+            Err(ClaimError::Missing(ClaimMember::Purpose))
+        );
+    }
+
+    #[test]
+    fn empty_grant_string_members_are_rejected() {
+        for (name, member, _) in string_grant_members() {
+            let mut input = complete_grant_claims();
+            set_string_grant_member(&mut input, name, String::new());
+
+            assert_eq!(
+                grant_claims(&input, &ClaimNames::default(), 1_500),
+                Err(ClaimError::Malformed(member))
+            );
+        }
+    }
+
+    #[test]
+    fn non_string_grant_members_are_rejected() {
+        for invalid in [json!(7), json!([]), json!({})] {
+            for (name, member, _) in string_grant_members() {
+                if name == "sub" {
+                    // `Claims::sub` is typed, so non-strings are refused before
+                    // `grant_claims` can assign a `ClaimMember` to the failure.
+                    let mut raw = serde_json::to_value(complete_grant_claims())
+                        .expect("complete grant claims serialize");
+                    raw["sub"] = invalid.clone();
+                    assert!(serde_json::from_value::<Claims>(raw).is_err());
+                } else {
+                    let mut input = complete_grant_claims();
+                    input.extra.insert(name.to_owned(), invalid.clone());
+                    assert_eq!(
+                        grant_claims(&input, &ClaimNames::default(), 1_500),
+                        Err(ClaimError::Malformed(member))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn grant_string_member_length_boundaries_are_enforced() {
+        for (name, member, maximum_bytes) in string_grant_members() {
+            let mut at_limit = complete_grant_claims();
+            set_string_grant_member(&mut at_limit, name, "a".repeat(maximum_bytes));
+            assert_eq!(
+                grant_claims(&at_limit, &ClaimNames::default(), 1_500).map(|grant| grant.is_some()),
+                Ok(true)
+            );
+
+            let mut over_limit = complete_grant_claims();
+            set_string_grant_member(&mut over_limit, name, "a".repeat(maximum_bytes + 1));
+            assert_eq!(
+                grant_claims(&over_limit, &ClaimNames::default(), 1_500),
+                Err(ClaimError::Malformed(member))
+            );
+        }
+    }
+
+    #[test]
+    fn control_characters_in_grant_string_members_are_rejected() {
+        for (name, member, _) in string_grant_members() {
+            let mut input = complete_grant_claims();
+            set_string_grant_member(&mut input, name, "value\u{0000}".to_owned());
+
+            assert_eq!(
+                grant_claims(&input, &ClaimNames::default(), 1_500),
+                Err(ClaimError::Malformed(member))
+            );
+        }
+    }
+
+    #[test]
+    fn purpose_must_be_a_valid_code() {
+        let mut input = complete_grant_claims();
+        input.extra.insert(
+            "registry_purpose".to_owned(),
+            Value::String("record review".to_owned()),
+        );
+
+        assert_eq!(
+            grant_claims(&input, &ClaimNames::default(), 1_500),
+            Err(ClaimError::Malformed(ClaimMember::Purpose))
         );
     }
 

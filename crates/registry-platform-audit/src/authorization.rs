@@ -311,6 +311,48 @@ mod tests {
     }
 
     #[test]
+    fn unsupported_actor_kind_is_rejected() {
+        let error = AuthorizationAuditEvent::new(
+            "Agent",
+            format!("sha256:{}", digest('a')),
+            format!("sha256:{}", digest('b')),
+            None,
+            None,
+            "benefit-review",
+            "get",
+            AuthorizationOutcome::Denied,
+            "authorization.profile",
+        )
+        .expect_err("unsupported actor kind is not accepted");
+
+        assert_eq!(error, AuthorizationAuditError::InvalidActorKind);
+    }
+
+    #[test]
+    fn invalid_authorization_codes_are_rejected() {
+        for (purpose, operation, reason) in [
+            ("benefit/review", "get", "authorization.allowed"),
+            ("benefit-review", "get/request", "authorization.allowed"),
+            ("benefit-review", "get", "authorization/allowed"),
+        ] {
+            let error = AuthorizationAuditEvent::new(
+                "agent",
+                format!("sha256:{}", digest('a')),
+                format!("sha256:{}", digest('b')),
+                None,
+                None,
+                purpose,
+                operation,
+                AuthorizationOutcome::Denied,
+                reason,
+            )
+            .expect_err("invalid authorization code is not accepted");
+
+            assert_eq!(error, AuthorizationAuditError::InvalidCode);
+        }
+    }
+
+    #[test]
     fn serialized_shape_has_common_fields_and_omits_absent_grant() {
         let event = AuthorizationAuditEvent::new(
             "service",
