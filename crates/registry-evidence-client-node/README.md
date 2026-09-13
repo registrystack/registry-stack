@@ -45,6 +45,14 @@ const verified = client.verify(prepared, response); // synchronous
 const verifiedInOneStep = await client.requestAndVerify(prepared);
 const verifiedAt = client.verifyAsOf(prepared, response, asOfMillis);
 
+// A profile-driven result also carries exact assertion or credential bytes
+// and its pre-response verification context for application-owned retention.
+const { verifyRetained, verifyRetainedAsOf } = require('@registrystack/client').evidence;
+const profileClient = EvidenceClient.fromProfile('client.json');
+const result = await profileClient.request({ requirement: 'status-check', selectors: {} });
+const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);
+const current = verifyRetained(result.retainedVerification, result.assertion);
+
 const batchSpec = {
   requirement,
   purpose,
@@ -68,6 +76,19 @@ const verifiedBatch = client.verifyBatch(preparedBatch, rawBatch);
 const verifiedBatchAt = client.verifyBatchAsOf(preparedBatch, rawBatch, asOfMillis);
 const verifiedBatchInOneStep = await client.requestAndVerifyBatch(preparedBatch);
 ```
+
+The profile may pin a selected definition under `expected.definitions` by its
+public handle. Each entry fixes `configurationRevision`, `evidenceType`,
+`purpose`, `assuranceProfile`, and `responseFormat`. The client refuses drift
+before the Evidence POST while unrelated definitions may change. Once any
+definition is pinned, a request for an unpinned handle is refused.
+
+Retain `result.retainedVerification` with the exact `assertion` Buffer or
+`credential` UTF-8 bytes. `verifyRetained` makes a current offline decision;
+`verifyRetainedAsOf` replays the recorded instant in Unix milliseconds. A past
+instant does not establish current validity. The retained context contains
+the original key and revocation snapshot, so applications must also account
+for independently governed current revocations before a current decision.
 
 `responseFormat` is required on every request specification. Use
 `"signed-jws"` for a flattened JWS JSON response or `"sd-jwt-vc"` for the

@@ -49,6 +49,8 @@ PUBLIC_SURFACE_NAMES = {
     "NotAvailableError",
     "ProtocolError",
     "VerificationError",
+    "verify_retained",
+    "verify_retained_as_of",
 }
 
 
