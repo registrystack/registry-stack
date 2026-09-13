@@ -1752,13 +1752,12 @@ impl AuthenticationConfig {
             validate_claim_name(claim)?;
         }
         // Two claims naming one member means the same value is read as two
-        // different things: requester tags read as a principal, or a grant id
-        // read as the authority that granted it.
+        // different things, such as requester tags read as a principal or a
+        // grant id read as a grant source issuer.
         let contextual_claims = [
             &self.claims.actor_kind,
             &self.claims.purpose,
             &self.claims.grant_id,
-            &self.claims.grant_authority,
             &self.claims.grant_source_issuer,
             &self.claims.grant_client,
             &self.claims.grant_resource,
@@ -1775,10 +1774,9 @@ impl AuthenticationConfig {
         {
             return invalid("authority claim names must be distinct");
         }
-        // These are defined by the token itself, so reading authority out of one
-        // reads something the issuer wrote for another purpose. `aud` is the
-        // sharpest: Evidence validates it against its own configured audiences,
-        // so a grant authority read from `aud` is Evidence's own name.
+        // These are defined by the token itself, so reading contextual
+        // authorization out of one reads something the issuer wrote for
+        // another purpose.
         //
         // `sub` is the exception, and only for the principal. It carries the
         // principal already, so naming it there reads the same value; naming it
@@ -6319,13 +6317,13 @@ mod tests {
         );
     }
 
-    /// Two authority claims naming one JWT member, or naming a member the token
+    /// Two contextual claims naming one JWT member, or naming a member the token
     /// already defines, is a configuration the verifier must refuse.
     ///
     /// Evidence accepts any configured OIDC issuer, so it enforces this rule at
     /// its own resource-server boundary without assuming an issuer-side check.
-    /// A grant authority claim named `aud` would read Evidence's own audience
-    /// as the authority that granted the request.
+    /// A grant source issuer claim named `aud` would read Evidence's own audience
+    /// as the source that issued the grant.
     #[test]
     fn authority_claim_names_must_be_distinct_and_must_not_shadow_registered_claims() {
         let config = EvidenceConfig::parse_yaml(include_bytes!(
@@ -6341,11 +6339,11 @@ mod tests {
             .authentication
             .claims
             .grant_id
-            .clone_from(&config.authentication.claims.grant_authority);
+            .clone_from(&config.authentication.claims.grant_source_issuer);
         assert_eq!(
             duplicate.validate(),
             invalid("contextual authorization claim names are invalid"),
-            "one member read as both the grant id and the granting authority"
+            "one member read as both the grant id and the grant source issuer"
         );
 
         let mut duplicate_actor = config.clone();
@@ -6375,11 +6373,11 @@ mod tests {
         // to explain why.
         for reserved in ["iss", "aud", "exp", "iat", "nbf", "jti", "client_id", "cnf"] {
             let mut candidate = config.clone();
-            candidate.authentication.claims.grant_authority = reserved.to_owned();
+            candidate.authentication.claims.grant_source_issuer = reserved.to_owned();
             assert_eq!(
                 candidate.validate(),
                 invalid("contextual authorization claim names are invalid"),
-                "grant authority read from the registered claim {reserved}"
+                "grant source issuer read from the registered claim {reserved}"
             );
         }
 
@@ -6392,13 +6390,16 @@ mod tests {
             .expect("the principal may be read from sub");
         // Moved off `sub` first, so this proves the shadowing rule rather than
         // colliding with the principal and tripping distinctness instead.
-        let mut authority_is_subject = config.clone();
-        authority_is_subject.authentication.principal_claim = "evidence_principal".to_owned();
-        authority_is_subject.authentication.claims.grant_authority = "sub".to_owned();
+        let mut source_issuer_is_subject = config.clone();
+        source_issuer_is_subject.authentication.principal_claim = "evidence_principal".to_owned();
+        source_issuer_is_subject
+            .authentication
+            .claims
+            .grant_source_issuer = "sub".to_owned();
         assert_eq!(
-            authority_is_subject.validate(),
+            source_issuer_is_subject.validate(),
             invalid("contextual authorization claim names are invalid"),
-            "the granting authority read from the principal member"
+            "the grant source issuer read from the principal member"
         );
 
         let mut distinct = config.clone();

@@ -172,7 +172,6 @@ async fn task_bound_and_partial_grants_cannot_create_deferred_wallet_offers() {
         "registry_actor_kind":"agent",
         "registry_grant_id":"grant-a",
         "registry_approver":"approver-pseudonym",
-        "registry_grant_authority":"authority-a",
         "registry_grant_source_issuer":"https://casework.example",
         "registry_grant_client":"offer-caller",
         "registry_grant_resource":OFFER_AUDIENCE,

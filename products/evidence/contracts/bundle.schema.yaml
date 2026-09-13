@@ -714,7 +714,6 @@ $defs:
       actorKind: {$ref: '#/$defs/claim-name', default: registry_actor_kind}
       purpose: {$ref: '#/$defs/claim-name', default: registry_purpose}
       grantId: {$ref: '#/$defs/claim-name', default: registry_grant_id}
-      grantAuthority: {$ref: '#/$defs/claim-name', default: registry_grant_authority}
       grantSourceIssuer: {$ref: '#/$defs/claim-name', default: registry_grant_source_issuer}
       grantClient: {$ref: '#/$defs/claim-name', default: registry_grant_client}
       grantResource: {$ref: '#/$defs/claim-name', default: registry_grant_resource}
@@ -2274,9 +2273,9 @@ $defs:
                       Fixes where this role's selector values originate. A `request` origin
                       takes values from the closed public request and prohibits `valueClaims`;
                       `authenticated-context` rejects caller values and reads the exact `valueClaims`
-                      map; `authenticated-grant` reads that same map and additionally requires
-                      a verified grant id and a grant authority equal to the matched authority-profile
-                      id.
+                      map; `authenticated-grant` reads that same map and additionally requires a
+                      verified grant whose trusted source issuer, requester client, purpose, and
+                      Evidence requirement bound match exactly one authority profile.
                     enum:
                       - authenticated-context
                       - authenticated-grant

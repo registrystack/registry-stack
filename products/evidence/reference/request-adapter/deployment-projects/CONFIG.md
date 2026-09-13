@@ -248,7 +248,7 @@ Every grant subject fixes `role`, `selectorProfile`, and one `valueOrigin`:
 - `authenticated-grant` requires the same exact map, rejects caller values,
   and additionally requires the complete shared task-grant claims. The actor
   must be an agent. The signed principal, original client and resource, trusted
-  source issuer, authority, purpose, Evidence requirement bound, and effective
+  source issuer, purpose, Evidence requirement bound, and effective
   token/grant deadline must all match. A malformed or mismatched present grant
   cannot fall back to a standing profile.
 
@@ -1516,7 +1516,6 @@ authentication.audiences[]
 authentication.claims
 authentication.claims.actorKind
 authentication.claims.approver
-authentication.claims.grantAuthority
 authentication.claims.grantBounds
 authentication.claims.grantClient
 authentication.claims.grantExp

@@ -35,7 +35,7 @@ invariants:
   - id: V1-I07
     rule: Caller-provided consent, approval, or grant references never create authority.
     threat: Fabricated reference escalates authority.
-    enforcement: Grant identifiers are accepted only inside the complete verified shared grant context. Agent kind, principal, client, resource, trusted source issuer, deadline, authority, purpose, and requirement bound must match the complete entitlement.
+    enforcement: Grant identifiers are accepted only inside the complete verified shared grant context. Agent kind, principal, client, resource, trusted source issuer, deadline, purpose, and requirement bound must match exactly one complete entitlement.
     negative_test: sec-caller-grant-reference-rejected
   - id: V1-I08
     rule: Callers cannot choose selector fields, operators, weights, thresholds, normalization, or query plans.
@@ -184,7 +184,7 @@ invariants:
     negative_test: sec-local-source-none-boundary
   - id: V1-I37
     rule: Each configured product or shared contextual-authorization claim names a distinct token member, and none names a registered JWT claim; only principalClaim may name sub.
-    threat: One verified member is read as two different authorities, or an authority is read from a member the issuer wrote for another purpose, such as a grant authority taken from the audience Evidence validates against itself.
+    threat: One verified member is read as two different authorization inputs, or an input is read from a member the issuer wrote for another purpose, such as a grant source issuer taken from the audience Evidence validates against itself.
     enforcement: Authentication validation refuses repeated names across both claim sets and the registered-claim set at startup, on the resource server, so the rule holds for every configured OIDC issuer rather than only for issuers that refuse to mint such tokens.
     negative_test: sec-authority-claim-names-closed
   - id: V1-I38

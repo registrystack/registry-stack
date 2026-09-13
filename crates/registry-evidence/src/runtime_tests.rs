@@ -1428,6 +1428,88 @@ async fn discovery_omits_an_authority_shape_that_the_runtime_would_deny_as_ambig
 }
 
 #[tokio::test]
+async fn task_grant_router_matches_local_profile_by_issuer_and_refuses_ambiguity() {
+    let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&prepared.bundle_root);
+    let configuration_path = prepared.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    replace_exact(
+        &mut configuration,
+        "  statutory-caseworker-v1:\n",
+        "  evidence-local-task-profile-v1:\n",
+        1,
+    );
+    fs::write(&configuration_path, configuration).expect("local profile id is written");
+    make_read_only(&prepared.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&prepared.runtime_path, authenticator())
+            .await
+            .expect("renamed local task profile initializes"),
+    );
+    mount_parent_source(
+        &prepared.server,
+        parent_source_response(vec![PARENT_REFERENCE]),
+    )
+    .await;
+    let http = TestServer::new(build_app(runtime));
+    let accepted = http
+        .post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!("Bearer {}", access_token(Some(parent_grant_claims()))),
+        )
+        .json(&serde_json::to_value(parent_request()).expect("request serializes"))
+        .await;
+    accepted.assert_status_ok();
+
+    let ambiguous = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
+    make_writable(&ambiguous.bundle_root);
+    let configuration_path = ambiguous.bundle_root.join("evidence.yaml");
+    let mut configuration =
+        fs::read_to_string(&configuration_path).expect("acceptance configuration is readable");
+    let profile_start = configuration
+        .find("  statutory-caseworker-v1:\n")
+        .expect("task authority profile exists");
+    let requirements_start = configuration
+        .find("\nrequirements:\n")
+        .expect("requirements follow authority profiles");
+    let duplicate = format!(
+        "\n{}",
+        configuration[profile_start..requirements_start].replacen(
+            "statutory-caseworker-v1",
+            "second-local-task-profile-v1",
+            1,
+        )
+    );
+    configuration.insert_str(requirements_start, &duplicate);
+    fs::write(&configuration_path, configuration).expect("duplicate local profile is written");
+    make_read_only(&ambiguous.bundle_root);
+    let runtime = Arc::new(
+        EvidenceRuntime::initialize_with_authenticator(&ambiguous.runtime_path, authenticator())
+            .await
+            .expect("overlapping task profiles initialize for request-time refusal"),
+    );
+    let http = TestServer::new(build_app(runtime));
+    let refused = http
+        .post("/v1/evidence")
+        .add_header(
+            "authorization",
+            format!("Bearer {}", access_token(Some(parent_grant_claims()))),
+        )
+        .json(&serde_json::to_value(parent_request()).expect("request serializes"))
+        .await;
+    assert_eq!(refused.status_code(), axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(refused.json::<Value>()["code"], json!("evidence.denied"));
+    assert!(ambiguous
+        .server
+        .received_requests()
+        .await
+        .expect("request journal is available")
+        .is_empty());
+}
+
+#[tokio::test]
 async fn discovery_refuses_duplicate_handles_visible_to_one_requester() {
     let prepared = prepare_acceptance("subject-binding-secret-canary-32-bytes-minimum").await;
     make_writable(&prepared.bundle_root);
@@ -7135,17 +7217,18 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
         .await
         .expect_err("caller candidate substitution is rejected before source access");
     assert_eq!(error.problem(), ProblemCode::InvalidSelector);
-    let mut wrong_authority_claims = parent_grant_claims();
-    wrong_authority_claims["registry_grant_authority"] = json!("different-authority");
+    let mut wrong_source_issuer_claims = parent_grant_claims();
+    wrong_source_issuer_claims["registry_grant_source_issuer"] =
+        json!("https://different-casework.invalid");
     let unauthorized = fixture
         .runtime
         .evaluate(
             "operation-acceptance-unauthorized",
-            &access_token(Some(wrong_authority_claims)),
+            &access_token(Some(wrong_source_issuer_claims)),
             &parent_request(),
         )
         .await
-        .expect_err("authority substitution is rejected before source access");
+        .expect_err("grant source substitution is rejected before source access");
     assert_eq!(unauthorized.problem(), ProblemCode::NotAuthorized);
     assert!(fixture
         .server
@@ -9620,7 +9703,6 @@ fn parent_grant_claims_for(candidate: Value) -> Value {
     json!({
         "registry_actor_kind": "agent",
         "registry_grant_id": "synthetic-parentage-grant-001",
-        "registry_grant_authority": AUTHORITY,
         "registry_grant_source_issuer": "https://casework.invalid",
         "registry_grant_client": "evidence-task-agent",
         "registry_grant_resource": TOKEN_AUDIENCE,

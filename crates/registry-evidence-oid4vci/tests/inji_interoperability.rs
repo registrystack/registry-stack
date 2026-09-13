@@ -737,7 +737,6 @@ fn task_bound_offer_access_token(issuer: &FixtureIssuer) -> String {
             "registry_actor_kind": "agent",
             "registry_grant_id": "synthetic-task-grant",
             "registry_approver": "h:synthetic-approver",
-            "registry_grant_authority": "synthetic-casework-authority",
             "registry_grant_source_issuer": "https://casework.example.org",
             "registry_grant_client": "tutorial-operator",
             "registry_grant_resource": ADOPTER_ORIGIN,

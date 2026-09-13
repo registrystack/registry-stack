@@ -427,7 +427,6 @@ mod tests {
             "requirement": "urn:example:requirement:v1",
             "purpose": "casework",
             "grantId": "caller-selected-grant",
-            "grantAuthority": "caller-selected-authority",
             "subjects": [{
                 "role": "subject",
                 "selector": {"profile": "profile-v1", "values": {"opaque": "value"}}

@@ -303,15 +303,12 @@ async fn every_selector_profile_runs_the_complete_signed_service_path() {
         ),
         (
             "selector-positive-grant",
-            access_token(task_grant_claims(
-                "authenticated-grant-v1",
-                json!({
-                    "given_name": "Adaeze",
-                    "family_name": "Okafor",
-                    "birth_date": "1990-07-11",
-                    "event_reference": "synthetic-event-001"
-                }),
-            )),
+            access_token(task_grant_claims(json!({
+                "given_name": "Adaeze",
+                "family_name": "Okafor",
+                "birth_date": "1990-07-11",
+                "event_reference": "synthetic-event-001"
+            }))),
             grant_request(None),
             vec!["subject"],
         ),
@@ -470,15 +467,12 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
             "birth_date": "2000-02-29"
         }
     }));
-    let grant_token = access_token(task_grant_claims(
-        "authenticated-grant-v1",
-        json!({
-            "given_name": "Adaeze",
-            "family_name": "Okafor",
-            "birth_date": "1990-07-11",
-            "event_reference": "synthetic-event-001"
-        }),
-    ));
+    let grant_token = access_token(task_grant_claims(json!({
+        "given_name": "Adaeze",
+        "family_name": "Okafor",
+        "birth_date": "1990-07-11",
+        "event_reference": "synthetic-event-001"
+    })));
     let mut executed = BTreeSet::new();
 
     assert_authorization_error(
@@ -620,9 +614,9 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
     .await;
     executed.insert("caller-added-disambiguator-rejected-from-demographics-v1");
 
-    let grant_authority_without_id = access_token(json!({
+    let grant_source_without_id = access_token(json!({
         "registry_actor_kind": "agent",
-        "registry_grant_authority": "authenticated-grant-v1",
+        "registry_grant_source_issuer": "https://casework.invalid",
         "grant": {"subject": {
             "given_name": "Adaeze",
             "family_name": "Okafor",
@@ -632,7 +626,7 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
     }));
     assert!(matches!(
         service
-            .authorize(&grant_authority_without_id, &grant_request(None))
+            .authorize(&grant_source_without_id, &grant_request(None))
             .await,
         Err(AuthorizationStageError::Authorization(
             AuthorizationError::Unauthorized
@@ -640,23 +634,22 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
     ));
     executed.insert("authenticated-grant-id-not-bound");
 
-    let wrong_grant_authority = access_token(task_grant_claims(
-        "other-authority-v1",
-        json!({
-            "given_name": "Adaeze",
-            "family_name": "Okafor",
-            "birth_date": "1990-07-11",
-            "event_reference": "synthetic-event-001"
-        }),
-    ));
+    let mut wrong_grant_source_issuer = task_grant_claims(json!({
+        "given_name": "Adaeze",
+        "family_name": "Okafor",
+        "birth_date": "1990-07-11",
+        "event_reference": "synthetic-event-001"
+    }));
+    wrong_grant_source_issuer["registry_grant_source_issuer"] =
+        json!("https://other-casework.invalid");
     assert_authorization_error(
         &service,
-        &wrong_grant_authority,
+        &access_token(wrong_grant_source_issuer),
         &grant_request(None),
         AuthorizationError::Unauthorized,
     )
     .await;
-    executed.insert("authenticated-grant-authority-not-bound");
+    executed.insert("authenticated-grant-source-issuer-not-bound");
 
     assert_authorization_error(
         &service,
@@ -927,11 +920,10 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
         "requirement": PROPERTY_WITH_EVENT,
         "purpose": PURPOSE,
         "grantId": "caller-grant",
-        "grantAuthority": "caller-authority",
         "subjects": [{"role": "subject", "selector": {"profile": "demographics-with-event-v1"}}]
     });
     assert!(serde_json::from_value::<EvidenceRequest>(caller_grant).is_err());
-    executed.insert("grant-id-or-authority-from-caller-request");
+    executed.insert("grant-id-from-caller-request");
 
     // All assertions above use the same executor configured with a deliberately
     // absent source credential. Any early credential acquisition would change
@@ -1032,7 +1024,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
             json!({"type":"evidence", "requirement":"urn:example:other"}),
         ),
     ] {
-        let mut claims = task_grant_claims("authenticated-grant-v1", subject.clone());
+        let mut claims = task_grant_claims(subject.clone());
         claims[member] = value;
         assert_authorization_error(
             &service,
@@ -1044,7 +1036,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
         assert!(!name.is_empty());
     }
 
-    let mut wrong_actor = task_grant_claims("authenticated-grant-v1", subject.clone());
+    let mut wrong_actor = task_grant_claims(subject.clone());
     wrong_actor["registry_actor_kind"] = json!("service");
     assert_authorization_error(
         &service,
@@ -1054,7 +1046,7 @@ async fn task_grant_context_is_bound_before_selector_or_source_access() {
     )
     .await;
 
-    let mut expired = task_grant_claims("authenticated-grant-v1", subject);
+    let mut expired = task_grant_claims(subject);
     expired["registry_grant_exp"] = json!(Utc::now().timestamp());
     assert_authorization_error(
         &service,
@@ -1252,12 +1244,11 @@ fn access_token(extra: Value) -> String {
     token_with_claims(claims)
 }
 
-fn task_grant_claims(authority: &str, subject: Value) -> Value {
+fn task_grant_claims(subject: Value) -> Value {
     let now = Utc::now().timestamp();
     json!({
         "registry_actor_kind": "agent",
         "registry_grant_id": "synthetic-grant-001",
-        "registry_grant_authority": authority,
         "registry_grant_source_issuer": "https://casework.invalid",
         "registry_grant_client": "evidence-task-agent",
         "registry_grant_resource": TOKEN_AUDIENCE,
@@ -1602,7 +1593,7 @@ fn declared_negative_cases() -> BTreeSet<String> {
         "caller-values-prohibited-for-grant-origin",
         "caller-added-disambiguator-rejected-from-demographics-v1",
         "authenticated-grant-id-not-bound",
-        "authenticated-grant-authority-not-bound",
+        "authenticated-grant-source-issuer-not-bound",
         "incomplete-grant-valueClaims",
         "alternative-field-set-not-inferred",
         "swapped-role-selectors",
@@ -1625,7 +1616,7 @@ fn declared_negative_cases() -> BTreeSet<String> {
         "missing-context-valueClaims",
         "incomplete-or-extra-valueClaims",
         "request-origin-valueClaims",
-        "grant-id-or-authority-from-caller-request",
+        "grant-id-from-caller-request",
         "credential-resolution-or-source-access-before-validation",
     ];
     let declared = matrix_negative_cases();

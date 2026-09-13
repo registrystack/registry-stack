@@ -159,10 +159,6 @@ impl AuthenticatedContext {
             .or_else(|| self.grant().ok().flatten().map(GrantClaims::id))
     }
 
-    pub fn grant_authority(&self) -> Option<&str> {
-        self.grant().ok().flatten().map(GrantClaims::authority)
-    }
-
     pub fn grant(&self) -> Result<Option<&GrantClaims>, TaskGrantError> {
         self.task_grant
             .as_ref()
@@ -1148,7 +1144,6 @@ mod tests {
             "registry_actor_kind": "agent",
             "registry_purpose": "eligibility-check",
             "registry_grant_id": "grant-1",
-            "registry_grant_authority": "authority-1",
             "registry_grant_source_issuer": "https://casework.invalid",
             "registry_grant_client": "evidence-agent",
             "registry_grant_resource": "evidence-resource",

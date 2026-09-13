@@ -88,7 +88,6 @@ $defs:
       selectorProfile: {type: string, pattern: '^[a-z][a-z0-9._-]{0,127}$'}
       valueOrigin: {enum: [authenticated-context, authenticated-grant]}
       grantId: {type: string, minLength: 1, maxLength: 512}
-      grantAuthority: {type: string, minLength: 1, maxLength: 512}
       values:
         type: object
         minProperties: 1
@@ -103,12 +102,9 @@ $defs:
           required: [valueOrigin]
           properties:
             valueOrigin: {const: authenticated-grant}
-        then: {required: [grantId, grantAuthority]}
+        then: {required: [grantId]}
         else:
-          not:
-            anyOf:
-              - {required: [grantId]}
-              - {required: [grantAuthority]}
+          not: {required: [grantId]}
   claim-path:
     type: string
     pattern: '^[A-Za-z_][A-Za-z0-9_-]*(\.[A-Za-z_][A-Za-z0-9_-]*)*$'
@@ -135,10 +131,10 @@ authorization_decision:
     - complete set of role, selector profile, and value origin tuples
   matching_rule: One entitlement must cover the complete request; permissions are never unioned across entitlements.
   principal_rule: Principal derives only from the one configured validated claim; a missing claim denies with no client_id, azp, header, or request fallback.
-  grant_rule: A grant identifier is context, never authority by possession. A present task grant is accepted only for an agent and only when its immutable principal, verified client, verified resource, trusted source issuer, authority, purpose, Evidence requirement bound, and effective token/grant deadline all match. An invalid present grant cannot fall back to a standing entitlement. An agent without a grant matches only an entitlement whose authority profile explicitly declares actorKind agent. Any declared actorKind must match the verified token.
+  grant_rule: A grant identifier is context, never authority by possession. A present task grant is accepted only for an agent and only when its immutable principal, verified client, verified resource, trusted source issuer, purpose, Evidence requirement bound, and effective token/grant deadline all match. An invalid present grant cannot fall back to a standing entitlement. An agent without a grant matches only an entitlement whose authority profile explicitly declares actorKind agent. Any declared actorKind must match the verified token.
   subject_binding_rule: Permission to serialize a response is not permission to issue under a binding mode. The one matched grant must name a holder-bound path explicitly before a holder-bound assertion may be issued on it; a grant widened to permit the SD-JWT VC serialization gains no binding-mode permission from that. Both halves are checked against the same one grant, because permissions are never unioned across grants, and the single denial that follows a failure of either does not say which one failed.
   selector_claim_rule: Context-derived and grant-derived selector values resolve only through the complete configured valueClaims map over the already verified token; request-derived subjects prohibit valueClaims.
-  authenticated_grant_rule: The complete shared grant claim set must exist, grantAuthority must exactly equal the matched authority-profile identifier, and the same entitlement must cover the complete request. Selector values come only from the verified token and never the caller request.
+  authenticated_grant_rule: The complete shared grant claim set must exist, and exactly one authority profile must match its trusted source issuer, requester client, purpose, Evidence requirement bound, and complete subject tuple set. Selector values come only from the verified token and never the caller request.
   denial_order: Deny before source credential resolution or source access.
 privacy:
   raw_context_in_logs_audit_errors: prohibited
