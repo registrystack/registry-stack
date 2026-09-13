@@ -2888,6 +2888,66 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
     .is_err());
 }
 
+#[test]
+fn borrowed_browser_admission_requires_exact_owner_resource() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&json!({
+            "version":2,"project":owner_project,"owner":owner_id,
+            "status":"ready","issuerPort":8093,"issuerProject":null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let resource = format!("urn:breg:dev:{owner_id}");
+    let inventory = json!({
+        "issuer":{"interactiveApplications":[
+            {"id":"app-kit","audience":null},
+            {"id":"evidence-app","audience":"urn:evidence:other"}
+        ]}
+    });
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&inventory).unwrap(),
+    )
+    .unwrap();
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project);
+    state.issuer_owner = Some(owner_id);
+    state.resource = Some(resource.clone());
+    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":resource,"browserClients":["app-kit"]
+    }))
+    .unwrap();
+    integrations.validate(&clients, &policy).unwrap();
+    let root = project.join("private");
+    private::directory(&root).unwrap();
+    integrations.prepare(&root, &state, None, &policy).unwrap();
+    let mut operator = config::operator(&state);
+    integrations
+        .operator(&state, &clients, &mut operator)
+        .unwrap();
+    assert!(operator["authentication"]["oidc"]["allowedClients"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|id| id == "app-kit"));
+    let mut wrong = integrations;
+    wrong.browser_clients = vec!["evidence-app".into()];
+    assert!(wrong.prepare(&root, &state, None, &policy).is_err());
+}
+
 struct RegistrySession {
     _root: tempfile::TempDir,
     executable: PathBuf,

@@ -23,6 +23,9 @@ pub(super) struct Integrations {
     pub secret_files: BTreeMap<String, PathBuf>,
     #[serde(default)]
     pub service_clients: Vec<ServiceClient>,
+    /// Interactive OAuth clients explicitly admitted from a borrowed issuer.
+    #[serde(default)]
+    pub browser_clients: Vec<String>,
     #[serde(default)]
     pub task_authority: Option<TaskAuthority>,
 }
@@ -61,8 +64,11 @@ impl Integrations {
         if self.sources.keys().collect::<BTreeSet<_>>() != declared {
             bail!("source-backed development needs exactly the declared source bindings");
         }
-        if self.secret_files.len() > 64 || self.service_clients.len() > 32 {
-            bail!("local integrations exceed their bounded secret or service-client count");
+        if self.secret_files.len() > 64
+            || self.service_clients.len() > 32
+            || self.browser_clients.len() > 8
+        {
+            bail!("local integrations exceed their bounded secret or client count");
         }
         for (name, path) in &self.secret_files {
             if !name.starts_with("source-") || !config::identifier(name) || !path.is_absolute() {
@@ -101,6 +107,11 @@ impl Integrations {
                     || client.scopes != ["casework:grants:assert"])
             {
                 bail!("task-exchange clients receive only casework:grants:assert at this session's Casework audience");
+            }
+        }
+        for id in &self.browser_clients {
+            if !config::identifier(id) || !ids.insert(id) {
+                bail!("interactive local clients need distinct bounded IDs");
             }
         }
         if !policy.task_templates.is_empty() && self.task_authority.is_none() {
@@ -212,6 +223,38 @@ impl Integrations {
                 });
             if !registered {
                 bail!("shared issuer owner must pre-register the exact Casework task authority connection");
+            }
+        }
+        if !self.browser_clients.is_empty() {
+            let owner_root = super::borrowed_issuer(state)?.ok_or_else(|| {
+                anyhow::anyhow!("interactive clients require a shared issuer owner")
+            })?;
+            let owner_clients: Value = serde_json::from_slice(&private::read(
+                &owner_root.join("clients.json"),
+                super::MAX_BYTES,
+            )?)?;
+            let owner_state: Value = serde_json::from_slice(&private::read(
+                &owner_root.join("state.json"),
+                super::MAX_BYTES,
+            )?)?;
+            let default_audience = format!(
+                "urn:breg:dev:{}",
+                owner_state["owner"].as_str().unwrap_or("")
+            );
+            for id in &self.browser_clients {
+                let registered = owner_clients["issuer"]["interactiveApplications"]
+                    .as_array()
+                    .is_some_and(|apps| {
+                        apps.iter().any(|app| {
+                            app["id"].as_str() == Some(id.as_str())
+                                && (app["audience"] == self.resource
+                                    || (app["audience"].is_null()
+                                        && self.resource == default_audience))
+                        })
+                    });
+                if !registered {
+                    bail!("shared issuer owner has no browser application for the Casework resource: {id}");
+                }
             }
         }
         for (name, path) in &self.secret_files {
@@ -336,13 +379,16 @@ impl Integrations {
         value: &mut Value,
     ) -> Result<()> {
         value["sources"] = serde_json::to_value(&self.sources)?;
-        if let Some(authority) = &self.task_authority {
+        if !self.service_clients.is_empty() || !self.browser_clients.is_empty() {
             value["authentication"]["oidc"]["allowedClients"] = json!(clients
                 .clients
                 .iter()
                 .map(|client| client.id.clone())
                 .chain(self.service_clients.iter().map(|client| client.id.clone()))
+                .chain(self.browser_clients.iter().cloned())
                 .collect::<Vec<_>>());
+        }
+        if let Some(authority) = &self.task_authority {
             value["taskAuthority"] = json!({"issuer":authority.issuer,
                 "exchangeAudience":state.issuer_origin(),"signingKeyRef":"secret:file/task-authority-signing-key",
                 "statusClients":authority.status_clients});
