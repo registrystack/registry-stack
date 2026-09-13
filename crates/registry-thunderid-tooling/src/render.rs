@@ -265,6 +265,16 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             .assigned_agents
             .iter()
             .map(|agent_id| json!({"id": agent_id, "type": "agent"}))
+            .chain(
+                role.assigned_users
+                    .iter()
+                    .map(|user_id| json!({"id": user_id, "type": "user"})),
+            )
+            .chain(
+                role.assigned_applications
+                    .iter()
+                    .map(|app_id| json!({"id": app_id, "type": "app"})),
+            )
             .collect();
         let document = json!({
             "resource_type": "role",
@@ -858,7 +868,32 @@ mod tests {
                 "staff".into(),
             )]),
         });
+        description.roles[0]
+            .assigned_users
+            .push("0197aaaa-0000-7000-8000-0000000000e2".into());
+        description.roles[0]
+            .assigned_applications
+            .push("0197aaaa-0000-7000-8000-0000000000e1".into());
         let rendered = render(&description).unwrap();
+        let role: Value = serde_yaml_parse(
+            &fs::read_to_string(
+                rendered
+                    .resources_dir
+                    .join("roles/0197aaaa-0000-7000-8000-0000000000c1.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(role["assignments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|assignment| assignment["type"] == "user"));
+        assert!(role["assignments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|assignment| assignment["type"] == "app"));
         let app: Value = serde_yaml_parse(
             &fs::read_to_string(
                 rendered

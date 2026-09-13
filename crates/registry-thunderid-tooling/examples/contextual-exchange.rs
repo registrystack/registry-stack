@@ -225,6 +225,8 @@ fn description(
                 "0197aaaa-0000-7000-8000-0000000000a1".into(),
                 "0197aaaa-0000-7000-8000-0000000000a2".into(),
             ],
+            assigned_users: vec![],
+            assigned_applications: vec![],
         }],
         machine_clients,
         compatibility_clients: vec![],

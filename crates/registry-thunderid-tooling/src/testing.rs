@@ -65,6 +65,8 @@ pub fn synthetic_description() -> IssuerDescription {
                 vec!["evidence:invoke".to_owned()],
             )],
             assigned_agents: vec!["0197aaaa-0000-7000-8000-0000000000a1".to_owned()],
+            assigned_users: vec![],
+            assigned_applications: vec![],
         }],
         machine_clients: vec![MachineClient {
             agent_id: "0197aaaa-0000-7000-8000-0000000000a1".to_owned(),

@@ -343,6 +343,10 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
             origin: "http://127.0.0.1:3000".into(),
             redirect_uris: vec!["http://127.0.0.1:3000/callback".into()],
             audience: None,
+            grants: vec![config::LocalPermissionGrant {
+                audience: None,
+                scopes: vec!["registry:generic:operate".into()],
+            }],
             token_attributes: vec!["registry_actor_kind".into()],
         });
     clients
@@ -354,6 +358,10 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
             origin: "http://127.0.0.1:3001".into(),
             redirect_uris: vec!["http://127.0.0.1:3001/callback".into()],
             audience: Some("urn:evidence:dev:synthetic".into()),
+            grants: vec![config::LocalPermissionGrant {
+                audience: Some("urn:evidence:dev:synthetic".into()),
+                scopes: vec!["registry:evidence:lookup".into()],
+            }],
             token_attributes: vec!["registry_actor_kind".into()],
         });
     clients.issuer.synthetic_users.push(config::BrowserUser {
@@ -361,7 +369,17 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         email: "staff@example.test".into(),
         password_file: user_secret,
         attributes: BTreeMap::from([("registry_actor_kind".into(), "human".into())]),
+        grants: vec![config::LocalPermissionGrant {
+            audience: None,
+            scopes: vec!["registry:generic:operate".into()],
+        }],
     });
+    let mut ungranted = clients.clone();
+    ungranted.issuer.interactive_applications[0].grants[0]
+        .scopes
+        .push("undeclared:permission".into());
+    assert!(config::clients(&serde_norway::to_string(&ungranted).unwrap().into_bytes()).is_err());
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
     let evidence = description
@@ -398,6 +416,16 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         json!(["policy-one"])
     );
     assert_eq!(description.interactive_applications[0].client_id, "portal");
+    assert!(description.roles.iter().any(|role| {
+        role.assigned_applications
+            .contains(&description.interactive_applications[0].id)
+            && role.permissions[0].1 == ["registry:generic:operate"]
+    }));
+    assert!(description.roles.iter().any(|role| {
+        role.assigned_users
+            .contains(&description.synthetic_users[0].id)
+            && role.permissions[0].1 == ["registry:generic:operate"]
+    }));
     let runtime: Value = serde_norway::from_slice(
         &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )

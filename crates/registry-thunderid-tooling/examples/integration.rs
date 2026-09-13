@@ -106,6 +106,8 @@ fn description(state_root: &Path, public_jwks: String) -> IssuerDescription {
             description: "May invoke the synthetic resource".to_owned(),
             permissions: vec![(SERVER_ID.to_owned(), vec!["evidence:invoke".to_owned()])],
             assigned_agents: vec![AGENT_ID.to_owned()],
+            assigned_users: vec![],
+            assigned_applications: vec![],
         }],
         machine_clients: vec![MachineClient {
             agent_id: AGENT_ID.to_owned(),
