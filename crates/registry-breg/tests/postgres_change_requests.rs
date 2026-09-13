@@ -181,7 +181,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     let mut source = serde_json::to_value(two_stage_project()).unwrap();
     // This guard has no mutation effect or ordinary UPDATE privilege. It must
     // still be lockable during apply without becoming writable.
-    source["accessProfiles"][4]["grants"][0]["applyTargets"]
+    source["accessProfiles"][4]["permissions"][0]["applyTargets"]
         .as_array_mut().unwrap().push(json!({
             "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
         }));
@@ -412,6 +412,37 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     )
     .await;
     let apply = action(&before.body, "apply_request", None);
+    // Each fresh acquisition must pass both cryptographic verification and the
+    // frozen application policy. None of these failures may leave a partial
+    // application, retained Evidence use, result, or idempotency receipt.
+    for mode in ["nonce", "expired", "inactive", "unavailable"] {
+        provider.mode(mode);
+        let failed = send_action(
+            &replay_app,
+            &apply,
+            &format!("guard-refusal-{mode}"),
+            applier.clone(),
+            json!({"proposalVersion":1,"effectDigest":digest}),
+        )
+        .await;
+        assert!(!failed.status.is_success(), "{mode} must not apply");
+        let counts = database
+            .admin
+            .query_one(
+                "SELECT (SELECT count(*) FROM registry_internal.registry_request_applications),
+                    (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
+                    (SELECT count(*) FROM registry_internal.registry_request_results)",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            [counts.get::<_, i64>(0), counts.get(1), counts.get(2)],
+            [0, 0, 0]
+        );
+    }
+    provider.mode("");
+    let expected_calls = provider.calls() + 1;
     provider.pause();
     let invocation = send_action(
         &fault_app,
@@ -421,7 +452,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         json!({"proposalVersion":1,"effectDigest":digest}),
     );
     let inspect = async {
-        provider.wait_for_calls(1).await;
+        provider.wait_for_calls(expected_calls).await;
         assert_eq!(pool.status().available, pool.status().size);
         let active: i64 = database
             .admin
@@ -440,7 +471,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     };
     let (ambiguous, ()) = tokio::join!(invocation, inspect);
     assert_eq!(ambiguous.status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(provider.calls(), 1);
+    assert_eq!(provider.calls(), expected_calls);
     let row = database
         .admin
         .query_one(
@@ -464,7 +495,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
     assert_eq!(
         provider.calls(),
-        1,
+        expected_calls,
         "receipt replay performs no acquisition"
     );
     let row = database

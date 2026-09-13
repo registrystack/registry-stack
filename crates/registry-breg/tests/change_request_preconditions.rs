@@ -95,7 +95,7 @@ fn project() -> Value {
                 }}
             }
         }],
-        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal", "grants":[{
+        "accessProfiles":[{"id":"reviewer", "default":true, "principalClaim":"principal", "permissions":[{
             "entity":"release-request",
             "operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],
             "readableFields":["lot","owner-reference","report-reference","release-state","valid-from","valid-through"],

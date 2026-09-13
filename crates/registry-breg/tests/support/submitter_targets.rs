@@ -63,10 +63,10 @@ fn create_only_guard_starter() -> registry_breg::CompiledRegistry {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["grants"][1]["reviewStages"][0]["targets"] = json!([{
+    reviewer["permissions"][1]["reviewStages"][0]["targets"] = json!([{
         "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
     }]);
-    reviewer["grants"][1]["applyTargets"] = json!([
+    reviewer["permissions"][1]["applyTargets"] = json!([
         {"entity":"enrolment", "rowBoundaries":[]},
         {"entity":"professional-license", "rowBoundaries":[]}
     ]);

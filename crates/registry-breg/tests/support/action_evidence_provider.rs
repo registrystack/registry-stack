@@ -63,7 +63,7 @@ impl EvidenceProvider {
                 let protected = URL_SAFE_NO_PAD.encode(json!({"alg":"ES256","kid":key.kid,"typ":registry_evidence_verifier::EVIDENCE_JWS_TYP,"cty":registry_evidence_verifier::EVIDENCE_JWS_CTY}).to_string());
                 let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
                 let signature = registry_platform_crypto::sign(format!("{protected}.{payload}").as_bytes(), &key).unwrap();
-                ([(axum::http::header::CONTENT_TYPE, registry_evidence_verifier::EVIDENCE_JWS_MEDIA_TYPE), (axum::http::HeaderName::from_static("traceparent"), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")], json!({"protected":protected,"payload":payload,"signature":URL_SAFE_NO_PAD.encode(signature)}).to_string())
+                (if mode == "unavailable" { axum::http::StatusCode::SERVICE_UNAVAILABLE } else { axum::http::StatusCode::OK }, [(axum::http::header::CONTENT_TYPE, registry_evidence_verifier::EVIDENCE_JWS_MEDIA_TYPE), (axum::http::HeaderName::from_static("traceparent"), "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")], json!({"protected":protected,"payload":payload,"signature":URL_SAFE_NO_PAD.encode(signature)}).to_string())
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

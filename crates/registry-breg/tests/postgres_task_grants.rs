@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #![cfg(feature = "postgres-test")]
+#[path = "support/action_evidence_provider.rs"]
+#[allow(dead_code)]
+mod action_evidence_provider;
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
 mod postgres_harness;
@@ -9,6 +12,7 @@ use axum::{
     Router,
 };
 use postgres_harness::TestDatabase;
+use registry_breg as breg;
 use registry_breg::api::{
     authenticated_router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture,
 };
@@ -249,6 +253,16 @@ fn app(
     idp: &MockIdp,
     status: Arc<Status>,
 ) -> Router {
+    app_with_evidence(db, registry, identity, idp, status, None)
+}
+fn app_with_evidence(
+    db: &TestDatabase,
+    registry: Arc<CompiledRegistry>,
+    identity: ExpectedRegistryIdentity,
+    idp: &MockIdp,
+    status: Arc<Status>,
+    evidence: Option<Arc<registry_breg::action_evidence::ActionEvidenceEvaluator>>,
+) -> Router {
     let pool = db.runtime_config.build_pool().unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();
     let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into()).unwrap();
@@ -264,17 +278,19 @@ fn app(
         audit.clone(),
         cursors.clone(),
     ));
-    let writes = Arc::new(
-        PostgresRecordMutationService::new(
-            pool,
-            registry.clone(),
-            identity.clone(),
-            lock,
-            Duration::from_secs(2),
-            audit,
-        )
-        .with_task_status(status),
-    );
+    let mut writes = PostgresRecordMutationService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        lock,
+        Duration::from_secs(2),
+        audit,
+    )
+    .with_task_status(status);
+    if let Some(evidence) = evidence {
+        writes = writes.with_evidence_evaluator(evidence);
+    }
+    let writes = Arc::new(writes);
     let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
         idp.jwks_uri(),
         JwksFetcherConfig::defaults(),
@@ -910,5 +926,163 @@ async fn automatic_apply_rechecks_original_task_after_human_approval() {
         after[6], before[6],
         "the original task binding is retained unchanged"
     );
+    db.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn evidence_apply_checks_original_task_before_disclosure_and_before_commit() {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::ModuleAssetSource;
+    let provider = action_evidence_provider::EvidenceProvider::start().await;
+    let db = TestDatabase::create(8).await;
+    let mut source: Value = serde_json::from_str(PROJECT).unwrap();
+    source["evidenceProviders"] = json!([{
+        "id":"farmer-registry", "contracts":"evidence/farmer-contracts.json",
+        "subjectResolution":"trusted-provider-exact-selector"
+    }]);
+    source["entities"][2]["changeRequest"]["application"] = json!({
+        "mode":"manual", "preconditions":{"evidence":[{
+            "id":"farmer-status", "provider":"farmer-registry",
+            "requirement":"urn:example:farmer:status-v1",
+            "subjects":{"farmer":{"profile":"farmer-number-v1",
+                "selectors":{"farmer-number":{"source":"request_field","field":"tenant"}}}},
+            "requires":[{"output":"active","equals":true}],
+            "maximumObservationAgeSeconds":60
+        }]}
+    });
+    let contracts = include_bytes!(
+        "../../../products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json"
+    );
+    let registry = Arc::new(
+        compile_project_with_assets(
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
+            &[],
+            &[ModuleAssetSource {
+                module: None,
+                path: "evidence/farmer-contracts.json".into(),
+                bytes: contracts.to_vec(),
+            }],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install(&db, &registry).await;
+    let idp = MockIdp::start().await;
+    let status = Arc::new(Status::default());
+    let app = app_with_evidence(
+        &db,
+        registry,
+        identity,
+        &idp,
+        status.clone(),
+        Some(Arc::new(
+            registry_breg::action_evidence::ActionEvidenceEvaluator::new(provider.client()),
+        )),
+    );
+    let steward = human(&idp, "steward", "maintain");
+    let reviewer = human(&idp, "reviewer", "review");
+    let applier = human(&idp, "applier", "apply");
+    let site = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "guard-site",
+        json!({"tenant":"tenant-a","name":"old"}),
+    )
+    .await;
+    let replacement = create(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        &steward,
+        "guard-replacement",
+        json!({"tenant":"tenant-a","name":"replacement"}),
+    )
+    .await;
+    for phase in ["revoked", "unavailable", "after-preflight", "allowed"] {
+        let target = create(
+            &app,
+            "/v1/records/placements?accessProfile=steward",
+            &steward,
+            &format!("{phase}-target"),
+            json!({"tenant":"tenant-a","site":id(&site)}),
+        )
+        .await;
+        let (grant, token) = agent(&idp, &status);
+        let draft = create(
+            &app,
+            "/v1/records/correction-requests?accessProfile=submitter",
+            &token,
+            &format!("{phase}-draft"),
+            json!({"tenant":"tenant-a","placement":id(&target),
+                "proposedSite":id(&replacement),"reason":"synthetic correction"}),
+        )
+        .await;
+        let record = id(&draft);
+        let submit = action(
+            &get(&app, &record, "submitter", &token).await,
+            "submit_request",
+        );
+        assert_eq!(
+            perform(&app, &submit, &token, &format!("{phase}-submit"))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let review = action(
+            &get(&app, &record, "reviewer", &reviewer).await,
+            "approve_request",
+        );
+        assert_eq!(
+            perform(&app, &review, &reviewer, &format!("{phase}-review"))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let apply = action(
+            &get(&app, &record, "applier", &applier).await,
+            "apply_request",
+        );
+        match phase {
+            "revoked" => status.revoke(&grant),
+            "unavailable" => {
+                status.unavailable.lock().unwrap().insert(grant.clone());
+            }
+            "after-preflight" => {
+                *status.revoke_after_check.lock().unwrap() = Some(grant.clone());
+            }
+            _ => {}
+        }
+        let before = counts(&db).await;
+        let disclosures = provider.calls();
+        let result = perform(&app, &apply, &applier, &format!("{phase}-apply")).await;
+        if phase == "allowed" {
+            assert_eq!(result.status, StatusCode::OK, "{}", result.body);
+            assert_eq!(provider.calls(), disclosures + 1);
+            status.revoke(&grant);
+            let replay = perform(&app, &apply, &applier, &format!("{phase}-apply")).await;
+            assert_eq!(replay.status, StatusCode::OK);
+            assert_eq!(replay.body, result.body);
+            assert_eq!(
+                provider.calls(),
+                disclosures + 1,
+                "recovery performs no second disclosure"
+            );
+        } else {
+            assert!(
+                !result.status.is_success(),
+                "refused authority cannot apply"
+            );
+            assert_eq!(
+                counts(&db).await,
+                before,
+                "refusal leaves no effects or receipt"
+            );
+            assert_eq!(
+                provider.calls(),
+                disclosures + usize::from(phase == "after-preflight"),
+                "only authority valid at preflight may request Evidence"
+            );
+        }
+    }
     db.cleanup().await;
 }

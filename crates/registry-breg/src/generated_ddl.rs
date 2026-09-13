@@ -2066,7 +2066,7 @@ fn change_request_target_policies_for_table(
                 });
             }
             for grant in request
-                .apply_grants
+                .apply_permissions
                 .iter()
                 .filter(|grant| grant.target_entity_id == target_entity.id)
             {
@@ -2473,7 +2473,7 @@ fn change_request_guard_application_expression(
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
     guard: &crate::model::CompiledChangeRequestGuardTarget,
-    grant: &crate::model::CompiledChangeRequestApplyGrant,
+    grant: &crate::model::CompiledChangeRequestApplyPermission,
 ) -> String {
     let context = change_request_context_expression();
     [

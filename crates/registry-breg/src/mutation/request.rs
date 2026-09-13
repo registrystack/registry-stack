@@ -407,10 +407,26 @@ impl MutationCoordinator {
             )?;
         }
         let requests = request_evidence_subjects(frozen)?;
+        let proposal_authority = crate::request_store::load_task_authority(
+            transaction.transaction(),
+            &entity.id,
+            request_id,
+            i64::from(*proposal_version),
+        )
+        .await?;
         transaction
             .commit()
             .await
             .map_err(|_| MutationError::Unavailable)?;
+        // A guard acquisition is a protected disclosure too. Check both the
+        // current actor and the authority frozen at submission before Evidence
+        // I/O, then recheck at the final SQL attempt before applying effects.
+        if let Some(grant) = claims.task_grant() {
+            self.check_task_authority(grant).await?;
+        }
+        if let Some(grant) = proposal_authority {
+            self.check_task_authority(&grant).await?;
+        }
         Ok(RequestEvidencePreflight::Acquire(requests))
     }
 

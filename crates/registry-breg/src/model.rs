@@ -140,6 +140,24 @@ pub struct CompiledChangeRequest {
     pub maximum_snapshot_bytes: u32,
 }
 
+impl CompiledChangeRequest {
+    /// Records needed for applying effects or checking frozen guards. Request-self
+    /// attachment permissions do not create additional lifecycle target authority.
+    pub(crate) fn application_target_entities(&self) -> BTreeSet<String> {
+        self.target_entities
+            .iter()
+            .cloned()
+            .chain(
+                self.application
+                    .preconditions
+                    .targets
+                    .iter()
+                    .map(|target| target.entity_id.clone()),
+            )
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompiledChangeRequestReviewMode {

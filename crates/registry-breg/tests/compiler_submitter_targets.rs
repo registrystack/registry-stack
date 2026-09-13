@@ -39,10 +39,10 @@ fn create_only_guard_source() -> Value {
         .iter_mut()
         .find(|profile| profile["id"] == "reviewer")
         .unwrap();
-    reviewer["grants"][1]["reviewStages"][0]["targets"] = json!([{
+    reviewer["permissions"][1]["reviewStages"][0]["targets"] = json!([{
         "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
     }]);
-    reviewer["grants"][1]["applyTargets"] = json!([
+    reviewer["permissions"][1]["applyTargets"] = json!([
         {"entity":"enrolment", "rowBoundaries":[]},
         {"entity":"professional-license", "rowBoundaries":[]}
     ]);
@@ -183,7 +183,7 @@ fn create_only_requests_admit_exact_existing_application_guard_targets() {
         .iter_mut()
         .find(|profile| profile["id"] == "holder")
         .unwrap();
-    holder["grants"][1]["submitterTargets"] = json!(["professional-license", "enrolment"]);
+    holder["permissions"][1]["submitterTargets"] = json!(["professional-license", "enrolment"]);
     let project = parse_project_json(&serde_json::to_vec(&widened).unwrap()).unwrap();
     let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
     assert!(failure

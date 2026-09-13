@@ -68,6 +68,15 @@ preflight is closed before Evidence I/O. Final target effects, request receipt,
 audit, outbox, and protected Evidence linkage commit atomically. Retrying the
 identical idempotency key recovers the receipt without another acquisition.
 
+When the proposal was submitted under an institutional task grant, fresh status
+for that original grant is required before requesting Evidence and again before
+committing application. An applying agent’s current grant is checked too.
+Revocation or unavailable task authority cannot cause a new guard disclosure;
+revocation during acquisition still prevents application. Completed receipt
+recovery does not disclose Evidence again and remains subject to current read
+authority. Attachment-read permissions stay separate from the effect and guard
+targets required for lifecycle actions.
+
 ## Rhai planner adopter comparison
 
 `acceptance/person-name-change-rhai` is the compact synthetic counterpart for
