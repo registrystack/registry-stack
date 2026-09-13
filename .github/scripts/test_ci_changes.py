@@ -1734,6 +1734,7 @@ class CiChangesTest(unittest.TestCase):
         self.assertEqual(
             trigger_block,
             """name: Deploy RegistryStack Docs
+run-name: Deploy RegistryStack Docs ${{ inputs.released_tag }} (${{ inputs.request_id }})
 
 on:
   push:
@@ -1747,6 +1748,10 @@ on:
         type: string
       docs_sha256:
         description: Optional SHA-256 of that released documentation archive
+        required: false
+        type: string
+      request_id:
+        description: Optional release publication correlation ID
         required: false
         type: string
 """.rstrip(),
