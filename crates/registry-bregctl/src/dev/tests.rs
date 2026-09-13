@@ -339,10 +339,21 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         .interactive_applications
         .push(config::BrowserApplication {
             id: "portal".into(),
-            client_secret_file: app_secret,
+            client_secret_file: app_secret.clone(),
             origin: "http://127.0.0.1:3000".into(),
             redirect_uris: vec!["http://127.0.0.1:3000/callback".into()],
             audience: None,
+            token_attributes: vec!["registry_actor_kind".into()],
+        });
+    clients
+        .issuer
+        .interactive_applications
+        .push(config::BrowserApplication {
+            id: "evidence-portal".into(),
+            client_secret_file: app_secret.clone(),
+            origin: "http://127.0.0.1:3001".into(),
+            redirect_uris: vec!["http://127.0.0.1:3001/callback".into()],
+            audience: Some("urn:evidence:dev:synthetic".into()),
             token_attributes: vec!["registry_actor_kind".into()],
         });
     clients.issuer.synthetic_users.push(config::BrowserUser {
@@ -387,6 +398,15 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         json!(["policy-one"])
     );
     assert_eq!(description.interactive_applications[0].client_id, "portal");
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    let allowed = runtime["authentication"]["oidc"]["allowedClients"]
+        .as_array()
+        .unwrap();
+    assert!(allowed.iter().any(|id| id == "portal"));
+    assert!(!allowed.iter().any(|id| id == "evidence-portal"));
     assert_eq!(description.synthetic_users[0].username, "staff");
     assert_eq!(
         private::read(
