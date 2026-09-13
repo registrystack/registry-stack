@@ -296,7 +296,8 @@ pub(crate) fn selector_field_matches_field_type(
             }
             FieldTypeSource::Timestamp => {
                 // PostgreSQL's JSONB projection uses at least 25 bytes with
-                // a UTC offset; snapshot sizing allows 37 including JSON quotes.
+                // a UTC offset. A valid year-0001 input can cross into BC on
+                // normalization and project 35 bytes, or 37 with JSON quotes.
                 return *maximum_bytes >= 25 && *minimum_bytes <= 35;
             }
             _ => {}

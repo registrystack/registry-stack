@@ -488,11 +488,12 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         &replay_app,
         &apply,
         "evidence-ambiguous-apply",
-        applier,
+        applier.clone(),
         json!({"proposalVersion":1,"effectDigest":digest}),
     )
     .await;
     assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
+    assert_eq!(replay.body["request"]["application"]["proposalVersion"], 1);
     assert_eq!(
         provider.calls(),
         expected_calls,
@@ -510,6 +511,69 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         .await
         .unwrap();
     assert_eq!([row.get::<_, i64>(0), row.get(1), row.get(2)], [1, 1, 1]);
+    provider.mode("unavailable");
+    let different_key = send_action(
+        &replay_app,
+        &apply,
+        "evidence-ambiguous-apply-different-key",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        different_key.status,
+        StatusCode::OK,
+        "{}",
+        different_key.body
+    );
+    assert_eq!(
+        different_key.body["request"]["application"],
+        replay.body["request"]["application"]
+    );
+    assert_eq!(different_key.body["revision"], replay.body["revision"]);
+    assert_eq!(
+        provider.calls(),
+        expected_calls,
+        "recovery performs no Evidence acquisition"
+    );
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+               (SELECT count(*) FROM registry_internal.registry_request_applications),
+               (SELECT count(*) FROM registry_internal.registry_request_evidence_uses)",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!([row.get::<_, i64>(0), row.get(1)], [1, 1]);
+    let idempotency_before_refusal = idempotency_result_count(&database).await;
+    let bogus_precondition = RequestAction {
+        href: apply.href.clone(),
+        if_match: tampered_if_match(&apply.if_match),
+        proposal_version: apply.proposal_version,
+        effect_digest: apply.effect_digest.clone(),
+        review: Value::Null,
+    };
+    let refused = send_action(
+        &replay_app,
+        &bogus_precondition,
+        "evidence-ambiguous-apply-bogus-precondition",
+        applier,
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused.body
+    );
+    assert_eq!(provider.calls(), expected_calls);
+    assert_eq!(
+        idempotency_result_count(&database).await,
+        idempotency_before_refusal
+    );
     database.cleanup().await;
 }
 

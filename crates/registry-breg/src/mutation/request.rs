@@ -293,6 +293,16 @@ impl MutationCoordinator {
         let workflow =
             crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
                 .await?;
+        if workflow.state() == RequestState::Applied {
+            // A new key may recover the committed application without fresh
+            // Evidence. The action transaction rechecks the original approved
+            // precondition, proposal identity, and current target authority.
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(RequestEvidencePreflight::Receipt);
+        }
         let etag = request_action_etag(
             &self.audit_profile,
             claims,
