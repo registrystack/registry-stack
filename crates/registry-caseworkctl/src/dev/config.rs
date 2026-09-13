@@ -570,7 +570,10 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         Zeroizing::new(pem("PRIVATE KEY", &server_key.serialize_der())).as_bytes(),
     )?;
     private::create(&root.join("database/pg_hba.conf"), b"local all all trust\nhostnossl all all 0.0.0.0/0 reject\nhostnossl all all ::/0 reject\nhostssl all all 0.0.0.0/0 scram-sha-256\nhostssl all all ::/0 scram-sha-256\n")?;
-    if !borrowed {
+    // Explicit source bindings need a generated runtime for validation even
+    // when the issuer is borrowed. The legacy source bridge writes its config
+    // later, after exporting source credentials.
+    if !borrowed || clients.integrations.is_some() {
         let mut operator = operator(state);
         if let Some(integrations) = &clients.integrations {
             integrations.operator(state, clients, &mut operator)?;
