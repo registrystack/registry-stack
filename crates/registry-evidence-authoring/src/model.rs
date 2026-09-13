@@ -201,6 +201,11 @@ pub struct QuestionAnswer {
     pub values: Vec<String>,
     pub minimum: Option<i64>,
     pub maximum: Option<i64>,
+    pub prefix: Option<String>,
+    #[serde(rename = "minimumBytes")]
+    pub minimum_bytes: Option<u64>,
+    #[serde(rename = "maximumBytes")]
+    pub maximum_bytes: Option<u64>,
     pub schema: Option<String>,
     #[serde(rename = "maximumSerializedBytes")]
     pub maximum_serialized_bytes: Option<u64>,
@@ -209,12 +214,13 @@ pub struct QuestionAnswer {
 }
 
 /// The shape of one answer.
-#[derive(Clone, Copy, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "kebab-case")]
 pub enum AnswerType {
     Boolean,
     ControlledCategory,
+    BoundedIdentifier,
     BoundedInteger,
     ReviewedStructuredValue,
 }

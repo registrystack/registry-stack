@@ -16,6 +16,10 @@ forms:
     wire: JSON string
     declaration_requires: [categoryScheme, schemeVersion, codelist, maximumBytes]
     rule: Exact reviewed category membership.
+  bounded-identifier:
+    wire: JSON string
+    declaration_requires: [prefix, minimumBytes, maximumBytes]
+    rule: Exact ASCII prefix followed by a nonempty suffix beginning with an ASCII letter or digit; later suffix bytes may also be dot, underscore, or hyphen. The complete value has the declared byte length, at most 1024 bytes. No codelist membership is required.
   bounded-integer:
     wire: JSON integer
     declaration_requires: [minimum, maximum]
@@ -55,6 +59,7 @@ validation_order:
   - exact concept identifier set and duplicate rejection
   - exact declared form
   - scalar and lexical type
+  - exact identifier prefix, suffix syntax, and declared byte bounds
   - numeric precision and range
   - codelist or scheme version and membership
   - collection cardinality and uniqueness

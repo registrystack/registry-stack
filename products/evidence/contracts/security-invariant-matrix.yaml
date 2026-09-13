@@ -58,9 +58,9 @@ invariants:
     enforcement: Closed prepare/2, extract/2 or optional extract/3, and selector-aware derive/3 entry points, fresh state and input copies, capability allowlist, minimized stage inputs, and closed output decoding. Dual extraction arities are refused. A selector-aware extractor cannot declare optimized batching, so the adapter's own returned-identity check runs for every evaluation. The runtime enforces the arity and that refusal; the identity comparison inside the adapter is the adapter author's obligation, generated for an exported source.
     negative_test: sec-rhai-output-shape-closed
   - id: V1-I12
-    rule: Undeclared concepts, extra fields, and values violating types, codelists, cardinality, precision, or sizes are rejected.
+    rule: Undeclared concepts, extra fields, and values violating types, codelists, identifier prefixes or syntax, cardinality, precision, or sizes are rejected.
     threat: Data leakage or type confusion through trusted-script mistakes.
-    enforcement: Core validates exact concept set and the complete Supported Value declaration before evidence construction; decimals are exact coefficient-and-scale values and entity-reference seeds are protected projection inputs.
+    enforcement: Core validates exact concept set and the complete Supported Value declaration before evidence construction; bounded identifiers require an exact governed prefix, ASCII suffix syntax, and declared byte bounds; decimals are exact coefficient-and-scale values and entity-reference seeds are protected projection inputs.
     negative_test: sec-derived-value-output-gate
   - id: V1-I13
     rule: Missing facts, undefined decisions, script failures, audit failures, and evaluation failures fail closed.

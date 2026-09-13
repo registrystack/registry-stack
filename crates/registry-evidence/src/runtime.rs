@@ -799,7 +799,7 @@ impl EvidenceRuntime {
         let concepts = requirement
             .concepts
             .iter()
-            .map(|concept| self.discovery_concept(concept))
+            .map(Self::discovery_concept)
             .collect::<Result<Vec<_>, RuntimeFailure>>()?;
 
         let configuration_revision = self
@@ -844,7 +844,6 @@ impl EvidenceRuntime {
     }
 
     fn discovery_concept(
-        &self,
         concept: &crate::config::ConceptConfig,
     ) -> Result<EvidenceDefinitionConcept, RuntimeFailure> {
         let form = match concept.form {
@@ -854,7 +853,9 @@ impl EvidenceRuntime {
             ConceptForm::BoundedInteger => {
                 EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::Integer)
             }
-            ConceptForm::ControlledCode | ConceptForm::ControlledCategory => {
+            ConceptForm::ControlledCode
+            | ConceptForm::ControlledCategory
+            | ConceptForm::BoundedIdentifier => {
                 EvidenceDefinitionForm::Scalar(EvidenceDefinitionScalarForm::String)
             }
             ConceptForm::BoundedDecimal => {
@@ -3955,6 +3956,15 @@ fn elapsed_millis(started: Instant) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_identifier_discovery_projects_a_string_client_contract() {
+        let concept: crate::config::ConceptConfig = serde_norway::from_str("handle: report\nid: urn:example:concept:report\nform: bounded-identifier\nrequired: true\nconstraints: {prefix: 'urn:example:report:', minimumBytes: 20, maximumBytes: 64}\n").expect("concept parses");
+        let discovered = EvidenceRuntime::discovery_concept(&concept).expect("concept projects");
+        let wire = serde_json::to_value(discovered).expect("client contract serializes");
+        assert_eq!(wire["form"], "string");
+        assert_eq!(wire["concept"], "urn:example:concept:report");
+    }
 
     #[test]
     fn runtime_failures_and_rate_keys_are_value_free() {
