@@ -63,6 +63,28 @@
     },
     "EvidenceProviderConfig": {
       "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "tokenRef": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "tokenRef"
+          ]
+        },
+        {
+          "properties": {
+            "privateKeyJwt": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "privateKeyJwt"
+          ]
+        }
+      ],
       "properties": {
         "baseUrl": {
           "type": "string"

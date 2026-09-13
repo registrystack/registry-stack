@@ -80,7 +80,19 @@ pub fn activate(
         {
             return Err(Error::InvalidBinding);
         }
-        let token_provider = token_provider(binding, secrets)?;
+        // Keep both clients on the same trust snapshot if the secret rotates
+        // while the remaining provider inputs are being activated.
+        let ca_bundle = binding
+            .ca_bundle_ref
+            .as_ref()
+            .map(|reference| {
+                secrets
+                    .resolve(reference)
+                    .map(|secret| secret.expose_secret().to_vec())
+                    .map_err(|_| Error::Secret)
+            })
+            .transpose()?;
+        let token_provider = token_provider(binding, secrets, ca_bundle.as_deref())?;
         let keys = secrets
             .resolve(&binding.trusted_jwks_ref)
             .map_err(|_| Error::Secret)?;
@@ -96,9 +108,8 @@ pub fn activate(
             jwks,
             binding.revoked_key_ids.clone(),
         );
-        if let Some(reference) = &binding.ca_bundle_ref {
-            let ca = secrets.resolve(reference).map_err(|_| Error::Secret)?;
-            config = config.with_trusted_root_certificates(ca.expose_secret().to_vec());
+        if let Some(ca_bundle) = ca_bundle {
+            config = config.with_trusted_root_certificates(ca_bundle);
         }
         let provider = EvidenceProviderBinding::new(binding.trust_binding_id.clone(), config)
             .map_err(|_| Error::InvalidBinding)?;
@@ -128,6 +139,7 @@ fn required_provider_ids(registry: &CompiledRegistry) -> BTreeSet<String> {
 fn token_provider(
     binding: &EvidenceProviderConfig,
     secrets: &SecretResolver,
+    ca_bundle: Option<&[u8]>,
 ) -> Result<
     Arc<dyn registry_evidence_client::TokenProvider>,
     crate::runtime_config::RuntimeConfigError,
@@ -136,53 +148,51 @@ fn token_provider(
     if binding.token_ref.is_some() == binding.private_key_jwt.is_some() {
         return Err(Error::InvalidBinding);
     }
-    let provider: Arc<dyn registry_evidence_client::TokenProvider> = if let Some(reference) =
-        &binding.token_ref
-    {
-        let token = secrets.resolve(reference).map_err(|_| Error::Secret)?;
-        let token = std::str::from_utf8(token.expose_secret()).map_err(|_| Error::Secret)?;
-        Arc::new(
-            registry_evidence_client::StaticToken::new(token.to_owned())
-                .map_err(|_| Error::InvalidBinding)?,
-        )
-    } else {
-        let source = binding
-            .private_key_jwt
-            .as_ref()
-            .ok_or(Error::InvalidBinding)?;
-        let endpoint = source
-            .token_endpoint
-            .parse()
-            .map_err(|_| Error::InvalidBinding)?;
-        let key = secrets
-            .resolve(&source.private_key_ref)
-            .map_err(|_| Error::Secret)?;
-        let key = std::str::from_utf8(key.expose_secret()).map_err(|_| Error::Secret)?;
-        let key =
-            registry_platform_crypto::PrivateJwk::parse(key).map_err(|_| Error::InvalidBinding)?;
-        let mut token_config = registry_evidence_client::PrivateKeyJwtConfig::new(
-            endpoint,
-            source.client_id.clone(),
-            key,
-        );
-        if let Some(audience) = &source.assertion_audience {
-            token_config = token_config.with_audience(audience.clone());
-        }
-        if let Some(resource) = &source.resource {
-            token_config = token_config.with_resource(resource.clone());
-        }
-        if !source.scopes.is_empty() {
-            token_config = token_config.with_scopes(source.scopes.clone());
-        }
-        if let Some(reference) = &binding.ca_bundle_ref {
-            let ca = secrets.resolve(reference).map_err(|_| Error::Secret)?;
-            token_config = token_config.with_trusted_root_certificates(ca.expose_secret().to_vec());
-        }
-        Arc::new(
-            registry_evidence_client::PrivateKeyJwt::new(token_config)
-                .map_err(|_| Error::InvalidBinding)?,
-        )
-    };
+    let provider: Arc<dyn registry_evidence_client::TokenProvider> =
+        if let Some(reference) = &binding.token_ref {
+            let token = secrets.resolve(reference).map_err(|_| Error::Secret)?;
+            let token = std::str::from_utf8(token.expose_secret()).map_err(|_| Error::Secret)?;
+            Arc::new(
+                registry_evidence_client::StaticToken::new(token.to_owned())
+                    .map_err(|_| Error::InvalidBinding)?,
+            )
+        } else {
+            let source = binding
+                .private_key_jwt
+                .as_ref()
+                .ok_or(Error::InvalidBinding)?;
+            let endpoint = source
+                .token_endpoint
+                .parse()
+                .map_err(|_| Error::InvalidBinding)?;
+            let key = secrets
+                .resolve(&source.private_key_ref)
+                .map_err(|_| Error::Secret)?;
+            let key = std::str::from_utf8(key.expose_secret()).map_err(|_| Error::Secret)?;
+            let key = registry_platform_crypto::PrivateJwk::parse(key)
+                .map_err(|_| Error::InvalidBinding)?;
+            let mut token_config = registry_evidence_client::PrivateKeyJwtConfig::new(
+                endpoint,
+                source.client_id.clone(),
+                key,
+            );
+            if let Some(audience) = &source.assertion_audience {
+                token_config = token_config.with_audience(audience.clone());
+            }
+            if let Some(resource) = &source.resource {
+                token_config = token_config.with_resource(resource.clone());
+            }
+            if !source.scopes.is_empty() {
+                token_config = token_config.with_scopes(source.scopes.clone());
+            }
+            if let Some(ca_bundle) = ca_bundle {
+                token_config = token_config.with_trusted_root_certificates(ca_bundle.to_vec());
+            }
+            Arc::new(
+                registry_evidence_client::PrivateKeyJwt::new(token_config)
+                    .map_err(|_| Error::InvalidBinding)?,
+            )
+        };
     Ok(provider)
 }
 
@@ -288,7 +298,7 @@ mod tests {
             revoked_key_ids: vec![],
             ca_bundle_ref: None,
         };
-        assert!(token_provider(&binding, &secrets).is_ok());
+        assert!(token_provider(&binding, &secrets, None).is_ok());
         binding.private_key_jwt = Some(EvidencePrivateKeyJwtConfig {
             token_endpoint: "https://issuer.example.org/token".into(),
             client_id: "action-client".into(),
@@ -298,19 +308,37 @@ mod tests {
             scopes: vec!["evidence.read".into()],
         });
         assert!(matches!(
-            token_provider(&binding, &secrets),
+            token_provider(&binding, &secrets, None),
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
         binding.token_ref = None;
-        assert!(token_provider(&binding, &secrets).is_ok());
+        assert!(token_provider(&binding, &secrets, None).is_ok());
+        let certificate = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let ca = format!(
+            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+            base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                certificate.cert.der().as_ref()
+            )
+        );
+        write_secret("ca", &ca);
+        binding.ca_bundle_ref = Some("secret:file/ca".into());
+        let retained_ca = secrets.resolve("secret:file/ca").unwrap();
+        write_secret("ca", "invalid replacement certificate");
+        // A later file replacement must not change the already resolved bundle.
+        assert!(token_provider(&binding, &secrets, Some(retained_ca.expose_secret())).is_ok());
+        assert!(matches!(
+            token_provider(&binding, &secrets, Some(b"invalid certificate")),
+            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
+        ));
         binding.private_key_jwt.as_mut().unwrap().resource = Some("not-an-uri".into());
         assert!(matches!(
-            token_provider(&binding, &secrets),
+            token_provider(&binding, &secrets, None),
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
         binding.private_key_jwt = None;
         assert!(matches!(
-            token_provider(&binding, &secrets),
+            token_provider(&binding, &secrets, None),
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
     }
