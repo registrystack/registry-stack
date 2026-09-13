@@ -102,8 +102,8 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
-`v0.26.0`, and `casework` from `v0.30.0`. Mint is retired after `v0.30.0`;
-that release and older release inventories remain unchanged. After selecting
+`v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.31.0`;
+the published `v0.30.0` and older release inventories remain unchanged. After selecting
 the candidate version, derive its exact image roster and verify each final
 destination:
 
@@ -601,7 +601,7 @@ workflow then:
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
   image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
   `v0.24.0`, Base Registry Engine joins at `v0.26.0`, and Casework joins at
-  `v0.30.0`. Mint is excluded from `v0.30.1` onward.
+  `v0.30.0`. Mint is excluded from `v0.31.0` onward.
 - Builds the exact locked release documentation archive once, in parallel with
   binary and client builds, and includes it in the candidate payload closure.
 - Publishes images only to private candidate packages.
