@@ -90,6 +90,16 @@ impl CaseworkAuthenticator {
             .profiles
             .get(selected_profile)
             .ok_or(AuthenticationError::Profile)?;
+        if profile.role != CaseworkRole::Requester
+            && (verified.claims.extra.contains_key("act")
+                || verified
+                    .claims
+                    .extra
+                    .keys()
+                    .any(|key| key.starts_with("registry_grant_")))
+        {
+            return Err(AuthenticationError::Refused);
+        }
         let actual_scopes: BTreeSet<_> = verified.scopes.iter().map(String::as_str).collect();
         if !profile
             .required_scopes

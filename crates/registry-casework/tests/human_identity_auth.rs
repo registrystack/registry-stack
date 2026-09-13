@@ -180,6 +180,59 @@ async fn trusted_human_assertion_gates_human_profiles_and_requester_accepts_serv
 }
 
 #[tokio::test]
+async fn delegated_or_grant_bearing_tokens_are_refused_for_officer_profiles_only() {
+    let idp = MockIdp::start().await;
+    let authenticator = authenticator(&idp);
+
+    for extra in [
+        json!({"act": {"sub": "agent"}}),
+        json!({"registry_grant_id": "delegated-grant"}),
+    ] {
+        for (profile, scope) in [
+            ("staff", "casework:staff"),
+            ("supervisor", "casework:supervisor"),
+            ("administrator", "casework:admin"),
+        ] {
+            let mut claims = json!({
+                "aud": AUDIENCE,
+                "registry_principal": QUEUE_MEMBER_PRINCIPAL,
+                "scope": scope,
+                "registry_actor_kind": "human"
+            });
+            claims
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert_eq!(
+                authenticator
+                    .authenticate(&idp.mint_token(claims), profile)
+                    .await
+                    .expect_err("delegated authority cannot enter an officer session"),
+                AuthenticationError::Refused
+            );
+        }
+
+        let mut requester_claims = json!({
+            "aud": AUDIENCE,
+            "registry_principal": QUEUE_MEMBER_PRINCIPAL,
+            "scope": "casework:request",
+            "registry_actor_kind": "service"
+        });
+        requester_claims
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let requester = authenticator
+            .authenticate(&idp.mint_token(requester_claims), "requester")
+            .await
+            .expect("the Requester profile may carry delegated request context");
+        assert_eq!(requester.role, CaseworkRole::Requester);
+    }
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn same_role_profiles_with_distinct_principals_require_distinct_scopes() {
     let idp = MockIdp::start().await;
 

@@ -574,6 +574,79 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
 }
 
 #[tokio::test]
+async fn delegated_or_grant_bearing_human_tokens_cannot_approve_or_revoke_task_grants() {
+    let f = fixture(900).await;
+    let human = token("human", "human-client", "human", "casework:staff");
+    let base = format!("/v1/work-items/{}/task-grants", f.item);
+    let approval = json!({"templateId":"summary","templateVersion":"1"});
+    let (status, grant) = request(
+        &f,
+        "POST",
+        &base,
+        &human,
+        true,
+        Some(approval.clone()),
+        Some("valid-approval"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let grant_id = grant["id"].as_str().unwrap();
+    let revoke = format!("{base}/{grant_id}/revoke");
+
+    for (key, extra) in [
+        ("delegated-approval", json!({"act": {"sub": "agent"}})),
+        (
+            "grant-bearing-approval",
+            json!({"registry_grant_id": "delegated-grant"}),
+        ),
+    ] {
+        let mut claims = json!({
+            "sub": "human",
+            "azp": "human-client",
+            "registry_actor_kind": "human",
+            "scope": "casework:staff"
+        });
+        claims
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        let credential = token_claims(claims);
+        assert_eq!(
+            request(
+                &f,
+                "POST",
+                &base,
+                &credential,
+                true,
+                Some(approval.clone()),
+                Some(key),
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            request(&f, "POST", &revoke, &credential, true, None, None)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    assert!(
+        !f.store
+            .task_grant(Uuid::parse_str(grant_id).unwrap())
+            .await
+            .unwrap()
+            .invalidated
+    );
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn supervisor_task_grant_requires_continued_supervisor_membership() {
     let f = fixture_for_role(900, CaseworkRole::Supervisor).await;
     let supervisor = token("human", "human-client", "human", "casework:supervisor");
