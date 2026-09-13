@@ -284,19 +284,27 @@ issuer:
       origin: http://127.0.0.1:3000
       redirectUris: [http://127.0.0.1:3000/callback]
       audience: null
+      grants:
+        - audience: null
+          scopes: [registry:generic:operate]
       tokenAttributes: [registry_actor_kind]
   syntheticUsers:
     - username: officer
       email: officer@example.test
       passwordFile: /absolute/owner-only/officer-password
       attributes: {registry_actor_kind: human}
+      grants:
+        - audience: null
+          scopes: [registry:generic:operate]
 ```
 
 Every referenced client also needs its own ordinary `clients` entry with exact
 scopes and claims. `exchangeClients` must have one bootstrap scope, and the
 external authority must be pre-registered. Local browser applications use
 authorization code with PKCE and explicit redirect URIs. Their secrets and
-synthetic passwords are copied into the owner's private issuer state. An app
+synthetic passwords are copied into the owner's private issuer state. Explicit
+app and user grants render issuer role assignments for the matching
+resource; requested scopes without both permissions are not granted. An app
 using the owner's default BREG audience enters the local runtime's allowed
 client list; an app mapped to another resource does not. The app still needs a
 token with the governed profile's actual `scope` and principal/purpose claims

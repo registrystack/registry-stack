@@ -107,7 +107,7 @@ pub struct Action {
 }
 
 /// One role: named permission strings from one resource server, assigned
-/// directly to agents. There is deliberately no group or synchronization
+/// directly to declared principals. There is deliberately no group or synchronization
 /// layer; the owning CLI's authority declarations are the source.
 #[derive(Debug, Clone)]
 pub struct Role {
@@ -118,6 +118,10 @@ pub struct Role {
     pub permissions: Vec<(String, Vec<String>)>,
     /// Agent ids this role is assigned to directly.
     pub assigned_agents: Vec<String>,
+    /// Synthetic user ids this role is assigned to directly.
+    pub assigned_users: Vec<String>,
+    /// Browser application ids this role is assigned to directly.
+    pub assigned_applications: Vec<String>,
 }
 
 /// One machine client: a `private_key_jwt` agent whose own registered public
@@ -596,6 +600,20 @@ impl IssuerDescription {
             for agent in &role.assigned_agents {
                 if !agent_ids.contains(agent) {
                     return refuse("each role assignment names a stated agent");
+                }
+            }
+            for user in &role.assigned_users {
+                if !user_ids.contains(user) {
+                    return refuse("each role assignment names a stated synthetic user");
+                }
+            }
+            for application in &role.assigned_applications {
+                if !self
+                    .interactive_applications
+                    .iter()
+                    .any(|app| &app.id == application)
+                {
+                    return refuse("each role assignment names a stated browser application");
                 }
             }
         }

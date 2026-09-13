@@ -90,6 +90,9 @@ pub(super) struct BrowserApplication {
     pub origin: String,
     pub redirect_uris: Vec<String>,
     pub audience: Option<String>,
+    /// Explicit permissions granted to this application, per resource audience.
+    #[serde(default)]
+    pub grants: Vec<LocalPermissionGrant>,
     pub token_attributes: Vec<String>,
 }
 
@@ -100,6 +103,17 @@ pub(super) struct BrowserUser {
     pub email: String,
     pub password_file: PathBuf,
     pub attributes: BTreeMap<String, String>,
+    /// Explicit permissions granted to this user, per resource audience.
+    #[serde(default)]
+    pub grants: Vec<LocalPermissionGrant>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalPermissionGrant {
+    /// Omit for the owner BREG resource; otherwise use a declared audience.
+    pub audience: Option<String>,
+    pub scopes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -160,6 +174,44 @@ pub(super) fn identifier(value: &str) -> bool {
         && value
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
+fn grant_scopes(clients: &Clients, audience: Option<&str>, scopes: &[String]) -> bool {
+    let available: BTreeSet<_> = match audience {
+        Some(audience) => clients
+            .issuer
+            .resources
+            .iter()
+            .find(|resource| resource.audience == audience)
+            .map(|resource| resource.scopes.iter().map(String::as_str).collect())
+            .unwrap_or_default(),
+        None => clients
+            .clients
+            .iter()
+            .filter(|client| !clients.issuer.client_resources.contains_key(&client.id))
+            .flat_map(|client| client.scopes.iter().map(String::as_str))
+            .collect(),
+    };
+    !scopes.is_empty()
+        && scopes.len() <= 32
+        && scopes.iter().collect::<BTreeSet<_>>().len() == scopes.len()
+        && scopes
+            .iter()
+            .all(|scope| available.contains(scope.as_str()))
+}
+
+fn valid_grants(clients: &Clients, grants: &[LocalPermissionGrant]) -> bool {
+    !grants.is_empty()
+        && grants.len() <= 7
+        && grants
+            .iter()
+            .all(|grant| grant_scopes(clients, grant.audience.as_deref(), &grant.scopes))
+        && grants
+            .iter()
+            .map(|grant| grant.audience.as_deref())
+            .collect::<BTreeSet<_>>()
+            .len()
+            == grants.len()
 }
 
 pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
@@ -332,8 +384,9 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
                 .audience
                 .as_ref()
                 .is_some_and(|audience| !resource_ids.contains(audience))
+            || !valid_grants(&clients, &app.grants)
         {
-            bail!("browser applications need distinct IDs and declared audiences");
+            bail!("browser applications need distinct IDs and exact declared resource permissions");
         }
         private::check(&app.client_secret_file, false)?;
     }
@@ -346,6 +399,9 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     for user in &clients.issuer.synthetic_users {
         if !identifier(&user.username) || !usernames.insert(&user.username) {
             bail!("synthetic users need distinct bounded usernames");
+        }
+        if !valid_grants(&clients, &user.grants) {
+            bail!("synthetic user grants need distinct declared resources and exact permissions");
         }
         private::check(&user.password_file, false)?;
     }
@@ -630,6 +686,25 @@ fn import_keypair(directory: &Path, input: &Path, id: &str) -> Result<()> {
     private::create(&directory.join("public.jwk"), &serde_json::to_vec(&public)?)
 }
 
+fn role_permissions(
+    description: &registry_thunderid_tooling::description::IssuerDescription,
+    state: &State,
+    grants: &[LocalPermissionGrant],
+) -> Result<Vec<(String, Vec<String>)>> {
+    grants
+        .iter()
+        .map(|grant| {
+            let audience = grant.audience.clone().unwrap_or_else(|| state.audience());
+            let server = description
+                .resource_servers
+                .iter()
+                .find(|server| server.identifier == audience)
+                .context("local permission grant resource is missing")?;
+            Ok((server.id.clone(), grant.scopes.clone()))
+        })
+        .collect()
+}
+
 /// The dev session's issuer description: one resource server whose
 /// identifier is BREG's exact access-token audience, one role per authored
 /// client carrying that client's scopes, and one machine agent per client
@@ -643,7 +718,7 @@ pub(super) fn issuer_description(
 ) -> Result<registry_thunderid_tooling::description::IssuerDescription> {
     use registry_thunderid_tooling::{
         description::{
-            ExchangeIssuer, ExchangeMapping, InteractiveApplication, SessionIdentity,
+            ExchangeIssuer, ExchangeMapping, InteractiveApplication, Role, SessionIdentity,
             SyntheticUser, TokenExchangeClient,
         },
         local::{typed_local_description, TypedLocalClient},
@@ -738,31 +813,60 @@ pub(super) fn issuer_description(
         });
     }
     for app in &clients.issuer.interactive_applications {
+        let app_id = registry_thunderid_tooling::local::agent_id(
+            &state.instance_id,
+            &format!("application-{}", app.id),
+        );
+        let audience = app.audience.clone().unwrap_or_else(|| state.audience());
+        let permissions = role_permissions(&description, state, &app.grants)?;
         description
             .interactive_applications
             .push(InteractiveApplication {
-                id: registry_thunderid_tooling::local::agent_id(
-                    &state.instance_id,
-                    &format!("application-{}", app.id),
-                ),
+                id: app_id.clone(),
                 client_id: app.id.clone(),
                 client_secret_file: format!("secrets/application-{}", app.id).into(),
                 origin: app.origin.clone(),
                 redirect_uris: app.redirect_uris.clone(),
-                audience: app.audience.clone().unwrap_or_else(|| state.audience()),
+                audience,
                 token_attributes: app.token_attributes.clone(),
             });
-    }
-    for user in &clients.issuer.synthetic_users {
-        description.synthetic_users.push(SyntheticUser {
+        description.roles.push(Role {
             id: registry_thunderid_tooling::local::agent_id(
                 &state.instance_id,
-                &format!("user-{}", user.username),
+                &format!("application-role-{}", app.id),
             ),
+            name: format!("Local browser {}", app.id),
+            description: "Explicit local browser application permissions".into(),
+            permissions,
+            assigned_agents: vec![],
+            assigned_users: vec![],
+            assigned_applications: vec![app_id],
+        });
+    }
+    for user in &clients.issuer.synthetic_users {
+        let user_id = registry_thunderid_tooling::local::agent_id(
+            &state.instance_id,
+            &format!("user-{}", user.username),
+        );
+        description.synthetic_users.push(SyntheticUser {
+            id: user_id.clone(),
             username: user.username.clone(),
             email: user.email.clone(),
             password_file: format!("secrets/user-{}", user.username).into(),
             attributes: user.attributes.clone(),
+        });
+        let permissions = role_permissions(&description, state, &user.grants)?;
+        description.roles.push(Role {
+            id: registry_thunderid_tooling::local::agent_id(
+                &state.instance_id,
+                &format!("user-role-{}", user.username),
+            ),
+            name: format!("Local user {}", user.username),
+            description: "Explicit local synthetic user permissions".into(),
+            permissions,
+            assigned_agents: vec![],
+            assigned_users: vec![user_id],
+            assigned_applications: vec![],
         });
     }
     description.validate()?;

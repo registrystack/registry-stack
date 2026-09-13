@@ -232,6 +232,8 @@ pub fn typed_local_description(
             description: "Explicit local client permissions".into(),
             permissions: vec![(server_id.clone(), client.scopes)],
             assigned_agents: vec![native_id.clone()],
+            assigned_users: vec![],
+            assigned_applications: vec![],
         });
         machine_clients.push(MachineClient {
             agent_id: native_id,

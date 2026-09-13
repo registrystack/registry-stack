@@ -346,6 +346,8 @@ impl Integrations {
                     description: "Explicit local service permissions".into(),
                     permissions: vec![(server.clone(), client.scopes.clone())],
                     assigned_agents: vec![agent.clone()],
+                    assigned_users: vec![],
+                    assigned_applications: vec![],
                 });
                 description.machine_clients.push(MachineClient {
                     agent_id: agent,
