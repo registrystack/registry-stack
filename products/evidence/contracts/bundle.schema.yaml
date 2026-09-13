@@ -2639,6 +2639,7 @@ $defs:
                 - boolean
                 - controlled-code
                 - controlled-category
+                - bounded-identifier
                 - bounded-integer
                 - bounded-decimal
                 - date-bucket
@@ -2689,6 +2690,13 @@ $defs:
                       const: controlled-category
                     constraints:
                       $ref: '#/$defs/controlled-category-constraints'
+                - required:
+                    - constraints
+                  properties:
+                    form:
+                      const: bounded-identifier
+                    constraints:
+                      $ref: '#/$defs/bounded-identifier-constraints'
                 - required:
                     - constraints
                   properties:
@@ -2821,6 +2829,32 @@ $defs:
         type: integer
         minimum: 1
         maximum: 8192
+  bounded-identifier-constraints:
+    description: >-
+      A source-owned immutable identifier is disclosed as an exact JSON string. Its ASCII
+      prefix is fixed by the governed bundle; the nonempty suffix begins with an ASCII
+      letter or digit and then contains only ASCII letters, digits, dots, underscores, or
+      hyphens. The full string must fit the declared UTF-8 byte bounds.
+    type: object
+    additionalProperties: false
+    required: [prefix, minimumBytes, maximumBytes]
+    properties:
+      prefix:
+        description: >-
+          Exact ASCII prefix ending in a dot, underscore, hyphen, colon, slash, or hash.
+          It may contain only ASCII letters, digits, and those six separators.
+        type: string
+        minLength: 1
+        maxLength: 512
+        pattern: '^[A-Za-z0-9._:/#-]*[._:/#-]$'
+      minimumBytes:
+        type: integer
+        minimum: 1
+        maximum: 1024
+      maximumBytes:
+        type: integer
+        minimum: 1
+        maximum: 1024
   controlled-category-constraints:
     type: object
     additionalProperties: false

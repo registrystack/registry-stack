@@ -4498,6 +4498,7 @@ pub enum ConceptForm {
     Boolean,
     ControlledCode,
     ControlledCategory,
+    BoundedIdentifier,
     BoundedInteger,
     BoundedDecimal,
     DateBucket,
@@ -5216,6 +5217,7 @@ fn validate_concept_constraints(concept: &ConceptConfig) -> Result<(), ConfigErr
             "maximumBytes",
             "codelist",
         ],
+        ConceptForm::BoundedIdentifier => &["prefix", "minimumBytes", "maximumBytes"],
         ConceptForm::BoundedInteger => &["minimum", "maximum"],
         ConceptForm::BoundedDecimal => &["minimum", "maximum", "maximumScale"],
         ConceptForm::DateBucket | ConceptForm::TimeBucket => &["bucketScheme", "schemeVersion"],
@@ -5253,6 +5255,28 @@ fn validate_concept_constraints(concept: &ConceptConfig) -> Result<(), ConfigErr
             )?;
             validate_codelist_path(yaml_string(&concept.constraints, "codelist")?)?;
             validate_constraint_u64(&concept.constraints, "maximumBytes", 1, 8_192)?;
+        }
+        ConceptForm::BoundedIdentifier => {
+            let prefix = yaml_string(&concept.constraints, "prefix")?;
+            if prefix.is_empty()
+                || prefix.len() > 512
+                || !prefix.is_ascii()
+                || !prefix.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/' | b'#')
+                })
+                || !matches!(
+                    prefix.as_bytes().last(),
+                    Some(b'.' | b'_' | b'-' | b':' | b'/' | b'#')
+                )
+            {
+                return invalid("bounded identifier prefix is invalid");
+            }
+            let minimum = validate_constraint_u64(&concept.constraints, "minimumBytes", 1, 1_024)?;
+            let maximum = validate_constraint_u64(&concept.constraints, "maximumBytes", 1, 1_024)?;
+            if minimum > maximum || maximum <= prefix.len() as u64 {
+                return invalid("bounded identifier byte bounds are invalid");
+            }
         }
         ConceptForm::BoundedInteger => {
             let minimum = yaml_i64(&concept.constraints, "minimum")?;
@@ -7657,13 +7681,20 @@ mod tests {
             serde_json::json!(32);
         assert!(!validator.is_valid(&unsupported));
 
+        let mut invalid_identifier = bundle_contract_instance(include_bytes!(
+            "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
+        ));
+        invalid_identifier["requirements"][0]["concepts"][3]["constraints"]["prefix"] =
+            serde_json::json!("urn:example:report:bad space:");
+        assert!(!validator.is_valid(&invalid_identifier));
+
         let mut structured_projection = bundle_contract_instance(include_bytes!(
             "../../../products/evidence/fixtures/conformance/supported-values/evidence.yaml"
         ));
-        structured_projection["requirements"][0]["concepts"][10]["sdJwtVc"] =
+        structured_projection["requirements"][0]["concepts"][11]["sdJwtVc"] =
             serde_json::json!({"claim": "birthCertificate", "disclosure": "top-level"});
         assert!(validator.is_valid(&structured_projection));
-        structured_projection["requirements"][0]["concepts"][10]
+        structured_projection["requirements"][0]["concepts"][11]
             .as_object_mut()
             .expect("concept is an object")
             .remove("sdJwtVc");

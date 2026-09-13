@@ -8,6 +8,7 @@ use pyo3::{
     IntoPyObjectExt,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::exchange_authorization_from_json;
 use relay_client_sdk::{
     PrivateKeyJwt, PrivateKeyJwtConfig, ProtocolFailure, RelayClientConfig, RelayClientError,
     StaticToken, TokenError, TokenProvider, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES,
@@ -515,13 +516,18 @@ fn authorization_provider(
                     private_key_jwt_trusted_root_certificates,
                 )?)));
             }
+            if let Some(value) = value.get("exchange") {
+                return Ok(Some(Arc::new(
+                    exchange_authorization_from_json(value).map_err(ConfigError::Token)?,
+                )));
+            }
             Err(ConversionError::new(
-                "authorization must contain exactly static or private_key_jwt",
+                "authorization must contain exactly static, private_key_jwt, or exchange",
             )
             .into())
         }
         _ => Err(ConversionError::new(
-            "authorization must be null or an object containing exactly static or private_key_jwt",
+            "authorization must be null or an object containing exactly static, private_key_jwt, or exchange",
         )
         .into()),
     }

@@ -157,6 +157,17 @@ hold more than the default bound.
 
 ## Explicit OAuth token exchange
 
+For automatic context-bound authorization, construct `BaseRegistryClient` with
+`authorization={"exchange": {"client": ..., "context": ..., "first_party": ...}}`
+or a `remote` source. `client` and the remote `bootstrap` use snake-case
+private-key-JWT fields with required `resource` and `scopes`. The context
+names one verified person or approved grant, its source generation, and a
+deadline. A first-party source signs once and requires a new verified host
+context for renewal. A remote source sends an empty assertion POST with its
+narrow bootstrap on refresh, then exchanges the returned assertion. PEM trust
+roots in this new option are strings. Existing `private_key_jwt` authorization
+and explicit exchange APIs remain available.
+
 `registry_client.breg.PrivateKeyJwt(config)` wraps the shared Rust OAuth
 provider. Its configuration uses the existing snake-case `private_key_jwt`
 fields. Call `provider.exchange(subject_token)` with a short-lived signed task

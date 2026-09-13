@@ -154,6 +154,7 @@ fn render_authorized(
                     concept.form.as_str(),
                     "boolean"
                         | "controlled-category"
+                        | "bounded-identifier"
                         | "bounded-integer"
                         | "reviewed-structured-value"
                 )

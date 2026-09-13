@@ -320,14 +320,19 @@ the requirement as a dependency failure and never cancels a durable audit
 append.
 
 Supported concept forms are `boolean`, `controlled-code`,
-`controlled-category`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
+`controlled-category`, `bounded-identifier`, `bounded-integer`, `bounded-decimal`, `date-bucket`,
 `time-bucket`, `audience-scoped-entity-reference`, `controlled-code-list`,
 `entity-reference-list`, and `reviewed-structured-value`. Constraint keys use
-bundle camelCase, including `codelistVersion`, `maximumBytes`, `categoryScheme`,
+bundle camelCase, including `codelistVersion`, `minimumBytes`, `maximumBytes`, `prefix`, `categoryScheme`,
 `schemeVersion`, `maximumScale`, `bucketScheme`, `minimumItems`, `maximumItems`,
 `maximumSerializedBytes`, and `unique`, with the exact set determined by the
 selected form. Codelist declarations and reviewed structured schemas are
 bundle-relative, closed, versioned artifacts validated at startup.
+`bounded-identifier` discloses a source-owned JSON string whose exact governed
+ASCII `prefix` ends in `.`, `_`, `-`, `:`, `/`, or `#`. A nonempty suffix starts
+with an ASCII letter or digit and then contains only ASCII letters, digits,
+`.`, `_`, or `-`. `minimumBytes` and `maximumBytes` bound the complete value;
+`maximumBytes` is at most 1024 and must leave room after the prefix.
 
 A requirement whose `subjectBinding` is `holder-bound` derives its subject
 bindings under the holder key the request presents rather than under the
@@ -1602,7 +1607,9 @@ requirements[].concepts[].constraints.maximumItems
 requirements[].concepts[].constraints.maximumScale
 requirements[].concepts[].constraints.maximumSerializedBytes
 requirements[].concepts[].constraints.minimum
+requirements[].concepts[].constraints.minimumBytes
 requirements[].concepts[].constraints.minimumItems
+requirements[].concepts[].constraints.prefix
 requirements[].concepts[].constraints.schema
 requirements[].concepts[].constraints.schemeVersion
 requirements[].concepts[].constraints.unique

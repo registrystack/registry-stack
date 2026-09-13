@@ -20,6 +20,14 @@ Outbound HTTP utilities for registry services.
   provider's configured resource and scopes. Every exchange is fresh and does
   not use or replace the service-token cache. Returned task bounds remain the
   consuming resource server's authorization responsibility.
+- `ExchangeAuthorization` for one immutable host-verified person or task-grant
+  context. The first-party source signs a bounded grantless JWT; the remote
+  source obtains a new assertion with a narrowly configured bootstrap on each
+  refresh. Both use `PrivateKeyJwt.exchange` for the exact configured client,
+  resource and scopes. Cache life never exceeds the context deadline. A
+  first-party context can exchange once; renewed person authority requires
+  fresh host source verification and a new provider. The shared closed JSON
+  parser `exchange_authorization_from_json` is used by Node and Python bindings.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe
