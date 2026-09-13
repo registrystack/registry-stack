@@ -1233,6 +1233,7 @@ fn household_credential_bindings(
                 .join(" ");
             let token = idp.mint_token(json!({
                 "aud": AUDIENCE,
+                "registry_actor_kind": claims["actorKind"].as_str().unwrap_or("service"),
                 "registry_principal": claims["principal"],
                 "purpose": claims["purpose"],
                 "scope": scope,
@@ -1322,6 +1323,7 @@ fn overprivileged_credential_bindings(
 ) -> SchemaTestCredentialBindings {
     let mut overprivileged = json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "fixture-operator",
         "jurisdiction": "zone-a",
         "purpose": "case-management",
@@ -1400,6 +1402,7 @@ fn credential_bindings_for_tokens<const N: usize>(
 fn operator_token(idp: &MockIdp, purpose: bool) -> String {
     let mut claims = json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "fixture-operator",
         "jurisdiction": "zone-a",
     });
@@ -1412,6 +1415,7 @@ fn operator_token(idp: &MockIdp, purpose: bool) -> String {
 fn spatial_admin_token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "synthetic-service-site-admin",
         "registry_purpose": "service-site-administration",
         "scope": "service-sites:seed",
@@ -1421,6 +1425,7 @@ fn spatial_admin_token(idp: &MockIdp) -> String {
 fn spatial_map_token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "synthetic-qgis-installation",
         "registry_purpose": "service-site-map",
         "scope": "service-sites:map.read",
@@ -1431,6 +1436,7 @@ fn spatial_map_token(idp: &MockIdp) -> String {
 fn spatial_directory_token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "synthetic-directory-reader",
         "registry_purpose": "service-site-directory",
         "scope": "service-sites:directory.read",
@@ -1440,6 +1446,7 @@ fn spatial_directory_token(idp: &MockIdp) -> String {
 fn spatial_site_token(idp: &MockIdp) -> String {
     idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": "synthetic-site-reader",
         "registry_purpose": "service-site-map",
         "scope": "service-sites:site.read",

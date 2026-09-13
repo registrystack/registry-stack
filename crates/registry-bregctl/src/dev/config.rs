@@ -343,7 +343,7 @@ pub(super) fn issuer_description(
         .clients
         .iter()
         .map(|client| {
-            let claims = client
+            let mut claims = client
                 .claims
                 .iter()
                 .map(|(name, value)| {
@@ -353,6 +353,11 @@ pub(super) fn issuer_description(
                     Ok((name.clone(), value.to_owned()))
                 })
                 .collect::<Result<BTreeMap<_, _>>>()?;
+            // An omitted local marker describes the ordinary machine client.
+            // Explicit human and agent teaching identities retain their kind.
+            claims
+                .entry("registry_actor_kind".to_owned())
+                .or_insert_with(|| "service".to_owned());
             let directory = root.join("credentials").join(&client.id);
             let public: Value =
                 serde_json::from_slice(&private::read(&directory.join("public.jwk"), 4096)?)?;

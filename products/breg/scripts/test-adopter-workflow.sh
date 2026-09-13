@@ -224,6 +224,7 @@ claims = {
     "iat": now,
     "iss": "https://issuer.example/adopter",
     "jti": f"adopter-{now}-{sys.argv[2]}-{sys.argv[3] or 'none'}",
+    "registry_actor_kind": "service",
     "registry_principal": sys.argv[2],
     "sub": sys.argv[2],
 }

@@ -122,6 +122,9 @@ def realm(client_secret: str, password: str, callback: str, audience: str) -> di
         mapper("stable principal", "oidc-usermodel-attribute-mapper", {
             "user.attribute": "registry_principal", "claim.name": "registry_principal",
             "jsonType.label": "String"}),
+        mapper("actor kind", "oidc-usermodel-attribute-mapper", {
+            "user.attribute": "registry_actor_kind", "claim.name": "registry_actor_kind",
+            "jsonType.label": "String"}),
         mapper("district assignments", "oidc-usermodel-attribute-mapper", {
             "user.attribute": "districts", "claim.name": "districts",
             "jsonType.label": "String"}),
@@ -135,7 +138,8 @@ def realm(client_secret: str, password: str, callback: str, audience: str) -> di
               "defaultClientScopes": [], "optionalClientScopes": ["registry:read"],
               "protocolMappers": authority, "directAccessGrantsEnabled": False,
               "fullScopeAllowed": False}
-    assignments = {"registry_principal": [PRINCIPAL], "districts": ["district-a"]}
+    assignments = {"registry_actor_kind": ["service"],
+                   "registry_principal": [PRINCIPAL], "districts": ["district-a"]}
     return {
         "realm": "breg-issuer-journey", "enabled": True, "sslRequired": "none",
         "accessTokenLifespan": 300,
@@ -154,7 +158,8 @@ def realm(client_secret: str, password: str, callback: str, audience: str) -> di
             {"username": "synthetic-clerk", "enabled": True,
              "email": "clerk@example.test", "emailVerified": True,
              "firstName": "Synthetic", "lastName": "Clerk",
-             "attributes": {**assignments, "registry_principal": [HUMAN_PRINCIPAL]},
+             "attributes": {**assignments, "registry_actor_kind": ["human"],
+                            "registry_principal": [HUMAN_PRINCIPAL]},
              "credentials": [{"type": "password", "value": password, "temporary": False}]},
         ],
     }
@@ -244,6 +249,7 @@ clients:
     accessProfiles: [clerk]
     scopes: [registry:read]
     claims:
+      registry_actor_kind: service
       registry_principal: urn:institution:service-clerk
       registry_purpose: registry-administration
       districts: district-a

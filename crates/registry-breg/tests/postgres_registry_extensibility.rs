@@ -379,7 +379,8 @@ async fn facility_registration_transfer_and_events_use_governed_actions() {
 
 fn token(idp: &MockIdp, principal: &str, scope: &str, extra: Value) -> String {
     let mut claims = json!({
-        "aud":AUDIENCE, "registry_principal":principal, "scope":scope,
+        "aud":AUDIENCE, "registry_actor_kind":"service",
+        "registry_principal":principal, "scope":scope,
         "purpose":"facility-administration"
     });
     for (key, value) in extra.as_object().expect("extra claims object") {

@@ -733,7 +733,7 @@ async fn task_http_to_postgres_preserves_original_authority_and_completed_receip
         .await;
         assert_eq!(changed.status, StatusCode::CONFLICT);
         assert_eq!(counts(&db).await, before);
-        let hidden=idp.mint_token(json!({"aud":AUDIENCE,"client_id":"human-client","sub":"applier","tenant_claim":"tenant-b","registry_purpose":"apply"}));
+        let hidden=idp.mint_token(json!({"aud":AUDIENCE,"client_id":"human-client","registry_actor_kind":"human","sub":"applier","tenant_claim":"tenant-b","registry_purpose":"apply"}));
         let refusal = perform(&app, &apply, &hidden, "apply").await;
         assert!(
             !refusal.status.is_success(),

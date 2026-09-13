@@ -514,6 +514,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
         .as_secs();
     let token = idp.mint_token(json!({
         "aud": "urn:breg:test",
+        "registry_actor_kind": "service",
         "principal": "recovery-operator",
         "iat": now,
         "nbf": now,

@@ -115,6 +115,23 @@ impl VerifiedRequestClaims {
         })
     }
 
+    /// Construct authenticated authority material with an explicitly verified
+    /// actor kind. Production callers receive this value from bearer admission;
+    /// offline access previews may construct the same bounded context directly.
+    pub fn authenticated_with_actor_kind(
+        principal_claim: impl Into<String>,
+        principal: impl Into<String>,
+        scopes: BTreeSet<String>,
+        purpose: Option<String>,
+        direct_claims: BTreeMap<String, VerifiedClaimValue>,
+        actor_kind: ActorKind,
+    ) -> Result<Self, VerifiedContextError> {
+        let mut claims =
+            Self::authenticated(principal_claim, principal, scopes, purpose, direct_claims)?;
+        claims.actor_kind = Some(actor_kind);
+        Ok(claims)
+    }
+
     pub(crate) fn with_contextual_authority(
         mut self,
         actor_kind: Option<ActorKind>,

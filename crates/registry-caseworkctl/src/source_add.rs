@@ -25,6 +25,8 @@ const READER_CLIENT_ID: &str = "casework-reader";
 const READER_PRINCIPAL_CLAIM: &str = "registry_principal";
 const READER_SCOPE: &str = "casework:source-reader";
 const READER_PURPOSE: &str = "casework-sync";
+const ACTOR_KIND_CLAIM: &str = "registry_actor_kind";
+const SERVICE_ACTOR_KIND: &str = "service";
 /// The issuer claim a local BReg client's access token carries its purpose under.
 const PURPOSE_CLAIM: &str = "registry_purpose";
 
@@ -647,15 +649,19 @@ fn leading_spaces(line: &str) -> usize {
     line.bytes().take_while(|byte| *byte == b' ').count()
 }
 
-/// The local BReg client exercising the casework-reader access profile, with
-/// the same id, scope, purpose, and principal claim `candidate_fragments`
+/// The local BReg service client exercising the casework-reader access profile,
+/// with the same id, scope, purpose, and principal claim `candidate_fragments`
 /// authors the profile itself with.
 fn reader_dev_client() -> Value {
     json!({
         "id": READER_CLIENT_ID,
         "accessProfiles": [READER_CLIENT_ID],
         "scopes": [READER_SCOPE],
-        "claims": {READER_PRINCIPAL_CLAIM: READER_CLIENT_ID, PURPOSE_CLAIM: READER_PURPOSE},
+        "claims": {
+            ACTOR_KIND_CLAIM: SERVICE_ACTOR_KIND,
+            READER_PRINCIPAL_CLAIM: READER_CLIENT_ID,
+            PURPOSE_CLAIM: READER_PURPOSE,
+        },
     })
 }
 
@@ -781,8 +787,9 @@ fn has_nonempty_row_boundaries(value: &Value) -> bool {
     }
 }
 
-/// The BReg dev client bound to one Casework dev client: same id and scopes
-/// and claims, no access profile of its own. A staff or supervisor client
+/// The BReg dev client bound to one Casework dev client: same id, scopes, and
+/// claims, plus an explicit service actor kind for the requester. It has no
+/// access profile of its own. A staff or supervisor client
 /// additionally carries the selected request's reviewer scopes, maps its
 /// Casework principal into the BReg reviewer claim, and carries any required
 /// purpose claim. Only those reviewer roles explicitly opt in to BReg's
@@ -809,6 +816,9 @@ fn human_dev_client(
         .flatten()
         .filter_map(|(key, value)| Some((key.clone(), value.as_str()?.to_owned())))
         .collect();
+    if role == "requester" {
+        claims.insert(ACTOR_KIND_CLAIM.to_owned(), SERVICE_ACTOR_KIND.to_owned());
+    }
     let allow_breg_access = matches!(role, "staff" | "supervisor");
     if allow_breg_access {
         let authority = authority.context(
@@ -1549,7 +1559,7 @@ mod tests {
         assert_eq!(reader["scopes"], json!(["casework:source-reader"]));
         assert_eq!(
             reader["claims"],
-            json!({"registry_principal":"casework-reader","registry_purpose":"casework-sync"})
+            json!({"registry_actor_kind":"service","registry_principal":"casework-reader","registry_purpose":"casework-sync"})
         );
 
         let administrator = clients.iter().find(|c| c["id"] == "administrator").unwrap();
@@ -1722,7 +1732,10 @@ mod tests {
         assert_eq!(requester["accessProfiles"], json!([]));
         assert!(requester.get("allowBregAccess").is_none());
         assert_eq!(requester["scopes"], json!(["casework:request"]));
-        assert_eq!(requester["claims"], json!({}));
+        assert_eq!(
+            requester["claims"],
+            json!({"registry_actor_kind":"service"})
+        );
     }
 
     #[test]

@@ -4052,21 +4052,26 @@ fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, Fixtur
                 .map_err(|_| FixtureError::RequestConstructionRefused)
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    VerifiedRequestClaims::authenticated(
+    let actor_kind = match (step.profile.actor_kind, step.claims.actor_kind) {
+        (None, None) => registry_platform_oidc::ActorKind::Service,
+        (Some(expected), Some(actual)) if expected == actual => match actual {
+            crate::contract::ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
+            crate::contract::ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
+            crate::contract::ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
+        },
+        _ => return Err(FixtureError::RequestConstructionRefused),
+    };
+    VerifiedRequestClaims::authenticated_with_actor_kind(
         principal_claim,
         principal,
         step.claims.scopes.clone(),
         step.claims.purpose.clone(),
         direct_claims,
+        actor_kind,
     )
     .and_then(|claims_context| {
-        let actor_kind = step.claims.actor_kind.map(|kind| match kind {
-            crate::contract::ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
-            crate::contract::ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
-            crate::contract::ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
-        });
         claims_context.with_contextual_authority(
-            actor_kind,
+            Some(actor_kind),
             step.claims.requester_client.clone(),
             step.claims.actor_subject.clone(),
             None,
@@ -6621,6 +6626,27 @@ mod tests {
         assert_eq!(
             assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
             Err(FixtureError::AuthorityWideningRefused)
+        );
+    }
+
+    #[test]
+    fn fixture_claims_use_a_service_actor_only_for_actor_neutral_profiles() {
+        let fixture = package_fixture(DIGEST_A);
+        let suite = validate_fixture_journeys(JOURNEY_SOURCE, fixture.package.registry())
+            .expect("strict suite validates");
+        let step = &suite.journeys[0].steps[0];
+        assert_eq!(
+            verified_claims(step)
+                .expect("actor-neutral fixture claims construct")
+                .actor_kind(),
+            Some(registry_platform_oidc::ActorKind::Service)
+        );
+
+        let mut actor_bound = step.clone();
+        actor_bound.profile.actor_kind = Some(crate::contract::ActorKindSource::Agent);
+        assert_eq!(
+            verified_claims(&actor_bound).unwrap_err(),
+            FixtureError::RequestConstructionRefused
         );
     }
 

@@ -458,8 +458,8 @@ fn start_issuer(
         ],
     )
     .unwrap();
-    let mut seed_client = client("seed-client", seed, None, &["records:get"]);
-    seed_client.claims = BTreeMap::from([
+    let mut seed_client = client("seed-client", seed, Some("service"), &["records:get"]);
+    seed_client.claims.extend([
         ("tenant_claim".into(), "tenant-a".into()),
         ("registry_purpose".into(), "maintain".into()),
     ]);
@@ -1112,6 +1112,7 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
         .await
         .unwrap(),
     );
+    assert_eq!(payload(&seed)["registry_actor_kind"], "service");
     let old = resource::create(
         &app,
         "/v1/records/sites?accessProfile=steward",

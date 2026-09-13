@@ -683,6 +683,7 @@ fn facility_registry_tokens(
     );
     let broker = idp.mint_token(json!({
         "aud":AUDIENCE, "registry_principal":"synthetic-transfer-broker",
+        "registry_actor_kind":"service",
         "purpose":"facility-administration", "scope":"registry:facility:transfer",
         "allowed_owners":["owner-a", "owner-b"],
     }));
@@ -1073,6 +1074,7 @@ fn action_token(
 ) -> String {
     let mut claims = json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": principal,
         "purpose": purpose,
     });

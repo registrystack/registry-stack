@@ -412,7 +412,7 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
 
 fn claims(idp: &MockIdp, principal: &str, scopes: &[&str]) -> String {
     idp.mint_token(
-        json!({"aud":"urn:breg:membership", "principal":principal, "scope":scopes.join(" ")}),
+        json!({"aud":"urn:breg:membership", "registry_actor_kind":"service", "principal":principal, "scope":scopes.join(" ")}),
     )
 }
 struct AlwaysReady;

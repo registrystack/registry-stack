@@ -144,9 +144,6 @@ fn authorize_action<'a>(
     {
         return None;
     }
-    if claims.actor_kind().is_some() && grant.actor_kind.is_none() {
-        return None;
-    }
     if let Some(expected) = grant.actor_kind {
         let actual = claims.actor_kind()?;
         if !matches!(

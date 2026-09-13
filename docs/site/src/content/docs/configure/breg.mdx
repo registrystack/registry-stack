@@ -126,6 +126,17 @@ and a snippet copied from a Relay page does not compile here.
 | `accessProfiles` | Every profile a token can select. |
 | `vocabularies` | Closed code lists that `vocabulary-code` fields reference. |
 
+Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every BReg access
+token. The value must be exactly `human`, `agent`, or `service`; a missing or malformed value causes
+authentication to fail before BReg selects an access profile. An `actorKind` on an access profile
+further restricts that profile to the matching token kind and must be paired with
+`requesterClients`. Omit `actorKind` only when the profile deliberately accepts all three declared
+actor kinds.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
+    crates/registry-breg/src/api/mod.rs, authorize_profile_claims();
+    crates/registry-breg/src/compiler.rs. */}
+
 Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
 `check` refuses anything else with `identifier.invalid`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
 The project convention is kebab-case for entity ids, field ids, profile ids, and vocabulary ids.

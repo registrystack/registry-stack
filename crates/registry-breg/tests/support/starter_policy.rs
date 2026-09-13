@@ -319,9 +319,9 @@ fn authored_credentials(
             {
                 token_claims["client_id"] = json!(client);
             }
-            if !claims["actorKind"].is_null() {
-                token_claims["registry_actor_kind"] = claims["actorKind"].clone();
-            }
+            token_claims["registry_actor_kind"] = claims["actorKind"]
+                .as_str()
+                .map_or_else(|| json!("service"), |kind| json!(kind));
             let token = idp.mint_token(token_claims);
             bindings.push(SchemaTestCredentialBinding::bearer(
                 journey["id"].as_str().unwrap(),
@@ -369,13 +369,14 @@ impl StarterHttp<'_> {
         {
             token_claims["client_id"] = json!(client);
         }
-        if let Some(actor_kind) = authored_profile.actor_kind {
-            token_claims["registry_actor_kind"] = json!(match actor_kind {
+        token_claims["registry_actor_kind"] = json!(match authored_profile.actor_kind {
+            Some(actor_kind) => match actor_kind {
                 ActorKindSource::Human => "human",
                 ActorKindSource::Agent => "agent",
                 ActorKindSource::Service => "service",
-            });
-        }
+            },
+            None => "service",
+        });
         let token = self.idp.mint_token(token_claims);
         let separator = if path.contains('?') { '&' } else { '?' };
         let mut request = Request::builder()

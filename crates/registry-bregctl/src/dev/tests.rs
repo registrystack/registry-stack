@@ -231,7 +231,7 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
         allow_breg_access: true,
         allow_human_fixture: false,
         scopes: vec!["registry:generic:review".into()],
-        claims: BTreeMap::new(),
+        claims: BTreeMap::from([("registry_actor_kind".into(), json!("agent"))]),
         test_bindings: Vec::new(),
         client_id_file: None,
         assertion_key_file: None,
@@ -250,18 +250,19 @@ fn profile_free_clients_need_explicit_breg_access_to_authenticate() {
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let root = state.root();
     let issuer = config::issuer_description(&state, &clients, &root).unwrap();
-    assert!(issuer
-        .machine_clients
-        .iter()
-        .any(|client| client.client_id == "guest"));
-    assert!(issuer
-        .machine_clients
-        .iter()
-        .any(|client| client.client_id == "casework-reviewer"));
-    assert!(issuer
-        .machine_clients
-        .iter()
-        .any(|client| client.client_id == "casework-administrator"));
+    for (id, actor_kind) in [
+        ("operator", "service"),
+        ("guest", "service"),
+        ("casework-reviewer", "agent"),
+        ("casework-administrator", "human"),
+    ] {
+        let client = issuer
+            .machine_clients
+            .iter()
+            .find(|client| client.client_id == id)
+            .expect("each authored client is registered");
+        assert_eq!(client.attributes["registry_actor_kind"], actor_kind);
+    }
     let runtime: Value = serde_norway::from_slice(
         &private::read(&root.join("runtime-test.yaml"), MAX_BYTES).unwrap(),
     )

@@ -1153,6 +1153,31 @@ mod tests {
     }
 
     #[test]
+    fn token_without_actor_kind_is_refused_during_context_extraction() {
+        let now = chrono::Utc::now().timestamp();
+        let claims = serde_json::from_value(serde_json::json!({
+            "iss": "https://issuer.invalid",
+            "aud": "evidence-resource",
+            "sub": "service-principal",
+            "exp": now + 300,
+            "registry_purpose": "standing-service",
+            "evidence_tags": ["service"],
+            "evidence_audience": "https://relying-party.invalid"
+        }))
+        .expect("claims parse");
+
+        let error = context_extraction_authenticator("sub")
+            .extract_context(VerifiedToken {
+                claims,
+                matched_client: Some("client_id:evidence-agent".to_owned()),
+                scopes: Vec::new(),
+            })
+            .expect_err("a token without registry_actor_kind is refused");
+
+        assert!(matches!(error, AuthenticationError::Context));
+    }
+
+    #[test]
     fn purpose_only_service_token_is_not_a_task_grant() {
         let now = chrono::Utc::now().timestamp();
         let claims = serde_json::from_value(serde_json::json!({

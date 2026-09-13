@@ -15,8 +15,8 @@ use axum::middleware::Next;
 use axum::response::Response;
 use registry_platform_authcommon::{parse_bearer_token, validate_compact_access_token};
 use registry_platform_oidc::{
-    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimError, ClaimNames,
-    JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig,
+    actor_kind, grant_claims, is_access_token_typ_pair, Audience, ClaimNames, JwksFetcher,
+    OidcError, TokenVerifier, TokenVerifierConfig,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -238,11 +238,10 @@ impl RegistryAuthenticator {
             })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
-        let actor_kind = match actor_kind(&verified.claims, &self.contextual_claims) {
-            Ok(kind) => Some(kind),
-            Err(ClaimError::Missing(_)) => None,
-            Err(_) => return Err(AuthenticationError::InvalidClaims),
-        };
+        let actor_kind = Some(
+            actor_kind(&verified.claims, &self.contextual_claims)
+                .map_err(|_| AuthenticationError::InvalidClaims)?,
+        );
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|_| AuthenticationError::InvalidClaims)?

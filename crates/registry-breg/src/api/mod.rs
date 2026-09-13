@@ -2772,9 +2772,6 @@ pub(crate) fn authorize_profile_claims(
     {
         return Err("purpose_missing_or_not_allowed");
     }
-    if claims.actor_kind().is_some() && profile.actor_kind.is_none() {
-        return Err("actor_bound_profile_required");
-    }
     if let Some(expected) = profile.actor_kind {
         let actual = claims.actor_kind().ok_or("actor_kind_missing")?;
         let matches = matches!(
