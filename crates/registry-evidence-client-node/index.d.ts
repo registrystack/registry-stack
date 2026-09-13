@@ -6,6 +6,8 @@
  * FFI boundary until the caller asks for it.
  */
 export declare class AudienceScopedResult {
+  /** Exact serialized pre-response trust snapshot for offline re-verification. */
+  get retainedVerification(): Buffer
   get responseFormat(): string
   get evidence(): any
   get traceId(): string | null
@@ -300,3 +302,15 @@ export interface VerifiedEvidenceRequestBatch {
 export type VerifiedEvidenceRequestBatchItem =
   | { status: 'available', verified: VerifiedEvidence }
   | { status: 'notAvailable' }
+
+/**
+ * Verify exact retained response bytes against a bounded pre-response trust
+ * snapshot without constructing a client or performing network I/O.
+ */
+export declare function verifyRetained(context: Buffer, response: Buffer): VerifiedEvidence
+
+/**
+ * Replay an earlier decision at its recorded instant. Current decisions use
+ * `verify_retained` so expired assertions cannot be accepted as current.
+ */
+export declare function verifyRetainedAsOf(context: Buffer, response: Buffer, asOfMillis: number): VerifiedEvidence

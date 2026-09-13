@@ -51,7 +51,199 @@ def load_registry_release():
     return module
 
 
+def candidate_verification_plan(registry_release):
+    version = "0.31.1"
+    release_id = "beta-44"
+    tag = f"v{version}"
+    source_sha = "a" * 40
+    repository = "registrystack/registry-stack"
+    manifest_sha256 = "b" * 64
+    binding = registry_release.release_candidate.render_tag_binding(
+        77,
+        2,
+        manifest_sha256,
+    )
+    return {
+        "schema_version": registry_release.CANDIDATE_VERIFICATION_PLAN_SCHEMA,
+        "operation": "verify-candidate",
+        "status": "ready",
+        "repository": repository,
+        "release": {
+            "version": version,
+            "release_id": release_id,
+            "tag": tag,
+            "source_sha": source_sha,
+        },
+        "candidate": {
+            "run_id": 77,
+            "run_attempt": 2,
+            "workflow_revision": "c" * 40,
+            "manifest_sha256": manifest_sha256,
+            "docs_sha256": "d" * 64,
+        },
+        "checks": [{"name": "source", "status": "passed", "detail": "exact"}],
+        "tag_command": (
+            f"git tag -a {tag} {source_sha} -m "
+            f"{registry_release.shlex.quote(binding.rstrip())}"
+        ),
+        "release_command": (
+            "gh workflow run release.yml --repo registrystack/registry-stack "
+            f"--ref main -f tag={tag}"
+        ),
+    }
+
+
 class RegistryReleaseTest(TestCase):
+    def test_candidate_source_requires_conventional_subject_and_parsed_dco(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test Author"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "commit",
+                    "--allow-empty",
+                    "--signoff",
+                    "-m",
+                    "fix(release): validate candidate source",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            valid = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            result = registry_release.validate_candidate_source_commit(repo, valid)
+            self.assertEqual(valid, result["source_sha"])
+            self.assertEqual("Test Author <test@example.invalid>", result["signoff"])
+
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "release: malformed DCO",
+                    "-m",
+                    "Prepare the release.\\n\\nSigned-off-by: "
+                    + "Test Author <test@example.invalid>",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            malformed = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "parseable Signed-off-by trailer",
+            ):
+                registry_release.validate_candidate_source_commit(repo, malformed)
+
+            subprocess.run(
+                [
+                    "git",
+                    "commit",
+                    "--allow-empty",
+                    "--signoff",
+                    "-m",
+                    "nonconventional subject",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            nonconventional = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "conventional-commit form",
+            ):
+                registry_release.validate_candidate_source_commit(repo, nonconventional)
+
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "commit",
+                    "--allow-empty",
+                    "-m",
+                    "release: mismatched DCO",
+                    "-m",
+                    "Signed-off-by: Other Author <other@example.invalid>",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            mismatched = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "matching its author",
+            ):
+                registry_release.validate_candidate_source_commit(repo, mismatched)
+
+    def test_candidate_request_rejects_invalid_source_before_dispatch(self) -> None:
+        registry_release = load_registry_release()
+        source = "a" * 40
+        context = {"repo": ROOT, "selected": {"data": {"stack": {}}}}
+        with (
+            mock.patch.object(
+                registry_release,
+                "prepare_release_context",
+                return_value=context,
+            ),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source,
+            ),
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value=source,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_source_commit",
+                side_effect=registry_release.ReleasePlanError("invalid DCO"),
+            ),
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+            mock.patch.object(registry_release, "wait_for_dispatched_run") as lookup,
+            redirect_stderr(io.StringIO()) as errors,
+        ):
+            result = registry_release.request_release_candidate(
+                ROOT,
+                "0.31.1",
+                "beta-44",
+                source,
+                "origin/main",
+                "registrystack/registry-stack",
+                print_request=False,
+            )
+
+        self.assertEqual(1, result)
+        dispatch.assert_not_called()
+        lookup.assert_not_called()
+        self.assertIn("invalid DCO", errors.getvalue())
+
     def test_candidate_request_requires_current_source_workflow_revision(
         self,
     ) -> None:
@@ -76,6 +268,10 @@ class RegistryReleaseTest(TestCase):
                 registry_release,
                 "resolve_commit",
                 return_value=source,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_source_commit",
             ),
             mock.patch.object(registry_release, "run_checked") as dispatch,
             mock.patch.object(
@@ -212,6 +408,10 @@ class RegistryReleaseTest(TestCase):
             ),
             mock.patch.object(
                 registry_release,
+                "validate_candidate_source_commit",
+            ),
+            mock.patch.object(
+                registry_release,
                 "wait_for_exact_protected_ci",
                 return_value={
                     "id": 77,
@@ -341,6 +541,688 @@ class RegistryReleaseTest(TestCase):
             ],
             run.call_args.args[0],
         )
+
+    def test_candidate_plan_rejects_inconsistent_operator_commands(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "candidate-plan.json"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            loaded = registry_release.load_candidate_verification_plan(path)
+            self.assertEqual(plan, loaded)
+
+            plan["tag_command"] = "git tag -f v0.31.1"
+            path.write_text(json.dumps(plan), encoding="utf-8")
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "tag command is inconsistent",
+            ):
+                registry_release.load_candidate_verification_plan(path)
+
+    def test_candidate_plan_is_reverified_against_exact_candidate(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            2,
+            "b" * 64,
+        )
+        manifest = {
+            "workflow": {"revision": "c" * 40, "run_attempt": 2},
+            "docs": {"sha256": "d" * 64},
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_run",
+                return_value=(manifest, binding),
+            ) as verify_candidate,
+            mock.patch.object(
+                registry_release,
+                "resolve_commit",
+                return_value="c" * 40,
+            ),
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_ancestry",
+            ) as validate_ancestry,
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_source_commit",
+            ) as validate_source,
+        ):
+            observed, observed_binding = (
+                registry_release.verify_candidate_verification_plan(
+                    ROOT,
+                    plan,
+                    protected_main_sha="e" * 40,
+                )
+            )
+
+        self.assertEqual(manifest, observed)
+        self.assertEqual(binding, observed_binding)
+        verify_candidate.assert_called_once_with(
+            ROOT,
+            repository="registrystack/registry-stack",
+            candidate_run=77,
+            version="0.31.1",
+            release_id="beta-44",
+            source_sha="a" * 40,
+        )
+        validate_ancestry.assert_called_once()
+        validate_source.assert_called_once_with(ROOT, "a" * 40)
+
+    def test_candidate_tag_creation_is_exact_and_resumable(self) -> None:
+        registry_release = load_registry_release()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            remote = root / "remote.git"
+            repo = root / "repo"
+            subprocess.run(["git", "init", "--bare", remote], check=True)
+            subprocess.run(["git", "init", "-b", "main", repo], check=True)
+            subprocess.run(
+                ["git", "config", "user.email", "test@example.invalid"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                ["git", "config", "user.name", "Test Author"],
+                cwd=repo,
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "git",
+                    "commit",
+                    "--allow-empty",
+                    "--signoff",
+                    "-m",
+                    "release: prepare fixture",
+                ],
+                cwd=repo,
+                check=True,
+            )
+            source_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=repo, text=True
+            ).strip()
+            subprocess.run(
+                ["git", "remote", "add", "origin", str(remote)],
+                cwd=repo,
+                check=True,
+            )
+            binding = registry_release.release_candidate.render_tag_binding(
+                77,
+                2,
+                "b" * 64,
+            )
+
+            self.assertEqual(
+                "pushed",
+                registry_release.ensure_candidate_tag(
+                    repo,
+                    tag="v0.31.1",
+                    source_sha=source_sha,
+                    binding=binding,
+                ),
+            )
+            self.assertEqual(
+                "existing",
+                registry_release.ensure_candidate_tag(
+                    repo,
+                    tag="v0.31.1",
+                    source_sha=source_sha,
+                    binding=binding,
+                ),
+            )
+            _, observed_source, observed_binding = (
+                registry_release.local_candidate_tag(repo, "v0.31.1")
+            )
+            self.assertEqual(source_sha, observed_source)
+            self.assertEqual(
+                registry_release.release_candidate.parse_tag_binding(binding),
+                observed_binding,
+            )
+            different_binding = registry_release.release_candidate.render_tag_binding(
+                78,
+                1,
+                "c" * 64,
+            )
+            with self.assertRaisesRegex(
+                registry_release.ReleasePlanError,
+                "does not match the verified candidate plan",
+            ):
+                registry_release.ensure_candidate_tag(
+                    repo,
+                    tag="v0.31.1",
+                    source_sha=source_sha,
+                    binding=different_binding,
+                )
+
+    def test_publication_dispatch_uses_unique_correlated_request(self) -> None:
+        registry_release = load_registry_release()
+        request_id = "e" * 32
+        run = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+        }
+        with (
+            mock.patch.object(
+                registry_release.secrets,
+                "token_hex",
+                return_value=request_id,
+            ),
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_titled_workflow_run",
+                return_value=run,
+            ) as correlate,
+        ):
+            observed, observed_request_id = (
+                registry_release.dispatch_publication_run(
+                    "registrystack/registry-stack",
+                    tag="v0.31.1",
+                )
+            )
+
+        self.assertEqual(run, observed)
+        self.assertEqual(request_id, observed_request_id)
+        dispatch.assert_called_once_with(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "release.yml",
+                "--repo",
+                "registrystack/registry-stack",
+                "--ref",
+                "main",
+                "-f",
+                "tag=v0.31.1",
+                "-f",
+                f"request_id={request_id}",
+            ]
+        )
+        correlate.assert_called_once_with(
+            "registrystack/registry-stack",
+            workflow="release.yml",
+            event="workflow_dispatch",
+            source_sha=None,
+            display_title=registry_release.publication_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+            label="release publication",
+            request_id=request_id,
+        )
+
+    def test_docs_recovery_dispatch_uses_exact_release_identity(self) -> None:
+        registry_release = load_registry_release()
+        request_id = "f" * 32
+        run = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+        }
+        with (
+            mock.patch.object(
+                registry_release.secrets,
+                "token_hex",
+                return_value=request_id,
+            ),
+            mock.patch.object(registry_release, "run_checked") as dispatch,
+            mock.patch.object(
+                registry_release,
+                "wait_for_titled_workflow_run",
+                return_value=run,
+            ) as correlate,
+        ):
+            observed, observed_request_id = (
+                registry_release.dispatch_docs_publication_run(
+                    "registrystack/registry-stack",
+                    tag="v0.31.1",
+                    docs_sha256="d" * 64,
+                )
+            )
+
+        self.assertEqual(run, observed)
+        self.assertEqual(request_id, observed_request_id)
+        dispatch.assert_called_once_with(
+            [
+                "gh",
+                "workflow",
+                "run",
+                "docs-pages.yml",
+                "--repo",
+                "registrystack/registry-stack",
+                "--ref",
+                "main",
+                "-f",
+                "released_tag=v0.31.1",
+                "-f",
+                f"docs_sha256={'d' * 64}",
+                "-f",
+                f"request_id={request_id}",
+            ]
+        )
+        correlate.assert_called_once_with(
+            "registrystack/registry-stack",
+            workflow="docs-pages.yml",
+            event="workflow_dispatch",
+            source_sha=None,
+            display_title=registry_release.docs_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+            label="release docs",
+            request_id=request_id,
+        )
+
+    def test_docs_recovery_reuses_latest_healthy_correlated_run(self) -> None:
+        registry_release = load_registry_release()
+        older_request = "e" * 32
+        newer_request = "f" * 32
+        older_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                older_request,
+            ),
+        }
+        newer_publication = {
+            "id": 89,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/89",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                newer_request,
+            ),
+        }
+        healthy_docs = {
+            "id": 98,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/98",
+            "status": "completed",
+            "conclusion": "success",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                older_request,
+            ),
+        }
+        failed_docs = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.docs_run_title(
+                "v0.31.1",
+                newer_request,
+            ),
+        }
+
+        self.assertEqual(
+            (older_publication, healthy_docs),
+            registry_release.reusable_docs_publication_run(
+                [older_publication, newer_publication],
+                [healthy_docs, failed_docs],
+                tag="v0.31.1",
+            ),
+        )
+
+    def test_publish_tags_dispatches_waits_and_verifies_docs(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        source_sha = plan["release"]["source_sha"]
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            2,
+            "b" * 64,
+        )
+        publication_run = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": source_sha,
+            "status": "queued",
+            "conclusion": None,
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                "e" * 32,
+            ),
+        }
+        manifest = {
+            "images": [{"final_ref": "ghcr.io/registrystack/relay:v0.31.1"}],
+            "docs": {"sha256": "d" * 64},
+            "workflow": {"revision": "c" * 40, "run_attempt": 2},
+        }
+        public_result = {"tag": "v0.31.1", "status": "verified"}
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source_sha,
+            ),
+            mock.patch.object(registry_release, "release_for_tag", return_value=None),
+            mock.patch.object(registry_release, "remote_candidate_tag", return_value=None),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+                return_value=(manifest, binding),
+            ),
+            mock.patch.object(
+                registry_release,
+                "verify_absent_image_destinations",
+            ) as absent_images,
+            mock.patch.object(
+                registry_release,
+                "ensure_candidate_tag",
+                return_value="pushed",
+            ) as ensure_tag,
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+                return_value=(publication_run, "e" * 32),
+            ) as dispatch,
+            mock.patch.object(registry_release, "validate_main_workflow_run"),
+            mock.patch.object(registry_release, "watch_workflow_run") as watch,
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value=public_result,
+            ) as verify_public,
+            mock.patch.object(
+                registry_release,
+                "wait_for_docs_publication",
+                return_value=99,
+            ) as wait_docs,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=True,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(0, result)
+        absent_images.assert_called_once_with(manifest["images"])
+        ensure_tag.assert_called_once()
+        dispatch.assert_called_once_with(
+            "registrystack/registry-stack",
+            tag="v0.31.1",
+        )
+        watch.assert_called_once_with(
+            "registrystack/registry-stack",
+            88,
+            "release publication",
+            verbose=False,
+        )
+        verify_public.assert_called_once()
+        wait_docs.assert_called_once()
+        self.assertIn('"status": "complete"', output.getvalue())
+        self.assertIn('"docs_run_id": 99', output.getvalue())
+
+    def test_publish_resumes_active_run_without_redispatch(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        source_sha = plan["release"]["source_sha"]
+        request_id = "e" * 32
+        active = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": source_sha,
+            "status": "waiting",
+            "conclusion": None,
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                request_id,
+            ),
+        }
+        binding = registry_release.release_candidate.render_tag_binding(
+            77,
+            2,
+            "b" * 64,
+        )
+        marker = "registry-stack-release-candidate-v2 manifest_sha256:" + "b" * 64
+        draft = {
+            "tag_name": "v0.31.1",
+            "name": "RegistryStack v0.31.1",
+            "prerelease": False,
+            "draft": True,
+            "published_at": None,
+            "body": marker,
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value=source_sha,
+            ),
+            mock.patch.object(registry_release, "release_for_tag", return_value=draft),
+            mock.patch.object(
+                registry_release,
+                "remote_candidate_tag",
+                return_value={"remote": "tag"},
+            ),
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+                return_value=({"images": []}, binding),
+            ),
+            mock.patch.object(
+                registry_release,
+                "ensure_candidate_tag",
+                return_value="existing",
+            ),
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[active],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+            ) as dispatch,
+            mock.patch.object(registry_release, "validate_main_workflow_run"),
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=False,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(0, result)
+        dispatch.assert_not_called()
+        self.assertIn('"publication_run_id": 88', output.getvalue())
+
+    def test_publish_verifies_completed_release_without_candidate_redispatch(
+        self,
+    ) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                registry_release,
+                "release_for_tag",
+                return_value={"draft": False},
+            ),
+            mock.patch.object(
+                registry_release,
+                "remote_candidate_tag",
+                return_value={"remote": "tag"},
+            ),
+            mock.patch.object(registry_release, "ensure_candidate_tag") as ensure_tag,
+            mock.patch.object(
+                registry_release,
+                "validate_candidate_source_commit",
+            ) as validate_source,
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value={"tag": "v0.31.1", "status": "verified"},
+            ) as verify_public,
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+            ) as verify_candidate,
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+            ) as dispatch,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=False,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(0, result)
+        ensure_tag.assert_called_once()
+        validate_source.assert_called_once_with(ROOT.resolve(), "a" * 40)
+        verify_public.assert_called_once()
+        verify_candidate.assert_not_called()
+        dispatch.assert_not_called()
+        self.assertIn('"release_state": "published"', output.getvalue())
+
+    def test_publish_recovers_docs_after_publication_workflow_failure(self) -> None:
+        registry_release = load_registry_release()
+        plan = candidate_verification_plan(registry_release)
+        failed_publication = {
+            "id": 88,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/88",
+            "event": "workflow_dispatch",
+            "head_branch": "main",
+            "head_sha": "e" * 40,
+            "status": "completed",
+            "conclusion": "failure",
+            "display_title": registry_release.publication_run_title(
+                "v0.31.1",
+                "e" * 32,
+            ),
+        }
+        docs_run = {
+            "id": 99,
+            "html_url": "https://github.com/registrystack/registry-stack/actions/runs/99",
+        }
+        with (
+            mock.patch.object(
+                registry_release,
+                "load_candidate_verification_plan",
+                return_value=plan,
+            ),
+            mock.patch.object(registry_release, "verify_origin_repository"),
+            mock.patch.object(
+                registry_release,
+                "refresh_protected_main",
+                return_value="e" * 40,
+            ),
+            mock.patch.object(
+                registry_release,
+                "release_for_tag",
+                return_value={"draft": False},
+            ),
+            mock.patch.object(
+                registry_release,
+                "remote_candidate_tag",
+                return_value={"remote": "tag"},
+            ),
+            mock.patch.object(registry_release, "ensure_candidate_tag"),
+            mock.patch.object(registry_release, "validate_candidate_source_commit"),
+            mock.patch.object(
+                registry_release.verify_public_release,
+                "verify",
+                return_value={"tag": "v0.31.1", "status": "verified"},
+            ),
+            mock.patch.object(
+                registry_release,
+                "publication_runs_for_tag",
+                return_value=[failed_publication],
+            ),
+            mock.patch.object(
+                registry_release,
+                "docs_runs_for_tag",
+                return_value=[],
+            ),
+            mock.patch.object(
+                registry_release,
+                "dispatch_docs_publication_run",
+                return_value=(docs_run, "f" * 32),
+            ) as dispatch_docs,
+            mock.patch.object(
+                registry_release,
+                "watch_docs_publication_run",
+                return_value=99,
+            ) as watch_docs,
+            mock.patch.object(
+                registry_release,
+                "verify_candidate_verification_plan",
+            ) as verify_candidate,
+            mock.patch.object(
+                registry_release,
+                "dispatch_publication_run",
+            ) as dispatch_publication,
+            redirect_stdout(io.StringIO()) as output,
+        ):
+            result = registry_release.publish_candidate_plan(
+                ROOT,
+                plan_path=ROOT / "candidate-plan.json",
+                repository="registrystack/registry-stack",
+                wait=True,
+                verbose_wait=False,
+            )
+
+        self.assertEqual(0, result)
+        dispatch_docs.assert_called_once_with(
+            "registrystack/registry-stack",
+            tag="v0.31.1",
+            docs_sha256="d" * 64,
+        )
+        watch_docs.assert_called_once_with(
+            ROOT.resolve(),
+            "registrystack/registry-stack",
+            run=docs_run,
+            verbose=False,
+        )
+        verify_candidate.assert_not_called()
+        dispatch_publication.assert_not_called()
+        self.assertIn('"docs_recovery": "dispatched"', output.getvalue())
+        self.assertIn('"docs_run_id": 99', output.getvalue())
 
     def test_recovery_draft_must_keep_the_candidate_binding(self) -> None:
         registry_release = load_registry_release()

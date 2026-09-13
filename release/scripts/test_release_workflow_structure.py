@@ -423,6 +423,12 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("github.event.client_payload.request_id", text)
         self.assertIn('[[ ! "${REQUEST_ID}" =~ ^[0-9a-f]{32}$ ]]', validation)
         self.assertIn("refs/remotes/origin/main", validation)
+        self.assertIn("registry-release validate-source-commit", validation)
+        self.assertIn('--source-sha "${REQUEST_SOURCE_SHA}"', validation)
+        self.assertLess(
+            validation.index("validate-source-commit"),
+            validation.index("git ls-remote --exit-code --tags"),
+        )
         ci = document["jobs"]["protected-ci"]
         self.assertEqual(ci["needs"], "validate")
         _, protected_workflow = workflow("ci.yml")
@@ -1223,6 +1229,10 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertIn("workflow_dispatch:", text.split("permissions:", 1)[0])
         self.assertNotIn("push:", text.split("permissions:", 1)[0])
         self.assertIn("${{ inputs.tag }}", text)
+        self.assertEqual(
+            document["run-name"],
+            "Publish RegistryStack ${{ inputs.tag }} (${{ inputs.request_id }})",
+        )
         self.assertIn('"${GITHUB_REF}" != refs/heads/main', text)
         self.assertEqual(
             list(document["jobs"]),
@@ -1242,6 +1252,26 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             document["jobs"]["promote-images"]["permissions"],
             {"actions": "read", "contents": "write", "packages": "write"},
         )
+
+    def test_correlates_publication_and_docs_without_approving_environments(self) -> None:
+        text, document = workflow("release.yml")
+        inputs = document[True]["workflow_dispatch"]["inputs"]
+        self.assertFalse(inputs["request_id"]["required"])
+        identity = next(
+            step
+            for step in document["jobs"]["verify"]["steps"]
+            if step.get("name") == "Resolve exact tag identity"
+        )
+        self.assertEqual(identity["env"]["REQUEST_ID"], "${{ inputs.request_id }}")
+        self.assertIn('[[ -n "${REQUEST_ID}"', identity["run"])
+        dispatch = step_run(
+            document,
+            "dispatch-docs",
+            "Dispatch authenticated docs promotion",
+        )
+        self.assertIn('-f "request_id=${{ inputs.request_id }}"', dispatch)
+        self.assertNotIn("pending_deployments", text)
+        self.assertNotIn("approve", text.lower())
 
     def test_image_promotion_can_reread_the_bound_draft(self) -> None:
         _, document = workflow("release.yml")
@@ -1882,6 +1912,14 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
         self.assertIn("push:", trigger)
         self.assertIn("- main", trigger)
         self.assertIn("required: false", trigger)
+        self.assertEqual(
+            document["run-name"],
+            "Deploy RegistryStack Docs ${{ inputs.released_tag }} "
+            "(${{ inputs.request_id }})",
+        )
+        self.assertFalse(
+            document[True]["workflow_dispatch"]["inputs"]["request_id"]["required"]
+        )
         self.assertIn("ref: ${{ github.sha }}", text)
         self.assertIn(".prerelease==false", text)
         self.assertIn(

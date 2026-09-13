@@ -644,6 +644,18 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
             assert!(artifact["protected"].is_string());
             assert!(artifact["payload"].is_string());
             assert!(artifact["signature"].is_string());
+            let retained = registry_evidence_client::RetainedEvidenceVerification::from_slice(
+                &serde_json::to_vec(verified.retained_verification()).unwrap(),
+            )
+            .expect("the progressive result retains a portable verification context");
+            let replayed = retained
+                .verify_as_of(verified.assertion_bytes(), Utc::now())
+                .expect("the exact progressive JWS verifies offline");
+            assert_eq!(
+                replayed.evidence().request_nonce,
+                verified.evidence().request_nonce
+            );
+            assert!(retained.verify_as_of(b"changed", Utc::now()).is_err());
             assert_eq!(verified.values().len(), 1);
             assert_eq!(
                 verified.value().expect("one published output"),
@@ -703,6 +715,14 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
     match matched_sd_jwt {
         VerifiedAudienceScopedEvidence::Credential(verified) => {
             assert!(!verified.credential().is_empty());
+            let replayed = verified
+                .retained_verification()
+                .verify_as_of(verified.credential().as_bytes(), Utc::now())
+                .expect("the exact progressive credential verifies offline");
+            assert_eq!(
+                replayed.evidence().request_nonce,
+                verified.evidence().request_nonce
+            );
             assert_eq!(verified.credential().split('.').count(), 3);
             assert_eq!(verified.values().len(), 1);
             assert_eq!(
@@ -772,6 +792,37 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         fresh_candidate.definitions[0].configuration_revision,
         format!("sha256:{}", "0".repeat(64)),
         "candidate fetching must not copy the already-reviewed catalog"
+    );
+    let definition = &fresh_candidate.definitions[0];
+    let mut pinned_profile: Value =
+        serde_json::from_slice(&fs::read(&profile_path).unwrap()).unwrap();
+    pinned_profile["expected"] = json!({"definitions": {definition.handle.clone(): {
+        "configurationRevision": definition.configuration_revision,
+        "evidenceType": definition.evidence_type,
+        "purpose": definition.purpose,
+        "assuranceProfile": fresh_candidate.assurance_profile,
+        "responseFormat": "signed-jws"
+    }}});
+    fs::write(&profile_path, serde_json::to_vec(&pinned_profile).unwrap()).unwrap();
+    let pinned_client =
+        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
+            .expect("a definition pin configures the client independently of service identity");
+    pinned_client
+        .request(request())
+        .await
+        .expect("the reviewed definition is accepted");
+    pinned_profile["expected"]["definitions"][&definition.handle]["configurationRevision"] =
+        json!(format!("sha256:{}", "0".repeat(64)));
+    fs::write(&profile_path, serde_json::to_vec(&pinned_profile).unwrap()).unwrap();
+    let drifted_client =
+        EvidenceClient::from_profile_path_with_key(&profile_path, issuer.client_key.clone())
+            .expect("the older pin is valid configuration");
+    assert!(
+        matches!(
+            drifted_client.request(request()).await,
+            Err(EvidenceClientError::Configuration { .. })
+        ),
+        "definition drift fails before the Evidence response-verification stage"
     );
     let reviewed_result = reviewed_client.request(request()).await;
     let Err(reviewed_error) = reviewed_result else {

@@ -29,6 +29,13 @@ judgement about a response is made by `registry-evidence-verifier`.
   expires.
 - `EvidenceClient::verify_as_of`: the same verification at an instant the caller
   names, for re-verifying a response it retained.
+- Profile-driven `request`: selects a complete requester-scoped definition and
+  can pin its revision, Evidence Type, purpose, assurance profile, and response
+  format under `expected.definitions[handle]` before the Evidence POST. Other
+  definitions published by the same service may change independently.
+- `RetainedEvidenceVerification`: the pre-response trust and policy snapshot.
+  A progressive result retains it beside exact assertion or credential bytes;
+  `from_slice` and `verify`/`verify_as_of` support bounded offline decisions.
 
 Preparing and verifying are synchronous. The HTTP methods are `reqwest` calls, so
 awaiting them requires a tokio-compatible reactor even though nothing in this
@@ -75,6 +82,10 @@ async fn accept(
   both a key retained in the pinned set and the revocation list captured in an
   older prepared request, so an emergency revocation takes effect without
   preparing a replacement request.
+- A retained context holds the keys and revocation input captured before the
+  response. A current decision must account for independently governed current
+  revocations; `verify_as_of` replays a past decision and does not establish
+  present validity.
 - One prepared request is one exchange, enforced rather than advised. Neither this
   crate nor its HTTP client retries anything, and a second `send` with the same
   prepared request fails locally before any I/O: a second attempt is a second

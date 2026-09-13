@@ -338,6 +338,7 @@ class VerifiedAssertion:
     value: Any
     subject_continuity: SubjectContinuity
     assertion: bytes
+    retained_verification: bytes
 
 class VerifiedAudienceScopedCredential:
     """A locally verified audience-scoped SD-JWT VC response."""
@@ -348,6 +349,17 @@ class VerifiedAudienceScopedCredential:
     value: Any
     subject_continuity: SubjectContinuity
     credential: str
+    retained_verification: bytes
+
+def verify_retained(context: bytes, response: bytes) -> VerifiedEvidence:
+    """Verify retained bytes as a current decision without network I/O."""
+    ...
+
+def verify_retained_as_of(
+    context: bytes, response: bytes, as_of_unix_seconds: float
+) -> VerifiedEvidence:
+    """Replay a decision at its recorded instant without network I/O."""
+    ...
 
 class EvidenceClient:
     """A relying party's connection to one Evidence deployment."""

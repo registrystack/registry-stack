@@ -166,6 +166,7 @@ for (const name of [
   'values',
   'value',
   'subjectContinuity',
+  'retainedVerification',
 ]) {
   wrapGetter(native.AudienceScopedResult.prototype, name);
 }
@@ -236,4 +237,18 @@ module.exports = {
   RawEvidenceRequestBatchResponse: native.RawEvidenceRequestBatchResponse,
   AudienceScopedResult: native.AudienceScopedResult,
   SdJwtVcBatchResponse,
+  verifyRetained(context, response) {
+    try {
+      return native.verifyRetained(context, response);
+    } catch (error) {
+      throw normalize(error);
+    }
+  },
+  verifyRetainedAsOf(context, response, asOfMillis) {
+    try {
+      return native.verifyRetainedAsOf(context, response, asOfMillis);
+    } catch (error) {
+      throw normalize(error);
+    }
+  },
 };
