@@ -2685,7 +2685,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
             {"id":"reader","scopes":["records:get"]},
             {"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true},
             {"id":"status","scopes":["casework:grants:status"]}],
-        "taskAuthority":{"id":"casework","issuer":"https://casework.local.example","jwksPort":8801,"statusClients":{"status":"urn:casework:source-group"}}
+        "taskAuthority":{"issuer":"https://casework.local.example","jwksPort":8801,"statusClients":{"status":"urn:casework:source-group"}}
     })).unwrap();
     clients.integrations = Some(integrations.clone());
     integrations.validate(&clients, &policy).unwrap();
@@ -2738,6 +2738,7 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
         operator["taskAuthority"]["issuer"],
         "https://casework.local.example"
     );
+    assert!(operator["taskAuthority"].get("id").is_none());
     assert_eq!(operator["sources"]["source"]["resource"], state.audience());
     assert_eq!(description.exchange_issuers.len(), 1);
     let mut wrong = integrations.clone();

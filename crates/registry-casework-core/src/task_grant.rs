@@ -268,7 +268,6 @@ pub struct TaskGrant {
     pub id: Uuid,
     pub item_id: Uuid,
     pub template: TaskTemplate,
-    pub authority: String,
     pub source_issuer: String,
     pub approver: IssuerPrincipal,
     pub approver_profile: String,
@@ -531,7 +530,6 @@ pub struct TaskGrantStatus {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatusDetails {
     pub grant_id: Uuid,
-    pub authority: String,
     pub source_issuer: String,
     pub principal: String,
     pub client: String,

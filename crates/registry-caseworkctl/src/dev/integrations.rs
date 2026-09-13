@@ -41,8 +41,7 @@ pub(super) struct ServiceClient {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct TaskAuthority {
-    pub id: String,
-    /// Logical authority identifier, independent of the local API transport URL.
+    /// Logical issuer, independent of the local API transport URL.
     pub issuer: String,
     /// Public-key-only listener, reachable from the stock issuer container.
     pub jwks_port: u16,
@@ -108,8 +107,7 @@ impl Integrations {
             bail!("governed task templates require an explicit local taskAuthority");
         }
         if let Some(authority) = &self.task_authority {
-            if !config::identifier(&authority.id)
-                || !authority.issuer.starts_with("https://")
+            if !authority.issuer.starts_with("https://")
                 || !registry_platform_httputil::valid_resource_uri(&authority.issuer)
                 || authority.jwks_port == 0
                 || authority.status_clients.len() > 32
@@ -209,8 +207,8 @@ impl Integrations {
             )?);
             private::create(&root.join("secrets/task-authority-signing-key"), &key)?;
             description.exchange_issuers.push(ExchangeIssuer {
-                id: local::agent_id("casework-authority", &authority.id),
-                name: authority.id.clone(),
+                id: local::agent_id("casework-authority", &authority.issuer),
+                name: "Casework task authority".into(),
                 issuer: authority.issuer.clone(),
                 jwks_endpoint: format!(
                     "http://host.docker.internal:{}/oauth2/jwks",
@@ -298,7 +296,7 @@ impl Integrations {
                 .map(|client| client.id.clone())
                 .chain(self.service_clients.iter().map(|client| client.id.clone()))
                 .collect::<Vec<_>>());
-            value["taskAuthority"] = json!({"id":authority.id,"issuer":authority.issuer,
+            value["taskAuthority"] = json!({"issuer":authority.issuer,
                 "exchangeAudience":state.issuer_origin(),"signingKeyRef":"secret:file/task-authority-signing-key",
                 "statusClients":authority.status_clients});
         }

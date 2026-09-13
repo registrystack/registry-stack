@@ -314,7 +314,6 @@ pub struct RuntimeConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskAuthorityConfig {
-    pub id: String,
     pub issuer: String,
     pub exchange_audience: String,
     pub signing_key_ref: String,
@@ -602,9 +601,7 @@ impl RuntimeConfig {
             return Err(RuntimeConfigError::InvalidOidc);
         }
         if let Some(authority) = &self.task_authority {
-            if authority.id.is_empty()
-                || authority.id.len() > 128
-                || !registry_platform_httputil::valid_resource_uri(&authority.issuer)
+            if !registry_platform_httputil::valid_resource_uri(&authority.issuer)
                 || !registry_platform_httputil::valid_resource_uri(&authority.exchange_audience)
                 || self.authentication.oidc.allowed_clients.is_empty()
                 || authority.status_clients.len() > 64

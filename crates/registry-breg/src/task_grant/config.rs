@@ -8,7 +8,6 @@ use registry_platform_httputil::client::PrivateKeyJwtConfig;
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantStatusConfig {
-    pub authority: String,
     pub source_issuer: String,
     pub base_url: String,
     pub token_endpoint: String,
@@ -20,13 +19,12 @@ pub struct TaskGrantStatusConfig {
 }
 
 pub struct TaskGrantStatusRegistry {
-    clients: BTreeMap<(String, String), TaskGrantStatusClient>,
+    clients: BTreeMap<String, TaskGrantStatusClient>,
 }
 
 impl TaskGrantStatusRegistry {
-    pub fn contains(&self, authority: &str, source_issuer: &str) -> bool {
-        self.clients
-            .contains_key(&(authority.to_owned(), source_issuer.to_owned()))
+    pub fn contains(&self, source_issuer: &str) -> bool {
+        self.clients.contains_key(source_issuer)
     }
 
     pub fn activate(
@@ -66,7 +64,6 @@ impl TaskGrantStatusRegistry {
                 token = token.with_trusted_root_certificates(ca.expose_secret().to_vec());
             }
             let client = TaskGrantStatusClient::new(
-                config.authority.clone(),
                 config.source_issuer.clone(),
                 resource.to_owned(),
                 config
@@ -77,10 +74,7 @@ impl TaskGrantStatusRegistry {
                 ca.as_ref().map(|value| value.expose_secret()),
             )?;
             if clients
-                .insert(
-                    (config.authority.clone(), config.source_issuer.clone()),
-                    client,
-                )
+                .insert(config.source_issuer.clone(), client)
                 .is_some()
             {
                 return Err(TaskGrantError::Configuration);
@@ -99,7 +93,7 @@ impl TaskGrantStatusChecker for TaskGrantStatusRegistry {
         Box::pin(async move {
             let client = self
                 .clients
-                .get(&(binding.authority.clone(), binding.source_issuer.clone()))
+                .get(&binding.source_issuer)
                 .ok_or(TaskGrantError::Refused)?;
             client.check(binding).await
         })
@@ -113,7 +107,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
-    fn configured_status_clients_pin_authority_and_refuse_unsafe_or_duplicate_bindings() {
+    fn configured_status_clients_pin_source_issuer_and_refuse_unsafe_or_duplicate_bindings() {
         let root = tempfile::tempdir().unwrap();
         let mut key = registry_platform_crypto::generate_private_jwk(
             registry_platform_crypto::GeneratedKeyAlgorithm::Rs384,
@@ -138,7 +132,6 @@ mod tests {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let secrets = SecretResolver::new([SecretProvider::File], root.path()).unwrap();
         let config = TaskGrantStatusConfig {
-            authority: "https://casework.test/tasks".into(),
             source_issuer: "https://casework.test".into(),
             base_url: "https://casework.test".into(),
             token_endpoint: "https://identity.test/oauth2/token".into(),
@@ -154,10 +147,12 @@ mod tests {
             &secrets,
         )
         .unwrap();
-        assert!(status.contains(&config.authority, &config.source_issuer));
-        assert!(!status.contains(&config.authority, "https://other.test"));
+        assert!(status.contains(&config.source_issuer));
+        assert!(!status.contains("https://other.test"));
+        let mut duplicate = config.clone();
+        duplicate.base_url = "https://other-casework.test".into();
         assert!(TaskGrantStatusRegistry::activate(
-            &[config.clone(), config.clone()],
+            &[config.clone(), duplicate],
             "urn:breg:test",
             &secrets
         )
@@ -177,6 +172,9 @@ mod tests {
         let mut invalid = config.clone();
         invalid.casework_resource = "not-an-absolute-resource".into();
         assert!(TaskGrantStatusRegistry::activate(&[invalid], "urn:breg:test", &secrets).is_err());
+        let mut retired = serde_json::to_value(config.clone()).unwrap();
+        retired["authority"] = serde_json::json!("casework-v1");
+        assert!(serde_json::from_value::<TaskGrantStatusConfig>(retired).is_err());
         let mut raw = serde_json::to_value(config).unwrap();
         raw["scopes"] = serde_json::json!(["admin"]);
         assert!(serde_json::from_value::<TaskGrantStatusConfig>(raw).is_err());

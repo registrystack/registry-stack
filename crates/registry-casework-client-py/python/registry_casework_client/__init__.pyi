@@ -78,7 +78,6 @@ class TaskAssertionResponse(TypedDict):
     grantExpiresAt: int
 class TaskGrantStatusDetails(TypedDict):
     grantId: str
-    authority: str
     sourceIssuer: str
     principal: str
     client: str

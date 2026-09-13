@@ -400,7 +400,7 @@ requester principal
 + purpose
 + subject roles, selector profiles, value origins, and authority
 + audience
-+ optional task-grant principal, client, resource, source issuer, authority,
++ optional task-grant principal, client, resource, source issuer,
   deadline, requirement bound, and approver
 ```
 
@@ -498,7 +498,7 @@ For an institutional agent task, Evidence consumes a complete signed grant
 context issued by an external task authority. It confines the request to a
 configured `delegated` authority path whose subjects derive from the
 authenticated grant. The agent actor kind, authenticated principal, verified
-client and resource, trusted source issuer, grant authority, purpose, exact
+client and resource, trusted source issuer, purpose, exact
 Evidence requirement bound, effective deadline, and signed approver handle
 must all match that one path. An invalid present grant cannot fall back to
 standing authority. Citizen-to-agent delegation and federation remain deferred
@@ -1818,7 +1818,7 @@ server-issued challenges, one-time consumption, and replay prevention.
 Version one supports an institutional software agent as an authenticated
 workload actor operating under an external task grant. The complete signed grant
 context binds the agent principal, verified client and Evidence resource,
-trusted source issuer, configured grant authority, fixed requirement, purpose,
+trusted source issuer, fixed requirement, purpose,
 subject values, effective deadline, and approver. Evidence accepts it only on a
 configured `delegated` authority path whose subjects use
 `authenticated-grant`; a partial, malformed, expired, mismatched, or non-agent
@@ -2367,7 +2367,7 @@ mandatory default and includes:
 - one strict OIDC access-token reference profile;
 - one reviewed statutory-agency subject-authority profile;
 - authenticated institutional task-grant authority for agent workloads, bound
-  to an exact requester client, resource, source issuer, authority, requirement,
+  to an exact requester client, resource, source issuer, requirement,
   purpose, deadline, and approver;
 - configured identifier, compound demographic, and multi-role selector profiles
   with provider-owned `match`, `no_match`, and `ambiguous` outcomes;

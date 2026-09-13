@@ -42,7 +42,6 @@ pub struct ClaimNames {
     pub actor_kind: String,
     pub purpose: String,
     pub grant_id: String,
-    pub grant_authority: String,
     pub grant_source_issuer: String,
     pub grant_client: String,
     pub grant_resource: String,
@@ -57,7 +56,6 @@ impl Default for ClaimNames {
             actor_kind: "registry_actor_kind".to_owned(),
             purpose: "registry_purpose".to_owned(),
             grant_id: "registry_grant_id".to_owned(),
-            grant_authority: "registry_grant_authority".to_owned(),
             grant_source_issuer: "registry_grant_source_issuer".to_owned(),
             grant_client: "registry_grant_client".to_owned(),
             grant_resource: "registry_grant_resource".to_owned(),
@@ -75,7 +73,6 @@ impl ClaimNames {
             &self.actor_kind,
             &self.purpose,
             &self.grant_id,
-            &self.grant_authority,
             &self.grant_source_issuer,
             &self.grant_client,
             &self.grant_resource,
@@ -94,10 +91,9 @@ impl ClaimNames {
         Ok(())
     }
 
-    fn core_grant_names(&self) -> [&str; 7] {
+    fn core_grant_names(&self) -> [&str; 6] {
         [
             &self.grant_id,
-            &self.grant_authority,
             &self.grant_source_issuer,
             &self.grant_client,
             &self.grant_resource,
@@ -235,7 +231,6 @@ impl fmt::Debug for GrantBounds {
 pub struct GrantClaims {
     principal: String,
     id: String,
-    authority: String,
     source_issuer: String,
     client: String,
     resource: String,
@@ -254,11 +249,6 @@ impl GrantClaims {
     #[must_use]
     pub fn id(&self) -> &str {
         &self.id
-    }
-
-    #[must_use]
-    pub fn authority(&self) -> &str {
-        &self.authority
     }
 
     #[must_use]
@@ -322,7 +312,6 @@ impl fmt::Debug for GrantClaims {
             .debug_struct("GrantClaims")
             .field("principal", &"<redacted>")
             .field("id", &"<redacted>")
-            .field("authority", &"<redacted>")
             .field("source_issuer", &"<redacted>")
             .field("client", &"<redacted>")
             .field("resource", &"<redacted>")
@@ -342,7 +331,6 @@ pub enum ClaimMember {
     Purpose,
     TokenExpiration,
     GrantId,
-    GrantAuthority,
     GrantSourceIssuer,
     GrantClient,
     GrantResource,
@@ -427,8 +415,6 @@ pub fn grant_claims(
         MAX_CLAIM_VALUE_BYTES,
     )?;
     let id = required_extra_string(claims, &names.grant_id, ClaimMember::GrantId)?;
-    let authority =
-        required_extra_string(claims, &names.grant_authority, ClaimMember::GrantAuthority)?;
     let source_issuer = required_extra_string(
         claims,
         &names.grant_source_issuer,
@@ -471,7 +457,6 @@ pub fn grant_claims(
     Ok(Some(GrantClaims {
         principal,
         id,
-        authority,
         source_issuer,
         client,
         resource,
@@ -587,7 +572,6 @@ mod tests {
         json!({
             "registry_actor_kind": "agent",
             "registry_grant_id": "grant-canary",
-            "registry_grant_authority": "casework-v1",
             "registry_grant_source_issuer": "https://casework.example",
             "registry_grant_client": "agent-client",
             "registry_grant_resource": "urn:registry:breg",
@@ -628,6 +612,24 @@ mod tests {
     }
 
     #[test]
+    fn grant_requires_source_issuer() {
+        let mut extra =
+            complete_grant(json!({"type":"evidence","requirement":"urn:requirement:one"}));
+        let grant = grant_claims(&claims(extra.clone()), &ClaimNames::default(), 1_500)
+            .expect("the grant is valid")
+            .expect("the grant is present");
+        assert_eq!(grant.source_issuer(), "https://casework.example");
+        extra
+            .as_object_mut()
+            .expect("grant object")
+            .remove("registry_grant_source_issuer");
+        assert_eq!(
+            grant_claims(&claims(extra), &ClaimNames::default(), 1_500),
+            Err(ClaimError::Partial)
+        );
+    }
+
+    #[test]
     fn grant_without_approver_is_rejected() {
         let mut grant =
             complete_grant(json!({"type":"evidence","requirement":"urn:requirement:one"}));
@@ -648,7 +650,6 @@ mod tests {
             actor_kind: "custom.actor".to_owned(),
             purpose: "custom.purpose".to_owned(),
             grant_id: "custom.grant_id".to_owned(),
-            grant_authority: "custom.grant_authority".to_owned(),
             grant_source_issuer: "custom.grant_source_issuer".to_owned(),
             grant_client: "custom.grant_client".to_owned(),
             grant_resource: "custom.grant_resource".to_owned(),
@@ -660,7 +661,6 @@ mod tests {
             "custom.actor": "agent",
             "custom.purpose": "record-review",
             "custom.grant_id": "grant-canary",
-            "custom.grant_authority": "casework-v1",
             "custom.grant_source_issuer": "https://casework.example",
             "custom.grant_client": "agent-client",
             "custom.grant_resource": "urn:registry:breg",

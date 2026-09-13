@@ -128,7 +128,7 @@ const PROJECT: &str = r#"{
       "actorKind":"agent",
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
-      "taskGrant":{"authority":"casework","sourceIssuer":"https://casework.example"}
+      "taskGrant":{"sourceIssuer":"https://casework.example"}
     },
     {
       "id":"reviewer",
@@ -325,9 +325,9 @@ fn agent(idp: &MockIdp, status: &Status) -> (String, String) {
         .unwrap();
     let bounds = json!({"type":"breg","permissions":permissions.iter().map(|p|json!({"collection":"correction-requests","operations":p["operations"]})).collect::<Vec<_>>()});
     let subjects = json!({"tenant_claim":"tenant-a"});
-    let binding:TaskGrantBinding=serde_json::from_value(json!({"grantId":id,"authority":"casework","sourceIssuer":SOURCE,"principal":"agent-subject","client":"task-agent","resource":AUDIENCE,"purpose":"review","bounds":bounds,"subjects":subjects,"expiresAt":expires})).unwrap();
+    let binding:TaskGrantBinding=serde_json::from_value(json!({"grantId":id,"sourceIssuer":SOURCE,"principal":"agent-subject","client":"task-agent","resource":AUDIENCE,"purpose":"review","bounds":bounds,"subjects":subjects,"expiresAt":expires})).unwrap();
     status.bindings.lock().unwrap().insert(id.clone(), binding);
-    let token=idp.mint_token(json!({"aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent","registry_actor_kind":"agent","registry_grant_id":id,"registry_approver":"synthetic-approver","registry_grant_authority":"casework","registry_grant_source_issuer":SOURCE,"registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,"registry_purpose":"review","registry_grant_exp":expires,"registry_grant_bounds":bounds,"identity":subjects}));
+    let token=idp.mint_token(json!({"aud":AUDIENCE,"sub":"agent-subject","client_id":"task-agent","registry_actor_kind":"agent","registry_grant_id":id,"registry_approver":"synthetic-approver","registry_grant_source_issuer":SOURCE,"registry_grant_client":"task-agent","registry_grant_resource":AUDIENCE,"registry_purpose":"review","registry_grant_exp":expires,"registry_grant_bounds":bounds,"identity":subjects}));
     (id, token)
 }
 struct Response {
@@ -494,8 +494,8 @@ async fn assert_grant_audit(db: &TestDatabase, grant: &str, phase: &str, outcome
         .expect("grant-bound write and refusal retain minimized grant audit context");
     let authorization = &record["authorization"];
     assert_eq!(authorization["outcome"], outcome);
-    assert_eq!(authorization["authority"], "casework");
     assert_eq!(authorization["sourceIssuer"], SOURCE);
+    assert!(authorization.get("authority").is_none());
     assert!(authorization["expiresAt"].as_u64().is_some());
     assert!(authorization["approverPseudonym"]
         .as_str()

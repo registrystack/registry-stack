@@ -1737,7 +1737,6 @@ mod tests {
             let mut names = ClaimNames::default();
             if renamed {
                 names.grant_id = "task_id".into();
-                names.grant_authority = "task_authority".into();
                 names.grant_source_issuer = "task_source".into();
                 names.grant_client = "task_client".into();
                 names.grant_resource = "task_resource".into();
@@ -1772,7 +1771,6 @@ mod tests {
                     claims["registry_grant_id"] = json!("grant-a");
                 } else if state != "ordinary" {
                     claims[&names.grant_id] = json!("grant-a");
-                    claims[&names.grant_authority] = json!("authority-a");
                     claims[&names.grant_source_issuer] = json!("https://casework.example.org");
                     claims[&names.grant_client] = json!("offer-client");
                     claims[&names.grant_resource] = json!("https://wallet.example.org");

@@ -113,7 +113,6 @@ async fn signed_task_token_cannot_discover_or_invoke_an_ordinary_immediate_actio
         "registry_actor_kind": "agent",
         "registry_purpose": "case-management",
         "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
-        "registry_grant_authority": "casework-v1",
         "registry_approver": "h:synthetic-approver",
         "registry_grant_source_issuer": "https://casework.example",
         "registry_grant_client": "agent-client",

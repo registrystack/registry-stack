@@ -1639,7 +1639,7 @@ mod tests {
             .expect("submit")
             .into_workflow();
         let grant: crate::task_grant::TaskGrantBinding = serde_json::from_value(json!({
-            "grantId": Uuid::new_v4().to_string(), "authority": "casework",
+            "grantId": Uuid::new_v4().to_string(),
             "sourceIssuer": "https://casework.test", "principal": "original-agent",
             "client": "original-client", "resource": "urn:breg:test", "purpose": "review",
             "bounds": {"type":"breg", "permissions":[{"collection":"people", "operations":["get","patch"]}]},

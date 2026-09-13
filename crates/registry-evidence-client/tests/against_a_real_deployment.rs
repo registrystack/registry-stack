@@ -92,7 +92,6 @@ const TASK_CLIENT_AGENT_ID: &str = "0197aaaa-0000-7000-8000-0000000000a1";
 const TASK_CLIENT_ROLE_ID: &str = "0197aaaa-0000-7000-8000-0000000000c1";
 const TASK_AUTHORITY_RESOURCE_ID: &str = "0197aaaa-0000-7000-8000-0000000000b1";
 const TASK_AUTHORITY_ISSUER_ID: &str = "0197aaaa-0000-7000-8000-0000000000d1";
-const TASK_AUTHORITY_PROFILE: &str = "statutory-caseworker-v1";
 const TASK_BOOTSTRAP_RESOURCE: &str = "urn:registry:evidence:fixture:task-authority";
 const TASK_BOOTSTRAP_SCOPE: &str = "grants:assert";
 
@@ -1813,7 +1812,6 @@ impl SyntheticAssertionAuthority {
             "registry_actor_kind": "agent",
             "registry_grant_id": grant_id,
             "registry_approver": "h:synthetic-approver",
-            "registry_grant_authority": TASK_AUTHORITY_PROFILE,
             "registry_grant_client": TASK_CLIENT_ID,
             "registry_grant_resource": TOKEN_AUDIENCE,
             "registry_purpose": "fixture-eligibility",

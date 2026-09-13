@@ -58,7 +58,7 @@ profiles:
     maximum_aggregate_bytes: 520
     value_origin: authenticated-grant
     claim_binding:
-      authority_profile: authenticated-grant-v1
+      authority_profile: institutional-review-v1
       requirement: urn:example:fixture:requirement:property:v1
       purpose: fixture-procedure
       audience: urn:example:fixture:audience:requester-a
@@ -66,7 +66,7 @@ profiles:
       configured_grant_claims:
       verified_grant_binding:
         grant_id: synthetic-grant-001
-        grant_authority: urn:example:fixture:authority:grant-a
+        source_issuer: https://casework.invalid
       valueClaims:
         given_name: grant.subject.given_name
         family_name: grant.subject.family_name
@@ -78,7 +78,7 @@ profiles:
       - caller-values-prohibited-for-grant-origin
       - caller-added-disambiguator-rejected-from-demographics-v1
       - authenticated-grant-id-not-bound
-      - authenticated-grant-authority-not-bound
+      - authenticated-grant-source-issuer-not-bound
       - incomplete-grant-valueClaims
       - alternative-field-set-not-inferred
   - case: multi-role
@@ -140,7 +140,7 @@ global_negative:
   - missing-context-valueClaims
   - incomplete-or-extra-valueClaims
   - request-origin-valueClaims
-  - grant-id-or-authority-from-caller-request
+  - grant-id-from-caller-request
   - credential-resolution-or-source-access-before-validation
 redaction_expectation:
   public_evidence: no selector profile or value

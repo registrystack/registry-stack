@@ -325,7 +325,6 @@ pub struct ResolvedAuthorization {
     pub authority_profile: String,
     pub authority_kind: AuthorityKind,
     pub grant_id: Option<String>,
-    pub grant_authority: Option<String>,
     pub requirement: String,
     pub purpose: String,
     pub subject_scope: ResolvedSubjectScope,
@@ -339,10 +338,6 @@ impl fmt::Debug for ResolvedAuthorization {
             .field("authority_profile", &"<redacted>")
             .field("authority_kind", &self.authority_kind)
             .field("grant_id", &self.grant_id.as_ref().map(|_| "<redacted>"))
-            .field(
-                "grant_authority",
-                &self.grant_authority.as_ref().map(|_| "<redacted>"),
-            )
             .field("requirement", &self.requirement)
             .field("purpose", &self.purpose)
             .field("subject_scope", &self.subject_scope)
@@ -476,13 +471,7 @@ pub fn match_entitlement(
                 continue;
             }
             if uses_authenticated_grant
-                && !task_grant_matches(
-                    context,
-                    authority_profile,
-                    authority,
-                    &request.requirement,
-                    &request.purpose,
-                )
+                && !task_grant_matches(context, authority, &request.requirement, &request.purpose)
             {
                 continue;
             }
@@ -505,7 +494,6 @@ pub fn match_entitlement(
 
 fn task_grant_matches(
     context: &AuthenticatedContext,
-    authority_profile: &str,
     authority: &crate::config::AuthorityProfile,
     requirement: &str,
     purpose: &str,
@@ -515,7 +503,6 @@ fn task_grant_matches(
     };
     context.actor_kind() == ActorKind::Agent
         && grant.principal() == context.principal()
-        && grant.authority() == authority_profile
         && authority.grant_source_issuer.as_deref() == Some(grant.source_issuer())
         && context.client().is_some_and(|client| {
             client == grant.client()
@@ -563,9 +550,6 @@ pub fn resolve_selectors(
         authority_kind: matched.authority_kind,
         grant_id: uses_authenticated_grant
             .then(|| context.grant_id().map(ToOwned::to_owned))
-            .flatten(),
-        grant_authority: uses_authenticated_grant
-            .then(|| context.grant_authority().map(ToOwned::to_owned))
             .flatten(),
         requirement: request.requirement.clone(),
         purpose: request.purpose.clone(),
@@ -624,10 +608,7 @@ pub(crate) fn validate_entitlement_context(
         .subjects
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
-    if uses_authenticated_grant
-        && (context.grant_id().is_none()
-            || context.grant_authority() != Some(matched.authority_profile()))
-    {
+    if uses_authenticated_grant && context.grant_id().is_none() {
         return Err(AuthorizationError::Unauthorized);
     }
 
@@ -795,11 +776,11 @@ pub fn resolve_offline_fixture_authorization(
         subjects,
         holder_keys,
     };
-    let (authority_name, authority, configured_grant) = bundle
+    let (authority, configured_grant) = bundle
         .config
         .authority_profiles
         .iter()
-        .find_map(|(authority_name, authority)| {
+        .find_map(|(_, authority)| {
             authority
                 .grants
                 .iter()
@@ -808,7 +789,7 @@ pub fn resolve_offline_fixture_authorization(
                         && grant.purpose == request.purpose
                         && same_subject_tuples(&grant.subjects, &request.subjects)
                 })
-                .map(|grant| (authority_name, authority, grant))
+                .map(|grant| (authority, grant))
         })
         .ok_or(AuthorizationError::Unauthorized)?;
     let claims = case
@@ -847,10 +828,6 @@ pub fn resolve_offline_fixture_authorization(
         object.insert(
             names.grant_id.clone(),
             Value::String("offline-fixture-grant".to_owned()),
-        );
-        object.insert(
-            names.grant_authority.clone(),
-            Value::String(authority_name.to_owned()),
         );
         object.insert(
             names.grant_source_issuer.clone(),
@@ -1117,9 +1094,7 @@ fn resolve_grant_subjects(
     let uses_authenticated_grant = granted
         .iter()
         .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant);
-    if uses_authenticated_grant
-        && (context.grant_id().is_none() || context.grant_authority().is_none())
-    {
+    if uses_authenticated_grant && context.grant_id().is_none() {
         return Err(AuthorizationError::Unauthorized);
     }
     if granted.len() != requirement.subject_roles.len() {

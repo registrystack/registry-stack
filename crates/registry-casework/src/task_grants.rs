@@ -162,7 +162,7 @@ impl PostgresStore {
         if TaskProposalIdentity::from(&item.binding) != grant.proposal {
             return Err(StoreError::Conflict);
         }
-        let request = json!({"item":grant.item_id,"template":grant.template,"proposal":grant.proposal,"subjects":grant.subjects,"authority":grant.authority,"sourceIssuer":grant.source_issuer});
+        let request = json!({"item":grant.item_id,"template":grant.template,"proposal":grant.proposal,"subjects":grant.subjects,"sourceIssuer":grant.source_issuer});
         let hash = Sha256::digest(serde_json::to_vec(&request)?)
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -408,7 +408,7 @@ impl TaskAuthority {
         let approver = self.approver_pseudonym(grant)?;
         let mut payload = json!({"iss":self.config.issuer,"sub":grant.template.agent.subject,"aud":self.config.exchange_audience,
             "iat":now,"nbf":now,"exp":expires,"jti":Uuid::new_v4(),"registry_actor_kind":"agent",
-            "registry_grant_id":grant.id,"registry_grant_authority":grant.authority,"registry_grant_source_issuer":grant.source_issuer,
+            "registry_grant_id":grant.id,
             "registry_grant_client":grant.template.client,"registry_grant_resource":grant.template.resource,
             "registry_purpose":grant.template.purpose,"registry_grant_exp":grant.expires_at,
             "registry_grant_bounds":grant.template.bounds,"registry_approver":approver,
@@ -579,7 +579,6 @@ impl crate::CaseworkService {
             id: Uuid::new_v4(),
             item_id,
             template: template.clone(),
-            authority: authority.config.id.clone(),
             source_issuer: authority.config.issuer.clone(),
             approver: actor.principal.clone(),
             approver_profile: actor.profile_id.clone(),
@@ -739,7 +738,6 @@ impl crate::CaseworkService {
                 active: true,
                 grant: Some(TaskGrantStatusDetails {
                     grant_id: stored.grant.id,
-                    authority: stored.grant.authority,
                     source_issuer: stored.grant.source_issuer,
                     principal: stored.grant.template.agent.subject,
                     client: stored.grant.template.client,
@@ -795,7 +793,6 @@ mod evidence_assertion_tests {
         key.kid = Some("task-authority-key".into());
         let authority = TaskAuthority {
             config: crate::TaskAuthorityConfig {
-                id: "casework".into(),
                 issuer: "https://casework.test".into(),
                 exchange_audience: "https://issuer.test".into(),
                 signing_key_ref: "secret:unused".into(),
@@ -820,7 +817,6 @@ mod evidence_assertion_tests {
             id: Uuid::new_v4(),
             item_id: Uuid::new_v4(),
             template,
-            authority: "statutory-caseworker-v1".into(),
             source_issuer: "https://casework.test".into(),
             approver: IssuerPrincipal {
                 issuer: "https://approver-issuer.test".into(),
@@ -864,6 +860,8 @@ mod evidence_assertion_tests {
             .audit_reference_hash("casework-principal-v1", "", &approver)
             .unwrap();
         assert_eq!(payload["registry_approver"], expected_approver);
+        assert!(payload.get("registry_grant_authority").is_none());
+        assert!(payload.get("registry_grant_source_issuer").is_none());
         let serialized = payload.to_string();
         assert!(!serialized.contains("https://approver-issuer.test"));
         assert!(!serialized.contains("approver-subject-canary"));

@@ -117,7 +117,7 @@ pub(super) const PROJECT: &str = r#"{
       "actorKind":"agent",
       "requesterClients":["task-agent"],
       "requiredPurposes":["review"],
-      "taskGrant":{"authority":"casework","sourceIssuer":"https://casework.example"}
+      "taskGrant":{"sourceIssuer":"https://casework.example"}
     },
     {
       "id":"reviewer",

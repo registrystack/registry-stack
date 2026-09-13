@@ -152,7 +152,7 @@ accessProfiles:
     actorKind: agent
     requesterClients: [agent-client]
     requiredPurposes: [record-review]
-    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}
+    taskGrant: {sourceIssuer: https://casework.example}
     permissions:
       - entity: case
         operations: [get]
@@ -406,7 +406,6 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         "registry_actor_kind": "agent",
         "registry_purpose": "record-review",
         "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
-        "registry_grant_authority": "casework-v1",
         "registry_approver": "h:synthetic-approver",
         "registry_grant_source_issuer": "https://casework.example",
         "registry_grant_client": "agent-client",
@@ -451,6 +450,18 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         .await;
     assert_ne!(standing.status(), StatusCode::OK);
 
+    let mut wrong_issuer = claims.clone();
+    wrong_issuer["registry_grant_source_issuer"] = json!("https://other-casework.example");
+    let refused = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&harness.signed_token(wrong_issuer, "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 1);
+
     let mut wider = claims;
     wider["registry_grant_bounds"] =
         json!({"type":"breg","permissions":[{"collection":"cases","operations":["get","list"]}]});
@@ -462,6 +473,20 @@ async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority(
         )
         .await;
     assert_ne!(refused.status(), StatusCode::OK);
+}
+
+#[test]
+fn task_grant_profile_uses_source_issuer_as_its_only_authority_key() {
+    let project = parse_project_yaml(CONTEXTUAL_PROJECT.as_bytes())
+        .expect("source-issuer-only task grant parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("source-issuer-only task grant compiles");
+
+    let retired_authority = CONTEXTUAL_PROJECT.replace(
+        "taskGrant: {sourceIssuer: https://casework.example}",
+        "taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}",
+    );
+    assert!(parse_project_yaml(retired_authority.as_bytes()).is_err());
 }
 
 #[tokio::test]
@@ -512,7 +537,7 @@ fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutatio
     let governed = include_str!("fixtures/authority-mapping.yaml")
         .replace(
             "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
-            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}",
+            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {sourceIssuer: https://casework.example}",
         )
         .replace(
             "operations: [get, submit_request, approve_request",

@@ -676,7 +676,6 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     admin.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request','synthetic-request','review','review-1',$2,'claimed','review',$3,$4,1,now(),now())",&[&item,&serde_json::to_value(binding()).unwrap(),&issuer.url(),&human]).await.unwrap();
     let authority = TaskAuthority {
         config: crate::TaskAuthorityConfig {
-            id: "casework".into(),
             issuer: AUTHORITY.into(),
             exchange_audience: issuer.url(),
             signing_key_ref: "secret:env/UNUSED_IN_MEMORY_KEY".into(),
@@ -866,6 +865,11 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
     )
     .await;
     assert_eq!(code, StatusCode::OK);
+    let assertion_claims = payload(issued["assertion"].as_str().unwrap());
+    assert!(assertion_claims.get("registry_grant_authority").is_none());
+    assert!(assertion_claims
+        .get("registry_grant_source_issuer")
+        .is_none());
     let exchange = provider(
         &issuer.url(),
         "task-agent",
@@ -933,6 +937,7 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
     let claims = payload(&token);
     assert_eq!(claims["registry_grant_id"], grant_id);
     assert_eq!(claims["registry_grant_source_issuer"], AUTHORITY);
+    assert!(claims.get("registry_grant_authority").is_none());
     assert_eq!(claims["registry_grant_exp"], issued["grantExpiresAt"]);
     assert_eq!(claims["registry_grant_exp"], grant["expiresAt"]);
     assert_eq!(claims["identity"], json!({"tenant_claim":"tenant-a"}));
@@ -947,7 +952,6 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
     for name in [
         "registry_actor_kind",
         "registry_grant_id",
-        "registry_grant_authority",
         "registry_grant_source_issuer",
         "registry_grant_client",
         "registry_grant_resource",
@@ -1078,7 +1082,6 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
     let identity = resource::install(&db, &registry).await;
     let checker = Arc::new(
         registry_breg::task_grant::TaskGrantStatusClient::new(
-            "casework".into(),
             AUTHORITY.into(),
             BREG_RESOURCE.into(),
             format!("http://127.0.0.1:{casework_port}").parse().unwrap(),

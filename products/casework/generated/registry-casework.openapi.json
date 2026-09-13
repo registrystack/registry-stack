@@ -4139,11 +4139,6 @@
       "TaskGrantStatusDetails": {
         "additionalProperties": false,
         "properties": {
-          "authority": {
-            "maxLength": 512,
-            "minLength": 1,
-            "type": "string"
-          },
           "bounds": {
             "$ref": "#/components/schemas/TaskGrantBounds"
           },
@@ -4194,7 +4189,6 @@
         },
         "required": [
           "grantId",
-          "authority",
           "sourceIssuer",
           "principal",
           "client",

@@ -912,7 +912,7 @@ store:
         let configured = VALID.replace("offers:\n", "offers:\n  claims:\n    grantId: task_id\n");
         let config = load_from(&configured).expect("custom contextual claim names load");
         assert_eq!(config.offers.claims.grant_id, "task_id");
-        for name in ["sub", "registry_grant_authority"] {
+        for name in ["sub", "registry_grant_source_issuer"] {
             let invalid = configured.replace("grantId: task_id", &format!("grantId: {name}"));
             assert!(matches!(load_from(&invalid), Err(ConfigError::Invalid(_))));
         }

@@ -236,7 +236,7 @@ authorityProfiles:
               given_name: identity.given_name
               family_name: identity.family_name
               birth_date: identity.birth_date
-  authenticated-grant-v1:
+  institutional-review-v1:
     requesterClients: [evidence-task-agent]
     grantSourceIssuer: https://casework.invalid
     kind: consent

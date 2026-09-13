@@ -17,7 +17,6 @@ pub use config::{TaskGrantStatusConfig, TaskGrantStatusRegistry};
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskGrantBinding {
     grant_id: String,
-    authority: String,
     source_issuer: String,
     principal: String,
     client: String,
@@ -42,7 +41,6 @@ impl TaskGrantBinding {
     ) -> Result<Self, TaskGrantError> {
         let binding = Self {
             grant_id: grant.id().into(),
-            authority: grant.authority().into(),
             source_issuer: grant.source_issuer().into(),
             principal: grant.principal().into(),
             client: grant.client().into(),
@@ -84,9 +82,6 @@ impl TaskGrantBinding {
     }
     pub fn grant_id(&self) -> &str {
         &self.grant_id
-    }
-    pub fn authority(&self) -> &str {
-        &self.authority
     }
     pub fn source_issuer(&self) -> &str {
         &self.source_issuer
@@ -136,7 +131,6 @@ pub trait TaskGrantStatusChecker: Send + Sync {
 }
 
 pub struct TaskGrantStatusClient {
-    authority: String,
     source_issuer: String,
     resource: String,
     base: ServiceBaseUrl,
@@ -150,16 +144,13 @@ impl fmt::Debug for TaskGrantStatusClient {
 }
 impl TaskGrantStatusClient {
     pub fn new(
-        authority: String,
         source_issuer: String,
         resource: String,
         base: reqwest::Url,
         token: Arc<PrivateKeyJwt>,
         trusted_roots: Option<&[u8]>,
     ) -> Result<Self, TaskGrantError> {
-        if authority.is_empty()
-            || authority.len() > 512
-            || !registry_platform_httputil::valid_resource_uri(&source_issuer)
+        if !registry_platform_httputil::valid_resource_uri(&source_issuer)
             || !registry_platform_httputil::valid_resource_uri(&resource)
         {
             return Err(TaskGrantError::Configuration);
@@ -173,7 +164,6 @@ impl TaskGrantStatusClient {
         })
         .map_err(|_| TaskGrantError::Configuration)?;
         Ok(Self {
-            authority,
             source_issuer,
             resource,
             base,
@@ -198,7 +188,6 @@ impl TaskGrantStatusChecker for TaskGrantStatusClient {
         Box::pin(async move {
             binding.validate()?;
             if !binding.is_current()
-                || binding.authority != self.authority
                 || binding.source_issuer != self.source_issuer
                 || binding.resource != self.resource
             {
