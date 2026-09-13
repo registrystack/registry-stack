@@ -462,6 +462,25 @@ impl PrivateKeyJwt {
         (self.resource.as_deref(), &self.requested_scopes)
     }
 
+    pub(super) fn matches_discovered_binding(
+        &self,
+        client_id: &str,
+        token_endpoint: &str,
+        assertion_audience: &str,
+        resource: &str,
+        scopes: &[String],
+    ) -> bool {
+        self.client_id == client_id
+            && self.token_endpoint.as_str() == token_endpoint
+            && self.audience == assertion_audience
+            && self.resource.as_deref() == Some(resource)
+            && self.requested_scopes == scopes
+    }
+
+    pub(super) fn set_fetch_url_policy(&mut self, policy: FetchUrlPolicy) {
+        self.fetch_url_policy = Some(policy);
+    }
+
     /// Exchange one externally signed JWT assertion for an access token.
     ///
     /// The resource and scopes are fixed when this provider is constructed.

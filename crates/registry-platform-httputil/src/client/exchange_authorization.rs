@@ -426,6 +426,39 @@ pub struct ExchangeAuthorization {
 }
 
 impl ExchangeAuthorization {
+    /// Apply DNS-pinned fetch rules before this provider joins a
+    /// discovery-driven client. Any token obtained under the prior policy is
+    /// discarded, so a previously used provider cannot bypass the new rules.
+    #[must_use]
+    pub fn with_fetch_url_policy(mut self, policy: crate::FetchUrlPolicy) -> Self {
+        self.exchange.set_fetch_url_policy(policy);
+        self.cached = RwLock::new(None);
+        self
+    }
+
+    /// Compare the immutable exchange target and requested authority with a
+    /// profile and the service's freshly checked authorization metadata.
+    /// No token is acquired while making this comparison.
+    #[must_use]
+    pub fn matches_discovered_binding(
+        &self,
+        client_id: &str,
+        token_endpoint: &str,
+        issuer: &str,
+        assertion_audience: &str,
+        resource: &str,
+        scopes: &[String],
+    ) -> bool {
+        self.context.audience == issuer
+            && self.exchange.matches_discovered_binding(
+                client_id,
+                token_endpoint,
+                assertion_audience,
+                resource,
+                scopes,
+            )
+    }
+
     pub fn first_party(
         exchange: PrivateKeyJwt,
         context: ExchangeContext,
@@ -716,6 +749,84 @@ mod tests {
             scopes.iter().map(|value| (*value).into()).collect(),
         )
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn discovered_binding_requires_every_profile_and_issuer_pin() {
+        let server = MockServer::start().await;
+        let token_endpoint = format!("{}/token", server.uri());
+        let authorization = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:registry:evidence", &["evidence:invoke"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["evidence:invoke"]),
+        )
+        .unwrap();
+        let matches = |client_id: &str,
+                       endpoint: &str,
+                       issuer: &str,
+                       audience: &str,
+                       resource: &str,
+                       scopes: &[String]| {
+            authorization
+                .matches_discovered_binding(client_id, endpoint, issuer, audience, resource, scopes)
+        };
+        let scopes = vec!["evidence:invoke".to_owned()];
+        assert!(matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            &token_endpoint,
+            "urn:registry:evidence",
+            &scopes,
+        ));
+        assert!(!matches(
+            "other-client",
+            &token_endpoint,
+            "https://issuer.example",
+            &token_endpoint,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            "https://other.example/token",
+            "https://issuer.example",
+            &token_endpoint,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://other.example",
+            &token_endpoint,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            "https://other.example/token",
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            &token_endpoint,
+            "urn:registry:other",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            &token_endpoint,
+            "urn:registry:evidence",
+            &["other:scope".to_owned()]
+        ));
     }
 
     async fn endpoint(server: &MockServer, expires_in: Option<i64>) {

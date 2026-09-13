@@ -40,7 +40,7 @@ const ASYNC_METHODS = [
   'requestAndVerifyBatch',
 ];
 
-const STATIC_METHODS = ['fromProfile'];
+const STATIC_METHODS = ['fromProfile', 'fromProfileWithAuthorization'];
 
 function ownMethodNames(prototype) {
   return Object.getOwnPropertyNames(prototype)

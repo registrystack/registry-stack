@@ -188,6 +188,10 @@ export declare class EvidenceClient extends NativeEvidenceClient {
    * the JavaScript wrapper.
    */
   static fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
+  static fromProfileWithAuthorization(
+    path: string,
+    authorization: { exchange: EvidenceExchangeAuthorizationConfig },
+  ): EvidenceClient
 }
 
 /**

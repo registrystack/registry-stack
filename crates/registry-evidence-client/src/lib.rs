@@ -219,6 +219,7 @@ pub use progressive::{
     VerifiedAudienceScopedCredential, VerifiedAudienceScopedEvidence,
     SUBJECT_BINDING_RECEIPT_SCHEMA_V1,
 };
+pub use registry_platform_httputil::ExchangeAuthorization;
 pub use request::SelectorValue;
 pub use request_batch::{
     EvidenceRequestBatchItemSpec, EvidenceRequestBatchSpec, PreparedEvidenceRequestBatch,

@@ -107,6 +107,14 @@ or the `remote` authority variant. The shared exchange parser checks the
 verified context and credential binding before any token request. Exactly one
 of `token` and `authorization` must be present.
 
+For a progressive procedure, use
+`EvidenceClient.from_profile_with_authorization(profile_path, {"exchange": config})`.
+The profile must pin `oauth.resource` and `oauth.scopes`; its client ID,
+assertion audience, selected definitions and service trust remain authoritative.
+The discovered issuer and token endpoint must match the exchange before any
+credential is acquired. The profile's `privateKey` reference is not loaded by
+this path because the exchange configuration carries its keys.
+
 Holder-bound issuance is supported: `prepare()` accepts public `holder_keys`,
 and `SdJwtVcBatchResponse` parses the ordered credential envelope returned for
 them. The binding stops at issuance. It exposes no trace_id for a holder to

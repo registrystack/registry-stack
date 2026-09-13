@@ -53,6 +53,14 @@ const result = await profileClient.request({ requirement: 'status-check', select
 const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);
 const current = verifyRetained(result.retainedVerification, result.assertion);
 
+// A staff procedure can use the same pinned profile with a context-bound
+// exchange. The profile must state oauth.resource and oauth.scopes; its
+// clientId and the discovered issuer/token endpoint must match this provider.
+const staffClient = EvidenceClient.fromProfileWithAuthorization('client.json', {
+  exchange: { client: exchangeClient, context: verifiedStaffContext,
+    firstParty: { key: assertionKey, attributes: { registry_actor_kind: 'human' } } },
+});
+
 const batchSpec = {
   requirement,
   purpose,

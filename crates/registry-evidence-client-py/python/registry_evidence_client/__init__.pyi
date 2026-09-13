@@ -383,6 +383,11 @@ class EvidenceClient:
         profile_path: str,
         private_key_jwk: Optional[Mapping[str, Any]] = ...,
     ) -> "EvidenceClient": ...
+    @staticmethod
+    def from_profile_with_authorization(
+        profile_path: str,
+        authorization: Mapping[str, Any],
+    ) -> "EvidenceClient": ...
     def refresh_metadata(self) -> None: ...
     def request(
         self,

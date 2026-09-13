@@ -41,9 +41,9 @@ mod convert;
 
 use convert::{
     batch_spec_from_json, config_from_parts_with_authorization, datetime_from_unix_seconds,
-    evidence_to_json, json_to_python, map_client_error, map_config_error, map_conversion_error,
-    progressive_subjects_from_json, python_to_json, selector_values_from_json, spec_from_json,
-    subject_expectations_to_json, MappedError,
+    evidence_to_json, exchange_from_authorization_json, json_to_python, map_client_error,
+    map_config_error, map_conversion_error, progressive_subjects_from_json, python_to_json,
+    selector_values_from_json, spec_from_json, subject_expectations_to_json, MappedError,
 };
 use registry_platform_crypto::PrivateJwk;
 
@@ -954,6 +954,47 @@ impl EvidenceClient {
             }
         }
         .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|error| {
+                PyRuntimeError::new_err(format!(
+                    "the client's internal runtime could not start: {error}"
+                ))
+            })?;
+        Ok(Self { inner, runtime })
+    }
+
+    /// Keep the profile's trust and requirement pins while authenticating
+    /// through a context-bound staff exchange. The exchange must match the
+    /// discovered issuer and the profile's fixed OAuth request parameters.
+    #[staticmethod]
+    fn from_profile_with_authorization(
+        py: Python<'_>,
+        profile_path: &str,
+        authorization: &Bound<'_, PyAny>,
+    ) -> PyResult<Self> {
+        let profile = RealEvidenceClientProfile::from_file(profile_path).map_err(|_| {
+            to_py_err(
+                py,
+                &MappedError {
+                    kind: "configuration",
+                    message: "the client profile could not be loaded".to_owned(),
+                    status: None,
+                    code: None,
+                    trace_id: None,
+                    retry_after_seconds: None,
+                    transport_kind: None,
+                    token_kind: None,
+                },
+            )
+        })?;
+        let authorization = python_to_json(authorization)
+            .map_err(|error| to_py_err(py, &map_conversion_error(&error)))?;
+        let exchange = exchange_from_authorization_json(&authorization)
+            .map_err(|error| to_py_err(py, &map_config_error(&error)))?;
+        let inner = RealEvidenceClient::from_profile_with_authorization(profile, exchange)
+            .map_err(|error| to_py_err(py, &map_client_error(&error)))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()

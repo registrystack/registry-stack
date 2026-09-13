@@ -31,7 +31,7 @@ use pyo3::{
     IntoPyObjectExt,
 };
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httputil::exchange_authorization_from_json;
+use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -878,18 +878,7 @@ pub fn config_from_parts_with_authorization(
                 "configure exactly one of `token` or `authorization`",
             )));
         }
-        let object = as_object(authorization, "`authorization`").map_err(ConfigError::Shape)?;
-        if object.len() != 1 {
-            return Err(ConfigError::Shape(ConversionError::new(
-                "`authorization` must carry exactly one `exchange`",
-            )));
-        }
-        let exchange = object.get("exchange").ok_or_else(|| {
-            ConfigError::Shape(ConversionError::new(
-                "`authorization` must carry exactly one `exchange`",
-            ))
-        })?;
-        Arc::new(exchange_authorization_from_json(exchange)?)
+        Arc::new(exchange_from_authorization_json(authorization)?)
     } else {
         token_provider_from_json(token)?
     };
@@ -921,6 +910,23 @@ pub fn config_from_parts_with_authorization(
     }
 
     Ok(config)
+}
+
+pub fn exchange_from_authorization_json(
+    authorization: &Value,
+) -> Result<ExchangeAuthorization, ConfigError> {
+    let object = as_object(authorization, "`authorization`").map_err(ConfigError::Shape)?;
+    if object.len() != 1 {
+        return Err(ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        )));
+    }
+    let exchange = object.get("exchange").ok_or_else(|| {
+        ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        ))
+    })?;
+    exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
 
 /// The verified payload crosses to Python through this, never through
