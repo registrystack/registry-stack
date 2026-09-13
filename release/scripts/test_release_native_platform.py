@@ -20,7 +20,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.30.0"
+VERSION = "0.31.0"
 SOURCE_SHA = subprocess.run(
     ["git", "rev-parse", "HEAD"],
     cwd=ROOT,
@@ -275,6 +275,18 @@ fi
             combined = merged / "platform" / name
             self.assertEqual(whole.read_bytes(), combined.read_bytes())
             self.assertEqual(stat.S_IMODE(combined.stat().st_mode), 0o755)
+
+    def test_mint_is_retired_only_from_v0_31_0(self) -> None:
+        for version in ("0.30.0", "0.30.1"):
+            with self.subTest(version=version):
+                self.assertIn(
+                    f"mint-v{version}-macos-arm64",
+                    MODULE.rosters(version)["core"],
+                )
+        self.assertNotIn(
+            "mint-v0.31.0-macos-arm64",
+            MODULE.rosters("0.31.0")["core"],
+        )
 
     def test_pre_breg_version_produces_and_merges_an_exact_empty_shard(self) -> None:
         version = "0.25.0"

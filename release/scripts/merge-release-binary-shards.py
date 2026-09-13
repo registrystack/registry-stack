@@ -15,6 +15,7 @@ from pathlib import Path
 
 VERSION = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+MINT_RETIREMENT_VERSION = (0, 31, 0)
 
 
 class ShardError(ValueError):
@@ -53,11 +54,11 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
         f"relay-{tag}-linux-amd64",
         f"relayctl-{tag}-linux-amd64",
     ]
-    if parsed > (0, 30, 0):
+    if parsed >= MINT_RETIREMENT_VERSION:
         common.remove(f"mint-{tag}-linux-amd64")
     core.extend(common)
     for image_name in ("evidence", "mint", "relay"):
-        if image_name != "mint" or parsed <= (0, 30, 0):
+        if image_name != "mint" or parsed < MINT_RETIREMENT_VERSION:
             image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
     return {"core": core, "breg": breg, "casework": casework}, image_bins
 

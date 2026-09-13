@@ -20,6 +20,7 @@ TARGET = "aarch64-apple-darwin"
 ASSET = "macos-arm64"
 RUST_TOOLCHAIN = "1.95.0"
 PURPOSES = {"candidate_input", "review_only"}
+MINT_RETIREMENT_VERSION = (0, 31, 0)
 
 
 class ShardError(ValueError):
@@ -39,7 +40,7 @@ def rosters(version: str) -> dict[str, list[str]]:
         f"mint-{tag}-{ASSET}",
         f"evidence-oid4vci-{tag}-{ASSET}",
     ]
-    if parsed >= (0, 30, 0):
+    if parsed >= MINT_RETIREMENT_VERSION:
         core.remove(f"mint-{tag}-{ASSET}")
     breg = []
     bregctl = []

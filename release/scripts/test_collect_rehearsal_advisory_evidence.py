@@ -203,7 +203,7 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
                 str(ROOT / "release/scripts/release_candidate.py"),
                 "image-names",
                 "--version",
-                "0.30.1",
+                "0.31.0",
             ],
             check=True,
             capture_output=True,
