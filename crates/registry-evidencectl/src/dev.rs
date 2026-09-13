@@ -40,9 +40,9 @@ use std::os::unix::fs::symlink;
 use crate::{
     access,
     authoring::{
-        access_policy_requester_tag, compile_local_project_with_ports,
-        compile_local_project_with_target_inputs, CompiledAccessPolicy, CompiledConceptForm,
-        CompiledQuestion, LocalServicePorts,
+        access_policy_requester_tag, compile_local_project_with_ports_and_resource,
+        compile_local_project_with_target_inputs_and_resource, valid_local_audience,
+        CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalServicePorts,
     },
     keygen, OutputFormat,
 };
@@ -126,6 +126,11 @@ pub struct DevArgs {
     /// Ready BREG dev project that owns the shared issuer and Evidence client registrations.
     #[arg(long, global = true, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
+
+    /// Exact inbound OAuth resource for this retained Evidence session.
+    /// Defaults to the local gateway resource on first start.
+    #[arg(long, global = true, value_name = "URI")]
+    resource: Option<String>,
 
     /// Retained Mint-era spelling, refused with migration guidance.
     #[arg(long, global = true, hide = true)]
@@ -470,6 +475,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 ports,
                 args.target.as_deref(),
                 args.issuer_project.as_deref(),
+                args.resource.as_deref(),
                 format,
             )
         }
@@ -521,6 +527,7 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 ports,
                 args.target.as_deref(),
                 args.issuer_project.as_deref(),
+                args.resource.as_deref(),
                 format,
             )
         }
@@ -1026,7 +1033,7 @@ fn validate_closed_state(state: &DevState, project: &Path, dev_root: &Path) -> R
                     }
                 })
         })
-        || state.access_token_audience != LOCAL_ACCESS_TOKEN_AUDIENCE
+        || !valid_local_audience(&state.access_token_audience)
         || !questions_are_closed
         || !access_policies_are_closed
         || !caller_is_closed
@@ -1367,6 +1374,7 @@ fn start_detached(
     ports: LocalServicePorts,
     target: Option<&Path>,
     issuer_project: Option<&Path>,
+    requested_resource: Option<&str>,
     format: OutputFormat,
 ) -> Result<ExitCode> {
     let project = canonical_project(project)?;
@@ -1384,6 +1392,12 @@ fn start_detached(
     } else {
         None
     };
+    let resource = select_resource(
+        prior
+            .as_ref()
+            .map(|state| state.access_token_audience.as_str()),
+        requested_resource,
+    )?;
     let owner_project = issuer_project
         .map(canonical_project)
         .transpose()?
@@ -1438,6 +1452,7 @@ fn start_detached(
             ports,
             target,
             owner.as_ref(),
+            resource,
             format,
         )
     });
@@ -1466,6 +1481,19 @@ fn start_detached(
         remove_retained_stopped_session(&retained_root)?;
     }
     result
+}
+
+fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) -> Result<&'a str> {
+    let resource = requested
+        .or(retained)
+        .unwrap_or(LOCAL_ACCESS_TOKEN_AUDIENCE);
+    if !valid_local_audience(resource) {
+        bail!("--resource must be one exact bounded absolute URI");
+    }
+    if retained.is_some_and(|audience| audience != resource) {
+        bail!("--resource differs from the retained Evidence session");
+    }
+    Ok(resource)
 }
 
 /// Refuse a start whose loopback ports are already taken.
@@ -1716,6 +1744,7 @@ fn prepare_and_start(
     ports: LocalServicePorts,
     target: Option<&Path>,
     owner: Option<&BorrowedIssuer>,
+    resource: &str,
     format: OutputFormat,
 ) -> Result<ExitCode> {
     let evidence_bin = canonical_tool_binary(resolve_tool_binary(
@@ -1733,20 +1762,27 @@ fn prepare_and_start(
         match target {
             Some(target) => {
                 let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
-                let compiled = compile_local_project_with_target_inputs(
+                let compiled = compile_local_project_with_target_inputs_and_resource(
                     project,
                     dev_root,
                     &evidence_bin,
                     ports,
                     connections,
                     outbound_tls,
+                    resource,
                 )?;
                 if format == OutputFormat::Human {
                     println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
                 }
                 compiled
             }
-            None => compile_local_project_with_ports(project, dev_root, &evidence_bin, ports)?,
+            None => compile_local_project_with_ports_and_resource(
+                project,
+                dev_root,
+                &evidence_bin,
+                ports,
+                resource,
+            )?,
         }
     };
     let evidence_origin = local_origin(ports.evidence);
@@ -2862,6 +2898,20 @@ fn ready_question(question: QuestionState) -> ReadyQuestionState {
 mod tests {
     use super::*;
     use crate::authoring::CompiledProject;
+
+    #[test]
+    fn retained_resource_must_match_explicit_restart_resource() {
+        let growers = "urn:seed-demo:evidence:growers";
+        let laboratory = "urn:seed-demo:evidence:laboratory";
+        assert_eq!(select_resource(None, Some(growers)).unwrap(), growers);
+        assert_eq!(select_resource(Some(growers), None).unwrap(), growers);
+        assert_eq!(
+            select_resource(Some(growers), Some(growers)).unwrap(),
+            growers
+        );
+        assert!(select_resource(Some(growers), Some(laboratory)).is_err());
+        assert!(select_resource(None, Some("not-an-absolute-uri")).is_err());
+    }
 
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
