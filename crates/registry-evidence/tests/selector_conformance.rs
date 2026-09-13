@@ -962,6 +962,40 @@ async fn all_runtime_selector_negatives_fail_closed_before_source_access() {
 }
 
 #[tokio::test]
+async fn standing_agent_requires_an_explicit_agent_profile() {
+    let service = prepare_service(false).await;
+    let request = classification_request(values([(
+        "record_reference",
+        SelectorValue::String("synthetic-record-001".to_owned()),
+    )]));
+    assert_authorization_error(
+        &service,
+        &access_token(json!({"registry_actor_kind": "agent"})),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
+    assert!(service.server.received_requests().await.unwrap().is_empty());
+
+    let bound = prepare_service_for_actor(false, Some("agent")).await;
+    assert!(bound
+        .authorize(
+            &access_token(json!({"registry_actor_kind": "agent"})),
+            &request
+        )
+        .await
+        .is_ok());
+    assert_authorization_error(
+        &bound,
+        &access_token(json!({"registry_actor_kind": "service"})),
+        &request,
+        AuthorizationError::Unauthorized,
+    )
+    .await;
+    assert!(bound.server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn task_grant_context_is_bound_before_selector_or_source_access() {
     let service = prepare_service(false).await;
     let request = grant_request(None);
@@ -1075,6 +1109,13 @@ fn configuration_selector_negatives_are_rejected_at_immutable_bundle_load() {
 }
 
 async fn prepare_service(write_source_secret: bool) -> PreparedService {
+    prepare_service_for_actor(write_source_secret, None).await
+}
+
+async fn prepare_service_for_actor(
+    write_source_secret: bool,
+    profile_actor: Option<&str>,
+) -> PreparedService {
     let temporary = tempfile::tempdir().expect("temporary selector conformance root");
     let bundle_root = temporary.path().join("bundle");
     let secret_root = temporary.path().join("secrets");
@@ -1088,6 +1129,17 @@ async fn prepare_service(write_source_secret: bool) -> PreparedService {
     copy_tree(&selector_bundle_root(), &bundle_root);
     let server = MockServer::start().await;
     rewrite_source_origin(&bundle_root, &server.uri());
+    if let Some(actor) = profile_actor {
+        let config_path = bundle_root.join("evidence.yaml");
+        let config = fs::read_to_string(&config_path).unwrap();
+        let marker = "  reviewed-caseworker-v1:\n";
+        assert!(config.contains(marker));
+        fs::write(
+            &config_path,
+            config.replacen(marker, &format!("{marker}    actorKind: {actor}\n"), 1),
+        )
+        .unwrap();
+    }
     write_secret(&secret_root, "audit-key", AUDIT_KEY);
     write_secret(&secret_root, "binding-key", BINDING_KEY);
     write_secret(&secret_root, "signing-key", EVIDENCE_PRIVATE_JWK.as_bytes());

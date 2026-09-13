@@ -2148,6 +2148,11 @@ $defs:
           - consent
           - delegated
           - explicit-request
+      actorKind:
+        description: >-
+          Restrict this authority profile to the verified actor kind. An agent without
+          a task grant must use a profile explicitly bound to agent.
+        enum: [human, agent, service]
       requesterTags:
         description: >-
           Complete tag set the claim named by `authentication.requesterTagsClaim` must contain

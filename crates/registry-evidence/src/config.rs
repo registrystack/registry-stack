@@ -3649,6 +3649,10 @@ pub enum PreparationChannelPolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AuthorityProfile {
     pub kind: AuthorityKind,
+    /// Restrict this profile to the verified actor kind. Required for agents
+    /// exercising standing authority without an authenticated task grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_kind: Option<registry_platform_oidc::ActorKind>,
     pub requester_tags: Vec<String>,
     /// Verified OAuth clients allowed to exercise a grant-bound authority
     /// path. Required only when one of this profile's subjects is sourced from

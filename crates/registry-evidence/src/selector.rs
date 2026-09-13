@@ -438,6 +438,15 @@ pub fn match_entitlement(
 
     let mut matched = Vec::new();
     for (authority_profile, authority) in bundle.config.authority_profiles.iter() {
+        if authority
+            .actor_kind
+            .is_some_and(|required| required != context.actor_kind())
+            || (context.actor_kind() == ActorKind::Agent
+                && !has_task_grant
+                && authority.actor_kind != Some(ActorKind::Agent))
+        {
+            continue;
+        }
         if !authority.requester_tags.iter().all(|required| {
             context
                 .requester_tags()
@@ -871,7 +880,11 @@ pub fn resolve_offline_fixture_authorization(
         .map_err(|_| AuthorizationError::Unauthorized)?;
         (ActorKind::Agent, Some(client.as_str()), Ok(grant))
     } else {
-        (ActorKind::Service, None, Ok(None))
+        (
+            authority.actor_kind.unwrap_or(ActorKind::Service),
+            None,
+            Ok(None),
+        )
     };
     let context = AuthenticatedContext::offline_fixture_context(
         authority.requester_tags.clone(),

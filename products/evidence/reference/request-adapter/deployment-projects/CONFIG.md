@@ -212,6 +212,12 @@ matching, fuzzy scoring, or candidate selection.
 
 ### Authority profiles
 
+An optional `actorKind` binds the authority profile to `human`, `agent`, or
+`service` in the verified token. An agent without a task grant must use a profile
+that explicitly declares `actorKind: agent`; profiles without that binding do
+not grant standing agent authority. A present but invalid task grant never falls
+back to a standing profile.
+
 An authority profile has a `kind` of `statutory`, `organizational`, `consent`,
 `delegated`, or `explicit-request`, non-empty `requesterTags`, and grants.
 Each grant binds one exact `requirement`, `purpose`,
@@ -1533,6 +1539,7 @@ authentication.tokenTypes
 authentication.tokenTypes[]
 authorityProfiles
 authorityProfiles.*
+authorityProfiles.*.actorKind
 authorityProfiles.*.grantSourceIssuer
 authorityProfiles.*.grants
 authorityProfiles.*.grants[]
