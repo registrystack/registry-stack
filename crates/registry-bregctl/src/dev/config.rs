@@ -46,6 +46,9 @@ pub(super) struct IssuerComposition {
     pub exchange_issuers: Vec<IssuerConnection>,
     #[serde(default)]
     pub interactive_applications: Vec<BrowserApplication>,
+    /// Owner-registered browser app IDs this borrower admits at its BREG resource.
+    #[serde(default)]
+    pub browser_clients: Vec<String>,
     #[serde(default)]
     pub synthetic_users: Vec<BrowserUser>,
     /// Client IDs mapped to a non-default resource audience.
@@ -253,6 +256,7 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     if clients.issuer.resources.len() > 7
         || clients.issuer.exchange_issuers.len() > 8
         || clients.issuer.interactive_applications.len() > 8
+        || clients.issuer.browser_clients.len() > 8
         || clients.issuer.synthetic_users.len() > 32
         || clients.issuer.client_resources.len() > 32
         || clients.issuer.exchange_clients.len() > 32
@@ -333,6 +337,11 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         }
         private::check(&app.client_secret_file, false)?;
     }
+    for id in &clients.issuer.browser_clients {
+        if !identifier(id) || !app_ids.insert(id) || ids.contains(id) {
+            bail!("borrowed browser clients need distinct bounded IDs");
+        }
+    }
     let mut usernames = BTreeSet::new();
     for user in &clients.issuer.synthetic_users {
         if !identifier(&user.username) || !usernames.insert(&user.username) {
@@ -406,6 +415,17 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
             .context("shared issuer owner has invalid retained clients")
         })
         .transpose()?;
+    if !clients.issuer.browser_clients.is_empty() {
+        let (Some(owner), Some(owner_clients)) = (&borrowed, &owner_clients) else {
+            bail!("browserClients requires a ready BREG issuer owner");
+        };
+        check_borrowed_browser_clients(
+            owner_clients,
+            &clients.issuer.browser_clients,
+            &state.audience(),
+            &owner.audience(),
+        )?;
+    }
     for client in &clients.clients {
         let directory = root.join("credentials").join(&client.id);
         if let (Some(owner), Some(owner_clients)) = (&borrowed, &owner_clients) {
@@ -577,6 +597,23 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         &format!("sha256:{}", "1".repeat(64)),
         true,
     )?;
+    Ok(())
+}
+
+pub(super) fn check_borrowed_browser_clients(
+    owner: &Clients,
+    selected: &[String],
+    audience: &str,
+    owner_default: &str,
+) -> Result<()> {
+    for id in selected {
+        let matched = owner.issuer.interactive_applications.iter().any(|app| {
+            &app.id == id && app.audience.as_deref().unwrap_or(owner_default) == audience
+        });
+        if !matched {
+            bail!("shared issuer owner has no browser application for this BREG resource: {id}");
+        }
+    }
     Ok(())
 }
 
@@ -816,6 +853,7 @@ pub(super) fn runtime(
                 .filter(|app| app.audience.is_none())
                 .map(|app| &app.id),
         )
+        .chain(clients.issuer.browser_clients.iter())
         .collect::<Vec<_>>();
     write_yaml(
         &root.join(if test {
