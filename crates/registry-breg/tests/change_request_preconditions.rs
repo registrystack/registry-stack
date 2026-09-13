@@ -166,13 +166,13 @@ fn reviewed_selector_bounds_must_admit_a_bound_registry_value() {
         .remove("maxLength");
     source["entities"][0]["fields"][1]["type"] = json!("timestamp");
     let mut contract = contracts();
-    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(19);
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(24);
     assert!(format!(
         "{:?}",
         compile_with_contract(source.clone(), contract.clone()).unwrap_err()
     )
     .contains("change_request.preconditions.selector_binding_invalid"));
-    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(64);
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"][0]["maximumBytes"] = json!(25);
     compile_with_contract(source, contract).unwrap();
 
     let mut source = project();

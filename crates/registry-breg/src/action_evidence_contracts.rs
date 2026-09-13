@@ -286,8 +286,8 @@ pub(crate) fn selector_field_matches_field_type(
                 return *minimum_bytes <= u64::from(*max_length) * 4;
             }
             FieldTypeSource::Timestamp => {
-                // Even the shortest RFC3339 timestamp occupies 20 bytes.
-                return *maximum_bytes >= 20;
+                // PostgreSQL's JSONB timestamptz projection includes a UTC offset.
+                return *maximum_bytes >= 25;
             }
             _ => {}
         }
