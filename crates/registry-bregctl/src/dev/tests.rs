@@ -2459,6 +2459,52 @@ fn an_imported_assertion_key_needs_a_usable_key_identifier() {
 }
 
 #[test]
+fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
+    let (_temp, state, mut clients, files) = fixture();
+    let root = state.root();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: token,
+            trusted_jwks_file: jwks,
+            revoked_key_ids: vec![],
+            ca_bundle_file: None,
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let runtime: Value =
+        serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
+    let provider = &runtime["evidenceProviders"]["qualification"];
+    assert_eq!(provider["baseUrl"], "http://127.0.0.1:18093");
+    assert_eq!(provider["trustBindingId"], "exact-local-trust-v1");
+    assert_eq!(
+        provider["tokenRef"],
+        "secret:file/evidence-token-qualification"
+    );
+    assert_eq!(
+        provider["trustedJwksRef"],
+        "secret:file/evidence-jwks-qualification"
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/evidence-token-qualification")).unwrap(),
+        b"synthetic-provider-token"
+    );
+    clients
+        .evidence_providers
+        .get_mut("qualification")
+        .unwrap()
+        .base_url = "https://evidence.example.org".into();
+    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+}
+
+#[test]
 fn old_event_free_sessions_keep_working_without_receiver_state() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();

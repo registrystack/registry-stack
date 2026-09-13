@@ -99,6 +99,28 @@ The origin must be numeric loopback HTTP with an explicit port. An explicit
 destination map starts no built-in receiver, so `dev events` has no inbox
 receipts; inspect the receiving service and `bregctl webhook list` instead.
 
+For a governed action package that declares Evidence providers, bind every
+required provider in the project's `dev-clients.yaml` before its first start:
+
+```yaml
+evidenceProviders:
+  qualification:
+    baseUrl: http://127.0.0.1:8093
+    trustBindingId: exact-local-trust-v1
+    tokenFile: /absolute/owner-only/evidence-token
+    trustedJwksFile: /absolute/owner-only/evidence-jwks.json
+    revokedKeyIds: []
+    caBundleFile: null
+```
+
+The dev command accepts exact numeric loopback origins and ordinary owner-only
+input files, copies the token, trusted keys and optional CA bundle into its
+private state, and generates the corresponding `evidenceProviders` runtime
+bindings. It does not relax package activation: provider IDs must match the
+compiled action requirements, and the runtime still resolves and validates
+every configured trust input before serving. Obtain the token after the shared
+issuer is ready, then start the action-bearing BREG borrower with this binding.
+
 After a seed, example scenario, or API write triggers an event, inspect receipts:
 
 ```sh

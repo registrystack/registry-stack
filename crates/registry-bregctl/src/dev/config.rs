@@ -27,6 +27,9 @@ pub(super) struct Clients {
     /// Optional exact local webhook bindings. An empty map keeps the inbox.
     #[serde(default)]
     pub event_destinations: BTreeMap<String, LocalEventDestination>,
+    /// Exact local Evidence provider bindings for governed action packages.
+    #[serde(default)]
+    pub evidence_providers: BTreeMap<String, LocalEvidenceProvider>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -35,6 +38,18 @@ pub(super) struct LocalEventDestination {
     pub origin: String,
     pub path: String,
     pub hmac_key_file: PathBuf,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct LocalEvidenceProvider {
+    pub base_url: String,
+    pub trust_binding_id: String,
+    pub token_file: PathBuf,
+    pub trusted_jwks_file: PathBuf,
+    #[serde(default)]
+    pub revoked_key_ids: Vec<String>,
+    pub ca_bundle_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -327,6 +342,32 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     if clients.event_destinations.len() > 16 {
         bail!("at most 16 local event destinations may be bound");
     }
+    if clients.evidence_providers.len() > 8 {
+        bail!("at most 8 local Evidence providers may be bound");
+    }
+    for (id, provider) in &clients.evidence_providers {
+        let origin = reqwest::Url::parse(&provider.base_url)
+            .context("local Evidence provider baseUrl must be an exact loopback HTTP origin")?;
+        if !identifier(id)
+            || provider.trust_binding_id.is_empty()
+            || provider.trust_binding_id.len() > 128
+            || provider.revoked_key_ids.len() > 128
+            || origin.scheme() != "http"
+            || origin.host_str() != Some("127.0.0.1")
+            || origin.port().is_none()
+            || origin.path() != "/"
+            || origin.query().is_some()
+            || origin.fragment().is_some()
+        {
+            bail!("local Evidence providers need bounded IDs, trust bindings, and exact loopback origins");
+        }
+        for file in [&provider.token_file, &provider.trusted_jwks_file]
+            .into_iter()
+            .chain(provider.ca_bundle_file.iter())
+        {
+            private::check(file, false)?;
+        }
+    }
     for (id, destination) in &clients.event_destinations {
         let origin = reqwest::Url::parse(&destination.origin)
             .context("local event destination origin must be an exact loopback HTTP URL")?;
@@ -600,6 +641,30 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
     for (id, destination) in &clients.event_destinations {
         let key = Zeroizing::new(private::read(&destination.hmac_key_file, 1024)?);
         private::create(&root.join("secrets").join(format!("webhook-{id}")), &key)?;
+    }
+    for (id, provider) in &clients.evidence_providers {
+        for (source, name, maximum) in [
+            (
+                &provider.token_file,
+                format!("evidence-token-{id}"),
+                16 * 1024,
+            ),
+            (
+                &provider.trusted_jwks_file,
+                format!("evidence-jwks-{id}"),
+                64 * 1024,
+            ),
+        ] {
+            let bytes = Zeroizing::new(private::read(source, maximum)?);
+            private::create(&root.join("secrets").join(name), &bytes)?;
+        }
+        if let Some(source) = &provider.ca_bundle_file {
+            let bytes = Zeroizing::new(private::read(source, 64 * 1024)?);
+            private::create(
+                &root.join("secrets").join(format!("evidence-ca-{id}")),
+                &bytes,
+            )?;
+        }
     }
     // The dev session's issuer is the pinned upstream ThunderID container,
     // rendered and provisioned through the shared tooling crate from these
@@ -1102,7 +1167,15 @@ pub(super) fn runtime(
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
             "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
-            "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
+            "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations,
+            "evidenceProviders":clients.evidence_providers.iter().map(|(id, provider)| (id.clone(), json!({
+                "baseUrl":provider.base_url,
+                "trustBindingId":provider.trust_binding_id,
+                "tokenRef":format!("secret:file/evidence-token-{id}"),
+                "trustedJwksRef":format!("secret:file/evidence-jwks-{id}"),
+                "revokedKeyIds":provider.revoked_key_ids,
+                "caBundleRef":provider.ca_bundle_file.as_ref().map(|_| format!("secret:file/evidence-ca-{id}"))
+            }))).collect::<BTreeMap<_,_>>()
         }),
     )
 }
