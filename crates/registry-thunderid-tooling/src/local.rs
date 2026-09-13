@@ -75,30 +75,31 @@ fn add_scope(
             "local scopes must be exact colon-delimited upstream handles",
         ));
     }
-    let chain: Vec<String> = segments[..segments.len() - 1]
-        .iter()
-        .map(|part| (*part).into())
-        .collect();
-    let action = segments[segments.len() - 1];
-    for depth in 1..=chain.len() {
-        let prefix = chain[..depth].to_vec();
-        resources.entry(prefix.clone()).or_insert_with(|| Resource {
-            name: chain[depth - 1].clone(),
-            handle: chain[depth - 1].clone(),
-            parent: (depth > 1).then(|| chain[depth - 2].clone()),
-            description: format!("local resource {}", prefix.join(":")),
-            actions: vec![],
-        });
+    // Resource handles are unique across an upstream server, not per parent.
+    // Keep the first segment as the resource handle and the remaining exact
+    // scope suffix as its action. This permits `a:records:get` and
+    // `b:records:get` in one audience without changing either permission.
+    let chain = vec![segments[0].to_owned()];
+    let action = segments[1..].join(":");
+    if action.len() > 64 {
+        return Err(refuse("local scope action exceeds the upstream handle bound"));
     }
-    let leaf = resources.get_mut(&chain).expect("inserted resource chain");
+    resources.entry(chain.clone()).or_insert_with(|| Resource {
+        name: chain[0].clone(),
+        handle: chain[0].clone(),
+        parent: None,
+        description: format!("local resource {}", chain[0]),
+        actions: vec![],
+    });
+    let leaf = resources.get_mut(&chain).expect("inserted resource");
     if !leaf
         .actions
         .iter()
         .any(|existing| existing.handle == action)
     {
         leaf.actions.push(Action {
-            name: action.into(),
-            handle: action.into(),
+            name: action.clone(),
+            handle: action,
             description: format!("local permission {scope}"),
         });
     }
@@ -304,7 +305,7 @@ mod tests {
         )
     }
     #[test]
-    fn native_principal_and_nested_scopes_remain_exact() {
+    fn native_principal_and_colon_scopes_remain_exact() {
         let description = build(client()).unwrap();
         assert_eq!(
             description.machine_clients[0].agent_id,
@@ -317,10 +318,10 @@ mod tests {
         let resource = description.resource_servers[0]
             .resources
             .iter()
-            .find(|r| r.handle == "grants")
+            .find(|r| r.handle == "casework")
             .unwrap();
-        assert_eq!(resource.parent.as_deref(), Some("casework"));
-        assert_eq!(resource.actions[0].handle, "assert");
+        assert_eq!(resource.parent, None);
+        assert!(resource.actions.iter().any(|a| a.handle == "grants:assert"));
         assert_ne!(
             agent_id("synthetic-session", "staff"),
             agent_id("other-session", "staff")
@@ -345,12 +346,16 @@ mod tests {
         assert!(build(client).is_err());
     }
     #[test]
-    fn unrepresentable_scope_and_ambiguous_resource_handles_fail_closed() {
+    fn repeated_path_segments_keep_distinct_exact_permissions() {
         let mut client = client();
         client.scopes = vec!["unstructured".into()];
         assert!(build(client.clone()).is_err());
-        client.scopes = vec!["a:records:get".into(), "b:records:get".into()];
-        assert!(build(client).is_err());
+        client.scopes = vec!["a:records:get".into(), "b:records:get".into(),
+                             "seed-demo:casework:intake".into(), "casework:grants:assert".into()];
+        let description = build(client).unwrap();
+        assert_eq!(description.roles[0].permissions[0].1,
+                   ["a:records:get", "b:records:get", "seed-demo:casework:intake", "casework:grants:assert"]);
+        assert_eq!(description.resource_servers[0].resources.len(), 4);
     }
 
     #[test]
