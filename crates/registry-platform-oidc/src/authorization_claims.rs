@@ -717,6 +717,15 @@ mod tests {
     }
 
     #[test]
+    fn non_string_actor_kind_is_rejected() {
+        let input = claims(json!({"registry_actor_kind":["agent"]}));
+        assert_eq!(
+            actor_kind(&input, &ClaimNames::default()),
+            Err(ClaimError::Malformed(ClaimMember::ActorKind))
+        );
+    }
+
+    #[test]
     fn expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline() {
         let input = claims(complete_grant(
             json!({"type":"evidence","requirement":"urn:requirement:one"}),
@@ -837,6 +846,16 @@ mod tests {
         assert_eq!(
             grant.verify_context(&client_id_token, "urn:registry:breg"),
             Ok(())
+        );
+
+        let missing = VerifiedToken {
+            claims: token.claims.clone(),
+            matched_client: None,
+            scopes: Vec::new(),
+        };
+        assert_eq!(
+            grant.verify_context(&missing, "urn:registry:breg"),
+            Err(GrantContextError::MissingVerifiedClient)
         );
 
         let malformed = VerifiedToken {
