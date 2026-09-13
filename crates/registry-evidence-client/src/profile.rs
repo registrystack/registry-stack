@@ -9,7 +9,7 @@ use std::{
 };
 
 use registry_platform_crypto::PrivateJwk;
-use registry_platform_httputil::is_cloud_metadata_ip;
+use registry_platform_httputil::{is_cloud_metadata_ip, valid_resource_uri};
 use serde::{Deserialize, Serialize};
 
 use crate::{error::EvidenceClientError, prepare::MAXIMUM_IDENTIFIER_BYTES, JwksDocument};
@@ -445,14 +445,7 @@ impl OauthProfile {
             .as_deref()
             .is_none_or(valid_expected_identity)
             && self.resource.as_deref().is_none_or(|value| {
-                !value.is_empty()
-                    && value.len() <= MAXIMUM_PROFILE_REFERENCE_BYTES
-                    && url::Url::parse(value).is_ok_and(|url| {
-                        !url.scheme().is_empty()
-                            && url.fragment().is_none()
-                            && url.username().is_empty()
-                            && url.password().is_none()
-                    })
+                value.len() <= MAXIMUM_PROFILE_REFERENCE_BYTES && valid_resource_uri(value)
             })
             && self.scopes.as_ref().is_none_or(|scopes| {
                 !scopes.is_empty()
@@ -604,6 +597,10 @@ mod tests {
             // resource indicator.
             r#"{"resource":"urn:registry:evidence#fragment"}"#,
             r#"{"resource":"https://user:pw@registry.example.org"}"#,
+            // Preserve the authored resource bytes. URL parsing would trim
+            // whitespace or percent-encode Unicode before validation.
+            r#"{"resource":" https://registry.example.org"}"#,
+            r#"{"resource":"https://registry.example.org/résumé"}"#,
             // Scopes are RFC 6749 scope-tokens, stated at least once, without
             // repetition.
             r#"{"scopes":[]}"#,
