@@ -626,7 +626,10 @@ impl TokenProvider for ExchangeAuthorization {
             return Err(TokenError::Unavailable);
         }
         let assertion = self.source.assertion(&self.context).await?;
-        self.validate_assertion(&assertion, wall_now)?;
+        // The authority may issue this assertion after waiting on HTTP or its
+        // current grant check. Compare iat to the time of receipt, not the time
+        // before acquisition began.
+        self.validate_assertion(&assertion, now_seconds()?)?;
         let acquired = self.exchange.exchange_acquired(&assertion.jwt).await?;
         if now_seconds()? >= self.context.deadline {
             return Err(TokenError::Unavailable);
@@ -857,6 +860,42 @@ mod tests {
                 exp,
             )
         }
+    }
+
+    struct DelayedAuthority;
+
+    #[async_trait]
+    impl ExchangeAssertionSource for DelayedAuthority {
+        async fn assertion(
+            &self,
+            context: &ExchangeContext,
+        ) -> Result<SignedExchangeAssertion, TokenError> {
+            tokio::time::sleep(Duration::from_millis(1100)).await;
+            GrantAuthority.assertion(context).await
+        }
+    }
+
+    #[tokio::test]
+    async fn assertion_issued_after_acquisition_starts_is_valid_at_receipt() {
+        let server = MockServer::start().await;
+        endpoint(&server, Some(30)).await;
+        let context = ExchangeContext::grant(
+            "https://casework.example",
+            "agent-1",
+            "https://issuer.example",
+            "grant-generation-1",
+            now_seconds().unwrap() + 120,
+            "grant-one",
+        )
+        .unwrap();
+        let provider = ExchangeAuthorization::from_authority(
+            exchange(&server, "urn:records", &["records:read"]),
+            context,
+            Arc::new(DelayedAuthority),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
