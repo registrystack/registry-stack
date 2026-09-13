@@ -16,14 +16,24 @@ pub(crate) struct StoredTaskGrant {
     pub invalidated: bool,
 }
 
+fn membership_kind(role: CaseworkRole) -> Option<&'static str> {
+    match role {
+        CaseworkRole::Staff => Some("staff"),
+        CaseworkRole::Supervisor => Some("supervisor"),
+        CaseworkRole::Administrator | CaseworkRole::Requester => None,
+    }
+}
+
 async fn eligible(
     transaction: &Transaction<'_>,
     actor: &ActorContext,
     item: &WorkItem,
     template: &TaskTemplate,
 ) -> Result<bool, StoreError> {
-    if !matches!(actor.role, CaseworkRole::Staff | CaseworkRole::Supervisor)
-        || !template.eligible_profiles.contains(&actor.profile_id)
+    let Some(membership_kind) = membership_kind(actor.role) else {
+        return Ok(false);
+    };
+    if !template.eligible_profiles.contains(&actor.profile_id)
         || item.holder.as_ref() != Some(&actor.principal)
         || !template.item_states.contains(&item.state)
         || item.subject.source_id != template.source
@@ -32,8 +42,8 @@ async fn eligible(
         return Ok(false);
     }
     let row = transaction.query_one(
-        "SELECT EXISTS(SELECT 1 FROM casework_memberships m JOIN casework_queue_service q ON q.team_id=m.team_id WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind IN ('staff','supervisor') AND m.team_id=ANY($3) AND q.queue_id=$4)",
-        &[&actor.principal.issuer, &actor.principal.subject, &template.eligible_teams, &item.queue_id],
+        "SELECT EXISTS(SELECT 1 FROM casework_memberships m JOIN casework_queue_service q ON q.team_id=m.team_id WHERE m.issuer=$1 AND m.subject=$2 AND m.membership_kind=$3 AND m.team_id=ANY($4) AND q.queue_id=$5)",
+        &[&actor.principal.issuer, &actor.principal.subject, &membership_kind, &template.eligible_teams, &item.queue_id],
     ).await?;
     Ok(row.get(0))
 }
@@ -177,7 +187,8 @@ impl PostgresStore {
         if serde_json::to_vec(&record)?.len() > 65536 {
             return Err(StoreError::Invalid);
         }
-        transaction.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)", &[&grant.id,&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&key,&hash,&record,&approved,&expires]).await?;
+        let approver_role = membership_kind(actor.role).ok_or(StoreError::Forbidden)?;
+        transaction.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", &[&grant.id,&item.item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&approver_role,&key,&hash,&record,&approved,&expires]).await?;
         task_event(&transaction, &item, "task_approved", Some(actor), grant.id).await?;
         transaction.commit().await?;
         Ok(StoredTaskGrant {
@@ -220,18 +231,23 @@ impl PostgresStore {
             .await?;
         let Some(row) = transaction
             .query_opt(
-                "SELECT * FROM casework_items WHERE item_id=$1 AND erased_at IS NULL FOR UPDATE",
-                &[&grant.item_id],
+                "SELECT i.*,g.approver_role FROM casework_items i JOIN casework_task_grants g ON g.item_id=i.item_id WHERE g.grant_id=$1 AND i.erased_at IS NULL FOR UPDATE OF i",
+                &[&grant.id],
             )
             .await?
         else {
             return Ok(false);
         };
         let item = crate::store::row_to_item(&row)?;
+        let role = match row.get::<_, &str>("approver_role") {
+            "staff" => CaseworkRole::Staff,
+            "supervisor" => CaseworkRole::Supervisor,
+            _ => return Err(StoreError::Invalid),
+        };
         let actor = ActorContext {
             principal: grant.approver.clone(),
             profile_id: grant.approver_profile.clone(),
-            role: CaseworkRole::Staff,
+            role,
         };
         let valid = template_active(&transaction, template).await?
             && eligible(&transaction, &actor, &item, template).await?

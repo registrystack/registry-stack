@@ -17,6 +17,7 @@ CREATE TABLE casework_task_grants (
     approver_issuer text NOT NULL,
     approver_subject text NOT NULL,
     approver_profile text NOT NULL,
+    approver_role text NOT NULL CHECK (approver_role IN ('staff','supervisor')),
     idempotency_key text NOT NULL,
     request_hash text NOT NULL,
     record jsonb NOT NULL CHECK (octet_length(record::text) <= 65536),
@@ -60,7 +61,7 @@ BEGIN
                   SELECT 1 FROM casework_memberships m
                   JOIN casework_queue_service q ON q.team_id=m.team_id
                   WHERE m.issuer=g.approver_issuer AND m.subject=g.approver_subject
-                    AND m.membership_kind IN ('staff','supervisor')
+                    AND m.membership_kind=g.approver_role
                     AND g.record->'template'->'eligibleTeams' ? m.team_id
                     AND q.queue_id=i.queue_id
               )

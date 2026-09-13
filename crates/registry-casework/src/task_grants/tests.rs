@@ -53,7 +53,7 @@ async fn template_versions_are_immutable_and_retirement_cannot_revive_existing_g
     let item = Uuid::new_v4();
     let grant = Uuid::new_v4();
     db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,revision,first_observed_at,updated_at) VALUES($1,'source','request','request-1','review','review-1',$2,'claimed','review',1,now(),now())", &[&item,&json!({"sourceRevision":"1","version":"1","generation":"1"})]).await.unwrap();
-    db.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,'https://issuer.test','human','staff','key','hash',$3,now(),now()+interval '900 seconds')", &[&grant,&item,&json!({"template":template})]).await.unwrap();
+    db.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,'https://issuer.test','human','staff','staff','key','hash',$3,now(),now()+interval '900 seconds')", &[&grant,&item,&json!({"template":template})]).await.unwrap();
     store.activate_task_templates(&[]).await.unwrap();
     let invalidated: bool = db
         .query_one(

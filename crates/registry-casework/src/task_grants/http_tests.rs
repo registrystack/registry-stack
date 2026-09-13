@@ -128,11 +128,23 @@ struct Fixture {
     app: Router,
     mode: Arc<AtomicUsize>,
     item: Uuid,
+    profile_id: &'static str,
+    template: TaskTemplate,
     admin: tokio_postgres::Client,
     schema: String,
     store: PostgresStore,
 }
 async fn fixture(lifetime: u64) -> Fixture {
+    fixture_for_role(lifetime, CaseworkRole::Staff).await
+}
+async fn fixture_for_role(lifetime: u64, role: CaseworkRole) -> Fixture {
+    let (profile_id, scope, membership_kind) = match role {
+        CaseworkRole::Staff => ("staff", "casework:staff", "staff"),
+        CaseworkRole::Supervisor => ("supervisor", "casework:supervisor", "supervisor"),
+        CaseworkRole::Administrator | CaseworkRole::Requester => {
+            panic!("task approval requires a staff or supervisor role")
+        }
+    };
     let base = std::env::var("CASEWORK_ASSIGNMENT_TEST_DATABASE_URL")
         .expect("disposable database is required");
     let schema = format!("task_http_{}", Uuid::new_v4().simple());
@@ -158,8 +170,9 @@ async fn fixture(lifetime: u64) -> Fixture {
     let store = PostgresStore::connect_migration(&config, &secrets).unwrap();
     store.migrate().await.unwrap();
     std::env::remove_var(name);
-    let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
+    let template:TaskTemplate=serde_json::from_value(json!({"id":"summary","version":"1","label":"Prepare summary","eligibleTeams":["team"],"eligibleProfiles":[profile_id],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":ISSUER,"subject":"agent"},"client":"agent-client","resource":"urn:breg:test","purpose":"prepare-summary","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"people","operations":["get"]}]},"subjects":{"person_reference":"person-reference"},"lifetimeSeconds":lifetime})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"tasks","version":"1"},"accessProfiles":[{"id":profile_id,"principalClaim":"sub","requiredScopes":[scope],"role":profile_id}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Test source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template]})).unwrap();
+    let template = project.task_templates[0].clone();
     store
         .activate_task_templates(&project.task_templates)
         .await
@@ -171,7 +184,7 @@ async fn fixture(lifetime: u64) -> Fixture {
     )
     .await
     .unwrap();
-    db.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,'human','staff')",&[&ISSUER]).await.unwrap();
+    db.execute("INSERT INTO casework_memberships(team_id,issuer,subject,membership_kind) VALUES('team',$1,'human',$2)",&[&ISSUER,&membership_kind]).await.unwrap();
     db.execute(
         "INSERT INTO casework_queue_service(queue_id,team_id,revision) VALUES('review','team',1)",
         &[],
@@ -241,6 +254,8 @@ async fn fixture(lifetime: u64) -> Fixture {
         app,
         mode,
         item,
+        profile_id,
+        template,
         admin,
         schema,
         store,
@@ -261,7 +276,7 @@ async fn request(
         .header("authorization", format!("Bearer {token}"));
     if human {
         req = req
-            .header(CASEWORK_PROFILE_HEADER, "staff")
+            .header(CASEWORK_PROFILE_HEADER, f.profile_id)
             .header(SOURCE_PROFILE_HEADER, "source-reader");
     }
     if let Some(key) = key {
@@ -288,6 +303,26 @@ async fn request(
         .is_some_and(|value| value.to_str().unwrap().contains("no-store")));
     let bytes = to_bytes(response.into_body(), 65536).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap())
+}
+
+async fn replace_membership(store: &PostgresStore, kind: &str) {
+    let mut db = store.client().await.unwrap();
+    let transaction = db.transaction().await.unwrap();
+    transaction
+        .execute(
+            "UPDATE casework_memberships SET membership_kind=$1",
+            &[&kind],
+        )
+        .await
+        .unwrap();
+    transaction
+        .execute(
+            "UPDATE casework_meta SET directory_revision=directory_revision+1",
+            &[],
+        )
+        .await
+        .unwrap();
+    transaction.commit().await.unwrap();
 }
 
 #[tokio::test]
@@ -531,6 +566,96 @@ async fn task_http_approval_assertion_status_and_revocation_enforce_current_auth
         .await
         .unwrap();
     assert!(stored.invalidated);
+    f.admin
+        .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn supervisor_task_grant_requires_continued_supervisor_membership() {
+    let f = fixture_for_role(900, CaseworkRole::Supervisor).await;
+    let supervisor = token("human", "human-client", "human", "casework:supervisor");
+    let agent = token("agent", "agent-client", "agent", "casework:grants:assert");
+    let resource = token(
+        "resource",
+        "breg-status",
+        "service",
+        "casework:grants:status",
+    );
+    replace_membership(&f.store, "staff").await;
+    let actor = ActorContext {
+        principal: IssuerPrincipal {
+            issuer: ISSUER.into(),
+            subject: "human".into(),
+        },
+        profile_id: "supervisor".into(),
+        role: CaseworkRole::Supervisor,
+    };
+    assert!(
+        !f.store
+            .eligible_task_template(&actor, f.item, &f.template)
+            .await
+            .unwrap(),
+        "a supervisor profile cannot approve through staff membership"
+    );
+    replace_membership(&f.store, "supervisor").await;
+    let approval_path = format!("/v1/work-items/{}/task-grants", f.item);
+    let (status, grant) = request(
+        &f,
+        "POST",
+        &approval_path,
+        &supervisor,
+        true,
+        Some(json!({"templateId":"summary","templateVersion":"1"})),
+        Some("supervisor-approval"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{grant}");
+    let grant_id = grant["id"].as_str().unwrap();
+    let assertion_path = format!("/v1/task-grants/{grant_id}/assertion");
+    let status_path = format!("/v1/task-grants/{grant_id}/status");
+
+    replace_membership(&f.store, "supervisor").await;
+    assert_eq!(
+        request(&f, "POST", &assertion_path, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::OK,
+        "an unchanged supervisor membership must preserve the grant"
+    );
+    let (status, active) = request(&f, "GET", &status_path, &resource, false, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{active}");
+    assert_eq!(active["active"], true);
+
+    replace_membership(&f.store, "staff").await;
+    assert_eq!(
+        request(&f, "POST", &assertion_path, &agent, false, None, None)
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, inactive) = request(&f, "GET", &status_path, &resource, false, None, None).await;
+    assert_eq!(status, StatusCode::OK, "{inactive}");
+    assert_eq!(inactive["active"], false);
+    assert!(inactive.get("grant").is_none());
+    let invalidation_reason: Option<String> = f
+        .store
+        .client()
+        .await
+        .unwrap()
+        .query_one(
+            "SELECT invalidation_reason FROM casework_task_grants WHERE grant_id=$1",
+            &[&Uuid::parse_str(grant_id).unwrap()],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(invalidation_reason.as_deref(), Some("eligibility"));
+    replace_membership(&f.store, "supervisor").await;
+    let (_, still_inactive) = request(&f, "GET", &status_path, &resource, false, None, None).await;
+    assert_eq!(still_inactive["active"], false);
+
     f.admin
         .batch_execute(&format!("DROP SCHEMA {} CASCADE", f.schema))
         .await

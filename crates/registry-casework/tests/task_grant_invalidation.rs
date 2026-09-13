@@ -45,7 +45,7 @@ async fn grant(db: &Client) -> (Uuid, Uuid) {
     let binding = json!({"sourceRevision":"1","version":"proposal-1","generation":"source-1"});
     db.execute("INSERT INTO casework_items(item_id,source_id,subject_kind,subject_id,occurrence_kind,occurrence_key,binding,state,queue_id,holder_issuer,holder_subject,revision,first_observed_at,updated_at) VALUES($1,'source','request',$2,'review',$2,$3,'claimed','review','https://issuer.test','human',1,now(),now())", &[&item,&item.to_string(),&binding]).await.unwrap();
     let record = json!({"template":{"itemStates":["claimed","waiting_applicant"],"itemKinds":["request"],"source":"source","eligibleTeams":["team"]},"proposal":{"version":"proposal-1","generation":"source-1","integrity":null},"subjects":{"person_reference":"synthetic-person"}});
-    db.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,'https://issuer.test','human','staff',$3,'synthetic-hash',$4,now(),now()+interval '900 seconds')", &[&grant,&item,&grant.to_string(),&record]).await.unwrap();
+    db.execute("INSERT INTO casework_task_grants(grant_id,item_id,approver_issuer,approver_subject,approver_profile,approver_role,idempotency_key,request_hash,record,approved_at,expires_at) VALUES($1,$2,'https://issuer.test','human','staff','staff',$3,'synthetic-hash',$4,now(),now()+interval '900 seconds')", &[&grant,&item,&grant.to_string(),&record]).await.unwrap();
     (item, grant)
 }
 
