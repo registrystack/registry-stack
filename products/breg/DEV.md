@@ -296,7 +296,11 @@ Every referenced client also needs its own ordinary `clients` entry with exact
 scopes and claims. `exchangeClients` must have one bootstrap scope, and the
 external authority must be pre-registered. Local browser applications use
 authorization code with PKCE and explicit redirect URIs. Their secrets and
-synthetic passwords are copied into the owner's private issuer state.
+synthetic passwords are copied into the owner's private issuer state. An app
+using the owner's default BREG audience enters the local runtime's allowed
+client list; an app mapped to another resource does not. The app still needs a
+token with the governed profile's actual `scope` and principal/purpose claims
+to call BREG.
 
 Start the owner first. Another BREG project can run
 `bregctl dev start ./registry-two --issuer-project ./issuer-owner` when the

@@ -800,6 +800,23 @@ pub(super) fn runtime(
     } else {
         json!({})
     };
+    // A browser application explicitly using this session's default BREG
+    // audience is a local OAuth client. Other-resource apps remain outside
+    // BREG admission; governed profiles and token scopes still authorize calls.
+    let allowed_clients = clients
+        .clients
+        .iter()
+        .filter(|client| !client.access_profiles.is_empty() || client.allow_breg_access)
+        .map(|client| &client.id)
+        .chain(
+            clients
+                .issuer
+                .interactive_applications
+                .iter()
+                .filter(|app| app.audience.is_none())
+                .map(|app| &app.id),
+        )
+        .collect::<Vec<_>>();
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -813,7 +830,7 @@ pub(super) fn runtime(
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
-            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":clients.clients.iter().filter(|client| !client.access_profiles.is_empty() || client.allow_breg_access).map(|client|&client.id).collect::<Vec<_>>(),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )
