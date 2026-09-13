@@ -2110,9 +2110,8 @@ async fn insert_action_evidence(
             .map_err(MutationError::from)?;
         bytes = bytes
             .checked_add(
-                serde_json::to_vec(&retained)
-                    .map_err(|_| MutationError::Unavailable)?
-                    .len(),
+                crate::action_evidence_client::retained_jsonb_bytes(&retained)
+                    .map_err(MutationError::from)?,
             )
             .ok_or(MutationError::Unavailable)?;
         if bytes > crate::action_evidence::MAXIMUM_RETAINED_EVIDENCE_BYTES {
