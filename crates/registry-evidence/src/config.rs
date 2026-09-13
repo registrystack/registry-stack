@@ -1011,6 +1011,14 @@ impl EvidenceConfig {
                         .insert(source_selector_set);
                 }
             }
+            if !authority.uses_task_grant()
+                && (!authority.requester_clients.is_empty()
+                    || authority.grant_source_issuer.is_some())
+            {
+                return invalid(
+                    "requesterClients and grantSourceIssuer require an authenticated-grant subject",
+                );
+            }
         }
 
         for requirement in &self.requirements {
@@ -3667,6 +3675,15 @@ pub struct AuthorityProfile {
 }
 
 impl AuthorityProfile {
+    fn uses_task_grant(&self) -> bool {
+        self.grants.iter().any(|grant| {
+            grant
+                .subjects
+                .iter()
+                .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)
+        })
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         validate_unique_strings(&self.requester_tags, 1, 32, 1, 128, "requester tags")?;
         if self.requester_tags.iter().any(|tag| !valid_local_id(tag)) {
@@ -3684,13 +3701,7 @@ impl AuthorityProfile {
         for grant in &self.grants {
             grant.validate()?;
         }
-        let uses_task_grant = self.grants.iter().any(|grant| {
-            grant
-                .subjects
-                .iter()
-                .any(|subject| subject.value_origin == ValueOrigin::AuthenticatedGrant)
-        });
-        if uses_task_grant {
+        if self.uses_task_grant() {
             validate_len(
                 self.requester_clients.len(),
                 1,
@@ -6433,6 +6444,29 @@ mod tests {
                 "task-grant requester clients must be admitted by authentication allowedClients"
             )
         );
+    }
+
+    #[test]
+    fn standing_authority_rejects_task_grant_only_constraints() {
+        let config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("standing-authority fixture validates");
+        let expected = invalid(
+            "requesterClients and grantSourceIssuer require an authenticated-grant subject",
+        );
+
+        let mut requester_clients = config.clone();
+        requester_clients.authentication.allowed_clients = Some(vec!["evidence-cli".to_owned()]);
+        requester_clients.authority_profiles.0[0]
+            .1
+            .requester_clients = vec!["evidence-cli".to_owned()];
+        assert_eq!(requester_clients.validate(), expected);
+
+        let mut source_issuer = config;
+        source_issuer.authority_profiles.0[0].1.grant_source_issuer =
+            Some("https://casework.invalid".to_owned());
+        assert_eq!(source_issuer.validate(), expected);
     }
 
     #[test]
