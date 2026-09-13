@@ -136,7 +136,11 @@ class DriftTest(unittest.TestCase):
         self.stub_classes = _stub_class_defs(self.tree)
 
     def test_the_stub_declares_exactly_the_live_module_top_level_names(self):
-        stub_names = set(self.stub_classes)
+        stub_names = set(self.stub_classes) | {
+            node.name
+            for node in self.tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         live_names = {name for name in dir(revc) if not name.startswith("_")}
         self.assertEqual(stub_names, live_names)
 

@@ -64,6 +64,28 @@ verified_batch = client.verify_batch(prepared_batch, raw_batch)
 # Or: client.request_and_verify_batch(prepared_batch)
 ```
 
+A profile-driven client may pin a selected definition under
+`expected.definitions` by its public handle. Each entry fixes
+`configurationRevision`, `evidenceType`, `purpose`, `assuranceProfile`, and
+`responseFormat`. The client refuses drift before the Evidence POST while
+unrelated definitions may change. Once any definition is pinned, a request
+for an unpinned handle is refused.
+
+```python
+from registry_client.evidence import verify_retained, verify_retained_as_of
+
+profile_client = EvidenceClient.from_profile("client.json")
+result = profile_client.request("status-check")
+exact_response = result.assertion  # or result.credential.encode("utf-8")
+context = result.retained_verification
+replayed = verify_retained_as_of(context, exact_response, decision_unix_seconds)
+current = verify_retained(context, exact_response)
+```
+
+The retained context holds the original key and revocation snapshot. A past
+instant does not establish current validity; account for independently
+governed current revocations before a current decision.
+
 Request-batch results retain request order. Each item is either
 `{"status": "available", "verified": VerifiedEvidence}` or exactly
 `{"status": "not_available"}`. Rust verifies every available member against

@@ -35,6 +35,8 @@ export interface ProgressiveVerifiedResult {
   readonly values: Readonly<Record<string, unknown>>
   readonly value: unknown
   readonly subjectContinuity: ProgressiveSubjectContinuity
+  /** Pre-response trust and policy snapshot. Retain with the exact artifact. */
+  readonly retainedVerification: Buffer
 }
 
 /** A signed-JWS result. The credential member of the native result is `null`. */

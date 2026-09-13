@@ -707,3 +707,5 @@ module.exports.PreparedEvidenceRequestBatch = nativeBinding.PreparedEvidenceRequ
 module.exports.RawEvidenceRequestBatchResponse = nativeBinding.RawEvidenceRequestBatchResponse
 module.exports.RawEvidenceResponse = nativeBinding.RawEvidenceResponse
 module.exports.SdJwtVcBatchResponse = nativeBinding.SdJwtVcBatchResponse
+module.exports.verifyRetained = nativeBinding.verifyRetained
+module.exports.verifyRetainedAsOf = nativeBinding.verifyRetainedAsOf

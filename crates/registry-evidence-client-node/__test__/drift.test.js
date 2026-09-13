@@ -151,6 +151,7 @@ test('every native progressive result getter is wrapped', () => {
     'credential',
     'evidence',
     'responseFormat',
+    'retainedVerification',
     'subjectContinuity',
     'traceId',
     'value',

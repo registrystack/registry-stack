@@ -44,6 +44,7 @@ use registry_evidence_client::{
     PreparedEvidenceRequestBatch as RealPreparedEvidenceRequestBatch,
     RawEvidenceRequestBatchResponse as RealRawEvidenceRequestBatchResponse,
     RawEvidenceResponse as RealRawEvidenceResponse,
+    RetainedEvidenceVerification as RealRetainedEvidenceVerification,
     SdJwtVcBatchResponse as RealSdJwtVcBatchResponse, SubjectContinuity as RealSubjectContinuity,
     VerifiedEvidence as RealVerifiedEvidence,
     VerifiedEvidenceRequestBatch as RealVerifiedEvidenceRequestBatch,
@@ -473,6 +474,21 @@ fn audience_scoped_result_to_napi(
 
 #[napi]
 impl AudienceScopedResult {
+    /// Exact serialized pre-response trust snapshot for offline re-verification.
+    #[napi(getter)]
+    pub fn retained_verification(&self) -> Result<Buffer> {
+        catch_panic("reading retained verification context", || {
+            let retained = match self.inner.as_ref() {
+                RealAudienceScopedResult::Assertion(verified) => verified.retained_verification(),
+                RealAudienceScopedResult::Credential(verified) => verified.retained_verification(),
+            };
+            serde_json::to_vec(retained)
+                .map(Buffer::from)
+                .map_err(|error| {
+                    to_napi_serialization_error("the retained verification context", error)
+                })
+        })
+    }
     #[napi(getter)]
     pub fn response_format(&self) -> Result<String> {
         catch_panic("reading the progressive response format", || {
@@ -565,6 +581,40 @@ impl AudienceScopedResult {
             subject_continuity_to_napi(continuity)
         })
     }
+}
+
+/// Verify exact retained response bytes against a bounded pre-response trust
+/// snapshot without constructing a client or performing network I/O.
+#[napi]
+pub fn verify_retained(context: Buffer, response: Buffer) -> Result<VerifiedEvidence> {
+    catch_panic("verifying retained evidence", || {
+        let context = RealRetainedEvidenceVerification::from_slice(&context)
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
+        let verified = context
+            .verify(&response)
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
+        verified_evidence_to_napi(&verified)
+    })
+}
+
+/// Replay an earlier decision at its recorded instant. Current decisions use
+/// `verify_retained` so expired assertions cannot be accepted as current.
+#[napi]
+pub fn verify_retained_as_of(
+    context: Buffer,
+    response: Buffer,
+    as_of_millis: f64,
+) -> Result<VerifiedEvidence> {
+    catch_panic("verifying retained evidence as of an instant", || {
+        let now = datetime_from_unix_millis(as_of_millis)
+            .map_err(|error| to_napi_error(map_conversion_error(&error)))?;
+        let context = RealRetainedEvidenceVerification::from_slice(&context)
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
+        let verified = context
+            .verify_as_of(&response, now)
+            .map_err(|error| to_napi_error(map_client_error(&error)))?;
+        verified_evidence_to_napi(&verified)
+    })
 }
 
 /// A relying party's connection to one Evidence deployment.
