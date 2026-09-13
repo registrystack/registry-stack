@@ -107,6 +107,8 @@ jobs:
             "${REQUEST_SOURCE_SHA}" refs/remotes/origin/main
           git merge-base --is-ancestor \
             "${workflow_revision}" refs/remotes/origin/main
+          release/scripts/registry-release validate-source-commit \
+            --source-sha "${REQUEST_SOURCE_SHA}"
           tag="v${REQUEST_VERSION}"
           if git ls-remote --exit-code --tags origin "refs/tags/${tag}" \
               >/dev/null 2>&1; then
