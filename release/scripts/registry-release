@@ -3323,6 +3323,17 @@ def request_id_from_publication_run(run: dict[str, Any], tag: str) -> str | None
     return match.group(1) if match is not None else None
 
 
+def request_id_from_docs_run(run: dict[str, Any], tag: str) -> str | None:
+    title = run.get("display_title")
+    if not isinstance(title, str):
+        return None
+    match = re.fullmatch(
+        rf"Deploy RegistryStack Docs {re.escape(tag)} \(([0-9a-f]{{32}})\)",
+        title,
+    )
+    return match.group(1) if match is not None else None
+
+
 def validate_main_workflow_run(
     repo: Path,
     run: dict[str, Any],
@@ -3359,6 +3370,58 @@ def publication_runs_for_tag(repository: str, tag: str) -> list[dict[str, Any]]:
     ]
 
 
+def docs_runs_for_tag(repository: str, tag: str) -> list[dict[str, Any]]:
+    return [
+        run
+        for run in workflow_runs(
+            repository,
+            "docs-pages.yml",
+            event="workflow_dispatch",
+        )
+        if request_id_from_docs_run(run, tag) is not None
+    ]
+
+
+def reusable_docs_publication_run(
+    publication_runs: list[dict[str, Any]],
+    docs_runs: list[dict[str, Any]],
+    *,
+    tag: str,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    docs_by_request: dict[str, dict[str, Any]] = {}
+    for docs_run in docs_runs:
+        request_id = request_id_from_docs_run(docs_run, tag)
+        if request_id is None:
+            continue
+        if request_id in docs_by_request:
+            raise ReleasePlanError(
+                f"release docs request {request_id} resolved to multiple workflow runs"
+            )
+        docs_by_request[request_id] = docs_run
+
+    for publication_run in sorted(
+        publication_runs,
+        key=lambda item: workflow_run_identity(
+            item,
+            "release publication",
+        )[0],
+        reverse=True,
+    ):
+        request_id = request_id_from_publication_run(publication_run, tag)
+        if request_id is None:
+            continue
+        docs_run = docs_by_request.get(request_id)
+        if docs_run is None:
+            continue
+        if (
+            docs_run.get("status") == "completed"
+            and docs_run.get("conclusion") != "success"
+        ):
+            continue
+        return publication_run, docs_run
+    return None
+
+
 def dispatch_publication_run(
     repository: str,
     *,
@@ -3393,6 +3456,67 @@ def dispatch_publication_run(
     return run, request_id
 
 
+def dispatch_docs_publication_run(
+    repository: str,
+    *,
+    tag: str,
+    docs_sha256: str,
+) -> tuple[dict[str, Any], str]:
+    if SEMVER_TAG.fullmatch(tag) is None:
+        raise ReleasePlanError("docs publication tag is invalid")
+    if SHA256_HEX.fullmatch(docs_sha256) is None:
+        raise ReleasePlanError("docs publication digest is invalid")
+    request_id = secrets.token_hex(16)
+    run_checked(
+        [
+            "gh",
+            "workflow",
+            "run",
+            "docs-pages.yml",
+            "--repo",
+            repository,
+            "--ref",
+            "main",
+            "-f",
+            f"released_tag={tag}",
+            "-f",
+            f"docs_sha256={docs_sha256}",
+            "-f",
+            f"request_id={request_id}",
+        ]
+    )
+    run = wait_for_titled_workflow_run(
+        repository,
+        workflow="docs-pages.yml",
+        event="workflow_dispatch",
+        source_sha=None,
+        display_title=docs_run_title(tag, request_id),
+        label="release docs",
+        request_id=request_id,
+    )
+    return run, request_id
+
+
+def watch_docs_publication_run(
+    repo: Path,
+    repository: str,
+    *,
+    run: dict[str, Any],
+    verbose: bool,
+) -> int:
+    run_id, url = workflow_run_identity(run, "release docs")
+    protected_main = refresh_protected_main(repo, repository)
+    validate_main_workflow_run(
+        repo,
+        run,
+        protected_main_sha=protected_main,
+        label="release docs",
+    )
+    print(f"release docs: run {run_id} {url}")
+    watch_workflow_run(repository, run_id, "release docs", verbose=verbose)
+    return run_id
+
+
 def wait_for_docs_publication(
     repo: Path,
     repository: str,
@@ -3410,17 +3534,12 @@ def wait_for_docs_publication(
         label="release docs",
         request_id=request_id,
     )
-    run_id, url = workflow_run_identity(run, "release docs")
-    protected_main = refresh_protected_main(repo, repository)
-    validate_main_workflow_run(
+    return watch_docs_publication_run(
         repo,
-        run,
-        protected_main_sha=protected_main,
-        label="release docs",
+        repository,
+        run=run,
+        verbose=verbose,
     )
-    print(f"release docs: run {run_id} {url}")
-    watch_workflow_run(repository, run_id, "release docs", verbose=verbose)
-    return run_id
 
 
 def publish_candidate_plan(
@@ -3476,34 +3595,85 @@ def publish_candidate_plan(
                 }
             )
             if wait and candidate_identity["docs_sha256"] is not None:
-                successful_runs = [
+                runs = publication_runs_for_tag(repository, tag)
+                active_runs = [
                     run
-                    for run in publication_runs_for_tag(repository, tag)
-                    if run.get("status") == "completed"
-                    and run.get("conclusion") == "success"
+                    for run in runs
+                    if run.get("status")
+                    in {"requested", "queued", "in_progress", "pending", "waiting"}
                 ]
-                if not successful_runs:
+                if len(active_runs) > 1:
                     raise ReleasePlanError(
-                        f"published release {tag} has no correlated successful "
-                        "publication run"
+                        f"multiple active publication runs exist for {tag}"
                     )
-                publication_run = max(
-                    successful_runs,
-                    key=lambda item: workflow_run_identity(
-                        item,
+                if active_runs:
+                    publication_run = active_runs[0]
+                    request_id = request_id_from_publication_run(publication_run, tag)
+                    if request_id is None:
+                        raise ReleasePlanError("active publication run has no request ID")
+                    publication_run_id, publication_url = workflow_run_identity(
+                        publication_run,
                         "release publication",
-                    )[0],
-                )
-                request_id = request_id_from_publication_run(publication_run, tag)
-                if request_id is None:
-                    raise ReleasePlanError("successful publication run has no request ID")
-                result["docs_run_id"] = wait_for_docs_publication(
-                    repo,
-                    repository,
-                    tag=tag,
-                    request_id=request_id,
-                    verbose=verbose_wait,
-                )
+                    )
+                    publication_main = refresh_protected_main(repo, repository)
+                    validate_main_workflow_run(
+                        repo,
+                        publication_run,
+                        protected_main_sha=publication_main,
+                        label="release publication",
+                    )
+                    print(
+                        f"release publication: run {publication_run_id} "
+                        f"{publication_url} (tag existing)"
+                    )
+                    watch_workflow_run(
+                        repository,
+                        publication_run_id,
+                        "release publication",
+                        verbose=verbose_wait,
+                    )
+                    result["publication_run_id"] = publication_run_id
+                    result["docs_run_id"] = wait_for_docs_publication(
+                        repo,
+                        repository,
+                        tag=tag,
+                        request_id=request_id,
+                        verbose=verbose_wait,
+                    )
+                else:
+                    reusable = reusable_docs_publication_run(
+                        runs,
+                        docs_runs_for_tag(repository, tag),
+                        tag=tag,
+                    )
+
+                    if reusable is not None:
+                        publication_run, docs_run = reusable
+                        publication_run_id, _ = workflow_run_identity(
+                            publication_run,
+                            "release publication",
+                        )
+                        publication_main = refresh_protected_main(repo, repository)
+                        validate_main_workflow_run(
+                            repo,
+                            publication_run,
+                            protected_main_sha=publication_main,
+                            label="release publication",
+                        )
+                        result["publication_run_id"] = publication_run_id
+                    else:
+                        docs_run, _ = dispatch_docs_publication_run(
+                            repository,
+                            tag=tag,
+                            docs_sha256=candidate_identity["docs_sha256"],
+                        )
+                        result["docs_recovery"] = "dispatched"
+                    result["docs_run_id"] = watch_docs_publication_run(
+                        repo,
+                        repository,
+                        run=docs_run,
+                        verbose=verbose_wait,
+                    )
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0
 
