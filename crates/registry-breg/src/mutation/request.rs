@@ -2926,19 +2926,21 @@ fn predicate_values_equal(actual: &Value, expected: &Value, timestamp: bool) -> 
     }
     let parse = |value: &Value| {
         value.as_str().and_then(|value| {
-            if let Some(bc) = value.strip_suffix(" BC") {
+            let (normalized, day_offset) = if let Some(bc) = value.strip_suffix(" BC") {
                 // Valid year-0001 inputs can cross into BC when PostgreSQL
                 // normalizes their offset. RFC3339 year 0000 is that instant.
                 let rest = bc.strip_prefix("0001-")?;
-                time::OffsetDateTime::parse(
-                    &format!("0000-{rest}"),
-                    &time::format_description::well_known::Rfc3339,
-                )
-                .ok()
+                (format!("0000-{rest}"), 0)
+            } else if let Some(rest) = value.strip_prefix("10000-01-01T") {
+                // A year-9999 input can similarly normalize into PostgreSQL's
+                // five-digit UTC year. Parse the prior day, then add one day.
+                (format!("9999-12-31T{rest}"), 1)
             } else {
-                time::OffsetDateTime::parse(value, &time::format_description::well_known::Rfc3339)
-                    .ok()
-            }
+                (value.to_owned(), 0)
+            };
+            time::OffsetDateTime::parse(&normalized, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .map(|parsed| parsed.unix_timestamp_nanos() + day_offset * 86_400_000_000_000)
         })
     };
     parse(actual)
@@ -3286,6 +3288,28 @@ mod application_precondition_tests {
         assert!(super::predicate_values_equal(&stored_bc, &submitted, true));
         assert!(!super::predicate_values_equal(
             &stored_bc, &submitted, false
+        ));
+        let stored_next_year = json!("10000-01-01T00:00:00.12+00:00");
+        let submitted_previous_year = json!("9999-12-31T23:00:00.12-01:00");
+        assert!(time::OffsetDateTime::parse(
+            submitted_previous_year.as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339
+        )
+        .is_ok());
+        assert!(super::predicate_values_equal(
+            &stored_next_year,
+            &submitted_previous_year,
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &stored_next_year,
+            &json!("9999-12-31T23:00:00.13-01:00"),
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &stored_next_year,
+            &submitted_previous_year,
+            false
         ));
     }
 

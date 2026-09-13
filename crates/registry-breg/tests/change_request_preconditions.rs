@@ -282,6 +282,32 @@ fn evidence_string_literals_fit_verified_public_value_bounds() {
 }
 
 #[test]
+fn evidence_bucket_literals_fit_the_verified_value_schema() {
+    let mut source = project();
+    let mut contract = contracts();
+    contract["definitions"][0]["concepts"][0]["form"] = json!("date-bucket");
+    {
+        let requirement = &mut source["entities"][1]["changeRequest"]["application"]
+            ["preconditions"]["evidence"][0]["requires"][0];
+        requirement
+            .as_object_mut()
+            .unwrap()
+            .remove("equalsFromRequestField");
+        requirement["equals"] = json!({"form":"date-bucket", "scheme":"", "bucket":""});
+    }
+    assert!(format!(
+        "{:?}",
+        compile_with_contract(source.clone(), contract.clone()).unwrap_err()
+    )
+    .contains("change_request.preconditions.evidence_invalid"));
+
+    source["entities"][1]["changeRequest"]["application"]["preconditions"]["evidence"][0]
+        ["requires"][0]["equals"] =
+        json!({"form":"date-bucket", "scheme":"urn:example:year", "bucket":"2026"});
+    compile_with_contract(source, contract).unwrap();
+}
+
+#[test]
 fn guard_predicates_and_target_selectors_share_the_context_field_ceiling() {
     let mut source = project();
     let mut contract = contracts();

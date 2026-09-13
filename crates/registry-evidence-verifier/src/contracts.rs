@@ -17,6 +17,8 @@ pub const EVIDENCE_SCHEMA_ID: &str =
 pub const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
 
 static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
+static PUBLIC_VALUE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
+    OnceLock::new();
 
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 #[error("built-in public contract schema failed to initialize")]
@@ -29,6 +31,24 @@ pub fn evidence_contract_accepts(value: &Value) -> Result<bool, ContractValidati
             .with_draft(Draft::Draft202012)
             .should_validate_formats(true)
             .compile(&evidence_schema())
+            .map_err(|_| ContractValidationError)
+    }) {
+        Ok(validator) => Ok(validator.is_valid(value)),
+        Err(error) => Err(*error),
+    }
+}
+
+/// Validate one supported value against the value definition in the Evidence payload schema.
+pub fn public_value_contract_accepts(value: &Value) -> Result<bool, ContractValidationError> {
+    match PUBLIC_VALUE_VALIDATOR.get_or_init(|| {
+        JSONSchema::options()
+            .with_draft(Draft::Draft202012)
+            .should_validate_formats(true)
+            .compile(&json!({
+                "$schema": SCHEMA_DIALECT,
+                "$ref": "#/$defs/value",
+                "$defs": evidence_schema()["$defs"],
+            }))
             .map_err(|_| ContractValidationError)
     }) {
         Ok(validator) => Ok(validator.is_valid(value)),
@@ -172,6 +192,22 @@ mod tests {
             "subjects": [{"role": "applicant", "binding": format!("urn:evidence:subject:v1_{}", "a".repeat(43))}],
             "supportedValues": [{"providesValueFor": "urn:example:concept", "value": true}]
         })
+    }
+
+    #[test]
+    fn public_value_contract_uses_payload_value_constraints() {
+        let valid = json!({
+            "form": "date-bucket",
+            "scheme": "urn:example:year",
+            "bucket": "2026",
+        });
+        assert!(public_value_contract_accepts(&valid).unwrap());
+        let invalid = json!({
+            "form": "date-bucket",
+            "scheme": "",
+            "bucket": "",
+        });
+        assert!(!public_value_contract_accepts(&invalid).unwrap());
     }
 
     /// The contract is one closed object covering both binding modes. It

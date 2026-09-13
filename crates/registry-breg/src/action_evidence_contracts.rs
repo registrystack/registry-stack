@@ -207,10 +207,9 @@ fn evidence_requirement_value_valid(
     value: &serde_json::Value,
     form: &ExpectedFormDocument,
 ) -> bool {
-    // Reuse the verifier's closed wire representation before comparing forms.
-    // This rejects missing members and extra properties in structured scalars.
-    if serde_json::from_value::<registry_evidence_verifier::model::PublicValue>(value.clone())
-        .is_err()
+    // Reuse the verifier's closed value schema, including structured scalar
+    // URI and pattern constraints, before comparing reviewed forms.
+    if !registry_evidence_verifier::contracts::public_value_contract_accepts(value).unwrap_or(false)
     {
         return false;
     }
@@ -220,9 +219,7 @@ fn evidence_requirement_value_valid(
             .as_number()
             .and_then(registry_evidence_verifier::model::safe_json_integer)
             .is_some(),
-        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => value
-            .as_str()
-            .is_some_and(|value| (1..=1024).contains(&value.chars().count())),
+        ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String) => value.is_string(),
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::DateBucket) => {
             value.get("form").and_then(serde_json::Value::as_str) == Some("date-bucket")
         }
@@ -510,7 +507,7 @@ mod requirement_literal_tests {
             ),
             (
                 ExpectedScalarFormDocument::EntityReference,
-                json!({"form":"audience-scoped-entity-reference", "reference":"urn:example:record:1"}),
+                json!({"form":"audience-scoped-entity-reference", "reference":format!("urn:evidence:entity:v1_{}", "a".repeat(43))}),
             ),
         ] {
             let expected = ExpectedFormDocument::Scalar(form);
@@ -531,6 +528,21 @@ mod requirement_literal_tests {
             };
             wrong_type[field] = json!(42);
             assert!(!evidence_requirement_value_valid(&wrong_type, &expected));
+        }
+        for invalid in [
+            json!({"form":"date-bucket", "scheme":"", "bucket":""}),
+            json!({"form":"time-bucket", "scheme":"urn:example:hour", "bucket":"-invalid"}),
+            json!({"form":"audience-scoped-entity-reference", "reference":"urn:example:record:1"}),
+        ] {
+            let form = match invalid["form"].as_str().unwrap() {
+                "date-bucket" => ExpectedScalarFormDocument::DateBucket,
+                "time-bucket" => ExpectedScalarFormDocument::TimeBucket,
+                _ => ExpectedScalarFormDocument::EntityReference,
+            };
+            assert!(!evidence_requirement_value_valid(
+                &invalid,
+                &ExpectedFormDocument::Scalar(form)
+            ));
         }
     }
 }
