@@ -154,12 +154,12 @@ pub struct ExchangeIssuer {
     pub jwks_endpoint: String,
 }
 
-/// Closed application profile. The issuer copies these signed values; consumers
-/// still compare immutable client, resource, authority, scope and deadline bounds.
+/// Closed exchange-token profile. The issuer derives source issuer from verified
+/// `iss` and copies the remaining signed values. Consumers bind that issuer and
+/// the immutable client, resource, scope and deadline bounds.
 pub const GRANT_ATTRIBUTES: &[&str] = &[
     "registry_actor_kind",
     "registry_grant_id",
-    "registry_grant_authority",
     "registry_grant_source_issuer",
     "registry_grant_client",
     "registry_grant_resource",

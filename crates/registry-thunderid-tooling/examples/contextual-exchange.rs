@@ -417,7 +417,7 @@ fn verified(token: &str, jwks: &Value) -> Result<Value> {
 fn grant(issuer: &str, source: &str) -> Value {
     let time = now();
     json!({"iss":source,"aud":issuer,"sub":"unregistered-task-agent-subject","iat":time,"exp":time+60,"jti":random(),
-    "scope":TARGET_SCOPE,"registry_actor_kind":"agent","registry_grant_id":"g-synthetic-1","registry_grant_authority":"authority-a",
+    "scope":TARGET_SCOPE,"registry_actor_kind":"agent","registry_grant_id":"g-synthetic-1",
     "registry_grant_client":CLIENT,"registry_grant_resource":TARGET,"registry_purpose":"synthetic-check","registry_grant_exp":time+900,
     "registry_grant_bounds":{"type":"evidence","requirement":"synthetic-requirement"},
     "identity":{"demographics-v1":{"full_name":"Synthetic Canary","birth_date":"1998-04-02"}},"registry_approver":"h:synthetic-approver"})
@@ -427,7 +427,6 @@ fn bounds(claims: &Value, client: &str, resource: &str, source: &str, time: u64)
         && claims["registry_grant_client"] == client
         && claims["registry_grant_resource"] == resource
         && claims["registry_grant_source_issuer"] == source
-        && claims["registry_grant_authority"] == "authority-a"
         && claims["registry_grant_exp"]
             .as_u64()
             .is_some_and(|exp| time < exp)
