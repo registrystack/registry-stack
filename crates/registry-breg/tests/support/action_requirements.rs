@@ -29,7 +29,7 @@ pub fn project() -> Value {
             "effects": [{"id": "child", "target": {"entity": "child"}, "operation": "create", "set": {"parent": {"fromField": "parent"}, "label": {"fromField": "label"}}}]
         }],
         "accessProfiles": [{"id": "registrar", "default": true, "principalClaim": "registry_principal", "requiredScopes": ["registry:register", "registry:parent:process"],
-            "grants": [{"action": "register-child", "operations": ["invoke"], "targets": [
+            "permissions": [{"action": "register-child", "operations": ["invoke"], "targets": [
                 {"entity": "parent", "rowBoundaries": [{"field": "zone", "claim": "zone", "operator": "equals"}]}, {"entity": "child", "rowBoundaries": []}
             ], "results": ["child"]}]
         }]

@@ -115,7 +115,7 @@ accessProfiles:
     default: true
     principalClaim: registry_principal
     requiredPurposes: [asset-management]
-    grants:
+    permissions:
       - {entity: asset-item, operations: [create, get, list, patch, batch], readableFields: [asset-code, label, asset-class], writableFields: [asset-code, label, asset-class], rowBoundaries: []}
       - {entity: asset-site, operations: [create, get, list, patch], readableFields: [site-code, label], writableFields: [site-code, label], rowBoundaries: []}
       - entity: asset-placement
@@ -129,7 +129,7 @@ accessProfiles:
   - id: site-planner
     principalClaim: registry_principal
     requiredPurposes: [site-planning]
-    grants:
+    permissions:
       - {entity: asset-item, operations: [get, list], readableFields: [asset-code, label], filterableFields: [asset-code], rowBoundaries: []}
       - {entity: asset-site, operations: [get, list], readableFields: [site-code, label], filterableFields: [site-code], rowBoundaries: []}
       - entity: asset-placement
@@ -144,7 +144,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
-    grants:
+    permissions:
       - entity: asset-item
         rowBoundaries: []
         operations: [get]
@@ -168,7 +168,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:review]
     requiredPurposes: [asset-correction-review]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, list, approve_request, reject_request, request_revision]
@@ -181,7 +181,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:supervise]
     requiredPurposes: [asset-correction-review]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, approve_request, reject_request, request_revision]
@@ -194,7 +194,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:apply]
     requiredPurposes: [asset-correction-apply]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, apply_request]

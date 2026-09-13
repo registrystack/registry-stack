@@ -732,3 +732,5 @@ module.exports.RecoveredLifecycle = nativeBinding.RecoveredLifecycle
 module.exports.BRegTombstoneBinding = nativeBinding.BRegTombstoneBinding
 module.exports.TombstoneBinding = nativeBinding.TombstoneBinding
 module.exports.verifyWebhookDelivery = nativeBinding.verifyWebhookDelivery
+module.exports.PrivateKeyJwt = nativeBinding.PrivateKeyJwt
+module.exports.PrivateKeyJwtBinding = nativeBinding.PrivateKeyJwtBinding

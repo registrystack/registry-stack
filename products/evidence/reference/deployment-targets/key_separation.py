@@ -264,7 +264,7 @@ def check_targets(root: pathlib.Path) -> None:
 
     seen: dict[str, pathlib.Path] = {}
     for environment in environments:
-        for service in ("evidence", "mint"):
+        for service in ("evidence",):
             public_keys = environment / service / "public-keys"
             for path in _service_keys(public_keys):
                 key = _read_json(path)
@@ -285,15 +285,6 @@ def check_targets(root: pathlib.Path) -> None:
                     )
                 _remember(seen, thumbprint, path)
 
-        client_directory = environment / "mint" / "clients"
-        client_files = sorted(client_directory.glob("*.yaml"))
-        if not client_files:
-            raise CheckError(
-                f"{client_directory}: at least one client registration is required"
-            )
-        for path in client_files:
-            check_client_file(path, seen)
-
 
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
@@ -305,7 +296,7 @@ def main(argv: list[str]) -> int:
         print(error, file=sys.stderr)
         return 1
     print(
-        "Deployment target service and client public keys are distinct and correctly identified."
+        "Deployment target Evidence signing keys are distinct and correctly identified."
     )
     return 0
 

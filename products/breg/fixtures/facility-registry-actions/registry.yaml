@@ -45,7 +45,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:facility:register]
     requiredPurposes: [facility-administration]
-    grants:
+    permissions:
       - action: register-facility
         operations: [invoke]
         targets:
@@ -61,7 +61,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:facility:transfer]
     requiredPurposes: [facility-administration]
-    grants:
+    permissions:
       - action: transfer-facility
         operations: [invoke]
         targets:
@@ -73,7 +73,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:facility:read]
     requiredPurposes: [facility-administration]
-    grants:
+    permissions:
       - entity: facility
         operations: [get, list]
         readableFields: [facility-code, label, owner]
@@ -84,7 +84,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:operator:manage]
     requiredPurposes: [facility-administration]
-    grants:
+    permissions:
       - entity: operator
         rowBoundaries: []
         operations: [create, get, patch]

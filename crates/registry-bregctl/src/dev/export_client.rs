@@ -66,7 +66,12 @@ pub(super) fn run(args: ExportClientArgs) -> Result<Value> {
         "client":client.id,"accessProfiles":client.access_profiles,
         "accessProfilesText":client.access_profiles.join(", "),
         "clientIdFile":id_path,"assertionKeyFile":key_path,
-        "bregUrl":state.breg_origin(),"tokenEndpoint":format!("{}/token",state.mint_origin()),
+        "bregUrl":state.breg_origin(),
+        "issuer":state.issuer_origin(),
+        "tokenEndpoint":format!("{}/oauth2/token",state.issuer_origin()),
+        "clientAssertionAudience":state.issuer_origin(),
+        "resource":state.audience(),
+        "scopes":client.scopes,
         "audience":state.audience()}),
     )
 }

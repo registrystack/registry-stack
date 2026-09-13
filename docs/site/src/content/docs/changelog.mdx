@@ -40,9 +40,9 @@ relevant product pages on this site rather than duplicating release notes.
   [retain, erase, and settle](../operate/casework-retention/), the
   [API contract](../reference/apis/registry-casework/), and a Casework section
   in the [client API reference](../reference/client-api/). The installer
-  `casework-install.sh` installs `casework`, `caseworkctl`, and `mint` together,
-  and `caseworkctl dev` starts a retained local runtime with its PostgreSQL
-  container, token issuer, and seeded directory.
+  `casework-install.sh` installs `casework` and `caseworkctl`, and
+  `caseworkctl dev start` starts a retained local runtime with its PostgreSQL
+  container, pinned stock issuer, and seeded directory.
 
 {/* Evidence: crates/registry-casework/install.sh; crates/registry-caseworkctl/src/dev/mod.rs;
     docs/site/scripts/check-casework-tutorial.sh. */}
@@ -171,10 +171,11 @@ relevant product pages on this site rather than duplicating release notes.
   reaches your terminal with its code, its `journeys[i].steps[j]` path, and its
   own message. See
   [author journeys](../configure/breg-journeys/#troubleshooting).
-- `bregctl dev` compares the `breg` and `mint` it resolved against its own
-  version before it starts anything, and refuses a prerequisite from another
-  release by name, giving both versions and the fix. Previously the mismatch
-  surfaced much later as a refused package or an unready database.
+- `bregctl dev start` compares the `breg` it resolved against its own version
+  before it starts anything, and refuses a binary from another release by name,
+  giving both versions and the fix. The issuer runs from the pinned stock image.
+  Previously a binary mismatch surfaced much later as a refused package or an
+  unready database.
 - A refused fixture logical reference names its class: a field the entity does
   not declare, a field the access profile grant does not make writable, a
   request body with no field, a step identifier that is not stable, a step

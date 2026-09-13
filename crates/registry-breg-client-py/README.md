@@ -154,3 +154,15 @@ stored content type. A retained older value may carry a content type the current
 policy no longer accepts. The response is bounded by both the slot capacity and
 the client's `max_response_bytes`, so raise `max_response_bytes` when a slot may
 hold more than the default bound.
+
+## Explicit OAuth token exchange
+
+`registry_client.breg.PrivateKeyJwt(config)` wraps the shared Rust OAuth
+provider. Its configuration uses the existing snake-case `private_key_jwt`
+fields. Call `provider.exchange(subject_token)` with a short-lived signed task
+assertion and explicit configured `resource` and `scopes`. Each exchange uses
+fresh client authentication and bypasses the service cache;
+`provider.bearer_token()` uses the separate client-credentials cache. Both
+methods release the GIL during network work and return a credential string for
+explicit use by the application. Keep that string out of logs and persistent
+state. The resource server still validates the signed authority and bounds.

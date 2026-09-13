@@ -917,7 +917,7 @@ fn compiled_registry() -> CompiledRegistry {
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","approve_request","reject_request","request_revision"],
               "readableFields":["placement","proposed-site"],
@@ -932,7 +932,7 @@ fn compiled_registry() -> CompiledRegistry {
               "rowBoundaries": []
             }]
           },{
-            "id":"request-submitter","principalClaim":"principal","grants":[{
+            "id":"request-submitter","principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","create","patch","submit_request"],
               "readableFields":["placement","proposed-site"],
@@ -940,7 +940,7 @@ fn compiled_registry() -> CompiledRegistry {
               "rowBoundaries": []
             }]
           },{
-            "id":"request-applier","principalClaim":"principal","grants":[{
+            "id":"request-applier","principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],
@@ -948,7 +948,7 @@ fn compiled_registry() -> CompiledRegistry {
               "rowBoundaries": []
             }]
           },{
-            "id":"placement-viewer","principalClaim":"principal","grants":[{
+            "id":"placement-viewer","principalClaim":"principal","permissions":[{
               "entity":"placement",
               "operations":["get"],
               "readableFields":["site"],
@@ -1026,7 +1026,7 @@ fn compiled_action_registry() -> CompiledRegistry {
             "principalClaim":"private_claim_name",
             "requiredScopes":["registry:contact:register"],
             "requiredPurposes":["contact-registration"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -1041,7 +1041,7 @@ fn compiled_action_registry() -> CompiledRegistry {
             "principalClaim":"other_private_claim",
             "requiredScopes":["registry:contact:audit"],
             "requiredPurposes":["contact-audit"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -1097,7 +1097,7 @@ fn compiled_asset_result_action_registry() -> CompiledRegistry {
             "default":true,
             "principalClaim":"principal",
             "requiredScopes":["registry:asset:register"],
-            "grants":[{
+            "permissions":[{
               "action":"register-asset",
               "operations":["invoke"],
               "targets":[

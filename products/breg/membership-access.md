@@ -15,7 +15,7 @@ accessProfiles:
   - id: member
     principalClaim: principal
     requiredScopes: [records:read, membership:use]
-    grants:
+    permissions:
       - entity: facility
         rowBoundaries: []
         operations: [get, list, lookup, snapshot, revisions]
@@ -95,11 +95,11 @@ other enabled features can require a newer supported version.
 Membership profiles support get, list, count, lookup, snapshot, and revisions.
 They can protect the root of a relationship read path; a related entity's
 membership rules cannot silently be bypassed by targeting it through a separate
-root grant. Such target grants are rejected. Membership sources must remain
+root grant. Such target permissions are rejected. Membership sources must remain
 leaf entities without their own membership boundaries, change-request lifecycle,
 or incoming relationship read paths, preventing recursive row-security policies.
 
-Spatial bbox grants use a separate authority role and cannot currently be
+Spatial bbox permissions use a separate authority role and cannot currently be
 combined with membership boundaries. Ordinary reads of facilities remain
 available under the membership profile.
 

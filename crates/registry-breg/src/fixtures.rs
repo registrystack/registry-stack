@@ -37,7 +37,9 @@ use crate::data::{validate_field_value, FieldValue};
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::event_destination::EventDestinationActivationError;
 use crate::model::CompiledRoute;
-use crate::model::{ActionRouteKind, CompiledAction, CompiledActionGrant, CompiledActionRoute};
+use crate::model::{
+    ActionRouteKind, CompiledAction, CompiledActionPermission, CompiledActionRoute,
+};
 use crate::model::{CompiledQueryKind, CompiledQueryOperation, CompiledRegistry, HttpMethod};
 #[cfg(any(test, feature = "postgres-test"))]
 use crate::package::{canonical_signed_bytes as package_canonical_signed_bytes, VerifiedPackage};
@@ -509,6 +511,12 @@ struct ClaimsSource {
     purpose: Option<String>,
     #[serde(default)]
     direct_claims: BTreeMap<String, DirectClaimSource>,
+    #[serde(default)]
+    actor_kind: Option<crate::contract::ActorKindSource>,
+    #[serde(default)]
+    requester_client: Option<String>,
+    #[serde(default)]
+    actor_subject: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -814,7 +822,7 @@ pub fn validate_fixture_journeys(
                         .cloned()
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
                     let grant = action
-                        .grants
+                        .permissions
                         .iter()
                         .find(|grant| grant.profile_id == step.access_profile)
                         .ok_or(FixtureError::LogicalReferenceRefused)?;
@@ -1258,6 +1266,9 @@ fn validate_claims(
             || !claims.scopes.is_empty()
             || claims.purpose.is_some()
             || !claims.direct_claims.is_empty()
+            || claims.actor_kind.is_some()
+            || claims.requester_client.is_some()
+            || claims.actor_subject.is_some()
         {
             return Err(FixtureError::AuthorityWideningRefused);
         }
@@ -1269,6 +1280,16 @@ fn validate_claims(
             .as_deref()
             .is_none_or(|value| value.is_empty() || value.len() > MAX_BINDING_BYTES)
         || !claims.scopes.is_subset(&profile.required_scopes)
+    {
+        return Err(FixtureError::AuthorityWideningRefused);
+    }
+    if claims.actor_kind != profile.actor_kind
+        || claims
+            .requester_client
+            .as_ref()
+            .is_some_and(|client| !profile.requester_clients.contains(client))
+        || profile.actor_kind == Some(crate::contract::ActorKindSource::Agent)
+            && (claims.requester_client.is_none() || claims.actor_subject.is_none())
     {
         return Err(FixtureError::AuthorityWideningRefused);
     }
@@ -1308,11 +1329,14 @@ fn immediate_action_route_kind(action: &ActionSource) -> Result<ActionRouteKind,
     }
 }
 
-fn action_profile_from_grant(grant: &CompiledActionGrant) -> AccessProfileSource {
+fn action_profile_from_grant(grant: &CompiledActionPermission) -> AccessProfileSource {
     AccessProfileSource {
         id: grant.profile_id.clone(),
         default: grant.default,
         anonymous: grant.anonymous,
+        actor_kind: grant.actor_kind,
+        requester_clients: grant.requester_clients.clone(),
+        task_grant: None,
         principal_claim: grant.principal_claim.clone(),
         required_scopes: grant.required_scopes.clone(),
         required_purposes: grant.required_purposes.clone(),
@@ -1495,7 +1519,7 @@ fn condition_input_api_names(action: &CompiledAction) -> BTreeSet<String> {
 fn validate_capture_results(
     request: &ActionSource,
     action: &CompiledAction,
-    grant: &CompiledActionGrant,
+    grant: &CompiledActionPermission,
     capture_results: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, FixtureError> {
     let mut captures = BTreeMap::new();
@@ -1543,7 +1567,7 @@ fn validate_request_capture_results(
             .iter()
             .find(|effect| effect.id == *effect_id && effect.operation == Operation::Create)
             .ok_or(FixtureError::LogicalReferenceRefused)?;
-        if !change_request.apply_grants.iter().any(|grant| {
+        if !change_request.apply_permissions.iter().any(|grant| {
             grant.profile_id == profile_id && grant.target_entity_id == effect.target.entity_id
         }) {
             return Err(FixtureError::LogicalReferenceRefused);
@@ -4028,13 +4052,32 @@ fn verified_claims(step: &ValidatedStep) -> Result<VerifiedRequestClaims, Fixtur
                 .map_err(|_| FixtureError::RequestConstructionRefused)
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    VerifiedRequestClaims::authenticated(
+    let actor_kind = match (step.profile.actor_kind, step.claims.actor_kind) {
+        (None, None) => registry_platform_oidc::ActorKind::Service,
+        (Some(expected), Some(actual)) if expected == actual => match actual {
+            crate::contract::ActorKindSource::Human => registry_platform_oidc::ActorKind::Human,
+            crate::contract::ActorKindSource::Agent => registry_platform_oidc::ActorKind::Agent,
+            crate::contract::ActorKindSource::Service => registry_platform_oidc::ActorKind::Service,
+        },
+        _ => return Err(FixtureError::RequestConstructionRefused),
+    };
+    VerifiedRequestClaims::authenticated_with_actor_kind(
         principal_claim,
         principal,
         step.claims.scopes.clone(),
         step.claims.purpose.clone(),
         direct_claims,
+        actor_kind,
     )
+    .and_then(|claims_context| {
+        claims_context.with_contextual_authority(
+            Some(actor_kind),
+            step.claims.requester_client.clone(),
+            step.claims.actor_subject.clone(),
+            None,
+            BTreeMap::new(),
+        )
+    })
     .map_err(|_| FixtureError::RequestConstructionRefused)
 }
 
@@ -6583,6 +6626,27 @@ mod tests {
         assert_eq!(
             assert_exact_claims(&claims, &profile, &exact, &widened_scopes),
             Err(FixtureError::AuthorityWideningRefused)
+        );
+    }
+
+    #[test]
+    fn fixture_claims_use_a_service_actor_only_for_actor_neutral_profiles() {
+        let fixture = package_fixture(DIGEST_A);
+        let suite = validate_fixture_journeys(JOURNEY_SOURCE, fixture.package.registry())
+            .expect("strict suite validates");
+        let step = &suite.journeys[0].steps[0];
+        assert_eq!(
+            verified_claims(step)
+                .expect("actor-neutral fixture claims construct")
+                .actor_kind(),
+            Some(registry_platform_oidc::ActorKind::Service)
+        );
+
+        let mut actor_bound = step.clone();
+        actor_bound.profile.actor_kind = Some(crate::contract::ActorKindSource::Agent);
+        assert_eq!(
+            verified_claims(&actor_bound).unwrap_err(),
+            FixtureError::RequestConstructionRefused
         );
     }
 

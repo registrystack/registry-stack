@@ -173,6 +173,8 @@ class DriftTest(unittest.TestCase):
             class_members(private_config),
             {
                 "audience",
+                "resource",
+                "scopes",
                 "assertion_lifetime_seconds",
                 "refresh_margin_seconds",
                 "request_timeout_seconds",

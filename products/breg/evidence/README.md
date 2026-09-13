@@ -50,7 +50,7 @@ bregctl dev export-client ./registry --client source \
 ```
 
 For the broader copied registry use `--clients-file ./registry/clients.yaml` on its
-first start. Both starters use default BReg and Mint ports `8090` and `8091`.
+first start. Both starters use default BReg and stock issuer ports `8090` and `8091`.
 Normal stop/start preserves records, package, and credentials. Do not remove data
 or change the retained registry's model or client declarations to add Evidence.
 
@@ -74,7 +74,7 @@ through native source diff and update. `--work-dir <new-directory>` retains the
 synthetic outputs for inspection. It also checks unmodified default init with the
 one-question starter and its 11 fixtures. The default run starts no services.
 
-Add `--live`, matching `--breg` and `--mint` binary paths, and available Docker
+Add `--live`, a matching `--breg` binary path, and available Docker
 to execute the retained-record journey. It allocates unused loopback ports,
 creates and edits a record before Evidence exists, stops normally during setup,
 and verifies the signed answer after restart. It checks retained record and

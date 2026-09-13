@@ -2258,7 +2258,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],
             "requiredPurposes":["contact-registration"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -2303,7 +2303,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:shadow"],
             "requiredPurposes":["contact-registration"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -2316,7 +2316,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           },{
             "id":"household-seed-writer",
             "principalClaim":"registry_principal",
-            "grants":[{
+            "permissions":[{
               "entity":"household",
               "operations":["create"],
               "readableFields":["household-code","jurisdiction"],

@@ -26,8 +26,8 @@ use registry_breg::{compile_project, parse_project_yaml, CompileProfile, Compile
 use registry_platform_crypto::PrivateJwk;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    access_token_typ_set, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
-    TokenVerifierConfig,
+    access_token_typ_set, ActorKind, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError,
+    TokenVerifier, TokenVerifierConfig,
 };
 use registry_platform_testing::{
     fixtures, jwks_from_private_jwk, oidc_verifier_config, sign_ed25519_compact_jwt, MockIdp,
@@ -42,6 +42,7 @@ const PURPOSE: &str = "case-management-never-rendered";
 const JURISDICTION: &str = "area-a-never-rendered";
 const TENANT: &str = "tenant-a-never-rendered";
 const RECORD_ID: &str = "00000000-0000-4000-8000-000000000001";
+const ACTOR_ID: &str = "00000000-0000-4000-8000-0000000000aa";
 
 const PROJECT: &str = r#"
 apiVersion: registry.registrystack.org/v1alpha1
@@ -67,7 +68,7 @@ accessProfiles:
   - id: public
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label]
@@ -76,7 +77,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry.read]
     requiredPurposes: [case-management-never-rendered]
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label, secret]
@@ -102,16 +103,62 @@ entities:
     classification: public
     fields:
       - {id: label, type: string, required: true, maxLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
 accessProfiles:
   - id: caseworker
     default: true
     principalClaim: registry_principal
-    grants:
+    permissions:
       - entity: case
         operations: [get]
         readableFields: [label]
         rowBoundaries:
           - {field: id, claim: record_id, operator: equals}
+"#;
+
+const CONTEXTUAL_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry: {id: contextual-auth, version: 0.1.0, defaultLanguage: en, canonicalBaseIri: https://authoring.example.test}
+entities:
+  - id: case
+    primaryDataset: test-dataset
+    route: cases
+    mutationMode: mutable
+    tombstone: false
+    classification: public
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: public}
+      - {id: tenant, type: string, required: true, maxLength: 100, classification: internal}
+accessProfiles:
+  - id: standing-human
+    principalClaim: sub
+    actorKind: human
+    requesterClients: [agent-client]
+    requiredScopes: [registry.read]
+    requiredPurposes: [record-review]
+    permissions:
+      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: []}
+  - id: standing-agent
+    principalClaim: sub
+    actorKind: agent
+    requesterClients: [agent-client]
+    requiredPurposes: [citizen-self-service]
+    permissions:
+      - {entity: case, operations: [get], readableFields: [label], rowBoundaries: []}
+  - id: delegated-agent
+    default: true
+    principalClaim: sub
+    actorKind: agent
+    requesterClients: [agent-client]
+    requiredPurposes: [record-review]
+    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}
+    permissions:
+      - entity: case
+        operations: [get]
+        readableFields: [label]
+        rowBoundaries:
+          - {field: tenant, claim: tenant_claim, operator: equals}
 "#;
 
 #[derive(Default)]
@@ -272,6 +319,208 @@ impl Harness {
             Value::Object(claims.clone()),
         )
     }
+}
+
+async fn contextual_harness() -> Harness {
+    let project = parse_project_yaml(CONTEXTUAL_PROJECT.as_bytes()).expect("project parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+    );
+    let idp = MockIdp::start().await;
+    let mut verifier = verifier_config(&idp);
+    verifier.allowed_clients = vec!["agent-client".to_owned()];
+    let claims = AuthorityClaimConfig::new("sub", Some("registry_purpose".to_owned()))
+        .with_contextual_claims(
+            ClaimNames::default(),
+            BTreeMap::from([("agent-client".to_owned(), ACTOR_ID.to_owned())]),
+        );
+    let authenticator = Arc::new(
+        authenticator_with_verifier(&registry, &idp, verifier, claims)
+            .expect("contextual authentication config is valid"),
+    );
+    let records = Arc::new(RecordingReadService::default());
+    let service = Arc::new(HttpService::new(
+        Arc::clone(&registry),
+        read_identity(),
+        records.clone(),
+        Arc::new(Ready),
+        cursor_codec(),
+    ));
+    let app = authenticated_router(service, Arc::clone(&authenticator));
+    Harness {
+        app,
+        authenticator,
+        records,
+        registry,
+        idp,
+    }
+}
+
+#[tokio::test]
+async fn token_without_actor_kind_is_refused_before_profile_authorization() {
+    let harness = Harness::new().await;
+    let mut claims = valid_claims();
+    claims
+        .as_object_mut()
+        .expect("fixture claims are an object")
+        .remove("registry_actor_kind");
+
+    assert_refused_without_record_call(&harness, &harness.idp.mint_token(claims)).await;
+}
+
+#[tokio::test]
+async fn agent_registered_client_without_actor_kind_cannot_use_a_human_profile() {
+    let harness = contextual_harness().await;
+    let token = harness.idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "scope": "registry.read",
+        "registry_purpose": "record-review"
+    }));
+
+    let response = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-human"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(response).await["code"], "authentication.refused");
+    assert_eq!(harness.records.calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn task_grant_is_exactly_bound_and_cannot_fall_back_to_standing_authority() {
+    let harness = contextual_harness().await;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let claims = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "record-review",
+        "registry_grant_id": "00000000-0000-4000-8000-0000000000bb",
+        "registry_grant_authority": "casework-v1",
+        "registry_approver": "h:synthetic-approver",
+        "registry_grant_source_issuer": "https://casework.example",
+        "registry_grant_client": "agent-client",
+        "registry_grant_resource": AUDIENCE,
+        "registry_grant_exp": now + 600,
+        "registry_grant_bounds": {"type":"breg","permissions":[{"collection":"cases","operations":["get"]}]},
+        "tenant_claim": "flat-claim-must-not-control-task-row",
+        "identity": {"tenant_claim": "tenant-from-approved-identity"}
+    });
+    let token = harness.signed_token(claims.clone(), "JWT");
+    let delegated = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_eq!(delegated.status(), StatusCode::OK);
+    {
+        let requests = harness.records.requests.lock().unwrap();
+        let context = &requests[0].context;
+        let task_grant = context.task_grant().expect("task grant is retained");
+        assert_eq!(
+            task_grant.subjects(),
+            &BTreeMap::from([(
+                "tenant_claim".to_owned(),
+                json!("tenant-from-approved-identity"),
+            )])
+        );
+        assert_eq!(
+            context.row_boundaries()[0].values(),
+            &BTreeSet::from(["tenant-from-approved-identity".to_owned()])
+        );
+    }
+
+    let standing = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&token)],
+            None,
+        )
+        .await;
+    assert_ne!(standing.status(), StatusCode::OK);
+
+    let mut wider = claims;
+    wider["registry_grant_bounds"] =
+        json!({"type":"breg","permissions":[{"collection":"cases","operations":["get","list"]}]});
+    let refused = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=delegated-agent"),
+            &[bearer(&harness.signed_token(wider, "JWT"))],
+            None,
+        )
+        .await;
+    assert_ne!(refused.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn standing_citizen_agent_requires_the_registered_client_actor_pair() {
+    let harness = contextual_harness().await;
+    let claims = json!({
+        "aud": AUDIENCE,
+        "sub": PRINCIPAL,
+        "azp": "agent-client",
+        "registry_actor_kind": "agent",
+        "registry_purpose": "citizen-self-service",
+        "act": {"sub": ACTOR_ID}
+    });
+    let accepted = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&harness.signed_token(claims.clone(), "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    let mut wrong_actor = claims;
+    wrong_actor["act"] = json!({"sub":"00000000-0000-4000-8000-0000000000cc"});
+    let refused = harness
+        .send(
+            &format!("/v1/records/cases/{RECORD_ID}?accessProfile=standing-agent"),
+            &[bearer(&harness.signed_token(wrong_actor, "JWT"))],
+            None,
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[test]
+fn task_profiles_allow_governed_draft_authoring_and_refuse_direct_target_mutation() {
+    let direct = CONTEXTUAL_PROJECT.replace(
+        "operations: [get]\n        readableFields: [label]\n        rowBoundaries:",
+        "operations: [create, get]\n        readableFields: [label]\n        writableFields: [label]\n        rowBoundaries:",
+    );
+    let project = parse_project_yaml(direct.as_bytes()).expect("direct mutation project parses");
+    let failure = compile_project(&project, &[], CompileProfile::Authoring)
+        .expect_err("direct target mutation is refused");
+    assert!(failure.diagnostics().iter().any(|diagnostic| {
+        diagnostic.code == "access_profile.task_grant.direct_mutation_forbidden"
+    }));
+
+    let governed = include_str!("fixtures/authority-mapping.yaml")
+        .replace(
+            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal",
+            "  - id: reviewer\n    default: true\n    principalClaim: registry_principal\n    actorKind: agent\n    requesterClients: [agent-client]\n    requiredPurposes: [record-review]\n    taskGrant: {authority: casework-v1, sourceIssuer: https://casework.example}",
+        )
+        .replace(
+            "operations: [get, submit_request, approve_request",
+            "operations: [create, get, patch, submit_request, approve_request",
+        );
+    let project = parse_project_yaml(governed.as_bytes()).expect("governed draft project parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("governed request draft create and patch remain available");
 }
 
 fn read_identity() -> ReadRuntimeIdentity {
@@ -638,6 +887,7 @@ async fn canonical_id_row_boundary_uses_the_compiled_uuid_claim_type() {
 
     let token = idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": PRINCIPAL,
         "record_id": RECORD_ID,
     }));
@@ -648,6 +898,7 @@ async fn canonical_id_row_boundary_uses_the_compiled_uuid_claim_type() {
 
     let invalid_token = idp.mint_token(json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": PRINCIPAL,
         "record_id": "invalid-uuid-claim-never-rendered",
     }));
@@ -1076,7 +1327,7 @@ async fn refusals_and_debug_output_are_value_free() {
 fn action_only_claim_source() -> Value {
     let mut source = action_source::project();
     source["accessProfiles"][0]["requiredPurposes"] = json!([PURPOSE]);
-    source["accessProfiles"][0]["grants"][0]["targets"][0]["rowBoundaries"][0] =
+    source["accessProfiles"][0]["permissions"][0]["targets"][0]["rowBoundaries"][0] =
         json!({"field": "zone", "claim": "allowed_owners", "operator": "in"});
     source
 }
@@ -1101,7 +1352,7 @@ async fn action_only_target_claims_are_mapped_without_crud_grants() {
     token_claims["allowed_owners"] = json!(["zone-a", "zone-b", "zone-a"]);
     let token = idp.mint_token(token_claims.clone());
     let expected = |direct| {
-        VerifiedRequestClaims::authenticated(
+        VerifiedRequestClaims::authenticated_with_actor_kind(
             "registry_principal",
             PRINCIPAL,
             BTreeSet::from([
@@ -1110,6 +1361,7 @@ async fn action_only_target_claims_are_mapped_without_crud_grants() {
             ]),
             Some(PURPOSE.to_owned()),
             direct,
+            ActorKind::Service,
         )
         .unwrap()
     };
@@ -1177,7 +1429,7 @@ async fn action_only_principal_purpose_and_claim_shape_conflicts_are_checked() {
     let mut conflicting = source;
     conflicting["accessProfiles"].as_array_mut().unwrap().push(json!({
         "id": "reader", "principalClaim": "registry_principal", "requiredScopes": ["registry:parent:process"],
-        "grants": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
+        "permissions": [{"entity": "parent", "operations": ["get"], "readableFields": ["status"], "rowBoundaries": [{"field": "zone", "claim": "allowed_owners", "operator": "equals"}]}]
     }));
     let registry = compile_action_claim_source(&conflicting);
     assert_eq!(
@@ -1214,6 +1466,40 @@ async fn constructor_rejects_empty_duplicate_reserved_and_incomplete_mappings() 
             .expect_err("incomplete compiled authority mapping is refused");
         assert_eq!(error, expected);
     }
+}
+
+#[tokio::test]
+async fn constructor_rejects_contextual_claims_that_shadow_other_authority_roles() {
+    let harness = Harness::new().await;
+    let principal_collision = ClaimNames {
+        actor_kind: "registry_principal".to_owned(),
+        ..ClaimNames::default()
+    };
+    let purpose_collision = ClaimNames {
+        grant_id: "purpose".to_owned(),
+        ..ClaimNames::default()
+    };
+    let scope_collision = ClaimNames::default();
+
+    for (contextual, scope_claim) in [
+        (principal_collision, "scope"),
+        (purpose_collision, "scope"),
+        (scope_collision, "registry_actor_kind"),
+    ] {
+        let mut verifier = verifier_config(&harness.idp);
+        verifier.scope_claim = scope_claim.to_owned();
+        let claims = authority_claims().with_contextual_claims(contextual, BTreeMap::new());
+        let error = authenticator_with_verifier(&harness.registry, &harness.idp, verifier, claims)
+            .expect_err("one claim cannot supply two authority roles");
+        assert_eq!(error, AuthenticationConfigError::ConflictingClaimMapping);
+        assert!(error.to_string().contains("overlaps"), "{error}");
+    }
+
+    let shared_purpose =
+        AuthorityClaimConfig::new("registry_principal", Some("registry_purpose".to_owned()))
+            .with_contextual_claims(ClaimNames::default(), BTreeMap::new());
+    authenticator(&harness.registry, &harness.idp, shared_purpose)
+        .expect("the contextual purpose may share the configured purpose role");
 }
 
 /// The construction refusal is what an operator reads at startup, so each
@@ -1433,6 +1719,7 @@ impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedLogs {
 fn valid_claims() -> Value {
     json!({
         "aud": AUDIENCE,
+        "registry_actor_kind": "service",
         "registry_principal": PRINCIPAL,
         "scope": "registry.read",
         "purpose": PURPOSE,
@@ -1461,9 +1748,13 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let idp = MockIdp::start().await;
     let auth = authenticator(&registry, &idp, AuthorityClaimConfig::new("sub", None)).unwrap();
-    let token = idp.mint_token(json!({"aud": AUDIENCE, "sub": RECORD_ID}));
+    let token = idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "sub": RECORD_ID,
+        "registry_actor_kind": "service"
+    }));
     let actual = auth.authenticate(&token).await.unwrap();
-    let expected = VerifiedRequestClaims::authenticated(
+    let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
         "sub",
         RECORD_ID,
         BTreeSet::<String>::new(),
@@ -1472,13 +1763,14 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
             "sub".to_owned(),
             VerifiedClaimValue::direct_string(RECORD_ID).unwrap(),
         )]),
+        ActorKind::Service,
     )
     .unwrap();
     assert_eq!(actual, expected);
     for payload in [
-        json!({"aud": AUDIENCE, "registry_principal": RECORD_ID, "client_id": RECORD_ID, "azp": RECORD_ID}),
-        json!({"aud": AUDIENCE, "sub": "not-a-uuid"}),
-        json!({"aud": AUDIENCE, "sub": [RECORD_ID]}),
+        json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": RECORD_ID, "client_id": RECORD_ID, "azp": RECORD_ID}),
+        json!({"aud": AUDIENCE, "registry_actor_kind": "service", "sub": "not-a-uuid"}),
+        json!({"aud": AUDIENCE, "registry_actor_kind": "service", "sub": [RECORD_ID]}),
     ] {
         assert!(auth.authenticate(&idp.mint_token(payload)).await.is_err());
     }
@@ -1494,11 +1786,13 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
     )
     .unwrap();
     assert!(auth
-        .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": RECORD_ID})))
+        .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": RECORD_ID})))
         .await
         .is_ok());
     assert!(auth
-        .authenticate(&idp.mint_token(json!({"aud": AUDIENCE, "sub": RECORD_ID})))
+        .authenticate(&idp.mint_token(
+            json!({"aud": AUDIENCE, "registry_actor_kind": "service", "sub": RECORD_ID})
+        ))
         .await
         .is_err());
 
@@ -1524,11 +1818,11 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
     let date_principal = "2026-09-05";
     let actual = auth
         .authenticate(
-            &idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": date_principal})),
+            &idp.mint_token(json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": date_principal})),
         )
         .await
         .unwrap();
-    let expected = VerifiedRequestClaims::authenticated(
+    let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
         "registry_principal",
         date_principal,
         BTreeSet::<String>::new(),
@@ -1537,13 +1831,14 @@ async fn explicitly_selected_subject_can_also_supply_scalar_ownership_without_fa
             "registry_principal".to_owned(),
             VerifiedClaimValue::direct_string(date_principal).unwrap(),
         )]),
+        ActorKind::Service,
     )
     .unwrap();
     assert_eq!(actual, expected);
     for malformed in ["2026-02-30", "2026-09-05T00:00:00Z", "not-a-date"] {
         assert_eq!(
             auth.authenticate(
-                &idp.mint_token(json!({"aud": AUDIENCE, "registry_principal": malformed}))
+                &idp.mint_token(json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": malformed}))
             )
             .await
             .unwrap_err(),
@@ -1563,12 +1858,12 @@ async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens
         .all(|entity| entity.access_profiles.is_empty()));
     let idp = MockIdp::start().await;
     let auth = authenticator(&registry, &idp, authority_claims()).unwrap();
-    let base = json!({"aud": AUDIENCE, "registry_principal": PRINCIPAL, "scope": "case.rename", "purpose": "case-management", "regions": ["north"]});
+    let base = json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": PRINCIPAL, "scope": "case.rename", "purpose": "case-management", "regions": ["north"]});
     let actual = auth
         .authenticate(&idp.mint_token(base.clone()))
         .await
         .unwrap();
-    let expected = VerifiedRequestClaims::authenticated(
+    let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
         "registry_principal",
         PRINCIPAL,
         BTreeSet::from(["case.rename".to_owned()]),
@@ -1577,17 +1872,19 @@ async fn action_only_purpose_and_target_claims_are_discovered_from_signed_tokens
             "regions".to_owned(),
             VerifiedClaimValue::direct_string_set(["north"]).unwrap(),
         )]),
+        ActorKind::Service,
     )
     .unwrap();
     assert_eq!(actual, expected);
     let mut missing = base.clone();
     missing.as_object_mut().unwrap().remove("regions");
-    let expected = VerifiedRequestClaims::authenticated(
+    let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
         "registry_principal",
         PRINCIPAL,
         BTreeSet::from(["case.rename".to_owned()]),
         Some("case-management".to_owned()),
         BTreeMap::new(),
+        ActorKind::Service,
     )
     .unwrap();
     assert_eq!(
@@ -1629,7 +1926,7 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
         AuthorityClaimConfig::new("registry_principal", None),
     )
     .unwrap();
-    let base = json!({"aud": AUDIENCE, "registry_principal": PRINCIPAL,
+    let base = json!({"aud": AUDIENCE, "registry_actor_kind": "service", "registry_principal": PRINCIPAL,
         "apply_label": "A", "lookup_label": "L", "presence_label": "P", "review_labels": ["R"]});
     let direct = BTreeMap::from([
         (
@@ -1649,12 +1946,13 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
             VerifiedClaimValue::direct_string_set(["R"]).unwrap(),
         ),
     ]);
-    let expected = VerifiedRequestClaims::authenticated(
+    let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
         "registry_principal",
         PRINCIPAL,
         BTreeSet::<String>::new(),
         None,
         direct.clone(),
+        ActorKind::Service,
     )
     .unwrap();
     assert_eq!(
@@ -1668,12 +1966,13 @@ async fn nested_workflow_and_lookup_claims_are_mapped_without_requiring_unrelate
         missing.as_object_mut().unwrap().remove(name);
         let mut expected_direct = direct.clone();
         expected_direct.remove(name);
-        let expected = VerifiedRequestClaims::authenticated(
+        let expected = VerifiedRequestClaims::authenticated_with_actor_kind(
             "registry_principal",
             PRINCIPAL,
             BTreeSet::<String>::new(),
             None,
             expected_direct,
+            ActorKind::Service,
         )
         .unwrap();
         assert_eq!(

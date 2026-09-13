@@ -2,53 +2,34 @@
 set -euo pipefail
 
 loadtest_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repository_root=$(cd -- "$loadtest_dir/../../.." && pwd)
 run_dir="$loadtest_dir/.run"
+marker="$run_dir/.launcher-owned"
 
-if [[ ! -f "$run_dir/env.json" ]]; then
-  printf '%s\n' "No recorded load-test environment at $run_dir/env.json." >&2
+if [[ $# -ne 0 ]]; then
+  printf '%s\n' 'usage: products/breg/loadtest/down.sh' >&2
+  exit 2
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  printf '%s\n' 'docker is required to stop the owned bregctl development session.' >&2
+  exit 2
+fi
+if [[ -L "$run_dir" || ! -d "$run_dir" || ! -f "$marker" ]] ||
+  [[ "$(<"$marker")" != registry-stack-breg-loadtest-v2 ]]; then
+  printf '%s\n' 'No owned Base Registry Engine load-test state was found; refusing teardown.' >&2
+  exit 2
+fi
+if [[ -L "$run_dir/project" || ! -d "$run_dir/project" || ! -f "$run_dir/env.json" ]]; then
+  printf '%s\n' 'Owned load-test state is incomplete; refusing teardown.' >&2
   exit 2
 fi
 
-container=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["database"]["container"])' "$run_dir/env.json")
-if [[ ! "$container" =~ ^breg-loadtest-[0-9]+-[0-9]+$ ]]; then
-  printf '%s\n' 'Recorded container name is not a Base Registry Engine load-test target; refusing teardown.' >&2
+bregctl=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["bregctl"])' "$run_dir/env.json")
+if [[ "$bregctl" != "$repository_root/target/debug/bregctl" || ! -x "$bregctl" ]]; then
+  printf '%s\n' 'The bregctl recorded by this environment is unavailable; preserve state and restore the matching build.' >&2
   exit 2
 fi
 
-validated_pid() {
-  local pid_file="$1"
-  local expected_config="$2"
-  local label="$3"
-  if [[ ! -f "$pid_file" ]]; then
-    return 0
-  fi
-  local pid
-  pid=$(<"$pid_file")
-  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "Recorded $label PID is invalid; refusing teardown." >&2
-    return 2
-  fi
-  if ! kill -0 "$pid" 2>/dev/null; then
-    return 0
-  fi
-  local command
-  command=$(ps -ww -p "$pid" -o command= 2>/dev/null || true)
-  if [[ "$command" != *"$expected_config"* ]]; then
-    printf '%s\n' "Recorded $label PID now belongs to another process; refusing teardown." >&2
-    return 2
-  fi
-  printf '%s\n' "$pid"
-}
-
-breg_pid=$(validated_pid "$run_dir/breg.pid" "$run_dir/runtime.yaml" 'Base Registry Engine') || exit $?
-mint_pid=$(validated_pid "$run_dir/mint.pid" "$run_dir/mint/mint.yaml" 'Registry Mint') || exit $?
-
-if [[ -n "$breg_pid" ]]; then
-  kill "$breg_pid" >/dev/null 2>&1 || true
-fi
-if [[ -n "$mint_pid" ]]; then
-  kill "$mint_pid" >/dev/null 2>&1 || true
-fi
-docker rm -f "$container" >/dev/null 2>&1 || true
-rm -f "$run_dir/breg.pid" "$run_dir/mint.pid" "$run_dir/env.json"
-printf '%s\n' 'Load-test environment stopped. The .run directory was kept for logs and seeds; up.sh clears it on the next start.'
+"$bregctl" --format json dev stop --remove --docker-bin "$(command -v docker)" "$run_dir/project" >"$run_dir/stop-report.json"
+printf '%s\n' 'Load-test services and their owned database were removed through bregctl dev.'
+printf '%s\n' "Evidence and synthetic seeds remain at $run_dir; move that directory aside before another start."

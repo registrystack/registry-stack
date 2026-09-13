@@ -78,7 +78,8 @@ credential are readable. Each one loads `runtime.yaml` in the project directory 
 before applying a command. Each connects with the migration credential, not the runtime credential.
 
 Both commands preview by default and write nothing until you repeat the exact invocation with
-`--apply`. The examples use `--format json` to put one report on standard output. A successful run
+`--apply`. These examples use `--format json` so you can compare the exact selector, counts, and
+`applied` state in the preview and apply reports. A successful run
 exits 0. A refusal puts `{"ok": false}` with a diagnostic on standard output and exits 1 for an
 invalid project or configuration, or 3 for an operational failure. Without `--format json`,
 Casework prints a human-readable result and sends refusal diagnostics to standard error.

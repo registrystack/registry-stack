@@ -131,7 +131,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 "caseload_moved", "clock_reminder", "clock_step_applied",
                 "clock_recomputed", "released", "draft_saved", "attempt_reserved",
                 "attempt_uncertain", "action_completed", "attempt_settled", "superseded",
-                "completed",
+                "completed", "task_approved", "task_revoked", "task_invalidated",
             },
             set(schemas["HistoryEntry"]["properties"]["kind"]["enum"]),
         )
@@ -908,7 +908,16 @@ class GeneratedOpenApiTests(unittest.TestCase):
             path = rust["path"]
             operation = self.openapi["paths"][path][method]
             names = {parameter["name"] for parameter in operation["parameters"]}
-            if path not in {"/health", "/ready", "/events/sources/{source_id}"}:
+            without_profiles = {
+                "/health", "/ready", "/events/sources/{source_id}",
+                "/.well-known/jwks.json",
+                "/v1/task-grants/{grant_id}/assertion",
+                "/v1/task-grants/{grant_id}/status",
+            }
+            if path in without_profiles:
+                self.assertNotIn("Registry-Casework-Profile", names)
+                self.assertNotIn("Registry-Source-Profile", names)
+            else:
                 self.assertEqual(
                     profile_schema,
                     parameter_schema(

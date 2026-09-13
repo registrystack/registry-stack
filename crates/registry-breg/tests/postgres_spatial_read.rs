@@ -2448,7 +2448,7 @@ fn plain_geojson_registry_source() -> &'static str {
         "default":true,
         "principalClaim":"registry_principal",
         "requiredScopes":["registry.read"],
-        "grants":[{
+        "permissions":[{
           "entity":"plain-site",
           "operations":["create","get","list"],
           "readableFields":["code","location"],

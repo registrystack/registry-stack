@@ -244,6 +244,14 @@ export declare class BRegTombstoneBinding {
 }
 export type TombstoneBinding = BRegTombstoneBinding
 
+/** Shared OAuth client authentication and uncached task-token exchange. */
+export declare class PrivateKeyJwt {
+  constructor(config: any)
+  exchange(subjectToken: string): Promise<string>
+  bearerToken(): Promise<string>
+}
+export type PrivateKeyJwtBinding = PrivateKeyJwt
+
 export interface CompleteOutcome {
   kind: string
   value: any

@@ -89,7 +89,7 @@ entities:
 
 | Member | Effect |
 |---|---|
-| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary grants, and only applying a request performs it. |
+| `changeControl.requiredFor` | The operations on the target that must go through a request. With `[patch]`, a direct patch of a placement is refused even for a profile that holds `patch`: the operation is absent from ordinary permissions, and only applying a request performs it. |
 | `changeRequest.effects` | What applying the request writes. `target` names the record from a reference field, `operation` is `create` or `patch`, `set` maps target fields to request fields, and `clear` lists target fields to null. A request entity declares either `effects` or a `planner`, never both. |
 | `review.stages` | Stages run in order. Each needs `approvals` distinct approvers. `excludeSubmitter` keeps the submitter out of that stage; `excludePreviousReviewers` keeps actors who decided an earlier stage of the current proposal out of this one. A request that needs no review declares `review.mode: none` instead of stages; submitting it moves it straight to `approved`. |
 | `application.mode` | Who applies. The default, `manual`, waits for an applier. `automatic` applies inside the submit, or inside the final approval when stages exist; one profile must then hold that action together with `apply_request` and `applyTargets` for every target. `planner` leaves the choice to a script: `allowedDispositions` lists which of `apply` and `queue` it may return, and a queued request names one of `queueReasons`. |
@@ -106,7 +106,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:submit]
     requiredPurposes: [asset-correction]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [create, get, patch, submit_request, revise_request, cancel_request]
@@ -117,7 +117,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:review]
     requiredPurposes: [asset-correction-review]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, list, approve_request, reject_request, request_revision]
@@ -132,7 +132,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:final-approve]
     requiredPurposes: [asset-correction-review]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, approve_request, reject_request, request_revision]
@@ -147,7 +147,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:corrections:apply]
     requiredPurposes: [asset-correction-apply]
-    grants:
+    permissions:
       - entity: placement-correction-request
         rowBoundaries: []
         operations: [get, apply_request]
@@ -170,7 +170,7 @@ The manual applier may also have participated in review; applying is a separatel
 A reviewer's `reviewStages` names the stages the profile may decide and the target fields it may see while deciding.
 An applier's `applyTargets` names the entities the profile may write when it applies, with row boundaries of its own.
 Give the profiles that read the target entity a `requestPresence` entry so they can see that a correction is pending.
-A grant's `requestVisibility: owner` restricts reads of the request entity to the requests the caller's own principal created, which suits a submitter.
+A permission's `requestVisibility: owner` restricts reads of the request entity to the requests the caller's own principal created, which suits a submitter.
 
 The request record moves through `draft`, `submitted`, `needs_changes`, `rejected`, `approved`, `applied`, and `canceled`.
 Applying writes the target the way a direct mutation would, so the target gains a revision and the request moves to `applied`.
@@ -259,7 +259,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [starter:holder]
     requiredPurposes: [starter-learning]
-    grants:
+    permissions:
       - entity: professional-license
         operations: [get, list]
         readableFields: [person-reference, licensed-activities]
@@ -276,11 +276,11 @@ accessProfiles:
         submitterTargets: [professional-license]
 ```
 
-`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the grant, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. Application must stay `manual`: a `planner` or `automatic` request cannot declare it. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself must be non-anonymous and cannot hold `batch` on the request entity. And the same profile id must carry a grant on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a grant that cannot honour all of this, with `change_request.submitter_targets.invalid`.
+`submitterTargets` must name exactly the request's target entities: one entry for every entity its `effects` write, no more and no fewer. Each field the effects read a target from, `record` above, must be `required` on the request entity and readable through the permission, so admission can always read the target id it names, and writable through it wherever the profile holds `create` or `patch` on the request, so the submitter can supply the reference its own request needs. Application must stay `manual`: a `planner` or `automatic` request cannot declare it. No target may itself be a change-request entity, since a request's own read authority is the thing being checked. The profile itself must be non-anonymous and cannot hold `batch` on the request entity. And the same profile id must carry a permission on the target entity with `get` in its `operations` and no `membershipBoundaries`; a `rowBoundaries` restriction is fine, and the holder's own row boundary on `person-reference` above is what actually limits which licences a holder may target. `check` refuses a permission that cannot honour all of this, with `change_request.submitter_targets.invalid`.
 
-At runtime the engine reuses that same target grant's current `get` authority, never the request entity's own boundaries. Two checks carry it. The route itself refuses `create`, a draft `patch`, `submit_request`, and `revise_request` unless the caller's claims resolve to target authority under that grant: a claim that carries no matching value, or one a boundary cannot reduce to the single value it needs, leaves the route unauthorized and answers `404`, the same concealment an unrelated caller gets. Then `submit_request` and `revise_request` admit the named target rows inside the request transaction, under a share lock on each target table, and an exact idempotent replay admits them again before it replays: a target row the caller can no longer read through that grant answers `412` and `precondition.failed`. Reads are symmetric: once the request is retained, its target links appear only to a reader who currently holds that same `get` authority.
+At runtime the engine reuses that same target permission's current `get` authority, never the request entity's own boundaries. Two checks carry it. The route itself refuses `create`, a draft `patch`, `submit_request`, and `revise_request` unless the caller's claims resolve to target authority under that permission: a claim that carries no matching value, or one a boundary cannot reduce to the single value it needs, leaves the route unauthorized and answers `404`, the same concealment an unrelated caller gets. Then `submit_request` and `revise_request` admit the named target rows inside the request transaction, under a share lock on each target table, and an exact idempotent replay admits them again before it replays: a target row the caller can no longer read through that permission answers `412` and `precondition.failed`. Reads are symmetric: once the request is retained, its target links appear only to a reader who currently holds that same `get` authority.
 
-{/* Evidence: products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/contract.rs, AccessGrantSource; crates/registry-breg/src/change_request.rs; crates/registry-breg/src/mutation/request.rs, admit_submitter_targets(); crates/registry-breg/src/api/mod.rs, authorize_direct_route_base(); crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/postgres/request_read.rs, target_get_is_authorized(); crates/registry-breg/src/problem.rs. */}
+{/* Evidence: products/breg/starters/professional-licences/core/registry.yaml; crates/registry-breg/src/contract.rs, AccessPermissionSource; crates/registry-breg/src/change_request.rs; crates/registry-breg/src/mutation/request.rs, admit_submitter_targets(); crates/registry-breg/src/api/mod.rs, authorize_direct_route_base(); crates/registry-breg/src/idempotency.rs; crates/registry-breg/src/postgres/request_read.rs, target_get_is_authorized(); crates/registry-breg/src/problem.rs. */}
 
 ### Plan effects with a Rhai script
 
@@ -487,14 +487,14 @@ actions:
 `inputs` use the same types and members as fields, except that an input cannot declare `validTimeRole`.
 Each effect has an `id`, a `target` that is either a fixed `entity` or a record named by an input reference through `fromField`, `set` values that come `fromField` or `fromEffect`, so a later effect can reference a record an earlier effect created, and an optional `clear` list for a patch.
 
-The grant names the action, the targets it may write, and the effect results the caller gets back:
+The permission names the action, the targets it may write, and the effect results the caller gets back:
 
 ```yaml
   - id: asset-registrar
     principalClaim: registry_principal
     requiredScopes: [registry:asset:register]
     requiredPurposes: [asset-registration]
-    grants:
+    permissions:
       - action: register-asset-with-inspection
         operations: [invoke]
         targets:
@@ -537,6 +537,6 @@ The report lists every compiled action with its inputs, effects, grants, contrac
 
 - [Review changes before updating a registry](../../tutorials/review-registry-changes/): submit, review, and apply a request against a running registry.
 - [Test with journeys](../breg-journeys/): write the submit, approve, apply, and refusal steps that prove the workflow.
-- [Control access per profile](../breg-access/): the grant members every role on this page depends on.
+- [Control access per profile](../breg-access/): the permission members every role on this page depends on.
 - [Base Registry Engine API reference](../../reference/breg-api/#change-requests): each request action, its route, and the states it accepts.
 - [Retain, erase, and audit](../../operate/breg-retention/): what `operator_erase` lets an operator remove later.

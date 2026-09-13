@@ -85,7 +85,7 @@
           "id": "inspect",
           "operation": "get",
           "entity": "scope-correction",
-          "client": "reviewer",
+          "client": "supervisor",
           "accessProfile": "reviewer",
           "record": "request"
         },
@@ -93,7 +93,7 @@
           "id": "approve",
           "operation": "approve",
           "entity": "scope-correction",
-          "client": "reviewer",
+          "client": "supervisor",
           "accessProfile": "reviewer",
           "record": "request"
         },
@@ -101,7 +101,7 @@
           "id": "reject",
           "operation": "reject",
           "entity": "scope-correction",
-          "client": "reviewer",
+          "client": "supervisor",
           "accessProfile": "reviewer",
           "record": "request"
         },
@@ -109,7 +109,7 @@
           "id": "apply",
           "operation": "apply",
           "entity": "scope-correction",
-          "client": "reviewer",
+          "client": "supervisor",
           "accessProfile": "reviewer",
           "record": "request"
         },
@@ -117,7 +117,7 @@
           "id": "history",
           "operation": "history",
           "entity": "professional-license",
-          "client": "reviewer",
+          "client": "supervisor",
           "accessProfile": "reviewer",
           "record": "first-record"
         }

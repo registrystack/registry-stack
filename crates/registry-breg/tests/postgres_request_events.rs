@@ -635,7 +635,7 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
             }
           }],
           "accessProfiles":[{
-            "id":"steward","principalClaim":"registry_principal","grants":[{
+            "id":"steward","principalClaim":"registry_principal","permissions":[{
               "entity":"asset-site",
               "operations":["create","get","list"],
               "readableFields":["tenant","name"],
@@ -649,7 +649,7 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
             }]
           },{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"submitter","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["create","get","list","patch","submit_request","revise_request","cancel_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],
@@ -657,7 +657,7 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
             }]
           },{
-            "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],"grants":[{
+            "id":"reviewer","principalClaim":"registry_principal","requiredPurposes":["review"],"permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","list","approve_request","reject_request","request_revision"],
               "readableFields":["tenant","placement","proposed-site","reason"],
@@ -668,14 +668,14 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
               }]
             }]
           },{
-            "id":"service","principalClaim":"registry_principal","requiredPurposes":["webhook"],"grants":[{
+            "id":"service","principalClaim":"registry_principal","requiredPurposes":["webhook"],"permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","list"],
               "readableFields":["tenant","placement","proposed-site","reason"],
               "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
             }]
           },{
-            "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],"grants":[{
+            "id":"applier","principalClaim":"registry_principal","requiredPurposes":["apply"],"permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["tenant","placement","proposed-site","reason"],

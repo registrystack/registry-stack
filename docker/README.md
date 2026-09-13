@@ -1,18 +1,16 @@
 # Development images
 
-Distroless container images for the `mint`, `evidence`, and `casework` services, built
+Distroless container images for the `evidence` and `casework` services, built
 entirely inside Docker from the repository root:
 
 ```sh
-docker build -f docker/Dockerfile --target mint -t registry-mint .
 docker build -f docker/Dockerfile --target evidence -t registry-evidence .
 docker build -f docker/Dockerfile --target casework -t registry-casework .
 ```
 
 These locally built images are **not release evidence**. Starting with
-`v0.21.0`, the official Evidence, Mint, and Relay images are
+`v0.21.0`, the official Evidence and Relay images are
 `ghcr.io/registrystack/evidence:v0.21.0`,
-`ghcr.io/registrystack/mint:v0.21.0`, and
 `ghcr.io/registrystack/relay:v0.21.0`. They are assembled from
 `release/docker/` with byte-reproducible binaries built outside Docker by
 `release/scripts/build-release-binaries.sh`. Published deployments should pin
@@ -66,29 +64,6 @@ distroless `nonroot` user (UID and GID 65532) with no shell or package tools.
 The official images have the same nonroot runtime identity and publish it as
 the machine-readable `org.registrystack.runtime.uid` and
 `org.registrystack.runtime.gid` OCI labels.
-
-## Running Mint locally
-
-The configuration is a startup-only artifact. Mount it read-only at
-`/etc/registry-mint` with the signing key and client registry beside it, at
-the paths the configuration names (relative paths resolve against the
-configuration file's directory). The listener address in the configuration
-must be an IP the container can bind. Use a private network address for a
-Compose deployment. Point `audit.path` under `/var/lib/registry-mint/audit`
-and mount that directory on persistent storage owned by UID and GID 65532:
-
-```sh
-docker run --rm \
-  -v "$PWD/deploy/mint:/etc/registry-mint:ro" \
-  -v mint-audit:/var/lib/registry-mint \
-  registry-mint
-```
-
-`mint check` validates a deployment without opening a socket:
-
-```sh
-docker run --rm -v "$PWD/deploy/mint:/etc/registry-mint:ro" registry-mint check
-```
 
 ## Running Evidence locally
 
@@ -145,14 +120,12 @@ both fail closed. The option proves containment only; the writability and
 chain proofs still have to pass.
 
 Relay provides the equivalent `relay check --runtime
-/etc/relay/runtime.yaml`; Mint provides `mint check
---require-runtime-dependencies`. Both accept the same
-`--require-audit-under`. For a Compose deployment containing any
-combination of the three official products, use
+/etc/relay/runtime.yaml`, including the same `--require-audit-under` option.
+For a Compose deployment containing Evidence, Relay, or both, use
 `docker/runtime-preflight.py` to verify the common container posture first and
 then run each product's native check in its actual mounts and network. The
 preflight rejects host or shared network namespaces, entrypoint or command
-overrides, alternate Evidence or Mint configuration paths, privileged mode,
+overrides, alternate Evidence configuration paths, privileged mode,
 replacement builds, added capabilities or supplementary groups, host devices,
 any security option other than one `no-new-privileges` entry, multiple
 replicas, lifecycle hooks, dynamic-loader overrides, inherited mounts,
@@ -187,42 +160,17 @@ short deployment timeout, and `--native-check-timeout-seconds SECONDS` selects
 any deadline from 30 to 21600 seconds. An expired deadline names the service
 that exceeded it and fails the preflight.
 
-Selected Compose dependencies are honored. A cold Evidence check can check,
-start with `--no-deps`, and readiness-probe a declared Mint dependency before
-checking Evidence. The dependency lane is an explicit allowlist: only a
-selected service whose product is Mint may be started, because Relay's existing
-healthcheck is liveness-only and is not accepted as readiness. A `depends_on`
-edge to an official Registry Stack service the operator did not select is
-refused and names both ends, because the dependent would otherwise be checked
-against a service this run never checked or started; an edge to any other
-service starts nothing. The
-plan orders every dependency before its dependent, rejects a cycle in the
-selected services before running anything, and is otherwise the given selection
-order. `docker/compose/docker-compose.mint.yaml` is the cold Mint and Evidence
-fixture for that lane; it publishes no host port.
-
-Services started for dependency checking remain under the operator's Compose
-lifecycle. The preflight names them, and the command that stops them, on
-success and on any failure, so a partially completed run is recoverable with
-the same Compose files. A service whose start did not return successfully is
-named as one the preflight could not confirm, because Compose may have created
-its container before failing. That command repeats the `--env-file` and `--compose-file`
-arguments the preflight was given, because the preflight itself renders the
-deployment once and runs every later command against that frozen configuration
-on stdin. `--dependency-timeout-seconds` bounds both Mint startup and
-readiness polling under one shared deadline. The cold Mint overlay requires
-`MINT_HEALTHCHECK_URL` so the probe names the numeric private `/ready` listener
-Mint binds rather than the command's loopback default. Native checks consume the
-exact rendered Compose JSON already
-validated by the static pass, rather than re-reading mutable Compose or
-environment files.
+The preflight never starts Compose services or their declared dependencies.
+Each native check uses `docker compose run --rm --no-deps` and consumes the
+exact rendered Compose JSON already validated by the static pass, rather than
+re-reading mutable Compose or environment files. Dependencies required by a
+native check must already be available in the deployment network.
 
 ## Health probes
 
-Neither image declares a Docker `HEALTHCHECK`. Mint provides a strict
-`mint healthcheck` command for its private `/ready` endpoint; Evidence serves
-`GET /health` and expects an operator-owned HTTP probe. The image itself does
-not guess which listener address is reachable from the container namespace.
+Evidence serves `GET /health` and expects an operator-owned HTTP probe. The
+image does not guess which listener address is reachable from the container
+namespace.
 
 A Compose healthcheck is a command Docker runs inside the container as the
 service identity, so the preflight validates it: absent, explicitly disabled,

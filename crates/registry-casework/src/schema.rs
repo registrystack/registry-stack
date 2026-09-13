@@ -58,6 +58,7 @@ fn install_runtime_constraints(schema: &mut Value) {
         ("DatabaseConfig", "migrationUrlRef"),
         ("DatabaseConfig", "trustedRootCertificateRef"),
         ("AuditConfig", "hashKeyRef"),
+        ("TaskAuthorityConfig", "signingKeyRef"),
         ("BregBinding", "clientIdRef"),
         ("BregBinding", "clientAssertionKeyRef"),
         ("BregBinding", "webhookSecretRef"),

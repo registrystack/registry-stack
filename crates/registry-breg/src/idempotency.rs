@@ -219,7 +219,7 @@ pub(crate) fn resolve_binding(
                 .map_err(|_| IdempotencyError::InvalidInput)
         })
         .transpose()?;
-    let canonical = canonicalize_json(&json!({
+    let mut authority_binding = json!({
         "context": canonical_context,
         "method": method_name(binding.method),
         "route": binding.route,
@@ -227,8 +227,13 @@ pub(crate) fn resolve_binding(
         "packageRevision": binding.package_revision,
         "responseFields": binding.response_fields,
         "canonicalRequestDigest": hex(&binding.canonical_request_digest),
-    }))
-    .map_err(|_| IdempotencyError::InvalidInput)?;
+    });
+    if let Some(grant) = binding.context.task_grant() {
+        authority_binding["taskGrant"] =
+            serde_json::to_value(grant).map_err(|_| IdempotencyError::InvalidInput)?;
+    }
+    let canonical =
+        canonicalize_json(&authority_binding).map_err(|_| IdempotencyError::InvalidInput)?;
     let canonical = std::str::from_utf8(&canonical).map_err(|_| IdempotencyError::InvalidInput)?;
     let binding_reference = key_hasher
         .audit_reference_hash(

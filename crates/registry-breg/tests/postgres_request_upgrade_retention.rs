@@ -2076,7 +2076,7 @@ fn change_request_project(
             }}
           }}{extra_entity}],
           "accessProfiles":[{{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","grants":[{{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{{
               "entity":"placement-correction-request",
               "operations":["get","list","submit_request","approve_request","reject_request","request_revision"],
               "readableFields":["tenant","placement","proposed-site","reason"],
@@ -2084,7 +2084,7 @@ fn change_request_project(
               "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"placement","readableFields":["site","label"]}}]}}]
             }}]
           }},{{
-            "id":"request-applier","principalClaim":"principal","grants":[{{
+            "id":"request-applier","principalClaim":"principal","permissions":[{{
               "entity":"placement-correction-request","operations":["get","apply_request"],
               "readableFields":["tenant","placement"],
               "rowBoundaries":[{{"field":"tenant","claim":"tenant","operator":"equals"}}],

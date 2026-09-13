@@ -362,10 +362,6 @@ def _webhook_config(fixture_kind: str) -> dict[str, Any]:
     return webhook
 
 
-def _validated_token_lifetime_seconds(value: int) -> int:
-    if value < MIN_TOKEN_LIFETIME_SECONDS or value > MAX_TOKEN_LIFETIME_SECONDS:
-        raise DemoError("token lifetime seconds must be between 60 and 900")
-    return value
 
 
 def _write_new(path: Path, content: str, mode: int = 0o600) -> None:
@@ -636,6 +632,67 @@ def _local_project(
     project_path.write_text(source, encoding="utf-8")
 
 
+
+def prepare_dev(root: Path, fixture: Path, fixture_kind: str, webhook: bool = False) -> None:
+    root = _require_root(root)
+    _local_project(root, fixture.resolve(), webhook, fixture_kind)
+    project = root / "project"
+    registry = project / "registry.yaml"
+    source = registry.read_text(encoding="utf-8")
+    if fixture_kind == "business-establishments":
+        source = source.replace(
+            "          - field: id\n            claim: business_id",
+            "          - field: business-code\n            claim: business_code",
+            1,
+        )
+    elif fixture_kind == "household":
+        source = source.replace(
+            "          - {field: id, claim: household_id, operator: equals}",
+            "          - {field: household-code, claim: household_code, operator: equals}",
+            1,
+        )
+    registry.write_text(source, encoding="utf-8")
+    profiles: dict[str, list[dict[str, Any]]] = {
+        "business-establishments": [
+            {"id":"business-demo", "profile":"business-operator", "scopes":["registry:business:operate"], "claims":{"registry_principal":"synthetic-business-operator", "registry_purpose":"business-administration"}},
+            {"id":"business-demo-no-purpose", "profile":"business-operator", "scopes":["registry:business:operate"], "claims":{"registry_principal":"synthetic-business-operator"}, "testBindings":[{"journeyId":"business-establishment-lifecycle", "stepId":"operator-without-purpose-is-concealed"}]},
+            {"id":"business-demo-viewer", "profile":"business-viewer", "scopes":["registry:business:view"], "claims":{"registry_principal":"synthetic-business-viewer", "registry_purpose":"business-view", "business_code":"BUSINESS-DEMO-001"}},
+        ],
+        "household": [
+            {"id":"household-demo", "profile":"household-operator", "scopes":["registry:household:operate"], "claims":{"registry_principal":"synthetic-household-operator", "registry_purpose":"household-administration"}},
+            {"id":"household-demo-no-purpose", "profile":"household-operator", "scopes":["registry:household:operate"], "claims":{"registry_principal":"synthetic-household-operator"}, "testBindings":[{"journeyId":"household-person-lifecycle", "stepId":"operator-without-purpose-is-concealed"}]},
+            {"id":"household-demo-viewer", "profile":"household-viewer", "scopes":["registry:household:view"], "claims":{"registry_principal":"synthetic-household-viewer", "registry_purpose":"household-view", "household_code":"HOUSEHOLD-DEMO-001"}},
+        ],
+        "asset-site": [
+            {"id":"asset-site-demo-operator", "profile":"asset-operator", "scopes":[ASSET_OPERATOR_SCOPE], "claims":{"registry_principal":"synthetic-asset-operator", "registry_purpose":"asset-management"}},
+            {"id":"asset-site-demo-planner", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner", "registry_purpose":"site-planning"}},
+            {"id":"asset-site-demo-planner-no-purpose", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner"}, "testBindings":[{"journeyId":"asset-and-site-caller-surfaces", "stepId":"planner-without-purpose-is-concealed"}]},
+        ],
+        "asset-change-request": [
+            {"id":"asset-change-demo-operator", "profile":"asset-operator", "scopes":[ASSET_OPERATOR_SCOPE], "claims":{"registry_principal":"asset-operator", "registry_purpose":"asset-management"}},
+            {"id":"asset-change-demo-planner", "profile":"site-planner", "scopes":[ASSET_PLANNER_SCOPE], "claims":{"registry_principal":"synthetic-site-planner", "registry_purpose":"site-planning"}},
+            {"id":"asset-change-demo-submitter", "profile":"correction-submitter", "scopes":["registry:corrections:submit"], "claims":{"registry_principal":"correction-submitter", "registry_purpose":"asset-correction"}},
+            {"id":"asset-change-demo-reviewer", "profile":"correction-reviewer", "scopes":["registry:corrections:review"], "claims":{"registry_principal":"correction-reviewer", "registry_purpose":"asset-correction-review"}},
+            {"id":"asset-change-demo-supervisor", "profile":"correction-supervisor", "scopes":["registry:corrections:supervise"], "claims":{"registry_principal":"correction-supervisor", "registry_purpose":"asset-correction-review"}},
+            {"id":"asset-change-demo-applier", "profile":"correction-applier", "scopes":["registry:corrections:apply"], "claims":{"registry_principal":"correction-applier", "registry_purpose":"asset-correction-apply"}},
+        ],
+        "facility": [
+            {"id":"facility-demo-operator", "profile":"facility-operator", "scopes":[FACILITY_OPERATOR_SCOPE], "claims":{"administrative_boundaries":"north-district", "registry_principal":"synthetic-facility-operator", "registry_purpose":"facility-registry"}},
+            {"id":"facility-demo-south-operator", "profile":"facility-operator", "scopes":[FACILITY_OPERATOR_SCOPE], "claims":{"administrative_boundaries":"south-district", "registry_principal":"synthetic-facility-operator", "registry_purpose":"facility-registry"}, "testBindings":[{"journeyId":"bounded-facility-and-batch-validation", "stepId":"south-district-claim-cannot-see-north-record"}]},
+        ],
+        "inspection": [
+            {"id":"inspection-demo-inspector", "profile":"inspection-inspector", "scopes":[INSPECTION_INSPECTOR_SCOPE], "claims":{"registry_principal":"synthetic-inspection-inspector", "registry_purpose":"facility-inspection"}},
+            {"id":"inspection-demo-no-purpose", "profile":"inspection-inspector", "scopes":[INSPECTION_INSPECTOR_SCOPE], "claims":{"registry_principal":"synthetic-inspection-inspector"}, "testBindings":[{"journeyId":"inspection-and-schema-validation", "stepId":"inspector-without-purpose-is-concealed"}]},
+        ],
+    }
+    clients = []
+    for declaration in profiles[fixture_kind]:
+        client = {"id": declaration["id"], "accessProfiles": [declaration["profile"]], "scopes": declaration["scopes"], "claims": declaration["claims"]}
+        if "testBindings" in declaration:
+            client["testBindings"] = declaration["testBindings"]
+        clients.append(client)
+    (project / "dev-clients.yaml").write_text(json.dumps({"version": 1, "clients": clients}, indent=2) + "\n", encoding="utf-8")
+
 def bind_webhook_module(
     root: Path,
     explain_report: Path,
@@ -671,614 +728,12 @@ def bind_webhook_module(
     project_path.write_text(source, encoding="utf-8")
 
 
-def _mint_client(
-    client_id: str,
-    public_key: dict[str, Any],
-    scopes: list[str],
-    claims: dict[str, Any],
-) -> str:
-    rendered_scopes = ", ".join(
-        json.dumps(scope, ensure_ascii=True, separators=(",", ":")) for scope in scopes
-    )
-    rendered_claims = "".join(
-        f"    {name}: {json.dumps(value, ensure_ascii=True, separators=(',', ':'))}\n"
-        for name, value in sorted(claims.items())
-    )
-    return (
-        f"clientId: {client_id}\n"
-        f"principal: urn:breg:demo:{client_id}\n"
-        "authorization:\n"
-        f"  scopes: [{rendered_scopes}]\n"
-        "  claims:\n"
-        f"{rendered_claims}"
-        f"keys: [{json.dumps(public_key, sort_keys=True, separators=(',', ':'))}]\n"
-    )
 
 
-def _runtime_config(
-    root: Path,
-    package_root: Path,
-    revision: str,
-    bind: str,
-    webhook: bool = False,
-    fixture_kind: str = DEFAULT_FIXTURE_KIND,
-    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
-) -> str:
-    config = _fixture_config(fixture_kind)
-    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
-    secrets = root / "secrets"
-    if webhook:
-        hook = _webhook_config(fixture_kind)
-        receiver_origin = root.joinpath("receiver-origin").read_text(encoding="ascii").strip()
-        event_destinations = f"""eventDestinations:
-  {hook["destination_id"]}:
-    origin: {receiver_origin}
-    path: /events
-    networkProfile: loopbackDevelopmentHttp
-    dnsFamily: dualStackStrict
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/webhook-key
-    classificationCeiling: restricted
-    deliveryCeilings:
-      attemptTimeoutMilliseconds: 1000
-      maximumAttempts: 3
-eventDelivery:
-  payloadRetentionDays: 1
-"""
-    else:
-        event_destinations = "eventDestinations: {}\n"
-    return f"""apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
-kind: BRegRuntimeConfig
-listener:
-  bind: {bind}
-identity:
-  environment: local
-  instanceId: {config["instance_id"]}
-  databaseId: {config["database_id"]}
-  databaseInitializationEnvironment: local
-secretProviders:
-  file:
-    root: {secrets}
-database:
-  runtimeUrlRef: secret:file/runtime-database-url
-  migrationUrlRef: secret:file/migration-database-url
-  pool:
-    maxSize: 4
-    waitTimeoutMilliseconds: 2000
-    createTimeoutMilliseconds: 2000
-    recycleTimeoutMilliseconds: 2000
-  roles:
-    migration: {MIGRATION_ROLE}
-    runtime: {RUNTIME_ROLE}
-package:
-  root: {package_root}
-  trustAnchorPath: {root / 'trust-anchor.json'}
-  compilerSourceRevision: {config["source_revision"]}
-  activeRevision: {revision}
-  activeSequence: 1
-authentication:
-  oidc:
-    issuer: {root.joinpath('mint-origin').read_text(encoding='ascii').strip()}
-    audience: {config["audience"]}
-    allowedAlgorithm: ES256
-    accessTokenType: at+jwt
-    scopeClaim: scope
-    scopeSeparator: " "
-    allowedClients: [{", ".join(config["allowed_clients"])}]
-    deniedKids: []
-    maxTokenLifetimeSeconds: {token_lifetime_seconds}
-    leewayMilliseconds: 30000
-    jwksCache:
-      cacheTtlSeconds: 300
-      negativeCacheTtlSeconds: 30
-      refreshCooldownSeconds: 30
-      maxDocumentBytes: 65536
-      requestTimeoutMilliseconds: 2000
-      outageToleranceSeconds: 0
-    jwksSource:
-      kind: static
-      documentRef: secret:file/mint-jwks
-  authorityClaims:
-    principal: registry_principal
-    purpose: registry_purpose
-audit:
-  hashKeyRef: secret:file/audit-key
-cursor:
-  secretRef: secret:file/cursor-key
-  maxAgeSeconds: 300
-{event_destinations}operationalTimeouts:
-  httpRequestMilliseconds: 10000
-  shutdownGraceMilliseconds: 5000
-  recordLockMilliseconds: 5000
-  migrationLockMilliseconds: 5000
-  migrationStatementMilliseconds: 60000
-"""
 
 
-def prepare(
-    root: Path,
-    fixture: Path,
-    database_port: int,
-    mint_port: int,
-    breg_port: int,
-    webhook: bool = False,
-    receiver_port: int | None = None,
-    fixture_kind: str = DEFAULT_FIXTURE_KIND,
-    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
-) -> None:
-    root = _require_root(root)
-    config = _fixture_config(fixture_kind)
-    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
-    fixture = fixture.resolve()
-    if not (fixture / "registry.yaml").is_file():
-        raise DemoError(f"{fixture_kind} fixture is missing registry.yaml")
-    password_path = root / "secrets/database-password"
-    password = password_path.read_text(encoding="ascii").strip()
-    if not password or any(character not in "0123456789abcdef" for character in password):
-        raise DemoError("database password must be non-empty lowercase hexadecimal")
-
-    if webhook and receiver_port is None:
-        raise DemoError("the webhook demo requires a receiver port")
-    _local_project(root, fixture, webhook, fixture_kind)
-    mint_public = _read_json_object(root / "keys/mint-public.jwk.json")
-    operator_public = _read_json_object(root / "keys/operator-public.jwk.json")
-    no_purpose_public = (
-        _read_json_object(root / "keys/no-purpose-public.jwk.json")
-        if fixture_kind in ("business-establishments", "household", "inspection")
-        else None
-    )
-    kid = mint_public.get("kid")
-    if not isinstance(kid, str) or not kid:
-        raise DemoError("Mint public JWK must carry a key identifier")
-
-    mint_origin = f"http://127.0.0.1:{mint_port}"
-    breg_origin = f"http://127.0.0.1:{breg_port}"
-    _write_new(root / "mint-origin", mint_origin + "\n")
-    _write_new(root / "breg-origin", breg_origin + "\n")
-    if webhook:
-        _write_new(root / "receiver-origin", f"http://127.0.0.1:{receiver_port}\n")
-    _write_json(root / "secrets/mint-jwks", {"keys": [mint_public]}, 0o600)
-    _write_json(root / f"mint/public-keys/{kid}.jwk.json", mint_public)
-    if fixture_kind == "business-establishments":
-        if no_purpose_public is None:
-            raise DemoError("business no-purpose key material is missing")
-        _write_new(
-            root / f"mint/clients/{BUSINESS_OPERATOR_CLIENT}.yaml",
-            _mint_client(
-                BUSINESS_OPERATOR_CLIENT,
-                operator_public,
-                ["registry:business:operate"],
-                {
-                    "registry_principal": "synthetic-business-operator",
-                    "registry_purpose": "business-administration",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{BUSINESS_NO_PURPOSE_CLIENT}.yaml",
-            _mint_client(
-                BUSINESS_NO_PURPOSE_CLIENT,
-                no_purpose_public,
-                ["registry:business:operate"],
-                {"registry_principal": "synthetic-business-operator"},
-            ),
-        )
-    elif fixture_kind == "household":
-        if no_purpose_public is None:
-            raise DemoError("household no-purpose key material is missing")
-        _write_new(
-            root / f"mint/clients/{OPERATOR_CLIENT}.yaml",
-            _mint_client(
-                OPERATOR_CLIENT,
-                operator_public,
-                ["registry:household:operate"],
-                {
-                    "registry_principal": "synthetic-household-operator",
-                    "registry_purpose": "household-administration",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{NO_PURPOSE_CLIENT}.yaml",
-            _mint_client(
-                NO_PURPOSE_CLIENT,
-                no_purpose_public,
-                ["registry:household:operate"],
-                {"registry_principal": "synthetic-household-operator"},
-            ),
-        )
-    elif fixture_kind == "asset-site":
-        planner_public = _read_json_object(root / "keys/planner-public.jwk.json")
-        planner_no_purpose_public = _read_json_object(
-            root / "keys/planner-no-purpose-public.jwk.json"
-        )
-        _write_new(
-            root / f"mint/clients/{ASSET_OPERATOR_CLIENT}.yaml",
-            _mint_client(
-                ASSET_OPERATOR_CLIENT,
-                operator_public,
-                [ASSET_OPERATOR_SCOPE],
-                {
-                    "registry_principal": "synthetic-asset-operator",
-                    "registry_purpose": "asset-management",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{ASSET_PLANNER_CLIENT}.yaml",
-            _mint_client(
-                ASSET_PLANNER_CLIENT,
-                planner_public,
-                [ASSET_PLANNER_SCOPE],
-                {
-                    "registry_principal": "synthetic-site-planner",
-                    "registry_purpose": "site-planning",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{ASSET_PLANNER_NO_PURPOSE_CLIENT}.yaml",
-            _mint_client(
-                ASSET_PLANNER_NO_PURPOSE_CLIENT,
-                planner_no_purpose_public,
-                [ASSET_PLANNER_SCOPE],
-                {"registry_principal": "synthetic-site-planner"},
-            ),
-        )
-    elif fixture_kind == "asset-change-request":
-        planner_public = _read_json_object(root / "keys/planner-public.jwk.json")
-        submitter_public = _read_json_object(root / "keys/submitter-public.jwk.json")
-        reviewer_public = _read_json_object(root / "keys/reviewer-public.jwk.json")
-        supervisor_public = _read_json_object(root / "keys/supervisor-public.jwk.json")
-        applier_public = _read_json_object(root / "keys/applier-public.jwk.json")
-        clients = (
-            (
-                ASSET_CHANGE_OPERATOR_CLIENT,
-                operator_public,
-                [ASSET_OPERATOR_SCOPE],
-                {
-                    "registry_principal": "asset-operator",
-                    "registry_purpose": "asset-management",
-                },
-            ),
-            (
-                ASSET_CHANGE_PLANNER_CLIENT,
-                planner_public,
-                [ASSET_PLANNER_SCOPE],
-                {
-                    "registry_principal": "synthetic-site-planner",
-                    "registry_purpose": "site-planning",
-                },
-            ),
-            (
-                ASSET_CHANGE_SUBMITTER_CLIENT,
-                submitter_public,
-                ["registry:corrections:submit"],
-                {
-                    "registry_principal": "correction-submitter",
-                    "registry_purpose": "asset-correction",
-                },
-            ),
-            (
-                ASSET_CHANGE_REVIEWER_CLIENT,
-                reviewer_public,
-                ["registry:corrections:review"],
-                {
-                    "registry_principal": "correction-reviewer",
-                    "registry_purpose": "asset-correction-review",
-                },
-            ),
-            (
-                ASSET_CHANGE_SUPERVISOR_CLIENT,
-                supervisor_public,
-                ["registry:corrections:supervise"],
-                {
-                    "registry_principal": "correction-supervisor",
-                    "registry_purpose": "asset-correction-review",
-                },
-            ),
-            (
-                ASSET_CHANGE_APPLIER_CLIENT,
-                applier_public,
-                ["registry:corrections:apply"],
-                {
-                    "registry_principal": "correction-applier",
-                    "registry_purpose": "asset-correction-apply",
-                },
-            ),
-        )
-        for client_id, public_key, scopes, claims in clients:
-            _write_new(
-                root / f"mint/clients/{client_id}.yaml",
-                _mint_client(client_id, public_key, scopes, claims),
-            )
-    elif fixture_kind == "facility":
-        south_operator_public = _read_json_object(root / "keys/south-operator-public.jwk.json")
-        _write_new(
-            root / f"mint/clients/{FACILITY_OPERATOR_CLIENT}.yaml",
-            _mint_client(
-                FACILITY_OPERATOR_CLIENT,
-                operator_public,
-                [FACILITY_OPERATOR_SCOPE],
-                {
-                    "administrative_boundaries": "north-district",
-                    "registry_principal": "synthetic-facility-operator",
-                    "registry_purpose": "facility-registry",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{FACILITY_SOUTH_OPERATOR_CLIENT}.yaml",
-            _mint_client(
-                FACILITY_SOUTH_OPERATOR_CLIENT,
-                south_operator_public,
-                [FACILITY_OPERATOR_SCOPE],
-                {
-                    "administrative_boundaries": "south-district",
-                    "registry_principal": "synthetic-facility-operator",
-                    "registry_purpose": "facility-registry",
-                },
-            ),
-        )
-    elif fixture_kind == "inspection":
-        if no_purpose_public is None:
-            raise DemoError("inspection no-purpose key material is missing")
-        _write_new(
-            root / f"mint/clients/{INSPECTION_INSPECTOR_CLIENT}.yaml",
-            _mint_client(
-                INSPECTION_INSPECTOR_CLIENT,
-                operator_public,
-                [INSPECTION_INSPECTOR_SCOPE],
-                {
-                    "registry_principal": "synthetic-inspection-inspector",
-                    "registry_purpose": "facility-inspection",
-                },
-            ),
-        )
-        _write_new(
-            root / f"mint/clients/{INSPECTION_NO_PURPOSE_CLIENT}.yaml",
-            _mint_client(
-                INSPECTION_NO_PURPOSE_CLIENT,
-                no_purpose_public,
-                [INSPECTION_INSPECTOR_SCOPE],
-                {"registry_principal": "synthetic-inspection-inspector"},
-            ),
-        )
-    else:
-        raise AssertionError(fixture_kind)
-    _write_new(
-        root / "mint/mint.yaml",
-        f"""version: 1
-validationMode: supervised-local-development
-issuer: {mint_origin}
-listener: {{address: 127.0.0.1, port: {mint_port}}}
-signing:
-  algorithm: ES256
-  activePublicJwkFile: public-keys/{kid}.jwk.json
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-signer:
-  kind: local-jwk
-  privateKeyRef: secret:file/signing-p256-private-jwk
-secretProviders:
-  file: {{root: {root / 'keys/mint'}}}
-audit:
-  path: audit/mint.jsonl
-  maximumFileBytes: 10485760
-  hashKeyRef: secret:file/audit-hmac-key
-  hashKeyVersion: 1
-accessTokens:
-  audiences: [{config["audience"]}]
-  lifetimeSeconds: {token_lifetime_seconds}
-clientAssertion:
-  audience: {mint_origin}/token
-  maximumLifetimeSeconds: 120
-  algorithms: [ES256]
-clients:
-  directory: clients
-""",
-    )
-
-    encoded_password = urllib.parse.quote(password, safe="")
-    base = f"localhost:{database_port}"
-    _write_new(
-        root / "secrets/test-runtime-database-url",
-        f"postgresql://{RUNTIME_ROLE}:{encoded_password}@{base}/{TEST_DATABASE}",
-        0o600,
-    )
-    _write_new(
-        root / "secrets/test-migration-database-url",
-        f"postgresql://{MIGRATION_ROLE}:{encoded_password}@{base}/{TEST_DATABASE}",
-        0o600,
-    )
-    _write_new(
-        root / "secrets/runtime-database-url",
-        f"postgresql://{RUNTIME_ROLE}:{encoded_password}@{base}/{RUNTIME_DATABASE}",
-        0o600,
-    )
-    _write_new(
-        root / "secrets/migration-database-url",
-        f"postgresql://{MIGRATION_ROLE}:{encoded_password}@{base}/{RUNTIME_DATABASE}",
-        0o600,
-    )
-    _write_new(
-        root / "database/postgres.env",
-        f"POSTGRES_USER=postgres\nPOSTGRES_PASSWORD={password}\nPOSTGRES_DB=postgres\n",
-        0o600,
-    )
-    _write_new(
-        root / "database/bootstrap.sql",
-        f"""CREATE ROLE {MIGRATION_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{password}';
-CREATE ROLE {RUNTIME_ROLE} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS PASSWORD '{password}';
-""",
-        0o600,
-    )
-    _write_new(
-        root / "database/initialize.sql",
-        f"""CREATE EXTENSION IF NOT EXISTS btree_gist;
-REVOKE ALL ON DATABASE {TEST_DATABASE} FROM PUBLIC;
-GRANT CONNECT ON DATABASE {TEST_DATABASE} TO {MIGRATION_ROLE}, {RUNTIME_ROLE};
-CREATE SCHEMA registry_internal AUTHORIZATION {MIGRATION_ROLE};
-CREATE SCHEMA registry_data AUTHORIZATION {MIGRATION_ROLE};
-CREATE SCHEMA registry_source AUTHORIZATION {MIGRATION_ROLE};
-CREATE SCHEMA registry_derived AUTHORIZATION {MIGRATION_ROLE};
-CREATE SCHEMA registry_context AUTHORIZATION {MIGRATION_ROLE};
-REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC;
-""",
-    )
-    _write_new(
-        root / "database/initialize-runtime.sql",
-        (root / "database/initialize.sql")
-        .read_text(encoding="utf-8")
-        .replace(TEST_DATABASE, RUNTIME_DATABASE),
-    )
-    _write_new(root / "trust-anchor.json", "{}")
-    (root / "empty-package").mkdir(mode=0o755)
-    dummy_revision = "sha256:" + "1" * 64
-    test_runtime = _runtime_config(
-        root,
-        root / "empty-package",
-        dummy_revision,
-        "127.0.0.1:0",
-        webhook,
-        fixture_kind,
-        token_lifetime_seconds,
-    )
-    test_runtime = test_runtime.replace(
-        "secret:file/runtime-database-url", "secret:file/test-runtime-database-url"
-    ).replace(
-        "secret:file/migration-database-url", "secret:file/test-migration-database-url"
-    )
-    _write_new(root / "runtime-test.yaml", test_runtime)
-    if fixture_kind == "business-establishments":
-        credentials = f"""apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {{journeyId: business-establishment-lifecycle, stepId: create-north-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-production-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-central-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-central-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-central-depot, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-head-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-regional-office, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-branch, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-central-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: create-isolation-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: lookup-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: read-establishments-from-north-business, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: query-establishment-summary, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: refuse-incomplete-assignment, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: business-establishment-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
-"""
-    elif fixture_kind == "household":
-        credentials = f"""apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-under-five-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-elder, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-head, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-spouse, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-child, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-woman-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: create-isolation-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: lookup-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: read-people-from-single-headed-household, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: query-household-demographics, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: refuse-incomplete-membership, credential: {{type: bearer, tokenRef: secret:file/operator-token}}}}
-  - {{journeyId: household-person-lifecycle, stepId: operator-without-purpose-is-concealed, credential: {{type: bearer, tokenRef: secret:file/no-purpose-token}}}}
-"""
-    elif fixture_kind == "asset-site":
-        credentials = """apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {journeyId: asset-and-site-caller-surfaces, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-asset, credential: {type: bearer, tokenRef: secret:file/planner-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-assets, credential: {type: bearer, tokenRef: secret:file/planner-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: operator-renames-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: create-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-gets-site, credential: {type: bearer, tokenRef: secret:file/planner-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-lists-sites, credential: {type: bearer, tokenRef: secret:file/planner-token}}
-  - {journeyId: asset-and-site-caller-surfaces, stepId: planner-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/planner-no-purpose-token}}
-"""
-    elif fixture_kind == "asset-change-request":
-        credentials = """apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {journeyId: placement-correction-request-flow, stepId: create-asset, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: placement-correction-request-flow, stepId: create-original-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: placement-correction-request-flow, stepId: create-corrected-site, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: placement-correction-request-flow, stepId: create-placement, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-placement-options, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-site-options, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: submitter-reads-placement-asset-label, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: create-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: submitter-lists-own-requests, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: edit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: get-before-submit, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: submit-correction-request, credential: {type: bearer, tokenRef: secret:file/submitter-token}}
-  - {journeyId: placement-correction-request-flow, stepId: get-before-review, credential: {type: bearer, tokenRef: secret:file/reviewer-token}}
-  - {journeyId: placement-correction-request-flow, stepId: approve-review-stage, credential: {type: bearer, tokenRef: secret:file/reviewer-token}}
-  - {journeyId: placement-correction-request-flow, stepId: get-before-final-approval, credential: {type: bearer, tokenRef: secret:file/supervisor-token}}
-  - {journeyId: placement-correction-request-flow, stepId: approve-final-stage, credential: {type: bearer, tokenRef: secret:file/supervisor-token}}
-  - {journeyId: placement-correction-request-flow, stepId: get-before-apply, credential: {type: bearer, tokenRef: secret:file/applier-token}}
-  - {journeyId: placement-correction-request-flow, stepId: apply-correction-request, credential: {type: bearer, tokenRef: secret:file/applier-token}}
-"""
-    elif fixture_kind == "facility":
-        credentials = """apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {journeyId: bounded-facility-and-batch-validation, stepId: create-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: bounded-facility-and-batch-validation, stepId: get-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: bounded-facility-and-batch-validation, stepId: rename-north-district-facility, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: bounded-facility-and-batch-validation, stepId: list-north-district-facilities, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: bounded-facility-and-batch-validation, stepId: south-district-claim-cannot-see-north-record, credential: {type: bearer, tokenRef: secret:file/south-operator-token}}
-  - {journeyId: bounded-facility-and-batch-validation, stepId: batch-refuses-out-of-bounds-installation, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-"""
-    elif fixture_kind == "inspection":
-        credentials = """apiVersion: registry.registrystack.org/breg-schema-test-credentials/v1
-kind: SchemaTestCredentials
-bindings:
-  - {journeyId: inspection-and-schema-validation, stepId: create-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: inspection-and-schema-validation, stepId: close-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: inspection-and-schema-validation, stepId: get-closed-inspection, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: inspection-and-schema-validation, stepId: list-inspections, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: inspection-and-schema-validation, stepId: refuse-undeclared-observation-metadata, credential: {type: bearer, tokenRef: secret:file/operator-token}}
-  - {journeyId: inspection-and-schema-validation, stepId: inspector-without-purpose-is-concealed, credential: {type: bearer, tokenRef: secret:file/no-purpose-token}}
-"""
-    else:
-        raise AssertionError(fixture_kind)
-    _write_new(root / "schema-test-credentials.yaml", credentials)
 
 
-def render_runtime(
-    root: Path,
-    revision: str,
-    webhook: bool = False,
-    fixture_kind: str = DEFAULT_FIXTURE_KIND,
-    token_lifetime_seconds: int = DEFAULT_TOKEN_LIFETIME_SECONDS,
-) -> None:
-    root = _require_root(root)
-    if not revision.startswith("sha256:") or len(revision) != 71:
-        raise DemoError("package revision must be one SHA-256 identifier")
-    token_lifetime_seconds = _validated_token_lifetime_seconds(token_lifetime_seconds)
-    bind = urllib.parse.urlparse((root / "breg-origin").read_text(encoding="ascii").strip()).netloc
-    _write_new(
-        root / "runtime.yaml",
-        _runtime_config(
-            root,
-            root / "build/package",
-            revision,
-            bind,
-            webhook,
-            fixture_kind,
-            token_lifetime_seconds,
-        ),
-    )
 
 
 def _token(root: Path, name: str) -> str:
@@ -1291,16 +746,6 @@ def _token(root: Path, name: str) -> str:
     return value
 
 
-def store_token(path: Path, source: bytes) -> None:
-    if len(source) > 64 * 1024:
-        raise DemoError("Mint returned an oversized token")
-    try:
-        value = source.decode("ascii").rstrip("\r\n")
-    except UnicodeDecodeError as error:
-        raise DemoError("Mint returned a non-ASCII token") from error
-    if value.count(".") != 2 or any(character.isspace() for character in value):
-        raise DemoError("Mint did not return one compact JWT")
-    _write_new(path, value, 0o600)
 
 
 def _write_state(path: Path, state: dict[str, Any]) -> None:
@@ -2399,46 +1844,6 @@ def _bound_business(root: Path) -> tuple[str, str]:
     return business_id, business_code
 
 
-def configure_viewer(
-    root: Path,
-    fixture_kind: str = DEFAULT_FIXTURE_KIND,
-) -> None:
-    root = _require_root(root)
-    viewer_public = _read_json_object(root / "keys/viewer-public.jwk.json")
-    if fixture_kind == "business-establishments":
-        business_id, business_code = _bound_business(root)
-        _write_new(
-            root / f"mint/clients/{BUSINESS_VIEWER_CLIENT}.yaml",
-            _mint_client(
-                BUSINESS_VIEWER_CLIENT,
-                viewer_public,
-                ["registry:business:view"],
-                {
-                    "business_code": business_code,
-                    "business_id": business_id,
-                    "registry_principal": "synthetic-business-viewer",
-                    "registry_purpose": "business-view",
-                },
-            ),
-        )
-        return
-    if fixture_kind != "household":
-        raise DemoError(f"the viewer demo is not available for the {fixture_kind} fixture")
-    household_id, household_code = _bound_household(root)
-    _write_new(
-        root / f"mint/clients/{VIEWER_CLIENT}.yaml",
-        _mint_client(
-            VIEWER_CLIENT,
-            viewer_public,
-            ["registry:household:view"],
-            {
-                "household_code": household_code,
-                "household_id": household_id,
-                "registry_principal": "synthetic-household-viewer",
-                "registry_purpose": "household-view",
-            },
-        ),
-    )
 
 
 def _print_query(label: str, response: dict[str, Any]) -> None:
@@ -2934,39 +2339,17 @@ def parser() -> argparse.ArgumentParser:
     )
     ports_parser = commands.add_parser("ports")
     ports_parser.add_argument("--count", type=int, choices=(3, 4), default=3)
-    prepare_parser = commands.add_parser("prepare")
-    prepare_parser.add_argument("--root", required=True, type=Path)
-    prepare_parser.add_argument("--fixture", required=True, type=Path)
-    prepare_parser.add_argument("--database-port", required=True, type=int)
-    prepare_parser.add_argument("--mint-port", required=True, type=int)
-    prepare_parser.add_argument("--breg-port", required=True, type=int)
-    prepare_parser.add_argument("--receiver-port", type=int)
-    prepare_parser.add_argument("--webhook", action="store_true")
-    prepare_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
-    prepare_parser.add_argument(
-        "--token-lifetime-seconds",
-        type=int,
-        default=DEFAULT_TOKEN_LIFETIME_SECONDS,
-    )
-    runtime_parser = commands.add_parser("render-runtime")
-    runtime_parser.add_argument("--root", required=True, type=Path)
-    runtime_parser.add_argument("--revision", required=True)
-    runtime_parser.add_argument("--webhook", action="store_true")
-    runtime_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
-    runtime_parser.add_argument(
-        "--token-lifetime-seconds",
-        type=int,
-        default=DEFAULT_TOKEN_LIFETIME_SECONDS,
-    )
+    dev_parser = commands.add_parser("prepare-dev")
+    dev_parser.add_argument("--root", required=True, type=Path)
+    dev_parser.add_argument("--fixture", required=True, type=Path)
+    dev_parser.add_argument("--webhook", action="store_true")
+    dev_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     bind_parser = commands.add_parser("bind-webhook-module")
     bind_parser.add_argument("--root", required=True, type=Path)
     bind_parser.add_argument("--report", required=True, type=Path)
     seed_parser = commands.add_parser("seed")
     seed_parser.add_argument("--root", required=True, type=Path)
     seed_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
-    viewer_parser = commands.add_parser("configure-viewer")
-    viewer_parser.add_argument("--root", required=True, type=Path)
-    viewer_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
     query_parser = commands.add_parser("query")
     query_parser.add_argument("--root", required=True, type=Path)
     query_parser.add_argument("--fixture-kind", choices=fixture_choices, default=DEFAULT_FIXTURE_KIND)
@@ -2978,8 +2361,6 @@ def parser() -> argparse.ArgumentParser:
     wait_parser = commands.add_parser("wait-http")
     wait_parser.add_argument("--url", required=True)
     wait_parser.add_argument("--timeout", type=float, default=30.0)
-    token_parser = commands.add_parser("store-token")
-    token_parser.add_argument("--out", required=True, type=Path)
     receiver_parser = commands.add_parser("serve-webhook-receiver")
     receiver_parser.add_argument("--root", required=True, type=Path)
     webhook_wait_parser = commands.add_parser("wait-webhook")
@@ -3000,26 +2381,8 @@ def main() -> int:
     try:
         if args.command == "ports":
             print(*reserve_ports(args.count))
-        elif args.command == "prepare":
-            prepare(
-                args.root,
-                args.fixture,
-                args.database_port,
-                args.mint_port,
-                args.breg_port,
-                args.webhook,
-                args.receiver_port,
-                args.fixture_kind,
-                args.token_lifetime_seconds,
-            )
-        elif args.command == "render-runtime":
-            render_runtime(
-                args.root,
-                args.revision,
-                args.webhook,
-                args.fixture_kind,
-                args.token_lifetime_seconds,
-            )
+        elif args.command == "prepare-dev":
+            prepare_dev(args.root, args.fixture, args.fixture_kind, args.webhook)
         elif args.command == "bind-webhook-module":
             bind_webhook_module(args.root, args.report)
         elif args.command == "seed":
@@ -3037,8 +2400,6 @@ def main() -> int:
                 seed_inspection(args.root)
             else:
                 raise AssertionError(args.fixture_kind)
-        elif args.command == "configure-viewer":
-            configure_viewer(args.root, args.fixture_kind)
         elif args.command == "query":
             if args.fixture_kind == "business-establishments":
                 query_business(args.root, args.suite)
@@ -3058,8 +2419,6 @@ def main() -> int:
             write_handoff(args.root, args.fixture_kind, args.out)
         elif args.command == "wait-http":
             wait_http(args.url, args.timeout)
-        elif args.command == "store-token":
-            store_token(args.out, sys.stdin.buffer.read(64 * 1024 + 1))
         elif args.command == "serve-webhook-receiver":
             serve_webhook_receiver(args.root)
         elif args.command == "wait-webhook":

@@ -82,7 +82,7 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
     let mut limited = source["accessProfiles"][0].clone();
     limited["id"] = json!("person-result-only");
     limited["default"] = json!(false);
-    limited["grants"][0]["results"] = json!(["person"]);
+    limited["permissions"][0]["results"] = json!(["person"]);
     source["accessProfiles"]
         .as_array_mut()
         .unwrap()
@@ -169,7 +169,7 @@ fn household_contact_project(extra: &str) -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],
             "requiredPurposes":["contact-registration"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact",
               "operations":["invoke"],
               "targets":[
@@ -290,8 +290,8 @@ fn household_contact_action_compiles_routes_effects_and_authority() {
         vec!["contact-person".to_owned()]
     );
 
-    assert_eq!(action.grants.len(), 1);
-    let grant = &action.grants[0];
+    assert_eq!(action.permissions.len(), 1);
+    let grant = &action.permissions[0];
     assert_eq!(grant.profile_id, "contact-registrar");
     assert!(grant.default);
     assert_eq!(grant.principal_claim.as_deref(), Some("registry_principal"));
@@ -324,13 +324,13 @@ fn action_grants_refuse_request_metadata_projection_overrides() {
         serde_json::from_str(&household_contact_project("")).unwrap();
     compile_json(&serde_json::to_vec(&source).unwrap())
         .expect("action grant with omitted request metadata settings compiles");
-    source["accessProfiles"][0]["grants"][0]["readableRequestFields"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"][0]["readableRequestFields"] = serde_json::json!([]);
     let failure = compile_json(&serde_json::to_vec(&source).unwrap())
         .expect_err("request metadata permissions do not apply to immediate actions");
     assert!(failure
         .diagnostics()
         .iter()
-        .any(|diagnostic| { diagnostic.code == "action.grant.entity_fields_forbidden" }));
+        .any(|diagnostic| { diagnostic.code == "action.permission.entity_fields_forbidden" }));
 }
 
 #[test]
@@ -353,8 +353,8 @@ fn action_grants_must_cover_every_derived_target_and_result() {
         .iter()
         .map(|diagnostic| diagnostic.code.as_str())
         .collect::<Vec<_>>();
-    assert!(codes.contains(&"action.grant.targets.incomplete"));
-    assert!(codes.contains(&"action.grant.result_unknown"));
+    assert!(codes.contains(&"action.permission.targets.incomplete"));
+    assert!(codes.contains(&"action.permission.result_unknown"));
 }
 
 #[test]
@@ -399,7 +399,7 @@ fn immediate_actions_preserve_review_control_and_request_lifecycle_boundaries() 
       }],
       "accessProfiles":[{
         "id":"operator","default":true,"principalClaim":"principal",
-        "grants":[{
+        "permissions":[{
           "entity":"record-change",
           "operations":["get","submit_request","approve_request","apply_request"],
           "readableFields":["record","label"],
@@ -480,7 +480,7 @@ fn action_effect_graph_rejects_invalid_sources_cycles_and_overlaps() {
           "set":{"label":{"fromField":"label"},"alpha":{"fromEffect":"alpha"}}
         }]
       }],
-      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{
+      "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
         "action":"make-cycle",
         "operations":["invoke"],
         "targets":[{"entity":"alpha","rowBoundaries":[]},{"entity":"beta","rowBoundaries":[]}]
@@ -510,7 +510,7 @@ fn action_inputs_resolve_project_vocabulary_values_for_type_compatibility() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"entity":"asset","rowBoundaries":[]}],
@@ -543,7 +543,7 @@ fn action_inputs_reject_unknown_project_vocabulary_references() {
             "inputs":[{"id":"kind","type":"vocabulary-code","vocabulary":"asset-type","required":true,"classification":"internal"}],
             "effects":[{"id":"asset","target":{"entity":"asset"},"operation":"create","set":{"kind":{"fromField":"kind"}}}]
           }],
-          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","grants":[{
+          "accessProfiles":[{"id":"operator","default":true,"principalClaim":"principal","permissions":[{
             "action":"create-asset",
             "operations":["invoke"],
             "targets":[{"entity":"asset","rowBoundaries":[]}]
@@ -585,7 +585,7 @@ fn action_bounds_apply_before_runtime_target_work() {
             "fields":[{{"id":"label","type":"string","maxLength":32,"classification":"internal"}}]}}],
           "actions":[{{"id":"bulk-fix","inputs":[{}],"effects":[{}]}}],
           "accessProfiles":[{{"id":"operator","default":true,"principalClaim":"principal",
-            "grants":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}]
+            "permissions":[{{"action":"bulk-fix","operations":["invoke"],"targets":[{}]}}]}}]
         }}"#,
         inputs.join(","),
         effects.join(","),
@@ -649,7 +649,7 @@ fn action_field_and_snapshot_ceilings_refuse_otherwise_valid_plans() {
             }],
             "accessProfiles": [{
                 "id": "operator", "default": true, "principalClaim": "principal",
-                "grants": [{
+                "permissions": [{
                     "action": "create-bounded-record", "operations": ["invoke"],
                     "targets": [{"entity": "bounded-record", "rowBoundaries": []}]
                 }]

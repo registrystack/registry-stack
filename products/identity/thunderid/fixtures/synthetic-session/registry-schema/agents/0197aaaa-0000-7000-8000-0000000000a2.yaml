@@ -1,0 +1,19 @@
+description: Fixture client_secret_post client
+id: 0197aaaa-0000-7000-8000-0000000000a2
+inboundAuthConfig:
+- config:
+    clientId: synthetic-compatibility-client
+    clientSecret: fixture-secret-not-a-real-credential
+    grantTypes:
+    - client_credentials
+    publicClient: false
+    token:
+      accessToken:
+        clientConfig:
+          validityPeriod: 300
+    tokenEndpointAuthMethod: client_secret_post
+  type: oauth2
+name: Synthetic Compatibility Client
+ouHandle: default
+resource_type: agent
+type: default

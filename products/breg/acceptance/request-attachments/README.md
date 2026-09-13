@@ -16,7 +16,7 @@ From the repository root, build matching binaries and run:
 ```sh
 CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo build --locked -p registry-breg --features runtime -p registry-bregctl \
-  -p registry-mint --bins
+  --bins
 python3 products/breg/scripts/test-request-attachments.py
 python3 products/breg/scripts/test-request-attachments.py --verification
 ```

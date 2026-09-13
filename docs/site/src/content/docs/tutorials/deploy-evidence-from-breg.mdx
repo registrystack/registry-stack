@@ -93,8 +93,7 @@ existing configuration, not an overlay. Review every environment-dependent field
 | Signing | The signing operator supplies the public JWK and exact non-exportable Transit key version and workload-local proxy binding. |
 | Runtime | The deployment operator supplies the absolute candidate, secret and audit paths, private listener, HTTPS reverse proxy and any private CA files. |
 
-Use an existing compatible OIDC issuer when suitable. Registry Mint is optional
-for an operated deployment. Its source registration and Evidence caller
+Use a compatible OpenID Connect issuer for an operated deployment. Its source registration and Evidence caller
 registration have different audiences and grants. A source credential must not
 carry BReg operator privileges.
 

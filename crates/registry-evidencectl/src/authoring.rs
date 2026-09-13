@@ -52,7 +52,7 @@ pub(crate) use registry_evidence_authoring::{
 };
 
 const LOCAL_URI_PREFIX: &str = "urn:registrystack:evidence:local:";
-const LOCAL_AUDIENCE: &str = "registry-evidence-local";
+const LOCAL_AUDIENCE: &str = "urn:registrystack:evidence:local:gateway";
 const LOCAL_SIGNING_PRIVATE_FILENAME: &str = "signing-p256-private-jwk";
 const LOCAL_SIGNING_PUBLIC_FILENAME: &str = "signing-p256-public.jwk.json";
 const AUTHORITY_PROFILE_ID: &str = "local-caller";
@@ -194,22 +194,22 @@ enum CompileProfile {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct LocalServicePorts {
     pub(crate) evidence: u16,
-    pub(crate) mint: u16,
+    pub(crate) issuer: u16,
 }
 
 impl LocalServicePorts {
-    pub(crate) fn new(evidence: u16, mint: u16) -> Result<Self> {
-        if evidence == 0 || mint == 0 {
+    pub(crate) fn new(evidence: u16, issuer: u16) -> Result<Self> {
+        if evidence == 0 || issuer == 0 {
             bail!("local service ports must be non-zero");
         }
-        if evidence == mint {
-            bail!("Evidence and Mint must use different local ports");
+        if evidence == issuer {
+            bail!("Evidence and the local issuer must use different local ports");
         }
-        Ok(Self { evidence, mint })
+        Ok(Self { evidence, issuer })
     }
 
-    pub(crate) fn mint_origin(self) -> String {
-        format!("http://127.0.0.1:{}", self.mint)
+    pub(crate) fn issuer_origin(self) -> String {
+        format!("http://127.0.0.1:{}", self.issuer)
     }
 
     pub(crate) fn evidence_origin(self) -> String {
@@ -221,7 +221,7 @@ impl Default for LocalServicePorts {
     fn default() -> Self {
         Self {
             evidence: 8080,
-            mint: 8081,
+            issuer: 8081,
         }
     }
 }
@@ -285,7 +285,7 @@ pub(crate) fn compile_local_project_with_target_inputs(
     source_connections: Value,
     outbound_tls: Value,
 ) -> Result<CompiledProject> {
-    LocalServicePorts::new(ports.evidence, ports.mint)?;
+    LocalServicePorts::new(ports.evidence, ports.issuer)?;
     let project_root = validate_project_root(project_root)?;
     validate_private_empty_staging(staging_root)?;
     validate_evidence_binary(evidence_bin)?;
@@ -3395,7 +3395,7 @@ fn render_local_bundle(
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
 ) -> Result<Value> {
-    let mint_origin = ports.mint_origin();
+    let issuer_origin = ports.issuer_origin();
     let selector_profiles = questions
         .iter()
         .flat_map(|question| &question.subjects)
@@ -3457,16 +3457,15 @@ fn render_local_bundle(
         },
         "authentication": {
             "kind": "oidc-access-token",
-            "issuer": mint_origin,
+            "issuer": issuer_origin,
             "audiences": [LOCAL_AUDIENCE],
             "tokenTypes": ["at+jwt"],
-            "algorithms": ["ES256"],
-            "jwksUri": format!("{mint_origin}/.well-known/jwks.json"),
+            "algorithms": ["RS256"],
+            "jwksUri": format!("{issuer_origin}/oauth2/jwks"),
             "principalClaim": "sub",
             "requesterTagsClaim": "evidence_tags",
             "evidenceAudienceClaim": "evidence_audience",
-            "grantIdClaim": "evidence_grant_id",
-            "grantAuthorityClaim": "evidence_authority",
+            "requiredScopes": ["evidence:invoke"],
             "maximumTokenLifetimeSeconds": 300,
             "revokedKeyIds": [],
         },

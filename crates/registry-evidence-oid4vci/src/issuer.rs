@@ -1,6 +1,6 @@
 //! The client half of the process: asking Evidence for credentials.
 //!
-//! This service signs nothing. It authenticates to Mint with its own private
+//! This service signs nothing. It authenticates to its token issuer with its own private
 //! key JWT, presents the resulting access token to Evidence, and hands back
 //! whatever Evidence signed, unchanged. There is no credential signing key
 //! here, no holder private key, and no place to put either: the only key this
@@ -108,18 +108,24 @@ impl EvidenceIssuer {
     /// The key is used to build the token provider and is not retained here in
     /// any other form.
     pub fn new(config: &DeliveryConfig, client_key: &str) -> Result<Self, IssuanceError> {
-        let token_endpoint = Url::parse(&config.mint.token_endpoint)
-            .map_err(|_| IssuanceError::Configuration("the Mint token endpoint is not a URL"))?;
+        let token_endpoint = Url::parse(&config.token_client.token_endpoint)
+            .map_err(|_| IssuanceError::Configuration("the token endpoint is not a URL"))?;
         let base_url = Url::parse(&config.evidence.base_url)
             .map_err(|_| IssuanceError::Configuration("the Evidence base URL is not a URL"))?;
         let key = PrivateJwk::parse(client_key).map_err(|_| {
-            IssuanceError::Configuration("the Mint client key is not a private JWK")
+            IssuanceError::Configuration("the token client key is not a private JWK")
         })?;
-        let provider = PrivateKeyJwt::new(
-            PrivateKeyJwtConfig::new(token_endpoint, config.mint.client_id.clone(), key)
-                .with_audience(config.mint.client_assertion_audience().to_owned()),
-        )
-        .map_err(|_| IssuanceError::Configuration("the Mint client identity is unusable"))?;
+        let mut provider_config =
+            PrivateKeyJwtConfig::new(token_endpoint, config.token_client.client_id.clone(), key)
+                .with_audience(config.token_client.client_assertion_audience().to_owned());
+        if let Some(resource) = config.token_client.resource.as_deref() {
+            provider_config = provider_config.with_resource(resource.to_owned());
+        }
+        if let Some(scopes) = config.token_client.scopes.as_ref() {
+            provider_config = provider_config.with_scopes(scopes.clone());
+        }
+        let provider = PrivateKeyJwt::new(provider_config)
+            .map_err(|_| IssuanceError::Configuration("the token client identity is unusable"))?;
         let provider: Arc<dyn TokenProvider> = Arc::new(provider);
         let client = NonVerifyingEvidenceClient::new(EvidenceClientConfig::without_verification(
             base_url, provider,
@@ -161,6 +167,14 @@ impl CredentialIssuer for EvidenceIssuer {
 mod tests {
     use super::*;
 
+    use axum::{
+        extract::{Form, State},
+        routing::{get, post},
+        Json, Router,
+    };
+    use serde_json::json;
+    use std::collections::HashMap;
+
     use crate::{config::tests::valid_config, testing::private_jwk};
 
     #[test]
@@ -176,9 +190,65 @@ mod tests {
         assert!(matches!(
             EvidenceIssuer::new(&config, "{}"),
             Err(IssuanceError::Configuration(
-                "the Mint client key is not a private JWK"
+                "the token client key is not a private JWK"
             ))
         ));
+    }
+
+    #[tokio::test]
+    async fn the_outbound_client_requests_its_configured_resource_and_scopes() {
+        type Forms = Arc<Mutex<Vec<HashMap<String, String>>>>;
+
+        async fn token(
+            State(forms): State<Forms>,
+            Form(form): Form<HashMap<String, String>>,
+        ) -> Json<serde_json::Value> {
+            forms.lock().await.push(form);
+            Json(json!({
+                "access_token": "synthetic-access-token",
+                "token_type": "Bearer",
+                "expires_in": 300,
+            }))
+        }
+
+        let forms: Forms = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/oauth2/token", post(token))
+            .route(
+                "/v1/evidence-definitions",
+                get(|| async { axum::http::StatusCode::FORBIDDEN }),
+            )
+            .with_state(forms.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a local issuer can bind");
+        let origin = format!("http://{}", listener.local_addr().expect("bound address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("local issuer serves");
+        });
+
+        let mut config = valid_config();
+        config.evidence.base_url = origin.clone();
+        config.token_client.token_endpoint = format!("{origin}/oauth2/token");
+        config.token_client.client_assertion_audience = Some(origin);
+        config.token_client.resource = Some("urn:registry:evidence".to_owned());
+        config.token_client.scopes = Some(vec!["evidence:invoke".to_owned()]);
+        let issuer = EvidenceIssuer::new(&config, &private_jwk("delivery-client"))
+            .expect("the outbound client is built");
+
+        let _ = issuer.catalog().await;
+        let recorded = forms.lock().await;
+        assert_eq!(recorded.len(), 1, "one token request precedes discovery");
+        let form = &recorded[0];
+        assert_eq!(
+            form.get("resource"),
+            Some(&"urn:registry:evidence".to_owned())
+        );
+        assert_eq!(form.get("scope"), Some(&"evidence:invoke".to_owned()));
+        assert_eq!(form.get("client_id"), Some(&"evidence-oid4vci".to_owned()));
+        server.abort();
     }
 
     #[test]

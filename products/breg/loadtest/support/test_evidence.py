@@ -19,6 +19,10 @@ SPEC = importlib.util.spec_from_file_location("loadtest_evidence", MODULE_PATH)
 assert SPEC and SPEC.loader
 evidence = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(evidence)
+LOADENV_SPEC = importlib.util.spec_from_file_location("loadtest_environment", MODULE_PATH.with_name("loadenv.py"))
+assert LOADENV_SPEC and LOADENV_SPEC.loader
+loadenv = importlib.util.module_from_spec(LOADENV_SPEC)
+LOADENV_SPEC.loader.exec_module(loadenv)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -36,7 +40,7 @@ class EvidenceTests(unittest.TestCase):
                     {
                         "pool_max": 32,
                         "breg_url": "http://secret-host",
-                        "driver_secret": "/secret/path",
+                        "private_setting": "/secret/path",
                     }
                 ),
                 encoding="utf-8",
@@ -108,7 +112,6 @@ class EvidenceTests(unittest.TestCase):
             manifest = root / "manifest.json"
             k6_summary = root / "summary.json"
             samples = root / "samples.json"
-            telemetry = root / "telemetry.jsonl"
             db_after = root / "db-after.json"
             db_waits = root / "db-waits.jsonl"
             safety = root / "safety.json"
@@ -163,19 +166,6 @@ class EvidenceTests(unittest.TestCase):
                 for status in ("200", "200", "504")
             ]
             samples.write_text("".join(json.dumps(item) + "\n" for item in sample_items), encoding="utf-8")
-            telemetry.write_text(
-                json.dumps(
-                    {
-                        "timestamp": "now",
-                        "metrics": [
-                            {"name": "breg_pool_connections", "labels": {"state": "waiting"}, "value": 3}
-                        ],
-                        "processes": {"server": {"cpuPercent": 12.5, "rssBytes": 4096}},
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
             db_after.write_text(json.dumps({"auditRows": 10}), encoding="utf-8")
             db_waits.write_text(
                 json.dumps({"auditLockWaiters": 2, "lockWaiters": 3, "blockedBackends": 1}) + "\n",
@@ -187,7 +177,6 @@ class EvidenceTests(unittest.TestCase):
                     manifest=manifest,
                     k6_summary=k6_summary,
                     samples=samples,
-                    telemetry=telemetry,
                     db_after=db_after,
                     db_waits=db_waits,
                     safety=safety,
@@ -202,16 +191,14 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(result["latency"]["byOperation"]["get"]["p95Ms"], 38.5)
             self.assertEqual(result["phases"]["steady"]["httpRequests"], 3)
             self.assertEqual(result["phases"]["steady"]["timeouts504"], 1)
-            self.assertEqual(result["telemetry"]["poolWaitingPeak"], 3)
             self.assertEqual(result["database"]["waits"]["auditLockWaitersPeak"], 2)
             self.assertTrue(result["pass"])
 
-    def test_profiles_pin_held_sweep_burst_recovery_and_one_shot_herd(self) -> None:
+    def test_profiles_pin_held_sweep_and_burst_recovery(self) -> None:
         loadtest = MODULE_PATH.parent.parent
         workload = (loadtest / "lib/workload.js").read_text(encoding="utf-8")
         sweep = (loadtest / "profiles/sweep.js").read_text(encoding="utf-8")
         burst = (loadtest / "profiles/burst.js").read_text(encoding="utf-8")
-        herd = (loadtest / "profiles/herd.js").read_text(encoding="utf-8")
         runner = (loadtest / "run.sh").read_text(encoding="utf-8")
         self.assertIn("body.pageInfo.nextCursor", workload)
         self.assertIn("$skiptoken=", workload)
@@ -219,9 +206,11 @@ class EvidenceTests(unittest.TestCase):
         self.assertNotIn("ramping-arrival-rate", sweep)
         self.assertIn("recovery:", burst)
         self.assertIn("'http_req_failed{scenario:recovery}'", burst)
-        self.assertIn("executor: 'per-vu-iterations'", herd)
+        self.assertNotIn("token-soak", runner)
+        self.assertNotIn("herd", runner)
+        self.assertIn("dev token", runner)
         self.assertIn("--http-debug|--http-debug=*|--system-tags|--system-tags=*", runner)
-        for profile in (sweep, burst, herd):
+        for profile in (sweep, burst):
             self.assertNotIn("sleep(", profile)
 
     @unittest.skipUnless(shutil.which("k6"), "k6 is not installed")
@@ -259,11 +248,12 @@ class EvidenceTests(unittest.TestCase):
                 artifacts = root / "artifacts"
                 artifacts.mkdir()
                 seed = root / "ids.txt"
-                secret = root / "secret.txt"
+                secret = root / "operator.header"
                 samples = artifacts / "samples.json"
                 summary = artifacts / "summary.json"
                 seed.write_text("record-1 LT-E-1\n", encoding="utf-8")
-                secret.write_text("unrelated-secret-value", encoding="utf-8")
+                secret.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
+                secret.chmod(0o600)
                 origin = f"http://127.0.0.1:{server.server_port}"
                 profile = MODULE_PATH.parent.parent / "profiles/cursor-smoke.js"
                 command = [
@@ -277,11 +267,7 @@ class EvidenceTests(unittest.TestCase):
                         "-e",
                         f"BREG_URL={origin}",
                         "-e",
-                        f"TOKEN_URL={origin}/token",
-                        "-e",
-                        "CLIENT_ID=test",
-                        "-e",
-                        "CLIENT_SECRET=test",
+                        f"AUTHORIZATION_HEADER_FILE={secret}",
                         "-e",
                         "FOLLOW_CURSOR=1",
                         "-e",
@@ -314,6 +300,44 @@ class EvidenceTests(unittest.TestCase):
         self.assertIn("$filter", requests[0])
         self.assertEqual(requests[1], {"accessProfile": ["business-operator"], "$skiptoken": ["cursor-value"]})
 
+    def test_load_environment_prepares_one_dev_client_and_preserves_existing_output(self) -> None:
+        repository = MODULE_PATH.parents[4]
+        fixture = repository / "products/breg/acceptance/business-establishments"
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            loadenv.local_project(fixture, project)
+            clients = (project / "dev-clients.yaml").read_text(encoding="utf-8")
+            self.assertIn("id: loadtest-driver", clients)
+            self.assertIn("accessProfiles: [business-operator]", clients)
+            self.assertNotIn(
+                "operator-without-purpose-is-concealed",
+                (project / "tests/journeys.yaml").read_text(encoding="utf-8"),
+            )
+            sentinel = project / "sentinel"
+            sentinel.write_text("keep", encoding="utf-8")
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.local_project(fixture, project)
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "keep")
+        self.assertIn(
+            "operator-without-purpose-is-concealed",
+            (fixture / "tests/journeys.yaml").read_text(encoding="utf-8"),
+        )
+
+    def test_dev_header_must_be_the_owned_private_session_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "project"
+            header = project / ".breg/dev/secrets/loadtest-driver.header"
+            header.parent.mkdir(parents=True)
+            header.write_text("Authorization: Bearer header.payload.signature\n", encoding="ascii")
+            header.chmod(0o600)
+            fake = Path(directory) / "bregctl"
+            fake.write_text(f"#!/bin/sh\nprintf '%s\\n' '{{\"headerFile\":\"{header}\"}}'\n", encoding="utf-8")
+            fake.chmod(0o700)
+            self.assertEqual(loadenv.fresh_header(fake, project, "loadtest-driver"), header.resolve())
+            header.chmod(0o644)
+            with self.assertRaises(loadenv.LoadtestError):
+                loadenv.fresh_header(fake, project, "loadtest-driver")
+
     def test_shell_entrypoints_parse(self) -> None:
         loadtest = MODULE_PATH.parent.parent
         subprocess.run(
@@ -330,9 +354,9 @@ class EvidenceTests(unittest.TestCase):
         up = (loadtest / "up.sh").read_text(encoding="utf-8")
         down = (loadtest / "down.sh").read_text(encoding="utf-8")
         self.assertIn("trap cleanup_failed_start EXIT", up)
-        self.assertIn("org.registrystack.loadtest=breg", up)
-        self.assertIn("^breg-loadtest-[0-9]+-[0-9]+$", down)
-        self.assertIn('ps -ww -p "$pid" -o command=', down)
+        self.assertIn("bregctl\" --format json dev start", up)
+        self.assertIn("dev stop --remove", down)
+        self.assertNotIn("rm -rf", up + down)
 
 
 if __name__ == "__main__":

@@ -925,7 +925,7 @@ fn compiled_contact_request_fixture() -> registry_breg::CompiledRegistry {
         .unwrap()
         .clone();
     limited_applier.id = "household-contact-limited-applier".to_owned();
-    limited_applier.grants[0]
+    limited_applier.permissions[0]
         .apply_targets
         .retain(|target| target.entity != "person");
     project.access_profiles.push(limited_applier);
@@ -1174,18 +1174,18 @@ fn compiled_request_fixture() -> registry_breg::CompiledRegistry {
             }
           }],
           "accessProfiles":[{
-            "id":"submitter","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"submitter","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"correction-request","operations":["create","submit_request","revise_request","cancel_request"],"readableFields":["target","value"],"writableFields":["target","value"],
               "rowBoundaries": []
             }]
           },{
-            "id":"reviewer","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"correction-request","operations":["get","list","approve_request","reject_request","request_revision"],"readableFields":["target","value"],
               "reviewStages":[{"stage":"review","targets":[{"entity":"target","readableFields":["label"],"rowBoundaries":[]}]}],
               "rowBoundaries": []
             }]
           },{
-            "id":"applier","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"applier","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"correction-request","operations":["apply_request"],"readableFields":["target"],
               "applyTargets":[{"entity":"target","rowBoundaries":[]}],
               "rowBoundaries": []
@@ -1214,7 +1214,7 @@ fn compiled_crud_alias_fixture() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"registrar","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"person","operations":["create","get","list","patch"],
               "readableFields":["jurisdiction","person-code","legal-name"],
               "writableFields":["jurisdiction","person-code","legal-name"],
@@ -1278,14 +1278,14 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
           }],
           "accessProfiles":[{
             "id":"household-seed","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"household","operations":["create","get"],"readableFields":["jurisdiction","household-code","contact-person"],
               "writableFields":["jurisdiction","household-code"],"rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
           },{
             "id":"contact-registrar","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry:contact:register"],"requiredPurposes":["contact-registration"],
-            "grants":[{
+            "permissions":[{
               "action":"register-household-contact","operations":["invoke"],
               "targets":[
                 {"entity":"household","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]},
@@ -1296,7 +1296,7 @@ fn compiled_action_fixture() -> registry_breg::CompiledRegistry {
             }]
           },{
             "id":"person-reader","default":true,"principalClaim":"registry_principal","requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"person","operations":["get"],"readableFields":["jurisdiction","person-code","legal-name"],
               "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
             }]
@@ -1330,12 +1330,12 @@ fn compiled_spatial_fixture() -> registry_breg::CompiledRegistry {
             "geojson":{"geometryField":"location"}
           }],
           "accessProfiles":[
-            {"id":"map-reader","default":true,"anonymous":true,"grants":[{
+            {"id":"map-reader","default":true,"anonymous":true,"permissions":[{
               "entity":"site","operations":["get","list"],"readableFields":["code","location"],
               "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":1,"maximumLatitudeSpanDegrees":1}},
               "rowBoundaries": []
             }]},
-            {"id":"directory-reader","anonymous":true,"grants":[{
+            {"id":"directory-reader","anonymous":true,"permissions":[{
               "entity":"site","operations":["list"],"readableFields":["code"],
               "rowBoundaries": []
             }]}

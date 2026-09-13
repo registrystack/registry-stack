@@ -149,7 +149,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes:
       - asset-management
-    grants:
+    permissions:
       - entity: asset-item
         rowBoundaries: []
         operations:
@@ -214,7 +214,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes:
       - site-planning
-    grants:
+    permissions:
       - entity: asset-item
         rowBoundaries: []
         operations:

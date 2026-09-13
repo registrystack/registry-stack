@@ -17,8 +17,6 @@ common:
       profile: civil-person-reference-v1
       values: {person_reference: PERSON-SYNTHETIC-A}
   verified_token_claims:
-    evidence_grant_id: synthetic-parentage-grant-001
-    evidence_authority: civil-registration-caseworker-v1
     grant:
       candidate_parent: {person_reference: PERSON-SYNTHETIC-A}
   expectedRequestParts:

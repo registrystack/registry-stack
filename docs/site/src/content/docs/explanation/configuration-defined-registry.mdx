@@ -57,7 +57,7 @@ The compiler refuses field names that collide with envelope members, so `recordI
 ## How access works
 
 The server does not issue tokens.
-It verifies bearer tokens from your identity provider, or from Registry Mint when you have none, and then selects an access profile.
+It verifies bearer tokens from your identity provider and then selects an access profile.
 A request names the profile it wants with the `accessProfile` query option; without one, the default profile applies.
 A profile states the scopes, purposes, and principal claim a token must carry, and one grant per entity:
 
@@ -74,9 +74,12 @@ Nothing in the runtime consults the identity provider for authorisation: the tok
 
 ### Local clients and their tokens
 
-A local development session has no identity provider, so `bregctl dev` starts Registry Mint beside the registry and registers the callers declared in the project's `dev-clients.yaml`.
+A local development session starts the maintained stock identity provider beside the registry and
+registers the callers declared in the project's `dev-clients.yaml`.
 A client entry stands for one calling application.
-It names the access profiles the journeys exercise with that client, the scopes Mint puts in its tokens, and the claims those tokens carry: the principal, the purpose, and any value a row boundary compares a field against.
+It names the access profiles the journeys exercise with that client, the scopes the local issuer puts
+in its tokens, and the claims those tokens carry: the principal, the purpose, and any value a row
+boundary compares a field against.
 
 The two files divide the work.
 `dev-clients.yaml` shapes the token; `registry.yaml` decides what a token may do.
@@ -161,7 +164,7 @@ Failed deliveries retry with backoff, and an operator can list and replay them.
 
 ## Where the product stops
 
-- The server issues no tokens and stores no users. Identity and session handling belong to your identity provider or Registry Mint.
+- The server issues no tokens and stores no users. Identity and session handling belong to your identity provider.
 - It renders no user interface. Clients talk to the REST API.
 - Review workflows are staged approvals over a proposal record, not a general workflow engine.
 - Spatial support is a bounded point-in-bounding-box profile over CRS84 points. The server publishes GeoJSON and claims no OGC API Features conformance.

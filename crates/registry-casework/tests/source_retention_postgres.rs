@@ -148,6 +148,7 @@ fn profile(id: &str, role: CaseworkRole) -> AccessProfile {
 
 fn project() -> CaseworkProject {
     CaseworkProject {
+        task_templates: Vec::new(),
         api_version: CASEWORK_API_VERSION.to_owned(),
         kind: CASEWORK_KIND.to_owned(),
         casework: CaseworkIdentity {

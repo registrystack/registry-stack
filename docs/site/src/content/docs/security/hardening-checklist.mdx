@@ -6,7 +6,6 @@ owner: registry-docs
 source_repos:
   - registry-relay
   - registry-evidence
-  - registry-mint
   - registry-platform
 last_reviewed: "2026-08-22"
 doc_type: how-to
@@ -47,8 +46,6 @@ Relay package. It assumes you have already configured your services per
 - Have `evidence check` runnable against the exact revision you intend to serve. Evidence Gateway has no
   posture endpoint, no profile declaration, and no admin surface: its equivalent of a gate finding
   is a startup or readiness failure, so the offline commands are where you find problems first.
-- When the deployment runs Registry Mint, have `mint check` and `mint verify-audit` runnable
-  against the exact configuration and retained chain you intend to serve.
 
 ## Keys and custody
 
@@ -73,7 +70,7 @@ Relay package. It assumes you have already configured your services per
   production and evidence-grade deployments. Require P-256, signing enabled, non-exportable key
   material, plaintext backup disabled, and an exact governed public-key match. Local JWK signing is
   for local assurance only. See
-  [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
+  [Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/).
 - Relay: supply every secret through one of the two reference grammars its runtime file accepts,
   `secret:env/<NAME>` or `secret:file/<name>`, and never as a literal value. `<NAME>` is uppercase
   ASCII, digits, and underscores starting with a letter; `<name>` is a single flat lowercase
@@ -101,18 +98,6 @@ Relay package. It assumes you have already configured your services per
 - Relay: it holds no signing key of its own, because it signs nothing. If your review process
   expects a signature over a Relay response or a Relay package, that expectation is not met by this
   product.
-- Registry Mint, when the deployment runs it: use the same active, published, revoked P-256 service
-  key posture and Transit boundary as Evidence Gateway. Treat `clients.directory` as key material. Any
-  file written there registers a client and the authority Registry Mint will assert for it, and a
-  running process re-reads the directory on `SIGHUP` without a restart.
-- Registry Mint: keep `private-key-jwt` as the client-authentication default. When a managed
-  standard client cannot sign assertions, generate a unique installation secret with
-  `mint client-secret generate`, deliver its owner-only file outside configuration, and register
-  only the printed fingerprint. Never share one secret across people or installations. Allow no
-  more than the two-fingerprint overlap needed for a planned rotation.
-- Registry Mint: generate its audit HMAC key independently from its signing key, give it at least
-  32 bytes of random material, and keep it in a separate owner-only, non-symlink file. Retain the
-  key for as long as its audit chain must remain verifiable.
 
 ## Freeze the Evidence Gateway deployment project
 
@@ -204,14 +189,6 @@ Relay package. It assumes you have already configured your services per
 - Evidence Gateway: run `evidence verify-audit` over the whole audit directory during backup, restore, and
   incident procedures, and on whatever cadence your retention policy requires. Startup verifies
   only the active segment, so this pass is what proves sealed history was not tampered with.
-- Registry Mint: put `audit.path` on durable storage whose permissions, capacity, backup, restore,
-  and retention you own. Mint synchronizes the token-release record before returning a token and
-  fails closed when that write fails. Treat `audit.maximumFileBytes` as a per-segment threshold,
-  not a total ceiling. Rotation happens online, but Mint never deletes or compacts sealed segments.
-- Registry Mint: run one process per `audit.path`. Mint verifies the retained chain and takes an
-  exclusive lock at startup. Archive sealed segments oldest first, never rename or archive the
-  active segment while Mint runs, and run `mint verify-audit` during backup, restore, incident
-  procedures, and on the cadence your retention policy requires.
 - Relay: `audit.sink` is a path on storage whose append durability, permissions, capacity, backup,
   restore, and retention you own. It is a plain path, not a choice between transports, so there is
   no `stdout` mode to fall back to and nothing to configure away.
@@ -280,13 +257,6 @@ Relay package. It assumes you have already configured your services per
   fixed-origin verification on. Evidence Gateway ignores `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and
   `NO_PROXY` and has no application-level proxy, so an ambient proxy variable will not silently
   redirect a source call.
-- Registry Mint, when the deployment runs it: put TLS in front of it. Registry Mint serves plain
-  HTTP and expects termination it does not manage, while Evidence Gateway requires the token issuer and
-  its key set to be HTTPS with no loopback exception. Keep `accessTokens.lifetimeSeconds` short
-  inside its `60..=3600` bound, because a minted token is accepted until it expires and no service
-  in this stack revokes one. Standard authorization is capped at 900 seconds. Apply bounded
-  request-body, connection, and rate controls at the trusted ingress for `/token`, preserving
-  Registry Mint's generic `invalid_client` response instead of exposing credential diagnostics.
 
 ## Declared posture, and why neither product has one
 
@@ -342,10 +312,6 @@ serve, and a startup that fails rather than degrades.
   Evidence Gateway defines no credential-status or lifecycle feature, so plan incident response
   around short assertion validity windows and service-key denylisting rather than recall.
 - Rotate a compromised source credential at its own source and restart the affected process.
-  For a compromised Registry Mint client key, remove its public JWK; for a compromised client
-  secret, remove its fingerprint when another valid fingerprint remains, or remove the complete
-  registration when it is the last or only secret. Send `SIGHUP` to reload the client registry
-  immediately. Already issued bearer tokens remain valid until expiry.
 - Withdraw a Relay disclosure by publishing a new package and restarting. Relay has no admin
   endpoint, no reload signal, and no way to narrow a compiled operation at runtime, so the only
   levers during an incident are stopping the process and deploying a corrected package. Plan for
@@ -353,8 +319,7 @@ serve, and a startup that fails rather than degrades.
 - Preserve the audit trail for post-incident review. For Evidence Gateway, take the whole audit directory
   including sealed segments and run `evidence verify-audit` over it before and after moving it;
   for Relay, hash-chained, fail-closed audit records are the record a deployment reconstructs a
-  request timeline from (REQ-SEC-G-008, REQ-SEC-G-009). For Registry Mint, preserve the chain and
-  matching HMAC key, then run `mint verify-audit` before and after moving it.
+  request timeline from (REQ-SEC-G-008, REQ-SEC-G-009).
 - Expect a `403` from Evidence Gateway to tell you nothing. Every authorization refusal collapses to one
   generic `evidence.denied` problem, deliberately, so it is not an oracle for which check failed.
   Debug it from trusted local state in this order: the bearer principal is in the deployed
@@ -383,9 +348,6 @@ serve, and a startup that fails rather than degrades.
   provider, the pinned audit sink, and every source credential, including a bounded OAuth token
   bootstrap where a source uses client credentials. Readiness sends no evidence-data request and
   probes no source data endpoint, so a passing probe is not proof that a source returns data.
-- Registry Mint: confirm `GET /ready` succeeds with at least one registered client, issue one
-  synthetic token, and run `mint verify-audit` to confirm its token-release record joined the
-  retained chain. A passing readiness probe does not prove off-host receipt or retention.
 - Send a request that should be audited and confirm a corresponding record lands in your
   configured sink, not only `stdout`.
 - Evidence Gateway: request an assertion and verify the stored response offline with
@@ -407,8 +369,6 @@ serve, and a startup that fails rather than degrades.
 | Evidence Gateway refuses to start on a non-immutable input | The bundle directory, `runtime.yaml`, a captured artifact, or a named CA bundle file is writable by the service process, or the secret root is reachable by group or other | Re-freeze the project (`chmod -R a-w bundle && chmod 444 runtime.yaml`), tighten the secret root to `0700`, and restart |
 | Evidence Gateway refuses to start on an invalid bound source extract | The source extract the runtime file names is writable; a distinct refusal from the non-immutable-input row above | Make the extract file non-writable and restart |
 | A second Evidence Gateway process fails at startup with a sink-locked error | Two processes point at the same `auditStorage.path` | Run one writer per audit path; use active/passive with restart-on-failure rather than a second replica |
-| A second Registry Mint process fails to start, or `mint verify-audit` rejects its chain | Another writer holds `audit.path`, or retained records were changed, reordered, or written with another key | Run one writer per path and restore the matching retained chain and HMAC key; do not delete audit records to make startup pass |
-| Registry Mint returns `500 server_error` and then fails readiness | The process could not durably append a token decision and poisoned its audit writer | Stop traffic, preserve and verify the chain, restore writable durable storage, and restart Mint; the failed request did not receive a token |
 | Evidence Gateway returns `403 evidence.denied` for a request you expected to work | Any one of the audience, grant, authority, or response-format checks failed; the response never says which | Work through the ordered checks in [Incident response](#incident-response) against local configuration, then read the refusal phase from the audit chain |
 
 ## Next

@@ -75,12 +75,14 @@ async fn real_postgres_export_is_authenticated_projected_audited_and_resumable()
     let app = authenticated_app(&database, registry.clone(), identity.clone(), &idp);
     let token = idp.mint_token(json!({
         "aud":AUDIENCE,
+        "registry_actor_kind":"service",
         "registry_principal":PRINCIPAL_CANARY,
         "purpose":"data-export",
         "jurisdictions":["north"]
     }));
     let wrong_purpose = idp.mint_token(json!({
         "aud":AUDIENCE,
+        "registry_actor_kind":"service",
         "registry_principal":PRINCIPAL_CANARY,
         "purpose":"other-purpose",
         "jurisdictions":["north"]
@@ -377,7 +379,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal",
                 "requiredPurposes":["data-export"],
-            "grants":[{
+            "permissions":[{
                 "entity":"entry",
                 "operations":["create","batch","list"],
                 "readableFields":["code"],

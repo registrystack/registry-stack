@@ -50,7 +50,7 @@ The proxy owns its provider auto-auth credential, provider trust file, and revie
 configuration. Do not mount those inputs into Evidence Gateway. The proxy configuration must force
 its auto-auth token, require the `X-Vault-Request` header, disable request retries, and set socket
 ownership for the Evidence Gateway process. Use
-[Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
+[Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
 and the maintained deployment-target templates for the exact boundary.
 
 The Git-managed proxy HCL is nonsecret. Provider credentials and generated tokens remain outside
@@ -170,14 +170,6 @@ it covers one requirement's own configuration and artifacts. Signed assertions c
 the requirement they answer as `configurationRevision`, never the runtime or bundle revision. No
 revision contains secret values or audit contents.
 
-## Add optional Mint
-
-When the same application uses Mint, run Mint as a separate private service. Mint retains its public
-HTTPS issuer and JWKS URI, while internal routing or split DNS resolves that identity. Evidence Gateway must
-continue to use the public HTTPS issuer and JWKS URI, not an internal plain-HTTP service name.
-Strict Mint uses its own proxy, Unix-socket directory, provider identity, policy, and Transit key.
-Do not share the Evidence Gateway proxy or socket with Mint.
-
 ## Stop without deleting the audit history
 
 `docker compose down` removes the containers and the network it created. It leaves named volumes
@@ -200,6 +192,5 @@ and audit-chain verification remain operator responsibilities.
 ## Next
 
 - [Build and deploy an Evidence Gateway project](../build-and-deploy-evidence-project/)
-- [Configure Transit signing for Evidence Gateway and Registry Mint](../move-evidence-to-production-signing/)
-- [Issue Evidence Gateway access tokens with Registry Mint](../issue-evidence-access-tokens-with-registry-mint/)
+- [Configure Transit signing for Evidence Gateway](../move-evidence-to-production-signing/)
 - [Configure Evidence Gateway](../../configure/evidence/)

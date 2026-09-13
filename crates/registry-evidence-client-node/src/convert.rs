@@ -134,6 +134,33 @@ fn optional_string(
     }
 }
 
+/// An optional member that, when present, must be an array of strings. The
+/// values' own grammar is the provider's to check; this holds only the shape.
+fn optional_string_array(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<Vec<String>>, ConversionError> {
+    let Some(values) = object.get(field) else {
+        return Ok(None);
+    };
+    if values.is_null() {
+        return Ok(None);
+    }
+    let values = values
+        .as_array()
+        .ok_or_else(|| ConversionError::new(format!("`{field}` must be an array of strings")))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ConversionError::new(format!("`{field}` must contain only strings")))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 fn optional_u64(object: &Map<String, Value>, field: &str) -> Result<Option<u64>, ConversionError> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
@@ -616,6 +643,12 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
     let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key);
     if let Some(audience) = optional_string(object, "audience").map_err(ConfigError::Shape)? {
         config = config.with_audience(audience);
+    }
+    if let Some(resource) = optional_string(object, "resource").map_err(ConfigError::Shape)? {
+        config = config.with_resource(resource);
+    }
+    if let Some(scopes) = optional_string_array(object, "scopes").map_err(ConfigError::Shape)? {
+        config = config.with_scopes(scopes);
     }
     if let Some(seconds) =
         optional_i64(object, "assertionLifetimeSeconds").map_err(ConfigError::Shape)?
@@ -1483,6 +1516,8 @@ mod tests {
                     "clientId": "example-client",
                     "clientKey": generated_client_key_json("signing-key-1"),
                     "audience": "https://issuer.example.org/",
+                    "resource": "urn:registry:evidence",
+                    "scopes": ["evidence:invoke"],
                 },
             },
         });
@@ -1507,6 +1542,35 @@ mod tests {
             },
         });
         config_from_json(&config_json).expect("an ES256 client key converts");
+    }
+
+    /// The scopes the binding reads are an array of strings, and a value of
+    /// any other shape is refused rather than coerced: a scope set is
+    /// configuration, not a string the deployment would want silently split.
+    #[test]
+    fn a_scopes_value_that_is_not_an_array_of_strings_is_a_shape_error() {
+        for scopes in [
+            serde_json::json!("evidence:invoke"),
+            serde_json::json!(["evidence:invoke", 7]),
+        ] {
+            let config_json = serde_json::json!({
+                "baseUrl": "https://evidence.example.org",
+                "trustedJwks": one_key_jwks_json(),
+                "revokedKeyIds": [],
+                "token": {
+                    "privateKeyJwt": {
+                        "tokenEndpoint": "https://issuer.example.org/token",
+                        "clientId": "example-client",
+                        "clientKey": generated_client_key_json("signing-key-1"),
+                        "scopes": scopes,
+                    },
+                },
+            });
+            assert!(
+                config_from_json(&config_json).is_err(),
+                "a scopes value of {scopes} converted"
+            );
+        }
     }
 
     #[test]

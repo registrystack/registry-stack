@@ -95,9 +95,9 @@ fn plan(script: &str, mode: CompiledChangeRequestApplicationMode) -> CompiledCha
         effects: Vec::new(),
         stages: Vec::new(),
         actions: Vec::new(),
-        review_grants: Vec::new(),
-        apply_grants: Vec::new(),
-        presence_grants: Vec::new(),
+        review_permissions: Vec::new(),
+        apply_permissions: Vec::new(),
+        presence_permissions: Vec::new(),
         target_entities: BTreeSet::from(["record".to_owned()]),
         maximum_targets: 16,
         maximum_field_mutations: 128,
@@ -564,7 +564,7 @@ fn rhai_planner_contract_fingerprint_binds_governed_meaning_only() {
     let mut review_policy = base.clone();
     review_policy["entities"][1]["changeRequest"]["review"] =
         json!({"stages": [{"id": "review", "approvals": 1}]});
-    let submitter_grant = &mut review_policy["accessProfiles"][1]["grants"][0];
+    let submitter_grant = &mut review_policy["accessProfiles"][1]["permissions"][0];
     submitter_grant["operations"] = json!([
         "create",
         "get",
@@ -819,7 +819,7 @@ fn anonymous_presence_rejects_a_non_public_rhai_target_link() {
         .push(json!({
             "id": "public-person-reader",
             "anonymous": true,
-            "grants": [{
+            "permissions": [{
                 "entity": "person",
                 "operations": ["get", "list"],
                 "readableFields": ["person-code"],
@@ -862,8 +862,8 @@ fn automatic_apply_requires_same_profile_trigger_and_target_authority() {
         .iter_mut()
         .find(|profile| profile["id"] == "name-change-submitter")
         .expect("submitter profile exists");
-    submitter["grants"][0]["operations"] = json!(["create", "get", "submit_request"]);
-    submitter["grants"][0]
+    submitter["permissions"][0]["operations"] = json!(["create", "get", "submit_request"]);
+    submitter["permissions"][0]
         .as_object_mut()
         .expect("grant is an object")
         .remove("applyTargets");
@@ -918,7 +918,7 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
     profiles.push(json!({
         "id": "final-reviewer-without-apply",
         "principalClaim": "registry_principal",
-        "grants": [{
+        "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get", "approve_request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],
@@ -932,7 +932,7 @@ fn staged_planner_final_review_cannot_borrow_a_separate_apply_profile() {
     profiles.push(json!({
         "id": "separate-staged-applier",
         "principalClaim": "registry_principal",
-        "grants": [{
+        "permissions": [{
             "entity": "person-name-change-request",
             "operations": ["get", "apply_request"],
             "readableFields": ["person", "given-name", "family-name", "handling"],

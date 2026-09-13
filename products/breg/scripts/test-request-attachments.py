@@ -54,14 +54,14 @@ def read_runtime_yaml(path: str) -> dict:
 def test_request_attachment_journey() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bin-dir", type=Path, default=ROOT / "target/debug",
-                        help="Directory containing matching bregctl, breg and mint binaries")
+                        help="Directory containing matching bregctl and breg binaries")
     parser.add_argument("--project", type=Path, default=FIXTURE)
     parser.add_argument("--verification", action="store_true",
                         help="Exercise asynchronous external verification and quarantine (requires PyYAML)")
     parser.add_argument("--keep", action="store_true", help="Keep owner-only reports after success")
     args = parser.parse_args()
     binaries = args.bin_dir.resolve()
-    for name in ("bregctl", "breg", "mint"):
+    for name in ("bregctl", "breg"):
         require((binaries / name).is_file(), f"Build the matching {name} binary first")
     docker = shutil.which("docker")
     require(docker is not None, "Docker is required by the native development lifecycle")
@@ -99,12 +99,12 @@ def test_request_attachment_journey() -> None:
 
     try:
         cli("check", "check", str(project))
-        breg_port, mint_port, database_port = free_ports()
+        breg_port, issuer_port, database_port = free_ports()
         # Native dev owns separate TLS PostgreSQL test/live databases, exact
         # runtime/migration roles, rehearsal receipt, signed package and activation.
         started = True
         state = cli("dev-start", "dev", str(project), "--breg-port", str(breg_port),
-                    "--mint-port", str(mint_port), "--database-port", str(database_port),
+                    "--issuer-port", str(issuer_port), "--database-port", str(database_port),
                     "--docker-bin", str(docker))
         require(state.get("status") == "ready" and not state.get("activationPending"),
                 "Native dev did not finish schema rehearsal and activation")
@@ -112,9 +112,13 @@ def test_request_attachment_journey() -> None:
         cli("verify", "verify", "--runtime-config", runtime)
         print("Native schema-test, package activation and verify passed.", flush=True)
         base = state["bregUrl"]
-        token_files = project / ".breg/dev/secrets"
-        tokens = {role: (token_files / f"{role}-token").read_text(encoding="utf-8").strip()
-                  for role in ("operator", "owner", "other-owner", "reviewer", "applier")}
+        tokens = {}
+        for role in ("operator", "owner", "other-owner", "reviewer", "applier"):
+            token_report = cli(f"token-{role}", "dev", "token", role, str(project))
+            header = Path(token_report["headerFile"]).read_text(encoding="utf-8").strip()
+            prefix = "Authorization: Bearer "
+            require(header.startswith(prefix), f"{role} token header is malformed")
+            tokens[role] = header[len(prefix):]
 
         if args.verification:
             verifier_secret = uuid.uuid4().hex

@@ -69,7 +69,7 @@ accessProfiles:
   - id: public-reader
     default: true
     anonymous: true
-    grants:
+    permissions:
       - entity: public-unit
         rowBoundaries: []
         operations: [get, list]
@@ -79,7 +79,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [records:protected:read]
     requiredPurposes: [bounded-read]
-    grants:
+    permissions:
       - entity: protected-unit
         rowBoundaries: []
         operations: [get, list]
@@ -89,7 +89,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [records:fixture:write]
     requiredPurposes: [fixture-setup]
-    grants:
+    permissions:
       - entity: public-unit
         rowBoundaries: []
         operations: [create]

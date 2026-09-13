@@ -45,6 +45,8 @@ const MIGRATION_ROLE: &str = "breg_dev_migration";
 const RUNTIME_ROLE: &str = "breg_dev_runtime";
 const IMAGE: &str =
     "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675";
+const SPATIAL_IMAGE: &str =
+    "postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6";
 const LABEL: &str = "org.registrystack.bregctl.dev-owner";
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
@@ -70,10 +72,12 @@ pub struct DevArgs {
 enum DevAction {
     /// Start or reuse the project's retained local database and services.
     ///
-    /// A resident supervisor owns this project's PostgreSQL container plus its
-    /// local Mint and Base Registry Engine (BReg) children. The database runs
+    /// A resident supervisor owns this project's PostgreSQL and ThunderID
+    /// containers plus its Base Registry Engine (BReg) child. The database runs
     /// the pinned image
     /// postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675,
+    /// or, when the compiled schema requires PostGIS,
+    /// postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6,
     /// which the supervisor pulls on the first start. Each supervised
     /// prerequisite command may run for 120 seconds, and the database and each
     /// started service have 45 seconds to answer as ready. A start that passes
@@ -86,12 +90,40 @@ enum DevAction {
     Events(EventsArgs),
     /// Copy an explicitly selected retained local client credential pair.
     ExportClient(export_client::ExportClientArgs),
+    /// Acquire a fresh local client token and report its private header-file path.
+    Token(TokenArgs),
+    /// Exchange an existing Casework approval using an explicit configured issuer connection.
+    Grant(GrantArgs),
     /// Review or prepare a bounded lookup successor for a stopped retained registry.
     ///
     /// `evidencectl source add` drives this operation for an adopter, so the
     /// lifecycle help lists only the commands run by hand.
     #[command(hide = true)]
     PrepareSource(Box<prepare_source::PrepareSourceArgs>),
+}
+
+#[derive(Debug, Args)]
+struct GrantArgs {
+    /// Registered agent client ID in the owner-only connection file.
+    client: String,
+    /// Existing Casework-approved grant UUID; this command does not approve tasks.
+    #[arg(long)]
+    grant: String,
+    /// Owner-only task connection v1 file with the registered agent key and fixed target.
+    #[arg(long, value_name = "FILE")]
+    connection: PathBuf,
+    /// Existing project whose private directory receives the grant-specific header.
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct TokenArgs {
+    /// Registered local client ID.
+    client: String,
+    /// Ready local project (defaults to the current directory).
+    #[arg(value_name = "PROJECT", default_value = ".")]
+    project: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -106,16 +138,25 @@ struct StartArgs {
     /// Registry loopback port on first start (default 8090; retained for restarts).
     #[arg(long)]
     breg_port: Option<u16>,
-    /// Local Mint loopback port on first start (default 8091; retained for restarts).
+    /// Local issuer loopback port on first start (default 8091; retained for restarts).
+    #[arg(long)]
+    issuer_port: Option<u16>,
+    /// Immutable local candidate issuer image ID on first start; retained for restarts.
+    #[arg(long, value_parser = candidate_issuer_image)]
+    issuer_image: Option<String>,
+    /// Retained spelling from earlier Mint-based dev sessions; refused with
+    /// legacy-session guidance rather than silently ignored.
     #[arg(long)]
     mint_port: Option<u16>,
+    /// Retained spelling from earlier Mint-based dev sessions; refused with
+    /// legacy-session guidance rather than silently ignored.
+    #[arg(long)]
+    mint_bin: Option<PathBuf>,
     /// PostgreSQL loopback port on first start (default 55432; retained for restarts).
     #[arg(long)]
     database_port: Option<u16>,
     #[arg(long, hide = true)]
     breg_bin: Option<PathBuf>,
-    #[arg(long, hide = true)]
-    mint_bin: Option<PathBuf>,
     #[arg(long, hide = true)]
     docker_bin: Option<PathBuf>,
 }
@@ -149,8 +190,6 @@ pub struct SupervisorArgs {
     #[arg(long)]
     breg_bin: PathBuf,
     #[arg(long)]
-    mint_bin: PathBuf,
-    #[arg(long)]
     docker_bin: PathBuf,
 }
 
@@ -162,8 +201,13 @@ struct State {
     owner: String,
     status: Status,
     breg_port: u16,
-    mint_port: u16,
+    issuer_port: u16,
+    #[serde(default)]
+    issuer_image: Option<String>,
     database_port: u16,
+    /// Fixed at first start from the compiled schema; retained with the database.
+    #[serde(default)]
+    requires_postgis: bool,
     /// Kernel-selected loopback receiver port, retained with destination bindings.
     #[serde(default)]
     webhook_port: Option<u16>,
@@ -226,6 +270,13 @@ impl State {
     fn root(&self) -> PathBuf {
         self.project.join(".breg/dev")
     }
+    fn database_image(&self) -> &'static str {
+        if self.requires_postgis {
+            SPATIAL_IMAGE
+        } else {
+            IMAGE
+        }
+    }
     fn container_name(&self) -> String {
         format!("breg-dev-{}", self.owner)
     }
@@ -242,8 +293,8 @@ impl State {
     fn breg_origin(&self) -> String {
         format!("http://127.0.0.1:{}", self.breg_port)
     }
-    fn mint_origin(&self) -> String {
-        format!("http://127.0.0.1:{}", self.mint_port)
+    fn issuer_origin(&self) -> String {
+        format!("http://127.0.0.1:{}", self.issuer_port)
     }
     fn audience(&self) -> String {
         format!("urn:breg:dev:{}", self.owner)
@@ -267,11 +318,12 @@ impl State {
         Ok(
             json!({"ok":true,"command":"dev","status":self.status,"project":self.project,
             "stateFile":self.root().join("state.json"),"runtimeConfig":self.root().join("runtime.yaml"),
-            "bregUrl":self.breg_origin(),"tokenEndpoint":format!("{}/token",self.mint_origin()),
+            "bregUrl":self.breg_origin(),"issuer":self.issuer_origin(),"tokenEndpoint":format!("{}/oauth2/token",self.issuer_origin()),
+            "clientAssertionAudience":self.issuer_origin(),"resource":self.audience(),
             "webhookUrl":self.webhook_port.map(|port|format!("http://127.0.0.1:{port}/events")),
             "eventsFile":self.webhook_port.map(|_|self.root().join("events.jsonl")),
             "audience":self.audience(),"packageRevision":self.package_revision,"packageSequence":self.sequence,"activationPending":!self.activated,
-            "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,
+            "clients":clients.clients.iter().map(|client|json!({"id":client.id,"accessProfiles":client.access_profiles,"scopes":client.scopes,
                 "clientIdFile":client.client_id_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("client-id")),
                 "assertionKeyFile":client.assertion_key_file.clone().unwrap_or_else(||self.root().join("credentials").join(&client.id).join("assertion-key.jwk"))})).collect::<Vec<_>>()}),
         )
@@ -289,9 +341,63 @@ pub fn run(args: DevArgs) -> Result<Value> {
         }
         Some(DevAction::Start(args)) => start(args),
         Some(DevAction::ExportClient(args)) => export_client::run(args),
+        Some(DevAction::Token(args)) => fresh_token(&args.project, &args.client),
+        Some(DevAction::Grant(args)) => approved_grant(args),
         Some(DevAction::PrepareSource(args)) => prepare_source::run(*args),
         None => start(args.start),
     }
+}
+
+fn approved_grant(args: GrantArgs) -> Result<Value> {
+    let project = project(&args.project)?;
+    let output = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?
+        .block_on(registry_thunderid_tooling::grant_file::acquire_to_header(
+            &args.connection,
+            &project.join(".breg"),
+            &args.client,
+            &args.grant,
+        ))?;
+    Ok(
+        json!({"ok":true,"command":"dev grant","headerFile":output.header_file,"grantExpiresAt":output.grant_expires_at}),
+    )
+}
+
+fn fresh_token(project_path: &Path, client: &str) -> Result<Value> {
+    if !config::identifier(client) {
+        bail!("a registered bounded local client ID is required");
+    }
+    let project = project(project_path)?;
+    private::check(&project.join(".breg"), true)?;
+    let root = project.join(".breg/dev");
+    let state = read_state(&root)?;
+    if !matches!(state.status, Status::Ready)
+        || !control(&root, "status").is_ok_and(|status| status == "ready")
+    {
+        bail!("the local development session must be ready before requesting a token");
+    }
+    // Resolve admission before opening any caller-derived credential path.
+    let clients: Clients =
+        serde_json::from_slice(&private::read(&root.join("clients.json"), MAX_BYTES)?)?;
+    if !clients
+        .clients
+        .iter()
+        .any(|configured| configured.id == client)
+    {
+        bail!("the local client is not registered");
+    }
+    token(&state, client)?;
+    let credential = Zeroizing::new(private::read(
+        &root.join("secrets").join(format!("{client}-token")),
+        65536,
+    )?);
+    let mut header = Zeroizing::new(b"Authorization: Bearer ".to_vec());
+    header.extend_from_slice(&credential);
+    header.push(b'\n');
+    let output = root.join("secrets").join(format!("{client}.header"));
+    private::replace(&output, &header)?;
+    Ok(json!({"ok":true,"command":"dev token","headerFile":output}))
 }
 
 fn project(path: &Path) -> Result<PathBuf> {
@@ -337,11 +443,25 @@ fn clients_file(
 
 fn read_state(root: &Path) -> Result<State> {
     private::check(root, true)?;
-    let state: State = serde_json::from_slice(&private::read(&root.join("state.json"), MAX_BYTES)?)
-        .map_err(|_| {
-            anyhow::anyhow!("retained dev state is invalid; preserve it for inspection")
-        })?;
-    if state.version != 1
+    let bytes = private::read(&root.join("state.json"), MAX_BYTES)?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct VersionProbe {
+        version: u8,
+        mint_port: Option<u16>,
+    }
+    let invalid = || anyhow::anyhow!("retained dev state is invalid; preserve it for inspection");
+    let version: VersionProbe = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if version.version == 1 && version.mint_port.is_some() {
+        bail!(
+            "this retained dev session still records its Mint-based issuer (state v1). \
+            This build does not implement retained issuer migration; keep the \
+            matching Mint-era bregctl and issuer for this session until a \
+            verified migration is available. Nothing was changed"
+        );
+    }
+    let state: State = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    if state.version != 2
         || state.sequence == 0
         || state.baseline_runtime
             != (state.sequence > 1).then(|| {
@@ -357,17 +477,36 @@ fn read_state(root: &Path) -> Result<State> {
     {
         bail!("retained dev state ownership is invalid; no resources were changed");
     }
-    ports(state.breg_port, state.mint_port, state.database_port)?;
+    if let Some(image) = &state.issuer_image {
+        candidate_issuer_image(image).map_err(anyhow::Error::msg)?;
+    }
+    ports(state.breg_port, state.issuer_port, state.database_port)?;
     if state.webhook_port.is_some_and(|port| {
-        port == 0 || [state.breg_port, state.mint_port, state.database_port].contains(&port)
+        port == 0 || [state.breg_port, state.issuer_port, state.database_port].contains(&port)
     }) {
         bail!("retained webhook receiver needs a distinct nonzero loopback port");
     }
     Ok(state)
 }
 
-fn ports(breg: u16, mint: u16, database: u16) -> Result<()> {
-    if breg == 0 || mint == 0 || database == 0 || BTreeSet::from([breg, mint, database]).len() != 3
+fn candidate_issuer_image(value: &str) -> std::result::Result<String, String> {
+    if value.strip_prefix("sha256:").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    }) {
+        Ok(value.to_owned())
+    } else {
+        Err("issuer image must be an immutable local sha256: image ID with 64 lowercase hexadecimal digits".into())
+    }
+}
+
+fn ports(breg: u16, issuer: u16, database: u16) -> Result<()> {
+    if breg == 0
+        || issuer == 0
+        || database == 0
+        || BTreeSet::from([breg, issuer, database]).len() != 3
     {
         bail!("three distinct nonzero loopback ports are required");
     }
@@ -384,7 +523,7 @@ fn receiver_port(state: &State) -> Result<u16> {
     loop {
         let listener = TcpListener::bind(("127.0.0.1", 0))?;
         let port = listener.local_addr()?.port();
-        if ![state.breg_port, state.mint_port, state.database_port].contains(&port) {
+        if ![state.breg_port, state.issuer_port, state.database_port].contains(&port) {
             return Ok(port);
         }
     }
@@ -432,12 +571,13 @@ fn prepare_receiver(state: &mut State, clients: &Clients) -> Result<()> {
 /// Name the first journey step whose access profile no local client binds.
 ///
 /// The schema-test stage makes the same lookup, but by then the database has
-/// been pulled and Mint is serving. Refusing here, before any service starts,
+/// been pulled and the issuer is serving. Refusing here, before any service starts,
 /// tells the author which profile the clients file still lacks while the fix
 /// is one edit away.
 fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
     let journeys: Value = serde_norway::from_slice(journeys)
         .context("tests/journeys.yaml must parse before local development starts")?;
+    let mut used = BTreeSet::new();
     for journey in journeys["journeys"]
         .as_array()
         .context("journeys must contain an array")?
@@ -446,23 +586,104 @@ fn bind_journey_profiles(journeys: &[u8], clients: &Clients) -> Result<()> {
             .as_array()
             .context("journey steps must be an array")?
         {
+            let journey_id = journey["id"].as_str().context("journey requires an id")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
             let profile = step["accessProfile"]
                 .as_str()
                 .context("journey step requires an access profile")?;
-            if !clients
-                .clients
-                .iter()
-                .any(|client| client.access_profiles.iter().any(|p| p == profile))
+            if let Some(client) = exact_journey_client(clients, journey_id, step_id, profile)? {
+                used.insert((journey_id.to_owned(), step_id.to_owned()));
+                let _ = client;
+                continue;
+            }
+            if step["claims"]
+                .as_object()
+                .is_some_and(|claims| claims.is_empty())
             {
+                continue;
+            }
+            let client = journey_client(clients, journey_id, step_id, profile)?;
+            if !client.test_bindings.is_empty() {
+                used.insert((journey_id.to_owned(), step_id.to_owned()));
+            }
+        }
+    }
+    for client in &clients.clients {
+        for binding in &client.test_bindings {
+            if !used.contains(&(binding.journey_id.clone(), binding.step_id.clone())) {
                 bail!(
-                    "journey step {} of {} uses access profile {profile}, which no client in the clients file binds; add a client with that profile and the claims the step expects before first start",
-                    step["id"].as_str().unwrap_or("?"),
-                    journey["id"].as_str().unwrap_or("?")
+                    "client {} testBindings names unknown or profile-mismatched journey step {}/{}",
+                    client.id,
+                    binding.journey_id,
+                    binding.step_id
                 );
             }
         }
     }
     Ok(())
+}
+
+fn journey_client<'a>(
+    clients: &'a Clients,
+    journey_id: &str,
+    step_id: &str,
+    profile: &str,
+) -> Result<&'a config::Client> {
+    let candidates = clients
+        .clients
+        .iter()
+        .filter(|client| client.access_profiles.iter().any(|value| value == profile))
+        .collect::<Vec<_>>();
+    let exact = candidates
+        .iter()
+        .copied()
+        .filter(|client| {
+            client
+                .test_bindings
+                .iter()
+                .any(|binding| binding.journey_id == journey_id && binding.step_id == step_id)
+        })
+        .collect::<Vec<_>>();
+    if let [client] = exact.as_slice() {
+        return Ok(*client);
+    }
+    let defaults = candidates
+        .iter()
+        .copied()
+        .filter(|client| client.test_bindings.is_empty())
+        .collect::<Vec<_>>();
+    if exact.is_empty() {
+        if let [client] = defaults.as_slice() {
+            return Ok(*client);
+        }
+    }
+    bail!(
+        "journey step {step_id} of {journey_id} needs one unambiguous local client for access profile {profile}; add one default client or one exact testBindings entry"
+    )
+}
+
+fn exact_journey_client<'a>(
+    clients: &'a Clients,
+    journey_id: &str,
+    step_id: &str,
+    profile: &str,
+) -> Result<Option<&'a config::Client>> {
+    let exact = clients
+        .clients
+        .iter()
+        .filter(|client| client.access_profiles.iter().any(|value| value == profile))
+        .filter(|client| {
+            client
+                .test_bindings
+                .iter()
+                .any(|binding| binding.journey_id == journey_id && binding.step_id == step_id)
+        })
+        .collect::<Vec<_>>();
+    match exact.as_slice() {
+        [] => Ok(None),
+        [client] => Ok(Some(*client)),
+        _ => bail!("journey step {step_id} of {journey_id} has ambiguous exact testBindings"),
+    }
 }
 
 struct CapturedSource {
@@ -538,6 +759,14 @@ fn start(args: StartArgs) -> Result<Value> {
     } else {
         None
     };
+    if args.mint_port.is_some() || args.mint_bin.is_some() {
+        bail!(
+            "--mint-port and --mint-bin named the Mint-based issuer used by earlier dev sessions. \
+            Use --issuer-port for a new owned dev issuer. A retained Mint session \
+            must stay with its matching Mint-era tools until a verified migration \
+            is available"
+        );
+    }
     let clients_file = clients_file(args.clients_file.as_deref(), existing.as_ref(), &project)?;
     let client_bytes =
         crate::read_bounded_source_file(&clients_file, "dev.clients", "clients", MAX_BYTES)
@@ -558,13 +787,20 @@ fn start(args: StartArgs) -> Result<Value> {
         Some(state)
             if digest != state.source_digest
                 || args.breg_port.is_some_and(|p| p != state.breg_port)
-                || args.mint_port.is_some_and(|p| p != state.mint_port)
+                || args.issuer_port.is_some_and(|p| p != state.issuer_port)
+                || args
+                    .issuer_image
+                    .as_ref()
+                    .is_some_and(|image| Some(image) != state.issuer_image.as_ref())
                 || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
             if state.container_id.is_some() {
-                bail!("authored package, clients or ports differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade");
+                bail!("authored package, clients, ports or issuer image differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade");
             }
             let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
+            // A removed BREG database does not imply its separately owned
+            // issuer state has been discarded. The explicit --remove path
+            // clears both before a changed source can replace this directory.
             fs::remove_dir_all(&root).context("cannot replace the owned development session")?;
             previous = Some(state);
             None
@@ -589,7 +825,7 @@ fn start(args: StartArgs) -> Result<Value> {
         }
         let previous = previous.as_ref();
         let mut state = State {
-            version: 1,
+            version: 2,
             project: project.clone(),
             owner: uuid::Uuid::new_v4().to_string(),
             status: Status::Stopped,
@@ -597,14 +833,19 @@ fn start(args: StartArgs) -> Result<Value> {
                 .breg_port
                 .or(previous.map(|s| s.breg_port))
                 .unwrap_or(8090),
-            mint_port: args
-                .mint_port
-                .or(previous.map(|s| s.mint_port))
+            issuer_port: args
+                .issuer_port
+                .or(previous.map(|s| s.issuer_port))
                 .unwrap_or(8091),
+            issuer_image: args
+                .issuer_image
+                .clone()
+                .or_else(|| previous.and_then(|s| s.issuer_image.clone())),
             database_port: args
                 .database_port
                 .or(previous.map(|s| s.database_port))
                 .unwrap_or(55432),
+            requires_postgis: compiled.ddl().requires_postgis,
             webhook_port: None,
             clients_file,
             source_digest: digest,
@@ -622,8 +863,8 @@ fn start(args: StartArgs) -> Result<Value> {
             binaries: BTreeMap::new(),
             failure: None,
         };
-        ports(state.breg_port, state.mint_port, state.database_port)?;
-        for port in [state.breg_port, state.mint_port, state.database_port] {
+        ports(state.breg_port, state.issuer_port, state.database_port)?;
+        for port in [state.breg_port, state.issuer_port, state.database_port] {
             probe(port)?;
         }
         if !compiled.event_deliveries().deliveries.is_empty() {
@@ -638,18 +879,21 @@ fn start(args: StartArgs) -> Result<Value> {
     prepare_receiver(&mut state, &clients)?;
     verify_outputs(&state)?;
     let breg = executable("breg", args.breg_bin.as_deref())?;
-    let mint = executable("mint", args.mint_bin.as_deref())?;
     let docker = executable("docker", args.docker_bin.as_deref())?;
     // Identify the prerequisites before the session stops a container or
-    // launches the supervisor: a breg or mint from another release has to be
-    // named here, while the terminal that asked for the start is reading.
+    // launches the supervisor: a breg from another release has to be named
+    // here, while the terminal that asked for the start is reading. The dev
+    // issuer is the pinned upstream container; no token-issuer binary is
+    // installed or version-locked anymore.
     state.binaries = BTreeMap::from([
         ("breg".into(), binary(&root, &breg)?),
-        ("mint".into(), binary(&root, &mint)?),
         ("docker".into(), binary(&root, &docker)?),
     ]);
     matching_versions(&state.binaries)?;
-    for port in [state.breg_port, state.mint_port] {
+    // A prior supervisor may have exited without reaching cleanup. Reclaim
+    // only this session's issuer before testing whether its port is free.
+    stop_issuer(&docker, &state)?;
+    for port in [state.breg_port, state.issuer_port] {
         probe(port)?;
     }
     if let Some(port) = state.webhook_port {
@@ -686,8 +930,6 @@ fn start(args: StartArgs) -> Result<Value> {
         .arg(&root)
         .arg("--breg-bin")
         .arg(breg)
-        .arg("--mint-bin")
-        .arg(mint)
         .arg("--docker-bin")
         .arg(docker)
         .stdin(Stdio::null())
@@ -842,10 +1084,11 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     }
     // No PID-based recovery: unrelated reused PIDs must never be signalled.
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
-    for port in [state.breg_port, state.mint_port] {
+    let docker = executable("docker", docker_bin)?;
+    stop_issuer(&docker, &state)?;
+    for port in [state.breg_port, state.issuer_port] {
         probe(port)?;
     }
-    let docker = executable("docker", docker_bin)?;
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
     // inspection (and the stop it guards) when nothing is listed under this name.
@@ -1014,22 +1257,16 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         }
         database(&args.docker_bin, &mut state)?;
         ensure_active(&terminate)?;
-        children.mint = Some(service(
-            &args.mint_bin,
-            &["serve", "--config"],
-            &root.join("mint/mint.yaml"),
-            &root,
-            "mint",
-        )?);
-        ready(
-            &format!("{}/ready", state.mint_origin()),
-            children.mint.as_mut().context("Mint child missing")?,
-            &terminate,
-        )?;
+        // The dev issuer is the pinned upstream ThunderID container, owned by
+        // this session through the shared tooling crate: setup, bootstrap
+        // provisioning, serving, and readiness all live there, and its state
+        // is retained across stop/start exactly like the registry's own.
+        issuer(&args.docker_bin, &state, &clients)?;
+        ensure_active(&terminate)?;
         if state.package_revision.is_none() {
             // The schema-test rehearsal presents these tokens to its own
-            // disposable runtime; the seed below mints its own.
-            tokens(&args.mint_bin, &state, &clients)?;
+            // disposable runtime; the seed below acquires its own.
+            tokens(&state, &clients)?;
             package(&args.docker_bin, &mut state, &clients)?;
         }
         ensure_active(&terminate)?;
@@ -1084,7 +1321,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         // A client token lives 300 seconds, which the child and readiness
         // deadlines of a slow first start can exhaust before the seed runs.
         // Mint the seeding tokens once the registry is ready, not before it.
-        tokens(&args.mint_bin, &state, &clients)?;
+        tokens(&state, &clients)?;
         seed(&mut state, &clients)?;
         let control_root = control_directory(&root)?;
         private::directory(&control_root)?;
@@ -1128,10 +1365,12 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         Ok(stop_stream)
     })();
     let child_cleanup = children.stop();
+    let issuer_cleanup = stop_issuer(&args.docker_bin, &state);
     let database_cleanup = stop_database(&args.docker_bin, &state);
     let socket_cleanup = remove_socket(&root);
     if result.is_err()
         || child_cleanup.is_err()
+        || issuer_cleanup.is_err()
         || database_cleanup.is_err()
         || socket_cleanup.is_err()
     {
@@ -1141,6 +1380,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         state.failure = [
             result.as_ref().err(),
             child_cleanup.as_ref().err(),
+            issuer_cleanup.as_ref().err(),
             database_cleanup.as_ref().err(),
             socket_cleanup.as_ref().err(),
         ]
@@ -1151,6 +1391,7 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<()> {
         state.save()?;
         result?;
         child_cleanup?;
+        issuer_cleanup?;
         database_cleanup?;
         socket_cleanup?;
         unreachable!("a failed cleanup returned its error");
@@ -1185,7 +1426,6 @@ fn read_control_command(stream: &mut impl Read) -> Result<Vec<u8>> {
 #[derive(Default)]
 struct Children {
     breg: Option<Child>,
-    mint: Option<Child>,
     receiver: Option<events::Receiver>,
 }
 impl Children {
@@ -1193,7 +1433,7 @@ impl Children {
         if self.receiver.as_ref().is_some_and(events::Receiver::exited) {
             return Ok(true);
         }
-        for child in [&mut self.breg, &mut self.mint].into_iter().flatten() {
+        for child in [&mut self.breg].into_iter().flatten() {
             if child.try_wait()?.is_some() {
                 return Ok(true);
             }
@@ -1202,7 +1442,7 @@ impl Children {
     }
     fn stop(&mut self) -> Result<()> {
         let mut error = None;
-        for owned in [&mut self.breg, &mut self.mint] {
+        for owned in [&mut self.breg] {
             if let Some(mut child) = owned.take() {
                 if let Err(cause) = stop_child(&mut child) {
                     error = Some(cause);
@@ -1324,23 +1564,19 @@ fn reported_version(binary: &Binary) -> Option<&str> {
     }
     binary.version.split_whitespace().nth(1)
 }
-/// Refuse a session whose breg or mint comes from another release. The three
-/// executables share a package format, a token shape and a schema, so an older
-/// breg beside this bregctl fails deep inside a supervised phase, where the
+/// Refuse a session whose BREG executable comes from another release. An older
+/// BREG beside this bregctl fails deep inside a supervised phase, where the
 /// cause reads as an unrelated refusal about the package or the database.
-/// Docker belongs to no release of this stack and is never compared.
+/// Docker and the source-pinned issuer belong to no BREG release comparison.
 fn matching_versions(binaries: &BTreeMap<String, Binary>) -> Result<()> {
     let own = registry_platform_buildinfo::DISPLAY_VERSION;
-    for name in ["breg", "mint"] {
-        let Some(prerequisite) = binaries.get(name) else {
-            continue;
-        };
+    if let Some(prerequisite) = binaries.get("breg") {
         let Some(reported) = reported_version(prerequisite) else {
-            continue;
+            return Ok(());
         };
         if reported != own {
             bail!(
-                "the installed {name} at {} reports version {reported}, and this bregctl reports version {own}. A local session runs breg, mint and bregctl together, so install all three from the same release, or put the matching build first on PATH",
+                "the installed breg at {} reports version {reported}, and this bregctl reports version {own}. A local session runs breg and bregctl together, so install both from the same release, or put the matching build first on PATH",
                 prerequisite.path.display()
             );
         }
@@ -1682,7 +1918,7 @@ fn inspect(docker: &Path, state: &State) -> Result<Option<Value>> {
         .context("Docker returned no exact container")?;
     if container["Name"] != format!("/{}", state.container_name())
         || container["Config"]["Labels"][LABEL] != state.owner
-        || container["Config"]["Image"] != IMAGE
+        || container["Config"]["Image"] != state.database_image()
         || state
             .container_id
             .as_ref()
@@ -1714,7 +1950,7 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
                 root.join("database/postgres.env")
                     .to_str()
                     .context("dev path must be UTF-8")?,
-                IMAGE,
+                state.database_image(),
             ],
             None,
         )?;
@@ -1868,6 +2104,9 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
             ] {
                 statements.push_str(&format!("CREATE SCHEMA IF NOT EXISTS {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
             }
+            if state.requires_postgis {
+                statements.push_str(&spatial_prerequisites_sql());
+            }
             sql(docker, state, database, statements.as_bytes(), None)?;
         }
         state.database_ready = true;
@@ -1875,6 +2114,24 @@ fn database(docker: &Path, state: &mut State) -> Result<()> {
     }
     Ok(())
 }
+/// Same role boundary as the runtime spatial prerequisite contract: the
+/// migration role may SET the no-login bbox owner; runtime is never a member.
+fn spatial_prerequisites_sql() -> String {
+    let bbox_role = format!("{RUNTIME_ROLE}__spatial_bbox");
+    format!(
+        "CREATE SCHEMA IF NOT EXISTS registry_spatial_ext; \
+         REVOKE ALL ON SCHEMA registry_spatial_ext FROM PUBLIC; \
+         CREATE EXTENSION IF NOT EXISTS postgis WITH SCHEMA registry_spatial_ext; \
+         GRANT USAGE ON SCHEMA registry_spatial_ext TO {MIGRATION_ROLE}, {RUNTIME_ROLE}; \
+         DO $breg_spatial$ BEGIN \
+         IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '{bbox_role}') THEN \
+         CREATE ROLE {bbox_role} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS; \
+         END IF; END; $breg_spatial$; \
+         GRANT {bbox_role} TO {MIGRATION_ROLE} WITH INHERIT FALSE, SET TRUE, ADMIN FALSE; \
+         GRANT USAGE ON SCHEMA registry_spatial_ext TO {bbox_role};"
+    )
+}
+
 fn sql(
     docker: &Path,
     state: &State,
@@ -1926,41 +2183,138 @@ fn stop_database(docker: &Path, state: &State) -> Result<()> {
     Ok(())
 }
 
-fn tokens(mint: &Path, state: &State, clients: &Clients) -> Result<()> {
+fn tokens(state: &State, clients: &Clients) -> Result<()> {
     for client in &clients.clients {
-        token(mint, state, &client.id)?;
+        token(state, &client.id)?;
     }
     Ok(())
 }
 
-fn token(mint: &Path, state: &State, id: &str) -> Result<()> {
+/// One dev credential, acquired through the shared private-key-JWT provider
+/// exactly as a relying client would: no token-issuer binary is spawned, the
+/// assertion key never leaves the session's private credentials tree, and the
+/// credential is stored owner-only for the seeding and rehearsal steps.
+fn token(state: &State, id: &str) -> Result<()> {
+    let client: Clients = serde_json::from_slice(&private::read(
+        &state.root().join("clients.json"),
+        MAX_BYTES,
+    )?)?;
+    let scopes = client
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .with_context(|| format!("the retained client {id} is not registered"))?
+        .scopes
+        .clone();
+    token_with_scopes(state, id, scopes)
+}
+
+fn token_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("cannot build the dev token runtime")?;
+    runtime.block_on(token_async_with_scopes(state, id, scopes))
+}
+
+async fn token_async(state: &State, id: &str) -> Result<()> {
+    let client: Clients = serde_json::from_slice(&private::read(
+        &state.root().join("clients.json"),
+        MAX_BYTES,
+    )?)?;
+    let scopes = client
+        .clients
+        .iter()
+        .find(|client| client.id == id)
+        .with_context(|| format!("the retained client {id} is not registered"))?
+        .scopes
+        .clone();
+    token_async_with_scopes(state, id, scopes).await
+}
+
+async fn token_async_with_scopes(state: &State, id: &str, scopes: Vec<String>) -> Result<()> {
+    use registry_platform_httputil::{PrivateKeyJwt, PrivateKeyJwtConfig, TokenProvider};
+
     let root = state.root();
-    let bytes = Zeroizing::new(command(
-        Command::new(mint)
-            .arg("token")
-            .arg("--url")
-            .arg(format!("{}/token", state.mint_origin()))
-            .arg("--client-id")
-            .arg(id)
-            .arg("--key")
-            .arg(root.join("credentials").join(id).join("assertion-key.jwk")),
-        &root,
-        "token",
-        None,
-    )?);
-    let value = std::str::from_utf8(&bytes)
-        .context("Mint token output must be ASCII")?
-        .trim();
-    if value.len() > 65536
-        || value.split('.').count() != 3
-        || value.chars().any(char::is_whitespace)
-    {
-        bail!("Mint returned an invalid compact token");
+    let issuer = state.issuer_origin();
+    let endpoint: url::Url = format!("{issuer}/oauth2/token")
+        .parse()
+        .context("the dev issuer token endpoint is invalid")?;
+    let key_bytes = private::read(
+        &root.join("credentials").join(id).join("assertion-key.jwk"),
+        4096,
+    )?;
+    let key_text =
+        String::from_utf8(key_bytes.to_vec()).context("the retained client key is unreadable")?;
+    let key = registry_platform_crypto::PrivateJwk::parse(&key_text)
+        .map_err(|_| anyhow::anyhow!("the retained client key is unusable"))?;
+    let provider = PrivateKeyJwt::new(
+        PrivateKeyJwtConfig::new(endpoint, id.to_owned(), key)
+            // ThunderID v1.0.1 checks the assertion audience against the
+            // issuer identifier, not the token endpoint.
+            .with_audience(issuer.clone())
+            .with_resource(state.audience())
+            .with_scopes(scopes),
+    )
+    .map_err(|error| anyhow::anyhow!("the dev token provider is unusable: {error}"))?;
+    let value = provider
+        .bearer_token()
+        .await
+        .map_err(|error| anyhow::anyhow!("the dev issuer declined to issue a token: {error}"))?;
+    let header = value.authorization_header_value();
+    let text = header
+        .to_str()
+        .context("the issued credential is not header-safe")?
+        .strip_prefix("Bearer ")
+        .unwrap_or_default()
+        .to_owned();
+    if text.len() > 65536 || text.split('.').count() != 3 {
+        bail!("the dev issuer returned an invalid compact token");
     }
     private::replace(
         &root.join("secrets").join(format!("{id}-token")),
-        value.as_bytes(),
+        text.as_bytes(),
     )
+}
+
+/// Bring the session's issuer container up: one-time setup and bootstrap
+/// provisioning against the rendered registration, then serving, then the
+/// bounded discovery wait. The functional half of readiness is the token
+/// acquisition above.
+fn issuer(docker: &Path, state: &State, _clients: &Clients) -> Result<()> {
+    let root = state.root();
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
+    let image = state.issuer_image.as_deref().unwrap_or(&pin.image);
+    let state_root = root.join("issuer");
+    let session = registry_thunderid_tooling::container::Session {
+        label: &format!("breg-dev-{}", state.instance_id),
+        id: &state.instance_id,
+        port: state.issuer_port,
+        state_root: &state_root,
+        image,
+    };
+    let jwks = registry_thunderid_tooling::local::start(&session, docker, &mut || false)?;
+    private::replace(
+        &root.join("secrets/issuer-jwks"),
+        &serde_json::to_vec(&jwks)?,
+    )
+}
+
+fn stop_issuer(docker: &Path, state: &State) -> Result<()> {
+    let state_root = state.root().join("issuer");
+    if !state_root.join("session.json").exists() {
+        return Ok(());
+    }
+    let pin = registry_thunderid_tooling::version::ThunderIdPin::load()?;
+    let image = state.issuer_image.as_deref().unwrap_or(&pin.image);
+    let session = registry_thunderid_tooling::container::Session {
+        label: &format!("breg-dev-{}", state.instance_id),
+        id: &state.instance_id,
+        port: state.issuer_port,
+        state_root: &state_root,
+        image,
+    };
+    registry_thunderid_tooling::local::stop(&session, docker).map_err(Into::into)
 }
 
 fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
@@ -1984,6 +2338,9 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     ] {
         initialization.push_str(&format!("CREATE SCHEMA {schema} AUTHORIZATION {MIGRATION_ROLE}; REVOKE ALL ON SCHEMA {schema} FROM PUBLIC;"));
     }
+    if state.requires_postgis {
+        initialization.push_str(&spatial_prerequisites_sql());
+    }
     sql(
         docker,
         state,
@@ -1996,6 +2353,7 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
         MAX_BYTES,
     )?)?;
     let mut bindings = Vec::new();
+    let mut rehearsal_scopes = BTreeMap::<String, Vec<String>>::new();
     for journey in journeys["journeys"]
         .as_array()
         .context("journeys must contain an array")?
@@ -2007,13 +2365,27 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
             let profile = step["accessProfile"]
                 .as_str()
                 .context("journey step requires an access profile")?;
-            let client = clients
-                .clients
-                .iter()
-                .find(|client| client.access_profiles.iter().any(|p| p == profile))
-                .context("every schema-test profile needs an explicit local client binding")?;
-            bindings.push(json!({"journeyId":journey["id"],"stepId":step["id"],"credential":{"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)}}));
+            let journey_id = journey["id"].as_str().context("journey requires an id")?;
+            let step_id = step["id"].as_str().context("journey step requires an id")?;
+            let explicit = exact_journey_client(clients, journey_id, step_id, profile)?;
+            let credential = if let Some(client) = explicit {
+                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
+                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+            } else if step["claims"]
+                .as_object()
+                .is_some_and(|claims| claims.is_empty())
+            {
+                json!({"type":"anonymous"})
+            } else {
+                let client = journey_client(clients, journey_id, step_id, profile)?;
+                remember_rehearsal_scopes(&mut rehearsal_scopes, client, step)?;
+                json!({"type":"bearer","tokenRef":format!("secret:file/{}-token",client.id)})
+            };
+            bindings.push(json!({"journeyId":journey_id,"stepId":step_id,"credential":credential}));
         }
+    }
+    for (client, scopes) in rehearsal_scopes {
+        token_with_scopes(state, &client, scopes)?;
     }
     let credentials = json!({"apiVersion":"registry.registrystack.org/breg-schema-test-credentials/v1","kind":"SchemaTestCredentials","bindings":bindings});
     private::replace(
@@ -2061,6 +2433,37 @@ fn package(docker: &Path, state: &mut State, clients: &Clients) -> Result<()> {
     config::runtime(&root, state, clients, revision, false)?;
     state.package_revision = Some(revision.into());
     state.save()
+}
+
+fn remember_rehearsal_scopes(
+    remembered: &mut BTreeMap<String, Vec<String>>,
+    client: &config::Client,
+    step: &Value,
+) -> Result<()> {
+    let scopes = step["claims"]["scopes"]
+        .as_array()
+        .context("an authenticated journey step must declare scopes")?
+        .iter()
+        .map(|scope| {
+            scope
+                .as_str()
+                .map(str::to_owned)
+                .context("journey scopes must be strings")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if scopes.iter().any(|scope| !client.scopes.contains(scope)) {
+        bail!("journey scopes exceed the bound local client's registered scopes");
+    }
+    match remembered.get(&client.id) {
+        Some(existing) if existing != &scopes => {
+            bail!("one local client cannot bind journey steps with different scope sets")
+        }
+        None => {
+            remembered.insert(client.id.clone(), scopes);
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Clear only this journal's rebuild outputs, preserving predecessor packages.

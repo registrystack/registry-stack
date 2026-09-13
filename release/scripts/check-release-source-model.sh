@@ -73,7 +73,6 @@ require_path "registry-relay Node client binding" "${stack_root}/crates/registry
 require_path "registry-relay Python client binding" "${stack_root}/crates/registry-relay-client-py"
 require_path "registry-evidence crate" "${stack_root}/crates/registry-evidence"
 require_path "registry-evidencectl crate" "${stack_root}/crates/registry-evidencectl"
-require_path "registry-mint crate" "${stack_root}/crates/registry-mint"
 require_path "registry-evidence-oid4vci crate" "${stack_root}/crates/registry-evidence-oid4vci"
 require_path "registry-breg crate" "${stack_root}/crates/registry-breg"
 require_path "registry-bregctl crate" "${stack_root}/crates/registry-bregctl"

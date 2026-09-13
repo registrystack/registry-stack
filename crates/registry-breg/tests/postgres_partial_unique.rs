@@ -42,7 +42,7 @@ async fn real_postgres_partial_unique_index_enforces_only_the_closed_predicate()
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+            "id":"operator","default":true,"principalClaim":"principal","permissions":[{
               "entity":"entry","operations":["get"],"readableFields":["code","status","ended-on"],
               "rowBoundaries": []
             }]

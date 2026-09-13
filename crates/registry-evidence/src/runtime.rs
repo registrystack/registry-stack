@@ -15,6 +15,7 @@ use registry_platform_audit::{AuditError, AuditProfile};
 use registry_platform_crypto::{
     LocalJwkSigner, PrivateJwk, SigningProvider, TransitSigner, TransitSignerConfig,
 };
+use registry_platform_oidc::ActorKind;
 use serde_json::{Map as JsonMap, Value};
 use thiserror::Error;
 
@@ -1040,6 +1041,22 @@ impl EvidenceRuntime {
             })
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let refusal_client_pseudonym = context
+            .client()
+            .map(|client| {
+                self.audit
+                    .pseudonym("client", &refusal_scope, client.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let refusal_grant_pseudonym = context
+            .grant_id()
+            .map(|grant| {
+                self.audit
+                    .pseudonym("grant", &refusal_scope, grant.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
         let binding_mode = self
             .bundle()
@@ -1067,6 +1084,14 @@ impl EvidenceRuntime {
             })
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let client_pseudonym = context
+            .client()
+            .map(|client| {
+                self.audit
+                    .pseudonym("client", &issuance_scope, client.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
         // Resolve every authorization and selector set before constructing the
         // first source future. A refused later item therefore cannot make an
@@ -1085,8 +1110,13 @@ impl EvidenceRuntime {
                 Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                     self.append_authorization_refusal(
                         operation,
-                        refusal_requester_pseudonym,
-                        refusal_actor_pseudonym,
+                        AuditCaller {
+                            requester_pseudonym: refusal_requester_pseudonym,
+                            actor_pseudonym: refusal_actor_pseudonym,
+                            actor_kind: context.actor_kind(),
+                            client_pseudonym: refusal_client_pseudonym,
+                        },
+                        refusal_grant_pseudonym,
                         started,
                     )
                     .await?;
@@ -1105,8 +1135,13 @@ impl EvidenceRuntime {
             {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
+                    refusal_grant_pseudonym,
                     started,
                 )
                 .await?;
@@ -1131,8 +1166,13 @@ impl EvidenceRuntime {
                 Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                     self.append_authorization_refusal(
                         operation,
-                        refusal_requester_pseudonym,
-                        refusal_actor_pseudonym,
+                        AuditCaller {
+                            requester_pseudonym: refusal_requester_pseudonym,
+                            actor_pseudonym: refusal_actor_pseudonym,
+                            actor_kind: context.actor_kind(),
+                            client_pseudonym: refusal_client_pseudonym,
+                        },
+                        refusal_grant_pseudonym,
                         started,
                     )
                     .await?;
@@ -1148,7 +1188,15 @@ impl EvidenceRuntime {
                     return Err(map_authority(error));
                 }
             };
-            let audit = self.request_batch_item_audit_material(&issuance_scope, &resolved)?;
+            let audit = self.request_batch_item_audit_material(
+                &issuance_scope,
+                &resolved,
+                context
+                    .grant()
+                    .ok()
+                    .flatten()
+                    .map(registry_platform_oidc::GrantClaims::approver),
+            )?;
             authorized.push(AuthorizedRequestBatchItem {
                 request,
                 resolved,
@@ -1163,6 +1211,8 @@ impl EvidenceRuntime {
             purpose: batch.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
+            actor_kind: context.actor_kind(),
+            client_pseudonym,
             items: authorized.iter().map(|item| item.audit.clone()).collect(),
         };
         let issued_at = observed_at;
@@ -1486,14 +1536,35 @@ impl EvidenceRuntime {
             })
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let refusal_client_pseudonym = context
+            .client()
+            .map(|client| {
+                self.audit
+                    .pseudonym("client", &refusal_scope, client.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let refusal_grant_pseudonym = context
+            .grant_id()
+            .map(|grant| {
+                self.audit
+                    .pseudonym("grant", &refusal_scope, grant.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
 
         let matched = match match_entitlement(self.bundle(), request, &context) {
             Ok(matched) => matched,
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
+                    refusal_grant_pseudonym,
                     started,
                 )
                 .await?;
@@ -1513,8 +1584,13 @@ impl EvidenceRuntime {
         {
             self.append_authorization_refusal(
                 operation,
-                refusal_requester_pseudonym,
-                refusal_actor_pseudonym,
+                AuditCaller {
+                    requester_pseudonym: refusal_requester_pseudonym,
+                    actor_pseudonym: refusal_actor_pseudonym,
+                    actor_kind: context.actor_kind(),
+                    client_pseudonym: refusal_client_pseudonym,
+                },
+                refusal_grant_pseudonym,
                 started,
             )
             .await?;
@@ -1565,8 +1641,13 @@ impl EvidenceRuntime {
             Err(AuthorizationError::Unauthorized | AuthorizationError::AmbiguousAuthority) => {
                 self.append_authorization_refusal(
                     operation,
-                    refusal_requester_pseudonym,
-                    refusal_actor_pseudonym,
+                    AuditCaller {
+                        requester_pseudonym: refusal_requester_pseudonym,
+                        actor_pseudonym: refusal_actor_pseudonym,
+                        actor_kind: context.actor_kind(),
+                        client_pseudonym: refusal_client_pseudonym,
+                    },
+                    refusal_grant_pseudonym,
                     started,
                 )
                 .await?;
@@ -1612,11 +1693,28 @@ impl EvidenceRuntime {
             })
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let client_pseudonym = context
+            .client()
+            .map(|client| {
+                self.audit
+                    .pseudonym("client", &issuance_scope, client.as_bytes())
+            })
+            .transpose()
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
         let material = self.audit_material(
             &issuance_scope,
-            requester_pseudonym,
-            actor_pseudonym,
+            AuditCaller {
+                requester_pseudonym,
+                actor_pseudonym,
+                actor_kind: context.actor_kind(),
+                client_pseudonym,
+            },
             &resolved,
+            context
+                .grant()
+                .ok()
+                .flatten()
+                .map(registry_platform_oidc::GrantClaims::approver),
             format,
         )?;
         let requirement = self
@@ -2372,6 +2470,7 @@ impl EvidenceRuntime {
         &self,
         scope: &str,
         resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
     ) -> Result<RequestBatchItemAuditMaterial, RuntimeFailure> {
         let grant_pseudonym = resolved
             .grant_id
@@ -2379,6 +2478,7 @@ impl EvidenceRuntime {
             .map(|grant| self.audit.pseudonym("grant", scope, grant.as_bytes()))
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let approver_pseudonym = self.approver_audit_pseudonym(scope, resolved, approver)?;
         let subjects = resolved
             .subjects
             .iter()
@@ -2401,6 +2501,7 @@ impl EvidenceRuntime {
             authority: AuditAuthority {
                 kind: map_authority_kind(resolved.authority_kind),
                 grant_pseudonym,
+                approver_pseudonym,
             },
             subjects,
         })
@@ -3101,17 +3202,24 @@ impl EvidenceRuntime {
     fn audit_material(
         &self,
         scope: &str,
-        requester_pseudonym: String,
-        actor_pseudonym: Option<String>,
+        caller: AuditCaller,
         resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
         format: ResponseFormat,
     ) -> Result<AuditMaterial, RuntimeFailure> {
+        let AuditCaller {
+            requester_pseudonym,
+            actor_pseudonym,
+            actor_kind,
+            client_pseudonym,
+        } = caller;
         let grant_pseudonym = resolved
             .grant_id
             .as_deref()
             .map(|grant| self.audit.pseudonym("grant", scope, grant.as_bytes()))
             .transpose()
             .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        let approver_pseudonym = self.approver_audit_pseudonym(scope, resolved, approver)?;
         let subjects = resolved
             .subjects
             .iter()
@@ -3137,22 +3245,48 @@ impl EvidenceRuntime {
             purpose: resolved.purpose.clone(),
             requester_pseudonym,
             actor_pseudonym,
+            actor_kind,
+            client_pseudonym,
             authority: AuditAuthority {
                 kind: map_authority_kind(resolved.authority_kind),
                 grant_pseudonym,
+                approver_pseudonym,
             },
             subjects,
             response_protection: map_response_protection(format),
         })
     }
 
+    fn approver_audit_pseudonym(
+        &self,
+        scope: &str,
+        resolved: &ResolvedAuthorization,
+        approver: Option<&str>,
+    ) -> Result<Option<String>, RuntimeFailure> {
+        if resolved.grant_id.is_none() {
+            return Ok(None);
+        }
+        let approver =
+            approver.ok_or_else(|| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))?;
+        self.audit
+            .pseudonym("approver", scope, approver.as_bytes())
+            .map(Some)
+            .map_err(|_| failure(ProblemCode::ServiceUnavailable, "audit-pseudonym"))
+    }
+
     async fn append_authorization_refusal(
         &self,
         operation: &str,
-        requester_pseudonym: String,
-        actor_pseudonym: Option<String>,
+        caller: AuditCaller,
+        grant_pseudonym: Option<String>,
         started: Instant,
     ) -> Result<(), RuntimeFailure> {
+        let AuditCaller {
+            requester_pseudonym,
+            actor_pseudonym,
+            actor_kind,
+            client_pseudonym,
+        } = caller;
         let mut event = EvidenceAuthorizationRefusalAuditEvent::new(
             self.bundle().config.assurance_profile,
             operation.to_owned(),
@@ -3161,6 +3295,9 @@ impl EvidenceRuntime {
             elapsed_millis(started),
         );
         event.actor_pseudonym = actor_pseudonym;
+        event.actor_kind = actor_kind;
+        event.client_pseudonym = client_pseudonym;
+        event.grant_pseudonym = grant_pseudonym;
         self.audit
             .append_authorization_refusal(event)
             .await
@@ -3282,6 +3419,8 @@ struct RequestBatchAuditMaterial {
     purpose: String,
     requester_pseudonym: String,
     actor_pseudonym: Option<String>,
+    actor_kind: ActorKind,
+    client_pseudonym: Option<String>,
     items: Vec<RequestBatchItemAuditMaterial>,
 }
 
@@ -3305,6 +3444,8 @@ impl RequestBatchAuditMaterial {
             duration_milliseconds,
         );
         event.actor_pseudonym = self.actor_pseudonym.clone();
+        event.actor_kind = self.actor_kind;
+        event.client_pseudonym = self.client_pseudonym.clone();
         event
     }
 
@@ -3371,6 +3512,13 @@ enum SourceStageLookup {
     DeclaredUnresolved,
 }
 
+struct AuditCaller {
+    requester_pseudonym: String,
+    actor_pseudonym: Option<String>,
+    actor_kind: ActorKind,
+    client_pseudonym: Option<String>,
+}
+
 struct AuditMaterial {
     assurance_profile: AssuranceProfile,
     requirement: String,
@@ -3378,6 +3526,8 @@ struct AuditMaterial {
     purpose: String,
     requester_pseudonym: String,
     actor_pseudonym: Option<String>,
+    actor_kind: ActorKind,
+    client_pseudonym: Option<String>,
     authority: AuditAuthority,
     subjects: Vec<AuditSubject>,
     response_protection: ResponseProtection,
@@ -3406,6 +3556,8 @@ impl AuditMaterial {
             duration_milliseconds,
         );
         event.actor_pseudonym = self.actor_pseudonym.clone();
+        event.actor_kind = self.actor_kind;
+        event.client_pseudonym = self.client_pseudonym.clone();
         event
     }
 }

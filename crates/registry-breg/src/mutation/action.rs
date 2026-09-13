@@ -468,6 +468,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &self.audit_profile,
             TerminalAudit {
+                grant: None,
                 outcome: TerminalAuditOutcome::Committed,
                 method: HttpMethod::Post,
                 operation_id: route_id.to_owned(),
@@ -564,6 +565,7 @@ impl MutationCoordinator {
                 transaction,
                 &self.audit_profile,
                 TerminalAudit {
+                    grant: None,
                     outcome: TerminalAuditOutcome::Replayed,
                     method: HttpMethod::Post,
                     operation_id: route_id.to_owned(),
@@ -1017,6 +1019,7 @@ impl MutationCoordinator {
             transaction.transaction(),
             &self.audit_profile,
             TerminalAudit {
+                grant: None,
                 outcome: TerminalAuditOutcome::Returned,
                 method: HttpMethod::Post,
                 operation_id: route_id.to_owned(),
@@ -1211,7 +1214,7 @@ fn validate_action_claims(
         return Err(MutationError::InvalidRequest);
     }
     let grant = action
-        .grants
+        .permissions
         .iter()
         .find(|grant| grant.profile_id == claims.access_profile())
         .ok_or(MutationError::InvalidRequest)?;

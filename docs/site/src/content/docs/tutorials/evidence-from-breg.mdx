@@ -24,7 +24,7 @@ a synthetic record, then add a narrow Evidence source without resetting the regi
   outcome="A verified Evidence answer from a record retained across BReg stop and restart."
   time="About 30 minutes, plus the first PostgreSQL image download"
   level="Local development with synthetic records"
-  prerequisites={['Matching candidate breg, bregctl, evidence, evidencectl and mint binaries on PATH', 'A running Docker engine', 'A shell with curl, tar, Python 3 and awk', 'An editor']}
+  prerequisites={['Matching candidate breg, bregctl, evidence and evidencectl binaries on PATH', 'A running Docker engine', 'A shell with curl, tar, Python 3 and awk', 'An editor']}
 />
 
 Use the matching candidate toolset that accompanies this page. Guided source setup
@@ -59,16 +59,16 @@ bregctl init ./registry --from publicschema --selection ./organization-selection
 bregctl dev ./registry
 ```
 
-BReg starts PostgreSQL, Mint, and the registry. If defaults `8090`, `8091`, or `55432`
+BReg starts PostgreSQL, the pinned local issuer, and the registry. If defaults `8090`, `8091`, or `55432`
 are occupied, choose unused ports on the first start instead:
 
 ```sh
-bregctl dev ./registry --breg-port 8190 --mint-port 8191 \
+bregctl dev ./registry --breg-port 8190 --issuer-port 8191 \
   --database-port 55433
 ```
 
 Use these ports only if they are available, or substitute another unused set.
-Use your chosen BReg and Mint ports in the record requests below. Evidence setup
+Use your chosen BReg and issuer ports in the record requests below. Evidence setup
 will obtain those retained endpoints directly. If startup fails, correct the
 named prerequisite and retry; the error gives a private diagnostics path.
 
@@ -88,13 +88,9 @@ support messages.
 Obtain an operator token:
 
 ```sh
-umask 077
-credentials=registry/.breg/dev/credentials/operator
-mint token --url http://127.0.0.1:8091/token \
-  --client-id "$(cat "$credentials/client-id")" --key "$credentials/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > authorization.header
+bregctl dev token operator ./registry
 curl --silent --show-error --fail-with-body \
-  --header @authorization.header --header 'Content-Type: application/json' \
+  --header @registry/.breg/dev/secrets/operator.header --header 'Content-Type: application/json' \
   --header 'Idempotency-Key: composition-create-1' \
   --data '{"data":{"code":"SYNTHETIC-ORG-001","name":"Earlier name"}}' \
   --output created.json \
@@ -105,11 +101,12 @@ Read the new record and capture its ETag before changing its name:
 
 ```sh
 record_id=$(python3 -c 'import json; print(json.load(open("created.json"))["data"]["recordIdentifier"])')
-curl --silent --show-error --fail-with-body --header @authorization.header \
+curl --silent --show-error --fail-with-body --header @registry/.breg/dev/secrets/operator.header \
   --dump-header record.headers --output before-edit.json \
   "http://127.0.0.1:8090/v1/records/records/$record_id?accessProfile=operator"
 record_etag=$(awk 'tolower($1) == "etag:" {print $2}' record.headers | tr -d '\r')
-curl --silent --show-error --fail-with-body --header @authorization.header \
+curl --silent --show-error --fail-with-body \
+  --header @registry/.breg/dev/secrets/operator.header \
   --header 'Content-Type: application/json-patch+json' \
   --header 'Idempotency-Key: composition-edit-1' --header "If-Match: $record_etag" \
   --request PATCH --data '[{"op":"replace","path":"/data/name","value":"Synthetic Works"}]' \
@@ -123,7 +120,7 @@ for comparison after setup. If a request returns `401`, repeat the token command
 If a concurrent edit changes the ETag, read the record again before deciding whether
 to retry the edit.
 
-{/* Evidence: crates/registry-breg/tests/postgres_mutation.rs; crates/registry-bregctl/tests/dev_lifecycle.rs; crates/registry-mint/src/cli.rs. */}
+{/* Evidence: crates/registry-breg/tests/postgres_mutation.rs; crates/registry-bregctl/tests/dev_lifecycle.rs. */}
 
 ## Connect Evidence after using the registry
 
@@ -236,7 +233,7 @@ target's caller governance. Production targets are refused by this command.
 
 If Evidence's default ports `8080` and `8081` are occupied, start with
 `evidencectl dev --target ./targets/local --evidence-port 8180
---mint-port 8181 start .` instead. Use that Evidence port in each curl command in this
+--issuer-port 8181 start .` instead. Use that Evidence port in each curl command in this
 section. BReg's two ports
 are separate and stay as configured in the source connection.
 
@@ -289,9 +286,9 @@ previous start:
 evidencectl dev --target ./targets/local start .
 ```
 
-The command reports the actual Evidence Gateway and Registry Mint endpoints it
+The command reports the actual Evidence Gateway and issuer endpoints it
 reused. After `dev clean`, select any nondefault ports again with
-`--evidence-port` and `--mint-port`.
+`--evidence-port` and `--issuer-port`.
 
 BReg retains its database, generated identities, audit history and seed
 checkpoints. Existing record edits survive this restart. A lost checkpoint is

@@ -17,7 +17,7 @@
 # deliberately does not do.
 #
 # This gate builds the BReg toolset from the checked-out source unless BREG_BIN,
-# BREGCTL_BIN and MINT_BIN select exact candidate or released bytes, then replays
+# BREG_BIN and BREGCTL_BIN select exact candidate or released bytes, then replays
 # the registered tutorial's own shell fences from an empty reader directory, the
 # way a reader starts after installing the binaries. What CI runs is what a
 # reader copies.
@@ -62,7 +62,7 @@
 # is exactly when the journey is worth walking again.
 #
 # Configuration:
-#   BREG_BIN / BREGCTL_BIN / MINT_BIN   run these exact binaries instead of
+#   BREG_BIN / BREGCTL_BIN              run these exact binaries instead of
 #                                       building from source
 #   BREG_TUTORIAL_CARGO_PROFILE         ci (default) or release
 #   BREG_TUTORIAL_DOCS_ROOT             docs content directory override (tests)
@@ -99,7 +99,6 @@ EXCLUDED_BREG_TUTORIALS=(
 	tutorials/build-a-breg-production-candidate   # needs a reader-supplied signing key and a production database; product CI builds the candidate
 	tutorials/extend-a-registry-with-a-module     # authoring journey with editor steps on the project first-breg generates; replayable, not yet specified as a journey here
 	tutorials/derive-a-registry-from-publicschema # derives a project from the embedded PublicSchema snapshot and edits a selection file; replayable, not yet specified as a journey here
-	tutorials/query-a-spatial-registry-from-qgis  # needs QGIS on a desktop; product CI runs the spatial quickstart smoke
 	tutorials/query-breg-client                   # BReg client journey; depends on the released unified packages, like query-relay-client
 	tutorials/review-breg-changes-in-casework     # two-product journey replayed by the Registry Casework tutorial gate, which builds the BReg toolset beside the Casework one
 	tutorials/review-registry-changes             # needs psql against the quickstart database and an editor step on change-control configuration; replayable, not yet specified as a journey here
@@ -305,7 +304,7 @@ resolve_profile_dir() {
 }
 
 prepare_toolset() {
-	if [[ -z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" || -z "${MINT_BIN:-}" ]]; then
+	if [[ -z "${BREG_BIN:-}" || -z "${BREGCTL_BIN:-}" ]]; then
 		local profile_dir
 		profile_dir="$(resolve_profile_dir)"
 		# The registry binary sits behind the runtime feature, exactly as the
@@ -313,13 +312,12 @@ prepare_toolset() {
 		(cd "$REPO_ROOT" && CARGO_TARGET_DIR="$TARGET_DIR" \
 			cargo build --locked --profile "$BUILD_PROFILE" \
 			-p registry-breg --features registry-breg/runtime \
-			-p registry-bregctl -p registry-mint --bins)
+			-p registry-bregctl --bins)
 		BREG_BIN="$TARGET_DIR/$profile_dir/breg"
 		BREGCTL_BIN="$TARGET_DIR/$profile_dir/bregctl"
-		MINT_BIN="$TARGET_DIR/$profile_dir/mint"
 	fi
 	local bin
-	for bin in "$BREG_BIN" "$BREGCTL_BIN" "$MINT_BIN"; do
+	for bin in "$BREG_BIN" "$BREGCTL_BIN"; do
 		# Absoluteness first: the reader journey runs from its own directory and
 		# reaches the binaries through symlinks, so a relative path resolves
 		# against the wrong directory and would otherwise surface much later,
@@ -335,11 +333,10 @@ prepare_toolset() {
 	done
 
 	# The tutorial calls the binaries by name, and `bregctl dev` resolves
-	# `breg` and `mint` from PATH, so serve them from a shim dir.
+	# `breg` from PATH, so serve both commands from a shim directory.
 	mkdir -p "$SHIM_DIR"
 	ln -s "$BREG_BIN" "$SHIM_DIR/breg"
 	ln -s "$BREGCTL_BIN" "$SHIM_DIR/bregctl"
-	ln -s "$MINT_BIN" "$SHIM_DIR/mint"
 }
 
 # ---------------------------------------------------------------------------

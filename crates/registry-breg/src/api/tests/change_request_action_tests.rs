@@ -316,7 +316,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
             }
           }],
           "accessProfiles":[{
-            "id":"request-reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"request-reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","submit_request","approve_request","reject_request","request_revision"],
               "readableFields":["placement","proposed-site"],
@@ -331,7 +331,7 @@ fn compiled_registry() -> Arc<CompiledRegistry> {
               "rowBoundaries": []
             }]
           },{
-            "id":"request-applier","principalClaim":"principal","grants":[{
+            "id":"request-applier","principalClaim":"principal","permissions":[{
               "entity":"placement-correction-request",
               "operations":["get","apply_request"],
               "readableFields":["placement"],

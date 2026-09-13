@@ -126,6 +126,33 @@ fn optional_string(
     }
 }
 
+/// An optional member that, when present, must be a list of strings. The
+/// values' own grammar is the provider's to check; this holds only the shape.
+fn optional_string_list(
+    object: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<Vec<String>>, ConversionError> {
+    let Some(values) = object.get(field) else {
+        return Ok(None);
+    };
+    if values.is_null() {
+        return Ok(None);
+    }
+    let values = values
+        .as_array()
+        .ok_or_else(|| ConversionError::new(format!("`{field}` must be a list of strings")))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ConversionError::new(format!("`{field}` must contain only strings")))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 fn optional_i64(object: &Map<String, Value>, field: &str) -> Result<Option<i64>, ConversionError> {
     match object.get(field) {
         None | Some(Value::Null) => Ok(None),
@@ -707,6 +734,12 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
     let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, client_key);
     if let Some(audience) = optional_string(object, "audience").map_err(ConfigError::Shape)? {
         config = config.with_audience(audience);
+    }
+    if let Some(resource) = optional_string(object, "resource").map_err(ConfigError::Shape)? {
+        config = config.with_resource(resource);
+    }
+    if let Some(scopes) = optional_string_list(object, "scopes").map_err(ConfigError::Shape)? {
+        config = config.with_scopes(scopes);
     }
     if let Some(seconds) =
         optional_i64(object, "assertion_lifetime_seconds").map_err(ConfigError::Shape)?
@@ -1626,6 +1659,9 @@ mod tests {
                 "token_endpoint": "https://issuer.example/token",
                 "client_id": "test-client",
                 "client_key": generated_private_jwk_json(),
+                "audience": "https://issuer.example/",
+                "resource": "urn:registry:evidence",
+                "scopes": ["evidence:invoke"],
             }
         });
         config_from_parts(
@@ -1641,6 +1677,42 @@ mod tests {
             Some(2048),
         )
         .expect("the configuration is well-shaped");
+    }
+
+    /// The scopes the binding reads are a list of strings, and a value of any
+    /// other shape is refused rather than coerced: a scope set is
+    /// configuration, not a string the deployment would want silently split.
+    #[test]
+    fn config_from_parts_refuses_a_scopes_value_that_is_not_a_list_of_strings() {
+        for scopes in [
+            serde_json::json!("evidence:invoke"),
+            serde_json::json!(["evidence:invoke", 7]),
+        ] {
+            let token = serde_json::json!({
+                "private_key_jwt": {
+                    "token_endpoint": "https://issuer.example/token",
+                    "client_id": "test-client",
+                    "client_key": generated_private_jwk_json(),
+                    "scopes": scopes,
+                }
+            });
+            assert!(
+                config_from_parts(
+                    "https://evidence.example/",
+                    &serde_json::json!({ "keys": [] }),
+                    Vec::new(),
+                    &token,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .is_err(),
+                "a scopes value of {scopes} converted"
+            );
+        }
     }
 
     /// The tutorial reads `.evidence/clients/<id>/private.jwk` and passes it

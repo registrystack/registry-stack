@@ -244,6 +244,7 @@ impl PilotHarness {
     ) -> String {
         let mut claims = json!({
             "aud": AUDIENCE,
+            "registry_actor_kind": "service",
             "registry_principal": "pilot-operator",
             "purpose": purpose,
         });

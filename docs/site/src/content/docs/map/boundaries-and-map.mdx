@@ -1,6 +1,6 @@
 ---
 title: Boundaries and map
-description: The four formal Registry Stack products, the supporting token issuer, the separate Solmara Lab adopter demo, and the boundaries between them.
+description: The formal Registry Stack products, the separate Solmara Lab adopter demo, and the boundaries between them.
 wide: true
 status: current
 owner: registry-docs
@@ -9,7 +9,6 @@ source_repos:
   - registry-platform
   - registry-manifest
   - registry-evidence
-  - registry-mint
   - solmara-lab
 last_reviewed: "2026-08-21"
 doc_type: explanation
@@ -28,21 +27,17 @@ import ProjectMap from '../../../components/ProjectMap.astro';
 
 The formal Registry Stack has four products with distinct responsibilities: Registry Platform,
 Registry Manifest, Registry Relay, and Evidence Gateway.
-Registry Mint is a supporting service beside them, issuing short-lived access tokens for deployments
-that have callers and no identity provider.
 Solmara Lab is a separate adopter project that demonstrates the products together.
 Use this page to decide which project owns a question before opening implementation docs,
 and to understand how the products and the external demo connect at runtime.
 
 <figure>
   <img src="../../images/registry-family-map.svg"
-       alt="Four formal Registry Stack products, with Registry Mint as a supporting service and the
-            separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
+       alt="The formal Registry Stack products and the separate Solmara Lab adopter demo. Registry Platform provides shared auth, audit, HTTP,
             crypto, SD-JWT, and test crates. Registry Manifest provides portable metadata contracts,
             validation, and renderers. Registry Relay compiles a reviewed registry contract into a
             fixed set of protected read-only operations over local read-only SQLite sources. Evidence
-            Gateway answers one bounded question about one subject with a signed assertion. Registry
-            Mint issues the short-lived access tokens Evidence Gateway verifies. Solmara Lab is an
+            Gateway answers one bounded question about one subject with a signed assertion. Solmara Lab is an
             external synthetic-data adopter demo." />
 </figure>
 
@@ -65,7 +60,6 @@ For how the products connect at runtime and how Solmara Lab demonstrates them, s
 | How is that registry contract authored, checked, and sealed into a package before it is served? | [`relayctl`](../../reference/relayctl/) |
 | How is `metadata.yaml` validated or rendered into standards-facing artifacts? | [Registry Manifest](https://github.com/registrystack/registry-stack) |
 | How is one bounded question about one subject answered with a signed assertion that carries the answer and not the record? | [Evidence Gateway](../../products/registry-evidence/) |
-| How does a deployment with callers and no identity provider issue access tokens? | [Registry Mint](../../reference/mint/) |
 | How do the services run together in a local demo? | [Solmara Lab](https://github.com/registrystack/solmara-lab/blob/3d5c492ea50c6fdcefd5978df6f036422096421c/README.md) |
 
 Cross-project explanation, standards evidence, and contract indexes live in these docs (not in any one project repo).
@@ -208,8 +202,7 @@ answer rather than the record. It does not own:
   {/* Evidence: crates/registry-evidence/Cargo.toml depends on registry-platform-audit, -crypto,
        -httpsec, -httputil, -oidc, and -sdjwt, and on no other product crate. */}
 - Token issuance and identity proofing. Evidence Gateway verifies access tokens under one reviewed OIDC
-  profile with exactly one trusted issuer; it issues none. Registry Mint issues them for a
-  deployment with no identity provider.
+  profile with exactly one trusted issuer; it issues none.
   {/* Evidence: "Supported deployment", products/evidence/OPERATOR-CONTRACT.md. */}
 - Consumer decisions. Requirements, eligibility, ranking, approval, routing, payment, workflow, and
   action policy stay with the accountable decision owner. Evidence Gateway is not a workflow, orchestration,
@@ -226,23 +219,6 @@ Verifiable Credentials Data Model JSON-LD envelope. An SD-JWT VC serialization
 bundle and the one matched authority grant both name that format, under the frozen profile in
 `products/evidence/contracts/sd-jwt-vc-profile.yaml`. That profile adds a response format, never a
 credential lifecycle.
-
-## Registry Mint
-
-Registry Mint issues short-lived access tokens to registered machine clients so a deployment with no
-identity provider still has one. It does not own:
-
-- End-user authentication, identity proofing, or consent. Registry Mint authenticates registered
-  machine clients through `private_key_jwt` by default or an explicitly selected standard
-  client-secret compatibility method, not people. A secret identifies the managed installation.
-- Caller-declared authority. Token authority is written from the client registry and never from the
-  caller's own request.
-- Evidence Gateway authorization. Evidence Gateway independently verifies the token and re-authorizes every request
-  against its own bundle and authority grants.
-
-{/* Evidence: contract status and stable properties, docs/site/src/content/docs/reference/mint.mdx,
-     sourced from crates/registry-mint/src/clients.rs and crates/registry-mint/src/token.rs;
-     one-way dependency, crates/registry-mint/Cargo.toml dev-dependencies. */}
 
 ## Solmara Lab
 

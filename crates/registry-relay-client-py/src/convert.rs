@@ -367,6 +367,33 @@ fn optional_string(
     }
 }
 
+/// An optional member that, when present, must be a list of strings. The
+/// values' own grammar is the provider's to check; this holds only the shape.
+fn optional_string_list(
+    value: &Map<String, Value>,
+    field: &str,
+    what: &str,
+) -> Result<Option<Vec<String>>, ConversionError> {
+    let Some(values) = value.get(field) else {
+        return Ok(None);
+    };
+    if values.is_null() {
+        return Ok(None);
+    }
+    let values = values.as_array().ok_or_else(|| {
+        ConversionError::new(format!("{what}[\"{field}\"] must be a list of strings"))
+    })?;
+    values
+        .iter()
+        .map(|value| {
+            value.as_str().map(str::to_owned).ok_or_else(|| {
+                ConversionError::new(format!("{what}[\"{field}\"] must contain only strings"))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 fn optional_i64(
     value: &Map<String, Value>,
     field: &str,
@@ -415,6 +442,8 @@ fn private_key_jwt(
             "client_id",
             "client_key",
             "audience",
+            "resource",
+            "scopes",
             "assertion_lifetime_seconds",
             "refresh_margin_seconds",
             "request_timeout_seconds",
@@ -437,6 +466,12 @@ fn private_key_jwt(
     let mut config = PrivateKeyJwtConfig::new(token_endpoint, client_id, key);
     if let Some(value) = optional_string(value, "audience", WHAT)? {
         config = config.with_audience(value);
+    }
+    if let Some(value) = optional_string(value, "resource", WHAT)? {
+        config = config.with_resource(value);
+    }
+    if let Some(values) = optional_string_list(value, "scopes", WHAT)? {
+        config = config.with_scopes(values);
     }
     if let Some(value) = optional_i64(value, "assertion_lifetime_seconds", WHAT)? {
         config = config.with_assertion_lifetime_seconds(value);

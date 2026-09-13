@@ -259,7 +259,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes:
       - facility-registry
-    grants:
+    permissions:
       - entity: facility
         operations:
           - create

@@ -349,7 +349,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "professional-license",
           "operations": [
@@ -377,7 +377,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "professional-license",
           "operations": [
@@ -456,7 +456,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "professional-license",
           "operations": [
@@ -533,6 +533,11 @@
             }
           ]
         }
+      ],
+      "actorKind": "human",
+      "requesterClients": [
+        "staff",
+        "supervisor"
       ]
     },
     {
@@ -545,7 +550,7 @@
       "requiredPurposes": [
         "starter-learning"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "professional-license",
           "operations": [

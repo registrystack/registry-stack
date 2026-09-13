@@ -1770,7 +1770,7 @@ fn compiled_registry_with_composite_lookup() -> registry_breg::CompiledRegistry 
         .as_array_mut()
         .expect("widget has selector profiles")
         .push(json!({"id": "by-amount-and-label", "fields": ["amount", "label"]}));
-    source["accessProfiles"][0]["grants"][0]["lookups"]
+    source["accessProfiles"][0]["permissions"][0]["lookups"]
         .as_array_mut()
         .expect("operator has widget lookups")
         .push(json!({"selector": "by-amount-and-label", "valueOrigin": "request"}));
@@ -1863,7 +1863,7 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management","audit-review"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget",
               "operations":["create","get","lookup","list","tombstone"],
               "readableFields":["label","secret","amount","jurisdiction","ordinal","rank","internal-code"],
@@ -1887,7 +1887,7 @@ fn registry_source() -> String {
             "principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"widget",
               "operations":["get","list"],
               "readableFields":["label","jurisdiction","internal-code"],

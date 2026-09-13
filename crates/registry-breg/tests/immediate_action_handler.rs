@@ -29,7 +29,7 @@ fn project() -> Value {
             {"id":"friend","target":{"entity":"person"},"operation":"create","fields":["name","friend"]},
             {"id":"existing","target":{"fromField":"person"},"operation":"patch","fields":["name","friend"]}
         ]}}],
-        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","grants":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
+        "accessProfiles":[{"id":"registrar","default":true,"principalClaim":"principal","permissions":[{"action":"register-person","operations":["invoke"],"targets":[{"entity":"person","rowBoundaries":[]}],"results":["person","friend","existing"]}]}]
     })
 }
 fn compile(source: Value, script: &str) -> Result<CompiledAction, registry_breg::CompileFailure> {
@@ -547,7 +547,7 @@ fn handler_compiler_rejects_inputs_outside_the_scalar_abi() {
             "id":"person","target":{"entity":"person"},"operation":"create",
             "set":{"name":{"fromField":"name"}}
         }]);
-        fixed["accessProfiles"][0]["grants"][0]["results"] = json!(["person"]);
+        fixed["accessProfiles"][0]["permissions"][0]["results"] = json!(["person"]);
         let fixed = parse_project_json(&serde_json::to_vec(&fixed).unwrap()).unwrap();
         compile_project_with_assets(&fixed, &[], &[], CompileProfile::Authoring).unwrap();
     }
@@ -1094,7 +1094,7 @@ fn fixed_action_fingerprints_omit_handler_and_bind_native_patterns() {
         .remove("handler");
     source["actions"][0]["inputs"][0]["maxLength"] = json!(160);
     source["actions"][0]["effects"] = json!([{"id":"person","target":{"entity":"person"},"operation":"create","set":{"name":{"fromField":"given-name"}}}]);
-    source["accessProfiles"][0]["grants"][0]["results"] = json!(["person"]);
+    source["accessProfiles"][0]["permissions"][0]["results"] = json!(["person"]);
     let compile = |source: &Value| {
         let project = parse_project_json(&serde_json::to_vec(source).unwrap()).unwrap();
         registry_breg::compiler::compile_project(&project, &[], CompileProfile::Authoring)
@@ -1127,7 +1127,7 @@ fn handler_rejects_reference_to_a_create_of_an_incompatible_entity() {
     second["route"] = json!("organizations");
     source["entities"].as_array_mut().unwrap().push(second);
     source["actions"][0]["handler"]["writes"][1]["target"]["entity"] = json!("organization");
-    source["accessProfiles"][0]["grants"][0]["targets"]
+    source["accessProfiles"][0]["permissions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({"entity":"organization","rowBoundaries":[]}));

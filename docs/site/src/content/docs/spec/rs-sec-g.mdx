@@ -7,7 +7,6 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-evidence
-  - registry-mint
 last_reviewed: "2026-09-06"
 doc_type: specification
 doc_id: RS-SEC-G
@@ -58,7 +57,7 @@ This specification covers the security model that holds across the runtime servi
 
 This specification does not define:
 
-- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable surface, see [Configure Relay](../../configure/relay/), [Configure Evidence Gateway](../../configure/evidence/), and [Configure Registry Mint](../../configure/mint/).
+- **Exact configuration schemas, algorithms, and parameters.** Concrete signing algorithms and key sizes, configurable token and cache windows, entropy floors, the precise security-header set, and the precise outbound allow and deny rules are configuration and operational detail, not contract data. For the configurable surface, see [Configure Relay](../../configure/relay/), [Configure Evidence Gateway](../../configure/evidence/).
 - **Surface-specific protocol behavior.** How each service applies this model to its own routes, request shapes, and error codes belongs to [RS-PR-EVIDENCE](../rs-pr-evidence/) and [RS-PR-RELAY](../rs-pr-relay/).
 - **Key custody and secret provisioning.** How private keys and credentials are stored, injected, and rotated in a deployment (environment, file, hardware module) is an operator responsibility, addressed in Section 9.
 - **Deeper service-internal security mechanisms.** The internal structure of the audit envelope, and of any product replay state beyond the authority, binding, retention, and failure behavior Section 7 states, is reserved for product specifications and operator guidance.
@@ -67,7 +66,7 @@ For the components named here and their boundaries, see [RS-ARC-G](../rs-arc-g/)
 
 ## 2. Shared security primitives
 
-The registry stack concentrates its security-critical behavior in Registry Platform so that it behaves identically across services and can be reviewed in one place. Registry Platform supplies authentication helpers, OpenID Connect (OIDC) verification, audit envelopes, HTTP security, outbound HTTP policy, cryptography, and Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers. Registry Relay, Evidence Gateway, and Registry Mint own how those primitives are configured and enforced on their own routes.
+The registry stack concentrates its security-critical behavior in Registry Platform so that it behaves identically across services and can be reviewed in one place. Registry Platform supplies authentication helpers, OpenID Connect (OIDC) verification, audit envelopes, HTTP security, outbound HTTP policy, cryptography, and Selective Disclosure JWT Verifiable Credential (SD-JWT VC) helpers. Registry Relay and Evidence Gateway own how those primitives are configured and enforced on their own routes.
 
 REQ-SEC-G-001: A security-critical primitive that must behave identically across runtime services (authentication, OIDC verification, audit envelopes, HTTP security, outbound HTTP policy, cryptography, and SD-JWT VC helpers) SHOULD be sourced from Registry Platform rather than reimplemented per service. This is the security-model form of REQ-ARC-G-005, and it keeps cross-service security behavior consistent and auditable in one place.
 
@@ -84,10 +83,9 @@ flowchart LR
     audit["Audit:<br/>Platform envelope · fail-closed<br/>principal · scopes · request_id · purpose"]
     caller --> authn --> authz --> serve --> audit
     keys["Verification keys:<br/>issuer JWKS<br/>(public half only)"] -.-> authn
-    mint["Registry Mint:<br/>registered client authentication · one-way<br/>issues the access token"] -.-> authn
 ```
 
-The diagram restates the model: a caller presents an access token the service verifies against its one configured issuer, the request is authorized against the scope its target requires before source or evaluation work, the service serves the configured surface, and the request is recorded. Verification keys are published so a verifier can check issued artifacts. Where a deployment has no identity provider, Registry Mint issues the access token the caller presents, and the resource server verifies it as an ordinary OIDC token.
+The diagram restates the model: a caller presents an access token the service verifies against its one configured issuer, the request is authorized against the scope its target requires before source or evaluation work, the service serves the configured surface, and the request is recorded. Verification keys are published so a verifier can check issued artifacts.
 
 REQ-SEC-G-002: A runtime service MUST verify caller credentials against exactly one issuer, fixed by configuration at startup, and MUST authenticate every route that returns person-level records or evidence assertions before it produces a response. Registry Relay and Evidence Gateway both verify OIDC access tokens against one trusted issuer. Registry Relay MUST refuse to start when its compiled contract carries a protected access profile and no issuer is configured, so a deployment cannot serve a protected operation with caller verification switched off.
 
@@ -118,7 +116,7 @@ A verifier needs the issuer's public key to check a signed artifact, and it need
 
 REQ-SEC-G-007: An issuer MUST sign with an asymmetric key and MUST publish only the public half through the issuer JWKS. Private key material MUST NOT be published and MUST NOT be required by a verifier. A key that is being rotated out MAY remain published for verification while artifacts it signed are still within their validity, so a verifier can check previously signed artifacts across a rotation. Evidence Gateway signs with exactly one active ES256/P-256 key, identifies service keys by their RFC 7638 thumbprints, and retains a previous public key for at least the maximum assertion validity plus the accepted clock skew.
 
-The approved custody mechanism depends on assurance: local assurance uses a file-backed private JWK, while production and evidence-grade assurance require Vault/OpenBao Transit through a workload-local Unix-socket proxy. See [Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/).
+The approved custody mechanism depends on assurance: local assurance uses a file-backed private JWK, while production and evidence-grade assurance require Vault/OpenBao Transit through a workload-local Unix-socket proxy. See [Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/).
 
 Readiness, liveness, and protocol conformance checks show that a service has loaded configuration and can serve the expected protocol surface. They do not certify production-grade private-key custody. A deployment that uses software keys, local JWK files, or demo-generated keys can still be reachable and internally consistent; production custody, rotation, and approval of a key provider remain operator responsibilities under Section 9.
 
@@ -132,46 +130,14 @@ REQ-SEC-G-009: A deployment MUST be able to run audit fail-closed, so that a req
 
 ## 7. Replay-protection authority
 
-Replay protection is product correctness state, not a shared storage service.
-Registry Platform can supply replay vocabulary and mechanism-only helpers, but each product defines
-and holds its own replay decisions.
-The [retention and persistent-state reference](../../operate/retention-and-persistent-state/)
-defines the complete product retention inventory, and
-[Operate Relay](../../operate/relay/) defines the Relay recovery procedure.
+No maintained Registry Stack resource server holds a replay table, replay reservation, or
+persistent single-use record. A service that keeps no replay state MUST NOT claim to consume a
+credential or prevent its reuse. Replay prevention belongs to the surrounding protocol or issuer
+that creates and validates a one-time challenge.
 
-| Product | Protected execution or domain | Identity and request binding | Retention |
-| --- | --- | --- | --- |
-| Registry Mint | Single use of a client assertion identifier at the token endpoint. | The assertion's `jti` is remembered once its signature has been verified against the named client's registered keys, so a captured assertion cannot be spent twice inside its own lifetime. | The assertion's own expiry, bounded by the configured maximum assertion lifetime, in a per-process cache with a configured entry ceiling. |
-
-Registry Mint's client-assertion cache is the only replay authority this stack holds. No maintained
-service persists a replay decision across restart, and none keeps replay correctness state in a
-database.
-
-Registry Relay holds no replay state. Every compiled operation is a read, so no request it accepts
-commits an effect a second identical request could commit twice. Its pagination cursors are
-client-held and authenticated, bound to the source revision, contract revision, operation, access
-profile, disclosure profile, and authorization context, and expiring against
-`cursor.maximumAgeSeconds`. A cursor is bound request context, not a single-use token, and a
-deployment MUST NOT present it as one.
-
-Evidence Gateway holds no replay state at all. Its request nonce is echoed in the response so a caller can
-correlate its own request, and it is never stored, uniqueness-checked, or exposed elsewhere.
-Evidence Gateway Version 1 therefore makes no single-use or freshness guarantee of its own, and a
-deployment MUST NOT present the echoed nonce as one.
-
-REQ-SEC-G-018: A service that holds no replay state MUST NOT be presented as providing replay,
-single-use, or freshness protection. A value such a service echoes, issues, or validates for another
-purpose MUST NOT be documented, configured, or relied on as one of those guarantees, and a
-deployment MUST NOT compose two such services into a claim neither one makes.
-Registry Relay and Evidence Gateway both hold no replay state.
-
-REQ-SEC-G-017: A product that enforces single use in process rather than in persistent state MUST
-bound the cache, MUST retain an identifier until at least its own expiry, and MUST fail closed when
-the cache is saturated rather than evict a live entry, so that a caller cannot flush the cache and
-then replay what it evicted.
-Such enforcement is scoped to one process: a deployment that runs more than one instance MUST NOT
-claim single use across those instances, and MUST NOT be documented as if it did.
-Registry Mint's client-assertion cache is the only in-process enforcement in this stack.
+REQ-SEC-G-018: A service that holds no replay state MUST NOT claim replay prevention or single-use
+enforcement. It MAY validate signatures, expiry, audience, nonce equality, and other request
+bindings, but those checks alone MUST NOT be described as consuming a credential.
 
 ## 8. Transport and outbound-call posture
 
@@ -207,9 +173,9 @@ A registry stack deployment conforms to this specification when it:
 
 REQ-SEC-G-010 is retired. It required delegated evaluation to be static-peer only and fully verified before any Relay consultation or claim evaluation. The retired `registry-notary` component held the only delegated-evaluation surface in this stack, so no service here evaluates on behalf of a peer and nothing implements that requirement. Per RS-DOC REQ-DOC-008 the identifier is not reused.
 
-REQ-SEC-G-003 is retired. It required a resource server's static bearer-credential mode to configure a `sha256:` fingerprint rather than the raw bearer secret. That mode shipped only in the retired Relay V1 runtime and its adopter tooling, so no maintained resource server implements the requirement and the identifier is not reused. Registry Mint's distinct token-endpoint client-secret compatibility method is governed by REQ-SEC-G-016; it authenticates a client before issuing a short-lived access token and grants no bearer access to a resource route by itself.
+REQ-SEC-G-003 is retired. It required a resource server's static bearer-credential mode to configure a `sha256:` fingerprint rather than the raw bearer secret. That mode shipped only in the retired Relay V1 runtime and its adopter tooling, so no maintained resource server implements the requirement and the identifier is not reused.
 
-REQ-SEC-G-014 and REQ-SEC-G-015 are retired together. They required a persisted replay decision to live in PostgreSQL state owned by the deciding product, forbade two products from sharing replay tables or correctness transactions, required product-owned atomic reservation and completion operations, and required a potentially stale recovery point to stay offline until product recovery rules passed. The retired Relay V1 runtime held the only persisted replay authority in this stack. Registry Relay V2 keeps no database of its own, Evidence Gateway holds no replay state, and Registry Mint enforces single use in a bounded per-process cache under REQ-SEC-G-017, so nothing implements those requirements. REQ-SEC-G-018 states what a service holding no replay state may claim. Per RS-DOC REQ-DOC-008 the identifiers are not reused.
+REQ-SEC-G-014 and REQ-SEC-G-015 are retired together. They required a persisted replay decision to live in PostgreSQL state owned by the deciding product, forbade two products from sharing replay tables or correctness transactions, required product-owned atomic reservation and completion operations, and required a potentially stale recovery point to stay offline until product recovery rules passed. The retired Relay V1 runtime held the only persisted replay authority in this stack. Registry Relay V2 keeps no database of its own, Evidence Gateway holds no replay state, so nothing implements those requirements. REQ-SEC-G-018 states what a service holding no replay state may claim. Per RS-DOC REQ-DOC-008 the identifiers are not reused.
 
 Conformance to this specification does not imply conformance to any external standard cited in the `standards_referenced` frontmatter field, nor to OpenID Connect, OAuth 2.0, or any other authentication or authorization framework named in prose. Each cited standard's adoption mode and scope are documented in the [standards register](../../reference/standards/).
 
@@ -218,14 +184,14 @@ Conformance to this specification does not imply conformance to any external sta
 This specification is `verified`: every requirement describes shipped behavior a reader can inspect, per RS-DOC REQ-DOC-014.
 
 - The [boundary map](../../map/boundaries-and-map/) records that the security primitives (authentication, OIDC, audit envelopes, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers) are owned by Registry Platform and that secret provisioning, audit retention, tenant isolation, deployment configuration, and incident response are operator responsibilities, which Sections 2 and 9 make precise.
-- The [Evidence Gateway API reference](../../reference/apis/registry-evidence/), the [Registry Mint reference](../../reference/mint/), and [Configure Relay](../../configure/relay/) describe the OIDC trust inputs, the per-dataset, per-grant, and per-access-profile scopes, and the unauthenticated probes that Sections 3 and 4 state normatively. Relay publishes no shared API reference: its route set and its security requirements are described per deployment by the OpenAPI document the runtime serves, as [RS-PR-RELAY](../rs-pr-relay/) states.
+- The [Evidence Gateway API reference](../../reference/apis/registry-evidence/), and [Configure Relay](../../configure/relay/) describe the OIDC trust inputs, the per-dataset, per-grant, and per-access-profile scopes, and the unauthenticated probes that Sections 3 and 4 state normatively. Relay publishes no shared API reference: its route set and its security requirements are described per deployment by the OpenAPI document the runtime serves, as [RS-PR-RELAY](../rs-pr-relay/) states.
 - The [Evidence Gateway security model](../../security/evidence/) and [Configure Evidence Gateway](../../configure/evidence/) describe JWKS publication, the public/private key boundary, and rotation, which Section 5 states normatively.
 - [RS-PR-EVIDENCE](../rs-pr-evidence/) and [RS-PR-RELAY](../rs-pr-relay/) carry the surface-level form of the authentication, authorization, key-publication, audit, and error requirements this document generalizes.
 - [RS-ARC-G](../rs-arc-g/) Section 5 holds the architectural invariants (REQ-ARC-G-004, REQ-ARC-G-005) that Sections 2 and 6 refine.
 - The [retention and persistent-state reference](../../operate/retention-and-persistent-state/) records the complete product retention inventory and states that Relay V2 keeps no database-backed correctness state, which is the inventory Section 7 states normatively. [Operate Relay](../../operate/relay/) carries the recovery procedure that replaced the retired backup and restore page.
 - The [standards register](../../reference/standards/) records the adoption mode for the standards listed in `standards_referenced`.
-- The enforcing code is inspectable in the workspace: OIDC verification in `crates/registry-platform-oidc`, the Evidence Gateway authenticator in `crates/registry-evidence/src/auth.rs`, and the Relay authenticator in `crates/registry-relay-v2/src/auth.rs` (REQ-SEC-G-004); the Relay startup refusal that pairs a protected access profile with a configured issuer in `crates/registry-relay-v2/src/startup.rs` (REQ-SEC-G-002); registered client authentication and provisioning in `crates/registry-mint/src/assertion.rs`, `crates/registry-mint/src/clients.rs`, and `crates/registry-mint/src/client_secret.rs` (REQ-SEC-G-016); authority matching before source work in `crates/registry-evidence` and Relay's access-profile preflight in `crates/registry-relay-v2/src/api.rs` (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Relay's router assembly (`crates/registry-relay-v2/src/server.rs`) and the Evidence Gateway router (`crates/registry-evidence/src/server.rs`), together with the `access.public_nonpublic_forbidden` and `disclosure.public_nonpublic_forbidden` compiler refusals in `crates/registry-relay-v2/src/compiler.rs` (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths (REQ-SEC-G-008, REQ-SEC-G-009); Registry Mint's bounded assertion cache in `crates/registry-mint/src/replay.rs` (REQ-SEC-G-017); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
-- No maintained crate holds a replay table, a replay reservation, or a persistent single-use record: `crates/registry-relay-v2` and `crates/registry-relayctl` declare no database dependency beyond the read-only `crates/registry-platform-sqlite` boundary, and Registry Mint's only single-use state is the in-process cache REQ-SEC-G-017 bounds (REQ-SEC-G-018).
+- The enforcing code is inspectable in the workspace: OIDC verification in `crates/registry-platform-oidc`, the Evidence Gateway authenticator in `crates/registry-evidence/src/auth.rs`, and the Relay authenticator in `crates/registry-relay-v2/src/auth.rs` (REQ-SEC-G-004); the Relay startup refusal that pairs a protected access profile with a configured issuer in `crates/registry-relay-v2/src/startup.rs` (REQ-SEC-G-002); authority matching before source work in `crates/registry-evidence` and Relay's access-profile preflight in `crates/registry-relay-v2/src/api.rs` (REQ-SEC-G-005); the unauthenticated-surface allow-lists in Relay's router assembly (`crates/registry-relay-v2/src/server.rs`) and the Evidence Gateway router (`crates/registry-evidence/src/server.rs`), together with the `access.public_nonpublic_forbidden` and `disclosure.public_nonpublic_forbidden` compiler refusals in `crates/registry-relay-v2/src/compiler.rs` (REQ-SEC-G-006); the audit envelope in `crates/registry-platform-audit` and the services' fail-closed audit paths (REQ-SEC-G-008, REQ-SEC-G-009); and the secret-material rejection lists in `crates/registry-manifest-core` (REQ-SEC-G-013).
+- No maintained crate holds a replay table, replay reservation, or persistent single-use record (REQ-SEC-G-018).
 - The frozen Evidence Gateway Version 1 security invariant matrix (`products/evidence/contracts/security-invariant-matrix.yaml`) records the Evidence Gateway-specific form of the audit-ordering, fail-closed, transport-identity, and nonce invariants that Sections 3, 6, and 7 state at stack level.
 
 {/* Evidence: crates/registry-platform-oidc verifies bearer tokens for both services, and the
@@ -233,8 +199,7 @@ This specification is `verified`: every requirement describes shipped behavior a
     crates/registry-relay-v2/src/auth.rs (REQ-SEC-G-004). crates/registry-relay-v2/src/startup.rs
     refuses to serve a protected access profile with no configured issuer (REQ-SEC-G-002),
     crates/registry-platform-audit carries the audit envelope both services append to
-    (REQ-SEC-G-008, REQ-SEC-G-009), and crates/registry-mint/src/replay.rs bounds the only single-use
-    state Registry Mint keeps (REQ-SEC-G-017, REQ-SEC-G-018). */}
+    (REQ-SEC-G-008, REQ-SEC-G-009). */}
 
 ## Next
 

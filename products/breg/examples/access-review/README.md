@@ -58,14 +58,14 @@ Use an explicit empty list to distinguish intentional registry-wide access from 
 
 The [task-profile project](task-profiles/README.md) adds a clerk, supervisor,
 auditor, action-only registrar, and reviewed correction to a small registry.
-It demonstrates how to use existing grants for different tasks without merging profiles.
+It demonstrates how to use existing permissions for different tasks without merging profiles.
 
 ## Requirements and limits
 
 `accessRequirements` is optional and requires authenticated access when present.
 It grants nothing. Every direct profile, including module contributions, must
 explicitly include its mandatory scopes and exact row bindings. Action targets
-and workflow review, application, and request-presence grants also preserve the
+and workflow review, application, and request-presence permissions also preserve the
 requirements of the entities they touch. When
 `allowedPurposes` is nonempty, profiles must restrict purpose to a nonempty subset
 of it. An empty or omitted list imposes no purpose requirement. Profiles may be stricter.
@@ -75,7 +75,7 @@ that has none, but cannot replace existing requirements.
 Relationship routes are authorized by the root profile. Target and join entity
 scope/purpose requirements apply to that profile too. Target or join row
 requirements cannot be enforced by the current root-only relationship plan, so
-such grants fail compilation. Use a direct route on the protected entity.
+such permissions fail compilation. Use a direct route on the protected entity.
 Root row requirements continue to work for relationship routes.
 
 Requirements govern request access, not independently configured event
@@ -85,7 +85,7 @@ Requirements also do not stop an authorized operator from replacing the complete
 configuration. Review, package signatures, and deployment authority still matter.
 
 `diff` reports field-by-field access changes, including scopes, purposes, row
-bindings, fields, related-record grants, and export/history permissions. Mixed
+bindings, fields, related-record permissions, and export/history permissions. Mixed
 changes are marked for review rather than assigned a guessed overall direction.
 Changing mandatory requirements is included in package migration/change review.
 

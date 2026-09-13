@@ -60,6 +60,12 @@ Set `RELAY_V2_SDMX_CONFORMANCE=1` when running `scripts/test-http.sh` to fetch
 the digest-locked schemas temporarily and validate generated data and structure
 responses.
 
+Set `RELAY_V2_STOCK_ISSUER=1` to include the pinned ThunderID container journey
+for private-key-JWT service issuance and protected lookup. Docker must be
+available; the fixture uses an isolated loopback port and owned temporary state.
+The existing CI HTTP journey enables this replacement for the former Mint-backed
+issuer test. Ordinary local HTTP tests do not require Docker.
+
 `scripts/check-client-contract.sh` verifies the standalone fixed route and
 problem inventory used by `registry-relay-client`; it has no live deployment or
 fixture dependency.

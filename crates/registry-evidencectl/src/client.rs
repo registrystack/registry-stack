@@ -14,6 +14,9 @@ use std::{
 
 use anyhow::{bail, Context as _, Result};
 use clap::{ArgGroup, Args, Subcommand};
+use registry_evidence_client::private_key_jwt::{
+    valid_scope_token, MAXIMUM_REQUESTED_SCOPES, MAXIMUM_REQUESTED_SCOPE_BYTES,
+};
 use registry_evidence_client::{EvidenceClient, EvidenceClientProfile};
 use registry_platform_crypto::canonicalize_json;
 use serde::{Deserialize, Serialize};
@@ -100,6 +103,23 @@ pub struct ProfileCreateArgs {
     #[arg(long)]
     expected_provider: Option<String>,
 
+    /// Audience of the client assertion presented at the token endpoint, when
+    /// the issuer expects one other than the token endpoint URL (ThunderID
+    /// v1.0.1 expects the issuer string). This is not the token request's
+    /// resource.
+    #[arg(long, value_name = "AUDIENCE")]
+    client_assertion_audience: Option<String>,
+
+    /// RFC 8707 resource indicator requested with the token: the resource
+    /// server's registered identifier, not a URL to fetch.
+    #[arg(long, value_name = "URI")]
+    resource: Option<String>,
+
+    /// Scope requested with the token. Repeat for several; a requested scope
+    /// may narrow the client's registered permission set, never widen it.
+    #[arg(long = "scope", value_name = "SCOPE")]
+    scopes: Vec<String>,
+
     /// New owner-only profile file.
     #[arg(long, alias = "out")]
     output: PathBuf,
@@ -128,6 +148,23 @@ pub(crate) struct ClientProfile {
     pub(crate) verification: VerificationProfile,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) expected: Option<ExpectedProfile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) oauth: Option<ClientOauthProfile>,
+}
+
+/// The token-request parameters a profile fixes ahead of discovery. The
+/// members are independent: a deployment may state only the assertion
+/// audience, or only the resource, and unstated members keep their
+/// discovery-driven defaults.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ClientOauthProfile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) client_assertion_audience: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) resource: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) scopes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -234,6 +271,57 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
     let expected =
         (expected.audience.is_some() || expected.issuer.is_some() || expected.provider.is_some())
             .then_some(expected);
+    let oauth = {
+        let oauth = ClientOauthProfile {
+            client_assertion_audience: args.client_assertion_audience,
+            resource: args.resource,
+            scopes: (!args.scopes.is_empty()).then_some(args.scopes),
+        };
+        if let Some(audience) = oauth.client_assertion_audience.as_deref() {
+            validate_bounded_identifier(audience, 512, "client assertion audience")?;
+        }
+        if let Some(resource) = oauth.resource.as_deref() {
+            validate_bounded_identifier(resource, 2048, "resource indicator")?;
+            let parsed =
+                Url::parse(resource).context("the resource indicator must be an absolute URI")?;
+            if parsed.fragment().is_some()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+            {
+                bail!("the resource indicator must carry no fragment or userinfo");
+            }
+        }
+        if let Some(scopes) = oauth.scopes.as_deref() {
+            if scopes.len() > MAXIMUM_REQUESTED_SCOPES {
+                bail!(
+                    "at most {} scopes may be requested",
+                    MAXIMUM_REQUESTED_SCOPES
+                );
+            }
+            for scope in scopes {
+                validate_bounded_identifier(
+                    scope,
+                    MAXIMUM_REQUESTED_SCOPE_BYTES,
+                    "requested scope",
+                )?;
+                if !valid_scope_token(scope) {
+                    bail!("requested scope {scope:?} is not an RFC 6749 scope-token");
+                }
+            }
+            if scopes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != scopes.len()
+            {
+                bail!("a requested scope may not repeat");
+            }
+        }
+        (oauth.client_assertion_audience.is_some()
+            || oauth.resource.is_some()
+            || oauth.scopes.is_some())
+        .then_some(oauth)
+    };
     let profile = ClientProfile {
         schema: CLIENT_PROFILE_SCHEMA_V1.to_owned(),
         base_url: args.base_url.as_str().trim_end_matches('/').to_owned(),
@@ -246,6 +334,7 @@ fn create_profile(args: ProfileCreateArgs) -> Result<ExitCode> {
             clock_skew_seconds: args.clock_skew_seconds,
         },
         expected,
+        oauth,
     };
     let mut bytes = canonicalize_json(&serde_json::to_value(profile)?)?;
     EvidenceClientProfile::from_slice(&bytes)

@@ -394,6 +394,30 @@ fn optional_string(
     }
 }
 
+/// An optional member that, when present, must be an array of strings. The
+/// values' own grammar is the provider's to check; this holds only the shape.
+fn optional_string_array(
+    object: &Map<String, Value>,
+    field: &str,
+    kind: &'static str,
+    message: &'static str,
+) -> Result<Option<Vec<String>>> {
+    match object.get(field) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(values)) => values
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| binding_error(kind, message))
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some),
+        Some(_) => Err(binding_error(kind, message)),
+    }
+}
+
 fn safe_integer(
     value: &Value,
     minimum: i64,
@@ -463,6 +487,8 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
             "clientId",
             "clientKey",
             "audience",
+            "resource",
+            "scopes",
             "assertionLifetimeSeconds",
             "refreshMarginSeconds",
             "requestTimeoutMilliseconds",
@@ -511,6 +537,22 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
     )? {
         config = config.with_audience(value);
     }
+    if let Some(value) = optional_string(
+        object,
+        "resource",
+        "configuration",
+        "authorization.privateKeyJwt.resource must be a string",
+    )? {
+        config = config.with_resource(value);
+    }
+    if let Some(values) = optional_string_array(
+        object,
+        "scopes",
+        "configuration",
+        "authorization.privateKeyJwt.scopes must be an array of strings",
+    )? {
+        config = config.with_scopes(values);
+    }
     if let Some(value) = optional_i64(
         object,
         "assertionLifetimeSeconds",
@@ -558,6 +600,52 @@ fn private_key_jwt(value: &Value) -> Result<PrivateKeyJwt> {
         config = config.with_trusted_root_certificates(value.into_bytes());
     }
     PrivateKeyJwt::new(config).map_err(|error| mapped_error(token_error_value(error)))
+}
+
+/// Shared OAuth client authentication and uncached task-token exchange.
+#[napi(js_name = "PrivateKeyJwt")]
+pub struct PrivateKeyJwtBinding {
+    inner: PrivateKeyJwt,
+}
+
+#[napi]
+impl PrivateKeyJwtBinding {
+    #[napi(constructor)]
+    pub fn new(config: Value) -> Result<Self> {
+        Ok(Self {
+            inner: private_key_jwt(&config)?,
+        })
+    }
+
+    #[napi]
+    pub async fn exchange(&self, subject_token: String) -> Result<String> {
+        let token = self
+            .inner
+            .exchange(&subject_token)
+            .await
+            .map_err(|error| mapped_error(token_error_value(error)))?;
+        bearer_value(token)
+    }
+
+    #[napi]
+    pub async fn bearer_token(&self) -> Result<String> {
+        let token = self
+            .inner
+            .bearer_token()
+            .await
+            .map_err(|error| mapped_error(token_error_value(error)))?;
+        bearer_value(token)
+    }
+}
+
+fn bearer_value(token: registry_breg_client::BearerToken) -> Result<String> {
+    let header = token.authorization_header_value();
+    header
+        .to_str()
+        .ok()
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_owned)
+        .ok_or_else(|| binding_error("token", "the issued credential is invalid"))
 }
 
 fn authorization_provider(value: &Value) -> Result<Option<Arc<dyn TokenProvider>>> {

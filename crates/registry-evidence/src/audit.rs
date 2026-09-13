@@ -17,9 +17,10 @@ pub use registry_platform_audit::segmented_audit_paths as audit_segment_paths;
 use registry_platform_audit::{
     verify_segmented_audit_chain, visit_stopped_segmented_audit_chain, AuditChainHasher,
     AuditEnvelope, AuditError, AuditHashSecret, AuditKeyHasher, AuditProfile,
-    DurableSegmentedAuditLog,
+    AuthorizationAuditEvent, AuthorizationOutcome, DurableSegmentedAuditLog,
 };
 use registry_platform_crypto::canonicalize_json;
+use registry_platform_oidc::ActorKind;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zeroize::Zeroizing;
@@ -77,10 +78,16 @@ pub struct EvidenceAuthorizationRefusalAuditEvent {
     pub phase: AuditPhase,
     pub bundle_revision: String,
     pub requester_pseudonym: String,
+    pub actor_kind: ActorKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_pseudonym: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_pseudonym: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_pseudonym: Option<String>,
     pub decision: AuthorizationRefusalAuditDecision,
     pub safe_error_category: String,
+    pub reason: String,
     pub duration_milliseconds: u64,
 }
 
@@ -101,9 +108,13 @@ impl EvidenceAuthorizationRefusalAuditEvent {
             phase: AuditPhase::Denial,
             bundle_revision,
             requester_pseudonym,
+            actor_kind: ActorKind::Service,
+            client_pseudonym: None,
+            grant_pseudonym: None,
             actor_pseudonym: None,
             decision: AuthorizationRefusalAuditDecision::NotAuthorized,
             safe_error_category: AUTHORIZATION_REFUSAL_ERROR_CATEGORY.to_owned(),
+            reason: "authorization.profile".to_owned(),
             duration_milliseconds,
         }
     }
@@ -118,13 +129,34 @@ impl EvidenceAuthorizationRefusalAuditEvent {
             || !valid_revision(&self.bundle_revision)
             || !valid_pseudonym(&self.requester_pseudonym)
             || self
+                .client_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self
+                .grant_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self
                 .actor_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
             || self.safe_error_category != AUTHORIZATION_REFUSAL_ERROR_CATEGORY
+            || !valid_purpose(&self.reason, 128)
             || self.duration_milliseconds > 86_400_000
         {
             return Err(EvidenceAuditError::InvalidEvent);
+        }
+        if let Some(client) = &self.client_pseudonym {
+            AuthorizationAuditEvent::denied_without_purpose(
+                self.actor_kind.as_str(),
+                self.requester_pseudonym.clone(),
+                client.clone(),
+                self.grant_pseudonym.clone(),
+                None,
+                self.operation.clone(),
+                self.reason.clone(),
+            )
+            .map_err(|_| EvidenceAuditError::InvalidEvent)?;
         }
         Ok(())
     }
@@ -163,6 +195,8 @@ pub struct AuditAuthority {
     pub kind: AuthorityKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grant_pseudonym: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approver_pseudonym: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -239,10 +273,14 @@ pub struct EvidenceRequestBatchAuditEvent {
     pub bundle_revision: String,
     pub purpose: String,
     pub requester_pseudonym: String,
+    pub actor_kind: ActorKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_pseudonym: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_pseudonym: Option<String>,
     pub response_protection: ResponseProtection,
     pub decision: EvidenceRequestBatchAuditDecision,
+    pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -286,9 +324,12 @@ impl EvidenceRequestBatchAuditEvent {
             bundle_revision,
             purpose,
             requester_pseudonym,
+            actor_kind: ActorKind::Service,
+            client_pseudonym: None,
             actor_pseudonym: None,
             response_protection: ResponseProtection::Signed,
             decision,
+            reason: "authorization.allowed".to_owned(),
             source_id: None,
             adapter_id: None,
             item_indices: None,
@@ -311,10 +352,15 @@ impl EvidenceRequestBatchAuditEvent {
             && valid_purpose(&self.purpose, 128)
             && valid_pseudonym(&self.requester_pseudonym)
             && self
+                .client_pseudonym
+                .as_ref()
+                .is_none_or(|value| valid_pseudonym(value))
+            && self
                 .actor_pseudonym
                 .as_ref()
                 .is_none_or(|value| valid_pseudonym(value))
             && self.response_protection == ResponseProtection::Signed
+            && valid_purpose(&self.reason, 128)
             && self.duration_milliseconds <= 86_400_000;
         if !common_valid {
             return Err(EvidenceAuditError::InvalidEvent);
@@ -437,6 +483,11 @@ fn valid_batch_item_groups(
                 .grant_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
+            || group
+                .authority
+                .approver_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
             || group.subjects.is_empty()
             || group.subjects.len() > 8
             || group.subjects.iter().any(|subject| {
@@ -494,6 +545,9 @@ pub struct EvidenceAuditEvent {
     pub bundle_revision: String,
     pub purpose: String,
     pub requester_pseudonym: String,
+    pub actor_kind: ActorKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_pseudonym: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_pseudonym: Option<String>,
     pub authority: AuditAuthority,
@@ -515,6 +569,7 @@ pub struct EvidenceAuditEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adapter_ids: Option<Vec<String>>,
     pub decision: AuditDecision,
+    pub reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disclosed_concepts: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -565,6 +620,8 @@ impl EvidenceAuditEvent {
             bundle_revision,
             purpose,
             requester_pseudonym,
+            actor_kind: ActorKind::Service,
+            client_pseudonym: None,
             actor_pseudonym: None,
             authority,
             subjects,
@@ -574,6 +631,7 @@ impl EvidenceAuditEvent {
             source_ids: None,
             adapter_ids: None,
             decision,
+            reason: "authorization.allowed".to_owned(),
             disclosed_concepts: None,
             evidence_id: None,
             evidence_ids: None,
@@ -665,12 +723,21 @@ impl EvidenceAuditEvent {
             || !valid_purpose(&self.purpose, 128)
             || !valid_pseudonym(&self.requester_pseudonym)
             || self
+                .client_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self
                 .actor_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
             || self
                 .authority
                 .grant_pseudonym
+                .as_ref()
+                .is_some_and(|value| !valid_pseudonym(value))
+            || self
+                .authority
+                .approver_pseudonym
                 .as_ref()
                 .is_some_and(|value| !valid_pseudonym(value))
             || self.subjects.is_empty()
@@ -707,8 +774,23 @@ impl EvidenceAuditEvent {
                 .as_ref()
                 .is_some_and(|value| !valid_local_name(value, 128))
             || self.duration_milliseconds > 86_400_000
+            || !valid_purpose(&self.reason, 128)
         {
             return Err(EvidenceAuditError::InvalidEvent);
+        }
+        if let Some(client) = &self.client_pseudonym {
+            AuthorizationAuditEvent::new(
+                self.actor_kind.as_str(),
+                self.requester_pseudonym.clone(),
+                client.clone(),
+                self.authority.grant_pseudonym.clone(),
+                self.authority.approver_pseudonym.clone(),
+                self.purpose.clone(),
+                self.operation.clone(),
+                AuthorizationOutcome::Allowed,
+                self.reason.clone(),
+            )
+            .map_err(|_| EvidenceAuditError::InvalidEvent)?;
         }
         Ok(())
     }
@@ -1225,7 +1307,10 @@ fn coherent_operation_pair(access: &EvidenceAuditEvent, terminal: &EvidenceAudit
         && access.bundle_revision == terminal.bundle_revision
         && access.purpose == terminal.purpose
         && access.requester_pseudonym == terminal.requester_pseudonym
+        && access.actor_kind == terminal.actor_kind
+        && access.client_pseudonym == terminal.client_pseudonym
         && access.actor_pseudonym == terminal.actor_pseudonym
+        && access.reason == terminal.reason
         && access.authority == terminal.authority
         && access.subjects == terminal.subjects
         && access.response_protection == terminal.response_protection
@@ -1320,6 +1405,7 @@ mod tests {
             authority: AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             subjects: vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -1575,6 +1661,7 @@ mod tests {
             AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             vec![AuditSubject {
                 role: "subject".to_string(),
@@ -1606,6 +1693,7 @@ mod tests {
             AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -1666,10 +1754,13 @@ mod tests {
             requester_pseudonym:
                 "hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111"
                     .to_owned(),
+            actor_kind: ActorKind::Service,
+            client_pseudonym: None,
             actor_pseudonym: None,
             authority: AuditAuthority {
                 kind: AuthorityKind::Statutory,
                 grant_pseudonym: None,
+                approver_pseudonym: None,
             },
             subjects: vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -1685,6 +1776,7 @@ mod tests {
             source_ids: None,
             adapter_ids: None,
             decision: AuditDecision::Authorized,
+            reason: "authorization.allowed".to_owned(),
             disclosed_concepts: None,
             evidence_id: None,
             evidence_ids: None,
@@ -1775,12 +1867,16 @@ mod tests {
             requester_pseudonym:
                 "hmac-sha256:v1:3333333333333333333333333333333333333333333333333333333333333333"
                     .to_owned(),
+            actor_kind: ActorKind::Service,
+            client_pseudonym: None,
+            grant_pseudonym: None,
             actor_pseudonym: Some(
                 "hmac-sha256:v1:4444444444444444444444444444444444444444444444444444444444444444"
                     .to_owned(),
             ),
             decision: AuthorizationRefusalAuditDecision::NotAuthorized,
             safe_error_category: "not-authorized".to_owned(),
+            reason: "authorization.profile".to_owned(),
             duration_milliseconds: 3,
         };
         refusal
@@ -2734,6 +2830,14 @@ mod tests {
                     log.pseudonym("grant-v1", "urn:example:trust", b"raw-grant-token-canary")
                         .expect("grant pseudonym builds"),
                 ),
+                approver_pseudonym: Some(
+                    log.pseudonym(
+                        "approver-v1",
+                        "urn:example:trust",
+                        b"raw-approver-token-canary",
+                    )
+                    .expect("approver pseudonym builds"),
+                ),
             },
             vec![AuditSubject {
                 role: "subject".to_owned(),
@@ -2836,6 +2940,7 @@ mod tests {
                 .keys()
                 .collect::<Vec<_>>(),
             [
+                "actorKind",
                 "actorPseudonym",
                 "assuranceProfile",
                 "bundleRevision",
@@ -2845,6 +2950,7 @@ mod tests {
                 "occurredAt",
                 "operation",
                 "phase",
+                "reason",
                 "requesterPseudonym",
                 "safeErrorCategory",
                 "schema",
@@ -3307,6 +3413,7 @@ mod tests {
             "bundleRevision",
             "raw-requester-token-canary",
             "raw-grant-token-canary",
+            "raw-approver-token-canary",
             "raw-actor-token-canary",
             "person-id-raw-selector-canary",
             "source-private-canary",

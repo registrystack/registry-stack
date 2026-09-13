@@ -19,6 +19,12 @@ export declare class CaseworkClient {
   listWorkItems(token: string, profile: string, sourceProfile: string, query: any): Promise<CaseworkOutcome>
   nextWorkItem(token: string, profile: string, sourceProfile: string, query?: any | undefined | null): Promise<CaseworkOutcome>
   getWorkItem(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
+  previewTaskTemplates(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
+  listTaskGrants(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>
+  approveTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, expectedRevision: number, idempotencyKey: string, approval: any): Promise<CaseworkOutcome>
+  revokeTaskGrant(token: string, profile: string, sourceProfile: string, itemId: string, grantId: string): Promise<CaseworkOutcome>
+  taskAssertion(token: string, grantId: string): Promise<CaseworkOutcome>
+  taskGrantStatus(token: string, grantId: string): Promise<CaseworkOutcome>
   claimWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
   releaseWorkItem(token: string, profile: string, sourceProfile: string, action: any, idempotencyKey: string): Promise<CaseworkOutcome>
   getDraft(token: string, profile: string, sourceProfile: string, itemId: string): Promise<CaseworkOutcome>

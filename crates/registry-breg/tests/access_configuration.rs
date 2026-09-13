@@ -13,7 +13,7 @@ fn source() -> Value {
           "accessRequirements":{"requiredScopes":["entry:read"],"allowedPurposes":["administration"],
             "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}}],
         "accessProfiles":[{"id":"reader","principalClaim":"registry_principal","requiredScopes":["entry:read"],
-          "requiredPurposes":["administration"],"grants":[{"entity":"entry","operations":["get","list"],
+          "requiredPurposes":["administration"],"permissions":[{"entity":"entry","operations":["get","list"],
             "readableFields":["code","district"],"filterableFields":["district"],
             "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]}]
     })
@@ -25,6 +25,26 @@ fn compile(value: &Value) -> Result<CompiledRegistry, registry_breg::CompileFail
         &[],
         CompileProfile::Authoring,
     )
+}
+
+#[test]
+fn legacy_grants_key_is_refused_with_permissions_migration_guidance() {
+    let mut value = source();
+    let permissions = value["accessProfiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("permissions")
+        .unwrap();
+    value["accessProfiles"][0]["grants"] = permissions;
+
+    let failure = parse_project_json(&serde_json::to_vec(&value).unwrap()).unwrap_err();
+    let diagnostic = failure
+        .diagnostics()
+        .iter()
+        .find(|diagnostic| diagnostic.code == "access_profile.grants.removed")
+        .expect("legacy key has a dedicated migration diagnostic");
+    assert_eq!(diagnostic.path, "project.accessProfiles[0].grants");
+    assert!(diagnostic.message.contains("permissions"));
 }
 
 fn assert_refused(value: &Value, code: &str) {
@@ -59,17 +79,17 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
             "access.requirements.purpose_widened",
         ),
         (
-            "/accessProfiles/0/grants/0/rowBoundaries",
+            "/accessProfiles/0/permissions/0/rowBoundaries",
             json!([]),
             "access.requirements.row_boundary_missing",
         ),
         (
-            "/accessProfiles/0/grants/0/rowBoundaries/0/claim",
+            "/accessProfiles/0/permissions/0/rowBoundaries/0/claim",
             json!("caller_district"),
             "access.requirements.row_boundary_missing",
         ),
         (
-            "/accessProfiles/0/grants/0/rowBoundaries/0/operator",
+            "/accessProfiles/0/permissions/0/rowBoundaries/0/operator",
             json!("equals"),
             "access.requirements.row_boundary_missing",
         ),
@@ -83,7 +103,7 @@ fn requirements_are_mandatory_not_grants_and_cannot_be_weakened_by_profiles() {
     stricter["entities"][0]["accessRequirements"]["allowedPurposes"] =
         json!(["administration", "review"]);
     stricter["accessProfiles"][0]["requiredScopes"] = json!(["entry:read", "entry:review"]);
-    stricter["accessProfiles"][0]["grants"][0]["rowBoundaries"]
+    stricter["accessProfiles"][0]["permissions"][0]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .push(json!({"field":"code","claim":"assigned_code","operator":"equals"}));
@@ -178,7 +198,7 @@ fn relationship_grants_cannot_bypass_target_or_join_requirements() {
     let mut value = source();
     value["entities"][0]["readPaths"] =
         json!([{"id":"children","through":"link","to":"child","route":"children"}]);
-    value["accessProfiles"][0]["grants"][0]["readPaths"] =
+    value["accessProfiles"][0]["permissions"][0]["readPaths"] =
         json!([{"path":"children","readableFields":["code"]}]);
     value["entities"].as_array_mut().unwrap().extend([
         json!({"id":"child","primaryDataset":"test-dataset","route":"children","mutationMode":"mutable","fields":[{"id":"code","type":"string","maxLength":32,"classification":"internal"}]}),
@@ -230,11 +250,11 @@ fn spatial_query_grants_do_not_satisfy_or_weaken_access_requirements() {
             "classification":"internal"
         }));
     value["entities"][0]["geojson"] = json!({"geometryField":"location"});
-    value["accessProfiles"][0]["grants"][0]["readableFields"]
+    value["accessProfiles"][0]["permissions"][0]["readableFields"]
         .as_array_mut()
         .expect("readable fields are an array")
         .push(json!("location"));
-    value["accessProfiles"][0]["grants"][0]["spatialQueries"] = json!({
+    value["accessProfiles"][0]["permissions"][0]["spatialQueries"] = json!({
         "bbox": {
             "maximumLongitudeSpanDegrees": 0.25,
             "maximumLatitudeSpanDegrees": 1.5
@@ -254,8 +274,8 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
         .unwrap()
         .remove("accessRequirements");
     value["accessProfiles"][0]["requiredScopes"] = json!([]);
-    value["accessProfiles"][0]["grants"][0]["rowBoundaries"] = json!([]);
-    value["accessProfiles"][0]["grants"][0]["allowDataExport"] = json!(true);
+    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
     let compiled = compile(&value).unwrap();
     for code in [
         "access.profile.no_required_scope",
@@ -286,7 +306,7 @@ fn footgun_findings_are_actionable_deterministic_and_do_not_change_authority() {
 fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
     let mut value = source();
     value["entities"][0]["fields"][0]["classification"] = json!("restricted");
-    let grant = &mut value["accessProfiles"][0]["grants"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"][0];
     grant["operations"] = json!(["get", "list", "patch", "revisions"]);
     grant["revisionAccess"] = json!(true);
     grant["writableFields"] = json!(["district"]);
@@ -308,7 +328,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
         "{}",
         patch_only.message
     );
-    value["accessProfiles"][0]["grants"][0]["writableFields"] = json!([]);
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!([]);
     assert!(!compile(&value)
         .unwrap()
         .findings()
@@ -321,7 +341,7 @@ fn history_sensitive_fields_and_writable_boundaries_are_visible_for_review() {
 #[test]
 fn create_grants_keep_the_row_boundary_field_writable() {
     let mut value = source();
-    let grant = &mut value["accessProfiles"][0]["grants"][0];
+    let grant = &mut value["accessProfiles"][0]["permissions"][0];
     grant["operations"] = json!(["create", "get", "list", "patch"]);
     grant["writableFields"] = json!(["code", "district"]);
     let compiled = compile(&value).unwrap();
@@ -353,7 +373,8 @@ fn create_grants_keep_the_row_boundary_field_writable() {
         .all(|d| d.code != "access.profile.row_boundary_not_writable"));
 
     let mut create_only = value.clone();
-    create_only["accessProfiles"][0]["grants"][0]["operations"] = json!(["create", "get", "list"]);
+    create_only["accessProfiles"][0]["permissions"][0]["operations"] =
+        json!(["create", "get", "list"]);
     let create_only = compile(&create_only).unwrap();
     let finding = create_only
         .findings()
@@ -363,7 +384,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert!(!finding.message.contains("patch"), "{}", finding.message);
 
     // Taking the patch-only advice on a create-bearing grant refuses every create.
-    value["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code"]);
     let compiled = compile(&value).unwrap();
     let finding = compiled
         .findings()
@@ -387,7 +408,7 @@ fn create_grants_keep_the_row_boundary_field_writable() {
     assert_eq!(compiled.findings(), compile(&value).unwrap().findings());
 
     // Without `create` the boundary field may stay unwritable.
-    value["accessProfiles"][0]["grants"][0]["operations"] = json!(["get", "list", "patch"]);
+    value["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get", "list", "patch"]);
     assert!(compile(&value)
         .unwrap()
         .findings()
@@ -469,8 +490,8 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .remove("accessRequirements");
     value["accessProfiles"][0]["requiredScopes"] = json!([]);
     value["accessProfiles"][0]["requiredPurposes"] = json!([]);
-    value["accessProfiles"][0]["grants"][0]["rowBoundaries"] = json!([]);
-    value["accessProfiles"][0]["grants"][0]["allowDataExport"] = json!(true);
+    value["accessProfiles"][0]["permissions"][0]["rowBoundaries"] = json!([]);
+    value["accessProfiles"][0]["permissions"][0]["allowDataExport"] = json!(true);
     let candidate = compile(&value).unwrap();
     let diff =
         registry_breg::tooling::classify_registry_diff(&baseline, &candidate, "package-under-test");
@@ -536,7 +557,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
         .as_array_mut()
         .unwrap()
         .push(binding.clone());
-    reordered["accessProfiles"][0]["grants"][0]["rowBoundaries"]
+    reordered["accessProfiles"][0]["permissions"][0]["rowBoundaries"]
         .as_array_mut()
         .unwrap()
         .push(binding);
@@ -561,7 +582,7 @@ fn access_diffs_show_each_changed_dimension_without_guessing_mixed_authority() {
 
 fn second_reader() -> Value {
     json!({"id":"auditor","principalClaim":"registry_principal","requiredScopes":["entry:read"],
-      "requiredPurposes":["administration"],"grants":[{"entity":"entry","operations":["get","list"],
+      "requiredPurposes":["administration"],"permissions":[{"entity":"entry","operations":["get","list"],
         "readableFields":["code","district"],"filterableFields":["district"],
         "rowBoundaries":[{"field":"district","claim":"districts","operator":"in"}]}]})
 }
@@ -641,7 +662,7 @@ fn anonymous_source() -> Value {
           "fields":[{"id":"code","type":"string","maxLength":32,"classification":"public"},
                     {"id":"note","type":"string","maxLength":32,"classification":"internal"}]}],
         "accessProfiles":[{"id":"public-map","default":true,"anonymous":true,
-          "grants":[{"entity":"place","operations":["list"],"readableFields":["code"], "rowBoundaries": []}]}]
+          "permissions":[{"entity":"place","operations":["list"],"readableFields":["code"], "rowBoundaries": []}]}]
     })
 }
 
@@ -667,7 +688,7 @@ fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
     compile(&public_entity).expect("a public entity with public readable fields compiles");
 
     let mut hidden_field = public_entity;
-    hidden_field["accessProfiles"][0]["grants"][0]["readableFields"] = json!(["code", "note"]);
+    hidden_field["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["code", "note"]);
     let failure = compile(&hidden_field).unwrap_err();
     let diagnostic = diagnostic_for(
         &failure,
@@ -684,7 +705,7 @@ fn anonymous_processing_refusals_name_the_entity_or_field_that_is_not_public() {
 #[test]
 fn write_grants_without_writable_fields_and_anonymous_collections_are_reported() {
     let mut value = source();
-    value["accessProfiles"][0]["grants"][0]["operations"] =
+    value["accessProfiles"][0]["permissions"][0]["operations"] =
         json!(["get", "list", "create", "patch"]);
     let compiled = compile(&value).unwrap();
     let finding = compiled
@@ -700,7 +721,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
         finding.message.contains("`create`") && finding.message.contains("`patch`"),
         "{finding:?}"
     );
-    value["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["code"]);
+    value["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["code"]);
     assert!(!compile(&value)
         .unwrap()
         .findings()
@@ -727,7 +748,7 @@ fn write_grants_without_writable_fields_and_anonymous_collections_are_reported()
             .any(|d| d.code == "access.profile.unrestricted_collection"),
         "a public entity keeps the authenticated-only collection finding out of the report"
     );
-    public["accessProfiles"][0]["grants"][0]["operations"] = json!(["get"]);
+    public["accessProfiles"][0]["permissions"][0]["operations"] = json!(["get"]);
     assert!(!compile(&public)
         .unwrap()
         .findings()
@@ -774,7 +795,7 @@ fn sole_profile_is_implicit_default_and_workflow_routes_may_require_explicit_sel
     {
         profile.default = true;
         // Reach stage-specific route validation rather than the shared GET route.
-        for grant in &mut profile.grants {
+        for grant in &mut profile.permissions {
             grant
                 .operations
                 .remove(&registry_breg::contract::Operation::Get);

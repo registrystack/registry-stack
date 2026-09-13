@@ -1,5 +1,6 @@
 // Campaign burst with named phases so recovery is measured separately.
-// Defaults: 50 ops/s baseline, ramp to 250, hold 30s, return to 50, recover 3m.
+// Defaults fit one fresh development token: 30s baseline, 15s ramps, a 30s
+// peak, and 90s recovery.
 
 import {
   SAFE_SYSTEM_TAGS,
@@ -15,10 +16,10 @@ const baselineOps = positiveNumber('OPS', __ENV.OPS, 50);
 const peakOps = positiveNumber('PEAK_OPS', __ENV.PEAK_OPS, 250);
 if (peakOps <= baselineOps) throw new Error('PEAK_OPS must be greater than OPS');
 
-const baselineDuration = __ENV.BASELINE_DURATION || '2m';
-const rampDuration = __ENV.RAMP_DURATION || '30s';
+const baselineDuration = __ENV.BASELINE_DURATION || '30s';
+const rampDuration = __ENV.RAMP_DURATION || '15s';
 const peakDuration = __ENV.PEAK_DURATION || '30s';
-const recoveryDuration = __ENV.RECOVERY_DURATION || '3m';
+const recoveryDuration = __ENV.RECOVERY_DURATION || '90s';
 const baselineMs = durationMilliseconds('BASELINE_DURATION', baselineDuration);
 const rampMs = durationMilliseconds('RAMP_DURATION', rampDuration);
 const peakMs = durationMilliseconds('PEAK_DURATION', peakDuration);
@@ -95,7 +96,7 @@ export const options = {
   noConnectionReuse: false,
 };
 
-const workload = new Workload(__ENV.BREG_URL, __ENV.TOKEN_URL, __ENV.CLIENT_ID, __ENV.CLIENT_SECRET);
+const workload = new Workload(__ENV.BREG_URL);
 
 export function campaignStep() {
   workload.step(workload.token(), READ_MIX);

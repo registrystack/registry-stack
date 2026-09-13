@@ -121,7 +121,7 @@ mod tests {
         project.actions[0].evidence.clear();
         project.evidence_providers.clear();
         for profile in &mut project.access_profiles {
-            profile.grants.retain(|grant| {
+            profile.permissions.retain(|grant| {
                 grant
                     .action
                     .as_ref()

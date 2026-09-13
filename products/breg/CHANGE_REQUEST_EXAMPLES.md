@@ -3,7 +3,7 @@
 For a first walkthrough, use the docs-site tutorial at
 `docs/site/src/content/docs/tutorials/review-registry-changes.mdx` in this source
 checkout. It runs an approval workflow, adapts a stage, and checks a refused
-direct-write grant. This guide covers the broader example and operator details.
+direct-write permission. This guide covers the broader example and operator details.
 
 Base Registry Engine change requests are ordinary product configuration. The compiler
 turns each request type into finite action routes, bounded action input schemas,
@@ -140,7 +140,7 @@ CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
 
 The explain output describes the compiled contract before running a database
 journey. It shows request types, action preconditions, controlled-write targets,
-bounds, review stages, grants, and compiled effects. Read `registry.yaml` for the
+bounds, review stages, permissions, and compiled effects. Read `registry.yaml` for the
 retention setting and a request's GET response for its current state and proposal
 metadata.
 
@@ -224,7 +224,7 @@ The same pattern works for the household fixture with `--household-project` and
 the Rhai fixture with `--rhai-project`. A
 real adopter starting from one review stage must make the same three changes in
 their own project: add the second stage under `changeRequest.review.stages`, add
-a grant whose `reviewStages` names that stage, and add a GET plus action step in
+a permission whose `reviewStages` names that stage, and add a GET plus action step in
 the journey that uses the GET-discovered `request.actions[].ifMatch`,
 `proposalVersion`, and `effectDigest`.
 
@@ -367,7 +367,7 @@ the same reason and other original action input with its idempotency key.
 GET exposes current decisions at `data.request.decisions` and retained decisions
 at `data.request.history.proposals[].decisions`. Each carries `stageId`, `kind`,
 `decidedAt`, and `reasonPresent`, with `reason` only when its text remains retained
-and the selected profile permits it. The request grant defaults to
+and the selected profile permits it. The request permission defaults to
 `readableRequestFields: [reason]`; an explicit empty list hides reason text
 without hiding the decision facts. Anonymous profiles never receive reason text.
 Request-detail erasure removes reason text while preserving the decision and
@@ -431,11 +431,11 @@ cargo run --locked -p registry-bregctl -- \
 
 ## Current native-reference submitter admission
 
-A request grant may declare `submitterTargets: [target-entity-id]` to require
+A request permission may declare `submitterTargets: [target-entity-id]` to require
 current ordinary GET authority on its fixed referenced target records. Each
-named entity must have a GET grant in the same selected profile. The target's
+named entity must have a GET permission in the same selected profile. The target's
 existing verified claim boundaries apply; profiles are never combined. The
-explicit request grant activates admission and does not grant target writes.
+explicit request permission activates admission and does not grant target writes.
 
 The compiler requires complete coverage of fixed existing native-reference
 effects, readable reference fields, manual application, and targets that are

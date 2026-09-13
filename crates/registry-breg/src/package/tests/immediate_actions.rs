@@ -15,7 +15,7 @@ fn source() -> Value {
             {"id":"label", "apiName":"newLabel", "type":"string", "maxLength":40, "required":true, "classification":"internal"}
         ], "effects":[{"id":"renamed", "target":{"fromField":"item"}, "operation":"patch", "set":{"label":{"fromField":"label"}}}]}],
         "accessProfiles":[{"id":"operator", "default":true, "principalClaim":"principal", "requiredScopes":["item.rename"],
-            "grants":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[]}], "results":["renamed"]}]}]
+            "permissions":[{"action":"rename-item", "operations":["invoke"], "targets":[{"entity":"item", "rowBoundaries":[]}], "results":["renamed"]}]}]
     })
 }
 
@@ -40,7 +40,7 @@ fn action_configuration_and_disclosure_changes_are_visible_in_package_diffs() {
     let mut scoped = value.clone();
     scoped["accessProfiles"][0]["requiredScopes"] = json!(["item.rename.restricted"]);
     let mut no_results = value;
-    no_results["accessProfiles"][0]["grants"][0]["results"] = json!([]);
+    no_results["accessProfiles"][0]["permissions"][0]["results"] = json!([]);
     for variant in [renamed, scoped, no_results] {
         let after = compile(&variant);
         let changes = compiled_registry_change_set(&before, &after, "prior-package");
@@ -148,7 +148,7 @@ fn reviewed_successor_does_not_duplicate_action_policies_for_new_entity() {
         "id":"task-operator",
         "default":true,
         "principalClaim":"principal",
-        "grants":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":[]}], "results":["task"]}]
+        "permissions":[{"action":"create-task", "operations":["invoke"], "targets":[{"entity":"task", "rowBoundaries":[]}], "results":["task"]}]
     }]);
     let after = compile(&candidate);
     let plan = reviewed_plan(&before, &after);
@@ -229,7 +229,7 @@ fn reviewed_successor_tracks_link_only_reference_policies() {
             "required":true, "classification":"internal"
         }));
     with_action["actions"][0]["effects"][0]["set"]["group"] = json!({"fromField":"group"});
-    with_action["accessProfiles"][0]["grants"][0]["targets"]
+    with_action["accessProfiles"][0]["permissions"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .push(json!({

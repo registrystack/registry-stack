@@ -21,7 +21,7 @@ is running, and prove that a valid access token does not let its client ask ever
 question.
 
 <QuickstartMeta
-  outcome="Two applications receive different policies, with live onboarding, refusal, and revocation."
+  outcome="Two applications receive different policies, with generation-bound onboarding, refusal, and revocation."
   time="About 15 minutes"
   level="Local development with synthetic data"
   prerequisites={[
@@ -36,13 +36,13 @@ question.
 
 This tutorial manages access for machine applications, not accounts for people.
 
-Registry Mint authenticates each application from its own key and issues a short-lived access
+The pinned local issuer authenticates each application from its own key and issues a short-lived access
 token. Evidence Gateway then checks whether the application's access policy includes the configured
 question. These are separate decisions:
 
 | Decision | Example | Owner |
 | --- | --- | --- |
-| Which application is calling? | `age-checker` | Registry Mint client registration |
+| Which application is calling? | `age-checker` | Local issuer client registration |
 | What may it ask? | The `age-checks` policy includes `adult-status` | Evidence Gateway access policy |
 | May Evidence Gateway read its source? | `GET /people/{person_id}` | Evidence Gateway source configuration |
 | May a consumer trust the result? | Expected issuer, audience, and signing key | Consumer verification policy |
@@ -51,15 +51,14 @@ The first two rows are the access-management boundary you will configure. Source
 consumer trust remain independent.
 
 Access policies are part of Evidence Gateway's immutable governed configuration. Client membership is
-part of Registry Mint's reloadable registry:
+part of the local issuer generation:
 
 | Change | Runtime effect |
 | --- | --- |
-| Add or revoke a client | Registry Mint receives a reload request; Evidence Gateway does not restart |
+| Add or revoke a client | Stop the local session, change the reviewed registry, and start a new generation |
 | Add a question or change an access policy | Start a new Evidence Gateway generation |
 
-A client change affects tokens issued after Registry Mint reloads. A token issued before a client
-is revoked remains valid for up to 300 seconds.
+A client change affects the next local generation. Stopping that generation also stops its issuer.
 
 ## Restart the source mock
 
@@ -138,7 +137,7 @@ key.
 
 ## Start the protected service
 
-Compile the questions and both access policies, then start Evidence Gateway and Registry Mint:
+Compile the questions and both access policies, then start Evidence Gateway and its local issuer:
 
 ```sh
 evidencectl dev start .
@@ -146,10 +145,10 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
-Registry Mint recognizes `age-checker`. Evidence Gateway has both access policies available, even though
+The local issuer recognizes `age-checker`. Evidence Gateway has both access policies available, even though
 no client belongs to `service-routing` yet.
 
 ## Make an allowed request
@@ -166,7 +165,7 @@ evidencectl request prepare adult-status \
 
 The Evidence client prepares the request and closes its pinned verification expectations locally.
 `evidencectl` separately signs a one-time client assertion with the local application key and
-exchanges it with Registry Mint for a short-lived access token. Preparation sends no HTTP request
+exchanges it with the local issuer for a short-lived access token. Preparation sends no HTTP request
 to Evidence Gateway and performs no source access.
 
 Send the request across the Evidence Gateway HTTP boundary:
@@ -202,12 +201,13 @@ VERIFIED
 The application was authenticated, its `age-checks` policy matched the request, and Evidence Gateway
 called the registry only after both checks passed.
 
-## Add an application without restarting
+## Add an application for the next generation
 
-Keep Evidence Gateway and Registry Mint running. Register `service-router` under the existing
-`service-routing` policy:
+Stop the current session, then register `service-router` under the existing `service-routing`
+policy:
 
 ```sh
+evidencectl dev stop
 evidencectl access client add service-router \
   --policy service-routing \
   --generate-local-key
@@ -215,14 +215,15 @@ evidencectl access client add service-router \
 
 ```text
 Added client service-router with policy service-routing.
-Registry Mint reload requested.
 ```
 
 The command writes the public registration to `access/clients/service-router.yaml`, keeps the
-private key under `.evidence/clients/`, and asks Registry Mint to reload its complete client
-registry. The message confirms that the reload was requested, not that Registry Mint accepted the
-new registry. The next token exchange provides that functional proof. Evidence Gateway does not restart
-because both access policies were already part of its governed configuration.
+private key under `.evidence/clients/`, and leaves the stopped generated session unchanged. Start a
+fresh generation so Evidence Gateway and the issuer consume one validated snapshot:
+
+```sh
+evidencectl dev start .
+```
 
 Review the active client assignments:
 
@@ -268,7 +269,7 @@ HTTP 200
 VERIFIED
 ```
 
-The successful token exchange proves that Registry Mint accepted the live client-registry reload.
+The successful token exchange proves that the new issuer generation accepted the client registry.
 `service-router` belongs to the policy required for this question. Preparation made zero Evidence
 Gateway HTTP requests, `curl` made the single `POST /v1/evidence` assertion request, and
 `evidencectl verify` checked the response offline.
@@ -288,7 +289,7 @@ evidencectl request prepare age-bracket \
 The command can prepare the request because `age-bracket` is a valid project question and
 `age-checker` is a registered client. The client preparation path closes the request and its
 verification expectations without calling Evidence Gateway or deciding whether this application
-may ask the question. Registry Mint only issues the token. Evidence Gateway makes the authorization
+may ask the question. The local issuer only issues the token. Evidence Gateway makes the authorization
 decision when you send the request.
 
 Send the request:
@@ -334,20 +335,37 @@ caused the refusal.
 
 ## Revoke an application
 
-Stop issuing new access tokens to `age-checker`:
+Stop the generation after the refusal and inspect its completed audit chain before replacing it:
+
+```sh
+evidencectl dev stop
+evidencectl audit show --last-operation
+```
+
+```text
+Local Evidence stopped
+ACCESS REFUSED requester=<pseudonym> reason=not_authorized
+```
+
+The privacy-safe refusal event contains a requester pseudonym and the closed `not_authorized`
+reason. It does not contain the rejected requirement, purpose, selector, authority, response format,
+client identifier, or access token.
+
+Revoke `age-checker` while the session is stopped, then start the next generation:
 
 ```sh
 evidencectl access client revoke age-checker
+evidencectl dev start .
 ```
 
 ```text
 Revoked client age-checker.
-Registry Mint reload requested.
+Evidence ready at http://127.0.0.1:8080
+Issuer ready at http://127.0.0.1:8081
 ```
 
-The command updates `access/clients/age-checker.yaml` and requests another Registry Mint reload
-without restarting Evidence Gateway. Revocation cannot erase a stateless access token already issued to
-the application. That token remains valid for up to 300 seconds.
+The command updates `access/clients/age-checker.yaml`. The next issuer generation excludes the
+revoked client.
 
 Try to prepare a fresh request as the revoked client:
 
@@ -363,29 +381,24 @@ evidencectl request prepare adult-status \
 evidencectl: unknown or revoked active client age-checker
 ```
 
-`evidencectl` rejects an unknown or revoked named client locally, before contacting Registry Mint
+`evidencectl` rejects an unknown or revoked named client locally, before contacting the issuer
 or publishing request artifacts. `service-router` remains registered and keeps its
 `service-routing` membership.
 
-## Inspect the final audit operation
+## Stop the final generation
 
-Stop the local services before reading their completed audit chain:
+Stop the local services:
 
 ```sh
 evidencectl dev stop
-evidencectl audit show --last-operation
 ```
 
 ```text
 Local Evidence stopped
-ACCESS REFUSED requester=<pseudonym> reason=not_authorized
 ```
 
-The privacy-safe refusal event contains a requester pseudonym and the closed `not_authorized`
-reason. The event does not contain the rejected requirement, purpose, selector, authority, or
-response format. It also does not contain a client identifier or access token. The revoked-client
-preparation remains local and creates no Evidence Gateway audit event because no HTTP request was
-sent.
+The revoked-client preparation remains local and creates no Evidence Gateway audit event because no
+HTTP request was sent.
 
 ## Clean up
 
@@ -402,15 +415,12 @@ Return to the registry terminal and press `Ctrl+C`.
 
 - Authentication identifies the calling application but grants no question by itself.
 - Many applications can share a governed access policy without client-specific Evidence Gateway config.
-- A client added while the services run can obtain a token without restarting Evidence Gateway or
-  Registry Mint.
+- A client registry change takes effect only through one newly validated local generation.
 - Each application receives only the questions included in its assigned policies.
 - Evidence Gateway refuses unauthorized questions before reading the source.
 - Evidence Gateway retains a privacy-safe audit event for an authenticated authorization refusal.
-- Revoking a local client requests a Registry Mint reload and prevents new local request
+- Revoking a local client excludes it from the next issuer generation and prevents local request
   preparation.
-- Client membership changes affect new tokens while existing tokens remain valid for up to 300
-  seconds.
 - Adding a question or changing an access policy requires a new Evidence Gateway generation.
 - Source authentication and consumer trust remain separate from caller access.
 
@@ -418,6 +428,5 @@ Return to the registry terminal and press `Ctrl+C`.
 
 - [Evidence authoring form reference](../../products/registry-evidence/authoring-form/)
 - [See Evidence Gateway refuse unsafe requests](../refuse-unsafe-evidence-requests/)
-- [Configure Registry Mint](../../configure/mint/)
-- [Request an access token from application code](../../configure/request-an-access-token/)
+- [Configure Evidence Gateway](../../configure/evidence/)
 - [Manage Evidence Gateway verifier trust](../manage-evidence-verifier-trust/)

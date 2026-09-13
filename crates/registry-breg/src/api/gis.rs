@@ -1162,7 +1162,7 @@ accessProfiles:
     default: true
     principalClaim: principal
     requiredScopes: [registry:sites:read]
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]
@@ -1173,14 +1173,14 @@ accessProfiles:
             maximumLatitudeSpanDegrees: 2
   - id: get-only
     principalClaim: principal
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get]
         readableFields: [code, label, location]
   - id: no-bbox
     principalClaim: principal
-    grants:
+    permissions:
       - entity: service-site
         rowBoundaries: []
         operations: [get, list]

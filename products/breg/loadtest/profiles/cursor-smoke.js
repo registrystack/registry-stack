@@ -17,7 +17,7 @@ export const options = {
   summaryTrendStats: SUMMARY_TREND_STATS,
 };
 
-const workload = new Workload(__ENV.BREG_URL, __ENV.TOKEN_URL, __ENV.CLIENT_ID, __ENV.CLIENT_SECRET);
+const workload = new Workload(__ENV.BREG_URL);
 
 export default function () {
   workload.filteredList(workload.token());

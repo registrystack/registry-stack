@@ -8,8 +8,8 @@ sources:
     path: fixture.sqlite
 authentication:
   issuer:
-    id: registry-mint
-    discoveryUrl: https://mint.example.invalid/.well-known/openid-configuration
+    id: institutional-issuer
+    discoveryUrl: https://issuer.example.invalid/.well-known/openid-configuration
     audience: relay-civil-events
     tokenTypes: [at+jwt]
     algorithms: [ES256]

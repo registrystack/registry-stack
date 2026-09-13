@@ -18,12 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import random
+import stat
 import subprocess
 import sys
 import threading
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -49,52 +49,60 @@ NAME_NOUNS = [
     "Distribution", "Refrigeration", "Textiles", "Components", "Bottling", "Grading",
 ]
 BATCH_ITEMS = 100
-TOKEN_REFRESH_MARGIN_SECONDS = 60
+HEADER_REFRESH_SECONDS = 210
 
 
 class SeedError(RuntimeError):
     pass
 
 
-class TokenSource:
-    """client_secret_post token acquisition with expiry tracking."""
+class DevTokenSource:
+    """Fresh owner-only headers acquired through the stock dev lifecycle."""
 
-    def __init__(self, token_url: str, client_id: str, secret: str) -> None:
-        self._token_url = token_url
+    def __init__(self, helper: Path, bregctl: Path, project: Path, client_id: str) -> None:
+        self._helper = helper
+        self._bregctl = bregctl
+        self._project = project
         self._client_id = client_id
-        self._secret = secret
         self._lock = threading.Lock()
-        self._token = ""
+        self._authorization = ""
         self._expires_at = 0.0
 
-    def token(self) -> str:
+    def authorization(self) -> str:
         with self._lock:
             if time.monotonic() >= self._expires_at:
                 self._refresh()
-            return self._token
+            return self._authorization
 
     def _refresh(self) -> None:
-        body = urllib.parse.urlencode(
-            {
-                "grant_type": "client_credentials",
-                "client_id": self._client_id,
-                "client_secret": self._secret,
-            }
-        ).encode("ascii")
-        request = urllib.request.Request(
-            self._token_url,
-            data=body,
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=30) as response:
-            document = json.loads(response.read().decode("utf-8"))
-        token = document.get("access_token")
-        lifetime = document.get("expires_in")
-        if not isinstance(token, str) or not isinstance(lifetime, (int, float)):
-            raise SeedError("Mint did not return an access token with expires_in")
-        self._token = token
-        self._expires_at = time.monotonic() + float(lifetime) - TOKEN_REFRESH_MARGIN_SECONDS
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(self._helper),
+                    "header",
+                    "--bregctl",
+                    str(self._bregctl),
+                    "--project",
+                    str(self._project),
+                    "--client",
+                    self._client_id,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=45,
+            )
+            path = Path(result.stdout.strip())
+            if path.is_symlink() or not path.is_file() or stat.S_IMODE(path.stat().st_mode) & 0o077:
+                raise SeedError("bregctl dev token header is not an owner-only regular file")
+            value = path.read_text(encoding="ascii").strip()
+        except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+            raise SeedError("could not acquire a fresh bregctl dev token") from error
+        if not value.startswith("Authorization: Bearer ") or value.count(".") != 2:
+            raise SeedError("bregctl dev token header is malformed")
+        self._authorization = value.split(": ", 1)[1]
+        self._expires_at = time.monotonic() + HEADER_REFRESH_SECONDS
 
 
 def canonical_body(items: list[dict[str, Any]]) -> bytes:
@@ -109,7 +117,7 @@ def post_batch(
     breg_url: str,
     route: str,
     items: list[dict[str, Any]],
-    tokens: TokenSource,
+    tokens: DevTokenSource,
     idempotency_suffix: str,
 ) -> list[dict[str, Any]]:
     body = canonical_body(items)
@@ -117,7 +125,7 @@ def post_batch(
         f"{breg_url}/v1/records/{route}:batch?accessProfile=business-operator",
         data=body,
         headers={
-            "Authorization": f"Bearer {tokens.token()}",
+            "Authorization": tokens.authorization(),
             "Content-Type": "application/json",
             "Idempotency-Key": f"loadtest-seed-{route}-{idempotency_suffix}",
         },
@@ -212,7 +220,7 @@ def seed_entity(
     breg_url: str,
     route: str,
     records: list[dict[str, Any]],
-    tokens: TokenSource,
+    tokens: DevTokenSource,
     workers: int,
     label: str,
 ) -> list[str]:
@@ -262,8 +270,21 @@ def main() -> int:
         print(f"no load-test environment at {env_path}; run up.sh first", file=sys.stderr)
         return 2
     environment = json.loads(env_path.read_text(encoding="utf-8"))
-    secret = (arguments.run_dir / "secrets/driver-client-secret").read_text(encoding="ascii").strip()
-    tokens = TokenSource(environment["token_url"], environment["driver_client_id"], secret)
+    repository = Path(__file__).resolve().parents[3]
+    expected_bregctl = repository / "target/debug/bregctl"
+    expected_project = (arguments.run_dir / "project").resolve()
+    if Path(environment.get("bregctl", "")).resolve() != expected_bregctl or Path(
+        environment.get("project", "")
+    ).resolve() != expected_project:
+        print("load-test environment references paths outside its owned checkout state", file=sys.stderr)
+        return 2
+    helper = Path(__file__).resolve().parent / "support/loadenv.py"
+    tokens = DevTokenSource(
+        helper,
+        Path(environment["bregctl"]),
+        Path(environment["project"]),
+        "loadtest-driver",
+    )
     seed_dir = arguments.run_dir / "seed"
     seed_dir.mkdir(parents=True, exist_ok=True)
     seed_summary = seed_dir / "seed-summary.json"

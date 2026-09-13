@@ -237,7 +237,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredScopes":["registry.read"],"requiredPurposes":["case-management"],
-            "grants":[
+            "permissions":[
               {
                 "entity":"household","rowBoundaries":[],"operations":["create","get","list"],
                 "readableFields":["household-code"],"writableFields":["household-code"],

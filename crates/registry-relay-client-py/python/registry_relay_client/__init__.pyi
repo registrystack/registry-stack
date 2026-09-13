@@ -18,7 +18,17 @@ class _PrivateKeyJwtRequired(TypedDict):
 
 
 class PrivateKeyJwtConfig(_PrivateKeyJwtRequired, total=False):
+    # The audience of the client assertion (who checks the client's
+    # authentication); defaults to the token endpoint URL. This is not the
+    # `resource` of the token request.
     audience: Optional[str]
+    # The RFC 8707 resource indicator the token is requested for: the resource
+    # server's registered identifier, not a URL to fetch.
+    resource: Optional[str]
+    # The scopes requested for the token, sent as one space-delimited `scope`
+    # parameter. A requested scope may narrow the client's registered
+    # permission set; it can never widen it.
+    scopes: Optional[Sequence[str]]
     assertion_lifetime_seconds: Optional[int]
     refresh_margin_seconds: Optional[int]
     request_timeout_seconds: Optional[float]

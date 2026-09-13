@@ -30,7 +30,7 @@ Request lifecycle actions use `change_request_lifecycle`; a client must disable
 an operation when it does not understand any required capability. Unknown
 optional operation kinds can be ignored. Controlled entity writes remain
 request-only: metadata must not expose controlled target mutations as direct
-create or patch grants, and a writable field list never permits a client to
+create or patch permissions, and a writable field list never permits a client to
 bypass a required mutation or record-state capability.
 
 `fields` contains only the union of this operation's readable and applicable
@@ -164,7 +164,7 @@ fields, whole-field paths, and at least one mutation remain runtime checks.
 and extra members are not accepted.
 
 Lookup uses `body: "selector_values"` and `contentType: "application/json"`.
-`selectors` contains only that route/profile's grants:
+`selectors` contains only that route/profile's permissions:
 
 ```json
 {
@@ -271,4 +271,4 @@ capabilities. New optional descriptors remain optional when reading older
 servers, but a missing executable request contract returns an unsupported
 selection error. Older strict clients may reject added metadata members, so
 upgrade clients and servers together. These descriptors expose existing runtime
-capabilities without changing grants, history retention, or database schema.
+capabilities without changing permissions, history retention, or database schema.

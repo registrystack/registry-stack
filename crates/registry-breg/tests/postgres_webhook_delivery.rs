@@ -1606,7 +1606,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
           "accessProfiles":[{
             "id":"operator","default":true,"principalClaim":"registry_principal",
             "requiredPurposes":["case-management"],
-            "grants":[{
+            "permissions":[{
               "entity":"case","operations":["create","get","list"],
               "readableFields":["jurisdiction","label","restricted_note"],
               "writableFields":["jurisdiction","label","restricted_note"],

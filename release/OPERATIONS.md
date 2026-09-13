@@ -44,9 +44,9 @@ Complete new-image onboarding outside the release clock, in this order:
    token on the command line:
 
 ```sh
-package="${PACKAGE:?set PACKAGE to relay, evidence, mint, discovery, breg, or casework}"
+package="${PACKAGE:?set PACKAGE to relay, evidence, discovery, breg, or casework}"
 case "${package}" in
-  relay|evidence|mint|discovery|breg|casework) ;;
+  relay|evidence|discovery|breg|casework) ;;
   *) echo "unsupported release image package: ${package}" >&2; exit 1 ;;
 esac
 
@@ -102,7 +102,8 @@ printf '%s' "${GHCR_BOOTSTRAP_TOKEN:?set a classic PAT with write:packages}" \
 
 Starting with `v0.21.0`, the release requires public `relay`, `evidence`, and
 `mint` packages, joined by `discovery` from `v0.24.0`, `breg` from
-`v0.26.0`, and `casework` from `v0.30.0`. After selecting the candidate
+`v0.26.0`, and `casework` from `v0.30.0`. Mint is retired from `v0.30.0`;
+older release inventories remain unchanged. After selecting the candidate
 version, derive its exact image roster and verify each final destination:
 
 ```sh
@@ -450,7 +451,7 @@ Download that exact rehearsal artifact and prepare one image's evidence with:
 rehearsal_run=<run-id-with-successful-canonical-linux-evidence-job>
 version=<version>
 request_id=<rehearsal-request-id>
-name=relay # or evidence, mint, discovery, breg, or casework
+name=relay # or evidence, discovery, breg, or casework
 artifact_dir="rehearsal-advisory-${rehearsal_run}-${name}"
 test ! -e "${artifact_dir}"
 gh run download "${rehearsal_run}" \
@@ -460,7 +461,7 @@ gh run download "${rehearsal_run}" \
 
 case "${name}" in
   relay) baseline=products/relay-v2/security/advisory-baseline.json ;;
-  breg|casework|discovery|evidence|mint)
+  breg|casework|discovery|evidence)
     baseline="release/security/${name}-advisory-baseline.json"
     ;;
   *) echo "unsupported release image: ${name}" >&2; exit 2 ;;
@@ -598,7 +599,8 @@ workflow then:
 - Validates the release identity, manifests, pins, recipes, and destinations.
 - Builds the release payloads and OCI images once. Starting with `v0.21.0`, the
   image set is Relay, Evidence Gateway, and Registry Mint. Discovery joins at
-  `v0.24.0`, and Base Registry Engine joins at `v0.26.0`.
+  `v0.24.0`, Base Registry Engine joins at `v0.26.0`, and Casework joins at
+  `v0.30.0`. Mint is excluded from `v0.30.0` onward.
 - Builds the exact locked release documentation archive once, in parallel with
   binary and client builds, and includes it in the candidate payload closure.
 - Publishes images only to private candidate packages.
@@ -634,7 +636,7 @@ evidence with the scanner versions pinned in the candidate workflow:
 ```sh
 run_id=<failed-run-id>
 run_attempt=<failed-run-attempt>
-name=relay # or evidence, mint, discovery, or breg
+name=relay # or evidence, discovery, or breg
 candidate_tag="ghcr.io/registrystack/${name}-candidate:candidate-${run_id}-${run_attempt}"
 digest="$(crane digest "${candidate_tag}")"
 candidate_ref="ghcr.io/registrystack/${name}-candidate@${digest}"
@@ -664,7 +666,7 @@ prefix of the candidate's authoritative uncompressed DiffIDs:
 
 ```sh
 baseline=products/relay-v2/security/advisory-baseline.json
-# BReg, Casework, Discovery, Evidence, and Mint use release/security/<name>-advisory-baseline.json.
+# BReg, Casework, Discovery, and Evidence use release/security/<name>-advisory-baseline.json.
 jq --slurpfile baseline "${baseline}" -e '
   .rootfs.diff_ids[0:($baseline[0].runtime.layer_ids | length)]
     == $baseline[0].runtime.layer_ids

@@ -2,7 +2,7 @@
 
 This is a synthetic local learning profile. All access is authenticated and
 restricted to the declared profiles. Browser previews never authorize local
-requests. The registry-wide grants and historical reads are explicit policy:
+requests. The registry-wide permissions and historical reads are explicit policy:
 there are no hidden jurisdiction or ownership row filters. An institution must
 review these boundaries before production deployment.
 
@@ -14,7 +14,7 @@ review these boundaries before production deployment.
 | Editor | Create, get, list and inspect history; PATCH only where the entity is not controlled | Create and edit own drafts; submit, revise or cancel own requests |
 | Reviewer | Get, list and inspect history | Read proposed fields and target fields, approve, reject, request revision and apply |
 
-Every operation absent from the authored grants is denied, including deletion.
+Every operation absent from the authored permissions is denied, including deletion.
 The full PATCH operation on Farm is controlled. The correction changes
 only `name`; it cannot change identity or holder/link endpoints. A reviewer is
 also the authorized applier. Review excludes the submitting principal, even

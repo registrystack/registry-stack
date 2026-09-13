@@ -585,3 +585,21 @@ entries:
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: graceful_shutdown_waits_for_admitted_request_batch_and_terminal_audit}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_later_dependency_failure_has_one_value_free_abort_and_no_release}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: request_batch_response_above_one_mib_releases_no_partial_envelope}
+  - id: acceptance-row-85
+    summary: Pinned stock ThunderID exchanges concurrent task grants into Evidence-bound tokens; different subject bounds remain separate, equivalent bounds may answer the same subject with distinct grant audit correlation, an ordinary service token and body retargeting are refused, and an issued token remains usable after authority revocation only until its immutable grant deadline.
+    tests:
+      - {file: crates/registry-evidence-client/tests/against_a_real_deployment.rs, name: stock_issuer_task_grants_are_subject_bound_at_the_evidence_boundary}
+      - {file: crates/registry-casework/src/task_grants/native_exchange_tests.rs, name: approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes}
+      - {file: crates/registry-evidence/tests/selector_conformance.rs, name: task_grant_context_is_bound_before_selector_or_source_access}
+      - {file: crates/registry-evidence/src/config.rs, name: task_grant_profiles_bind_trusted_source_and_verified_client}
+      - {file: crates/registry-evidence/src/auth.rs, name: purpose_only_service_token_is_not_a_task_grant}
+    note: >-
+      The controlled signer in the stock-container test is a synthetic assertion
+      authority, not Casework. The Casework native composition test separately
+      covers officer preview and approval, signed requester context, native
+      exchange, and a successful real Evidence request. Issuance-time wrong-key, expired-assertion,
+      unregistered-authority, unreachable-authority, provenance-overwrite, and
+      bootstrap-isolation cases remain in the pinned stock issuer Gate0 at
+      crates/registry-thunderid-tooling/examples/contextual-exchange.rs; this row
+      composes the resulting token with the Evidence resource boundary instead
+      of duplicating those issuer tests.

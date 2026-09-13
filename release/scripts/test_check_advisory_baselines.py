@@ -24,7 +24,6 @@ LIVE_BASELINES = (
     ROOT / "release/security/casework-advisory-baseline.json",
     ROOT / "release/security/discovery-advisory-baseline.json",
     ROOT / "release/security/evidence-advisory-baseline.json",
-    ROOT / "release/security/mint-advisory-baseline.json",
 )
 LIVE_REFERENCE_IMAGE_DIGESTS = {
     "relay": "sha256:7d25a3324cfc459dbdc4f85a67fb0758a948230535a5b4c0d84b7bd05a614a0a",
@@ -32,7 +31,6 @@ LIVE_REFERENCE_IMAGE_DIGESTS = {
     "casework": "sha256:f2618e193c83f07501ec0af237dc7841c8cc279f06c7121f04815889fc90a7e2",
     "discovery": "sha256:9151a7242173be13ee42cabfcc3604efaebc2561efc3d70881a580e10b78e36e",
     "evidence": "sha256:0ff66e94c746ccad1fcc1913f2f0eb46e6fb21c590b27a9a0fbde60f21bc260b",
-    "mint": "sha256:d485eb3b24eff8d0aaea73afdeb28984e38bddc9a52a0512228a2e77fbfb7bbe",
 }
 LIVE_REFERENCE_SOURCE_REVISION = "6bdeb66a8e37693ef13e0fa629e551a75f109f0c"
 # The date the live exceptions below were reviewed against, stated here rather
@@ -46,7 +44,6 @@ LIVE_REFERENCE_PROVENANCE = {
     "casework": "local_reproduction",
     "discovery": "local_reproduction",
     "evidence": "local_reproduction",
-    "mint": "local_reproduction",
 }
 LIVE_EXECUTABLES = {
     "relay": "/usr/local/bin/relay",
@@ -54,7 +51,6 @@ LIVE_EXECUTABLES = {
     "casework": "/usr/local/bin/casework",
     "discovery": "/usr/local/bin/discovery",
     "evidence": "/usr/local/bin/evidence",
-    "mint": "/usr/local/bin/mint",
 }
 
 

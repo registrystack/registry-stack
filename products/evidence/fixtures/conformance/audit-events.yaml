@@ -10,6 +10,7 @@ access_attempt:
   requirement: urn:example:fixture:requirement:property:v1
   bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   purpose: fixture-procedure
+  actorKind: service
   requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
   authority: {kind: statutory}
   subjects:
@@ -20,6 +21,7 @@ access_attempt:
   sourceId: source-a
   adapterId: adapter-a
   decision: authorized
+  reason: authorization.allowed
   durationMilliseconds: 2
 disclosure_release:
   schema: registry.evidence.audit/v1
@@ -31,6 +33,7 @@ disclosure_release:
   requirement: urn:example:fixture:requirement:property:v1
   bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   purpose: fixture-procedure
+  actorKind: service
   requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
   authority: {kind: statutory}
   subjects:
@@ -41,6 +44,7 @@ disclosure_release:
   sourceId: source-a
   adapterId: adapter-a
   decision: released
+  reason: authorization.allowed
   disclosedConcepts: [urn:example:fixture:concept:boolean-a]
   evidenceId: urn:example:fixture:evidence:001
   signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
@@ -55,6 +59,7 @@ unsigned_disclosure_release:
   requirement: urn:example:fixture:requirement:property:v1
   bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   purpose: fixture-procedure
+  actorKind: service
   requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
   authority: {kind: statutory}
   subjects:
@@ -65,6 +70,7 @@ unsigned_disclosure_release:
   sourceId: source-a
   adapterId: adapter-a
   decision: released
+  reason: authorization.allowed
   disclosedConcepts: [urn:example:fixture:concept:boolean-a]
   evidenceId: urn:example:fixture:evidence:001
   durationMilliseconds: 12
@@ -78,6 +84,7 @@ disclosure_release_fetch_set:
   requirement: urn:example:fixture:requirement:property:v1
   bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   purpose: fixture-procedure
+  actorKind: service
   requesterPseudonym: hmac-sha256:v1:1111111111111111111111111111111111111111111111111111111111111111
   authority: {kind: statutory}
   subjects:
@@ -90,6 +97,7 @@ disclosure_release_fetch_set:
   sourceIds: [source-a, source-b, source-c]
   adapterIds: [adapter-a, adapter-b, adapter-b]
   decision: released
+  reason: authorization.allowed
   disclosedConcepts: [urn:example:fixture:concept:boolean-a]
   evidenceId: urn:example:fixture:evidence:002
   signingKeyId: _QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo
@@ -102,9 +110,11 @@ authorization_refusal:
   operation: fixture-operation-00000002
   phase: denial
   bundleRevision: sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  actorKind: service
   requesterPseudonym: hmac-sha256:v1:3333333333333333333333333333333333333333333333333333333333333333
   actorPseudonym: hmac-sha256:v1:4444444444444444444444444444444444444444444444444444444444444444
   decision: not-authorized
+  reason: authorization.profile
   safeErrorCategory: not-authorized
   durationMilliseconds: 3
 negative:

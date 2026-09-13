@@ -43,15 +43,15 @@ For a generic, domain-neutral local path, run:
 products/breg/quickstart/run.sh
 ```
 
-Pass `--installed` to use released `breg`, `bregctl`, and `mint` binaries from
-`PATH` instead of building them from this checkout with Cargo.
+Pass `--installed` to use released `breg` and `bregctl` binaries from `PATH`
+instead of building them from this checkout with Cargo.
 
 The quickstart uses `bregctl init` to create a small generic
 Registry project, replaces its package identity with a local one for the
-disposable package, checks it, starts disposable PostgreSQL and Registry Mint on loopback, activates
-an unsigned local package, obtains a short-lived Mint token, POSTs one record,
-and GETs that record back. Generated configuration, keys, tokens, package
-artifacts, logs, and database URLs stay under
+disposable package, checks it, starts disposable PostgreSQL and the pinned stock
+ThunderID issuer on loopback, activates an unsigned local package, obtains a
+short-lived token, POSTs one record, and GETs that record back. Generated
+configuration, keys, tokens, package artifacts, logs, and database URLs stay under
 `products/breg/quickstart/.run/`, which is ignored by Git and
 created owner-only.
 
@@ -76,8 +76,8 @@ To verify only the checked quickstart structure without Docker or network, run:
 products/breg/quickstart/self-test.sh
 ```
 
-This route is intentionally local-only: Mint's supervised local-development
-profile, loopback HTTP, disposable PostgreSQL, and an unsigned local package.
+This route is intentionally local-only: the supervised stock ThunderID issuer,
+loopback HTTP, disposable PostgreSQL, and an unsigned local package.
 It is the first-hour learning path, not a shortcut around production package
 signing, operated database roles, TLS, migration review, or secret custody.
 
@@ -204,8 +204,8 @@ retention boundaries, see [Corrections and historical queries](HISTORY.md).
 
 [Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
 explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses
-the same BReg, Mint and package lifecycle; ordinary registries do not need
-PostGIS.
+the same BReg, stock ThunderID issuer, and package lifecycle; ordinary
+registries do not need PostGIS.
 
 Base Registry Engine owns typed configured storage, generated REST contracts,
 authorization, record revisions, audit ordering, idempotency, outbox creation,
@@ -240,6 +240,8 @@ while the public-binary adopter workflow proves signed activation, authenticated
 data access, an additive upgrade, failure recovery, and unchanged server bytes
 for the asset project. See [change-request examples](CHANGE_REQUEST_EXAMPLES.md)
 for the approval workflows.
+For bounded institutional-agent authority and current-status checks, see
+[task grants for governed writes](TASK_GRANTS.md).
 The separate `household-history` fixture proves correction batches and retained
 snapshot answers through the same compiler and runtime.
 The additional `spatial-service-sites` project covers governed Point queries
@@ -258,7 +260,8 @@ products/breg/scripts/check-contracts.sh
 ```
 
 For an interactive local business example backed by disposable PostgreSQL,
-Registry Mint, a real local package, and deterministic relational data, run:
+the pinned stock ThunderID issuer, a real local package, and deterministic
+relational data, run:
 
 ```bash
 products/breg/demo/run.sh
@@ -354,5 +357,5 @@ product to Base Registry Engine internals.
 Base Registry Engine is a writable source-of-truth product. Registry Relay remains
 the separately deployed read-only publication product; Evidence remains the
 minimum-disclosure assertion product; Manifest receives a safe one-way
-metadata projection; Mint may issue configured OIDC tokens; and PublicSchema
-is an authoring input rather than a runtime dependency.
+metadata projection; an operated OIDC issuer supplies configured tokens; and
+PublicSchema is an authoring input rather than a runtime dependency.

@@ -69,24 +69,23 @@ its own deployment contract and adopter tooling, and each one is optional.
 
 Evidence Gateway can use a Base Registry Engine or Registry Relay API as one of
 its fixed sources, and keeps its own authorization either way. The stack also
-includes Registry Mint for short-lived access tokens, Registry Platform shared
-primitives, the `bregctl`, `relayctl`, `evidencectl`, and `discoveryctl` adopter
-tools, unified Node.js and Python clients, and release tooling for validating
-the public source model.
+includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
+`relayctl`, `evidencectl`, and `discoveryctl` adopter tools, unified Node.js and
+Python clients, and release tooling for validating the public source model.
 
 ### Install a released build
 
 ```bash
-# Base Registry Engine: breg, bregctl, and mint
+# Base Registry Engine: breg and bregctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 
-# Registry Casework: casework, caseworkctl, and mint
+# Registry Casework: casework and caseworkctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 
 # Registry Relay: relay and relayctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 
-# Evidence Gateway: evidence, evidencectl, mint, and evidence-oid4vci
+# Evidence Gateway: evidence, evidencectl, and evidence-oid4vci
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/evidencectl-install.sh | bash
 ```
 
@@ -98,7 +97,7 @@ installer: download `discovery-<tag>-linux-amd64` or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Container images for `breg`,
-`casework`, `relay`, `evidence`, `mint`, and `discovery` are published as
+`casework`, `relay`, `evidence`, and `discovery` are published as
 `ghcr.io/registrystack/<name>:<tag>`. Which platforms each artifact supports,
 and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
@@ -111,7 +110,6 @@ flowchart LR
     breg["Base Registry Engine<br/>hold and update records"]
     evidence["Evidence Gateway<br/>minimum-disclosure assertions"]
     discovery["Registry Discovery<br/>index published providers"]
-    mint["Registry Mint<br/>issue short-lived tokens"]
     caller["Approved service or verifier"]
 
     source --> relay
@@ -122,7 +120,6 @@ flowchart LR
     relay -. protected fixed request .-> evidence
     breg -. protected fixed request .-> evidence
     evidence -. signed assertion .-> caller
-    mint -. access token .-> caller
     relay -. advertisement .-> discovery
     evidence -. advertisement .-> discovery
     discovery -. index lookup .-> caller
@@ -132,7 +129,7 @@ flowchart LR
 
 - `crates/`: Rust crates and runnable binaries for Base Registry Engine,
   Registry Relay, Evidence Gateway, Registry Casework, Registry Discovery,
-  Registry Manifest, Registry Mint, Registry Platform, and the `bregctl`,
+  Registry Manifest, Registry Platform, and the `bregctl`,
   `caseworkctl`, `relayctl`, `evidencectl`, and `discoveryctl` adopter tools.
   Base Registry Engine lives in `crates/registry-breg` with one `breg`
   binary, Evidence Gateway in `crates/registry-evidence` with one `evidence`

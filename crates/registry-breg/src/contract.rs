@@ -1961,6 +1961,12 @@ pub struct AccessProfileSource {
     pub default: bool,
     #[serde(default)]
     pub anonymous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_kind: Option<ActorKindSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub requester_clients: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_grant: Option<CompiledTaskGrantSource>,
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
@@ -1985,7 +1991,7 @@ pub struct AccessProfileSource {
     #[serde(default)]
     pub sortable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spatial_queries: Option<SpatialQueryGrantSource>,
+    pub spatial_queries: Option<SpatialQueryPermissionSource>,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
@@ -1995,18 +2001,18 @@ pub struct AccessProfileSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub lookups: Vec<LookupGrantSource>,
+    pub lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_paths: Vec<ReadPathGrantSource>,
+    pub read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review_stages: Vec<ReviewStageGrantSource>,
+    pub review_stages: Vec<ReviewStagePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub apply_targets: Vec<ApplyTargetGrantSource>,
+    pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub request_presence: Vec<RequestPresenceGrantSource>,
+    pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_count: bool,
     #[serde(default)]
@@ -2058,6 +2064,15 @@ pub enum Operation {
     CancelRequest,
     ApplyRequest,
     Invoke,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorKindSource {
+    Human,
+    Agent,
+    Service,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2218,6 +2233,12 @@ pub struct ProjectAccessProfileSource {
     pub default: bool,
     #[serde(default)]
     pub anonymous: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_kind: Option<ActorKindSource>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub requester_clients: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_grant: Option<TaskGrantSource>,
     #[serde(default)]
     pub principal_claim: Option<String>,
     #[serde(default)]
@@ -2227,12 +2248,37 @@ pub struct ProjectAccessProfileSource {
     /// The verified token's purpose must match one listed value. Empty means no purpose restriction.
     pub required_purposes: BTreeSet<String>,
     #[serde(default)]
-    pub grants: Vec<AccessGrantSource>,
+    pub permissions: Vec<AccessPermissionSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TaskGrantSource {
+    pub authority: String,
+    pub source_issuer: String,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledTaskGrantSource {
+    pub authority: String,
+    pub source_issuer: String,
+    pub permissions: Vec<CompiledTaskGrantPermissionSource>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledTaskGrantPermissionSource {
+    pub collection: String,
+    pub operations: BTreeSet<Operation>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AccessGrantSource {
+pub struct AccessPermissionSource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2253,7 +2299,7 @@ pub struct AccessGrantSource {
     #[serde(default)]
     pub sortable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spatial_queries: Option<SpatialQueryGrantSource>,
+    pub spatial_queries: Option<SpatialQueryPermissionSource>,
     #[serde(default)]
     pub row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
@@ -2263,20 +2309,20 @@ pub struct AccessGrantSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub lookups: Vec<LookupGrantSource>,
+    pub lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub read_paths: Vec<ReadPathGrantSource>,
+    pub read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub review_stages: Vec<ReviewStageGrantSource>,
+    pub review_stages: Vec<ReviewStagePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub apply_targets: Vec<ApplyTargetGrantSource>,
+    pub apply_targets: Vec<ApplyTargetPermissionSource>,
     /// Native-reference targets requiring current same-profile GET authority at intake and preparation.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub request_presence: Vec<RequestPresenceGrantSource>,
+    pub request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub targets: Vec<ActionTargetGrantSource>,
+    pub targets: Vec<ActionTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub results: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2291,7 +2337,7 @@ pub struct AccessGrantSource {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct RawAccessGrantSource {
+struct RawAccessPermissionSource {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     entity: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2312,7 +2358,7 @@ struct RawAccessGrantSource {
     #[serde(default)]
     sortable_fields: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    spatial_queries: Option<SpatialQueryGrantSource>,
+    spatial_queries: Option<SpatialQueryPermissionSource>,
     #[serde(default)]
     row_boundaries: Option<Vec<RowBoundarySource>>,
     #[serde(default)]
@@ -2321,19 +2367,19 @@ struct RawAccessGrantSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     request_visibility: Option<RequestVisibilitySource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    lookups: Vec<LookupGrantSource>,
+    lookups: Vec<LookupPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    read_paths: Vec<ReadPathGrantSource>,
+    read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    review_stages: Vec<ReviewStageGrantSource>,
+    review_stages: Vec<ReviewStagePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    apply_targets: Vec<ApplyTargetGrantSource>,
+    apply_targets: Vec<ApplyTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     submitter_targets: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    request_presence: Vec<RequestPresenceGrantSource>,
+    request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    targets: Vec<ActionTargetGrantSource>,
+    targets: Vec<ActionTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     results: BTreeSet<String>,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2347,16 +2393,16 @@ struct RawAccessGrantSource {
 }
 
 // Entity grants must state their row reach. Action invocation itself has no
-// rows; its target grants carry the independently required declarations.
-impl<'de> Deserialize<'de> for AccessGrantSource {
+// rows; its target permissions carry the independently required declarations.
+impl<'de> Deserialize<'de> for AccessPermissionSource {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let raw = RawAccessGrantSource::deserialize(deserializer)?;
+        let raw = RawAccessPermissionSource::deserialize(deserializer)?;
         if !raw.entity.is_empty() && raw.row_boundaries.is_none() {
             return Err(D::Error::custom(
-                "entity grants require rowBoundaries; use an explicit empty array for intentional all-row access",
+                "entity permissions require rowBoundaries; use an explicit empty array for intentional all-row access",
             ));
         }
         Ok(Self {
@@ -2389,17 +2435,17 @@ impl<'de> Deserialize<'de> for AccessGrantSource {
 }
 
 #[cfg(feature = "schema")]
-impl schemars::JsonSchema for AccessGrantSource {
+impl schemars::JsonSchema for AccessPermissionSource {
     fn schema_name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("AccessGrantSource")
+        std::borrow::Cow::Borrowed("AccessPermissionSource")
     }
 
     fn schema_id() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed(concat!(module_path!(), "::AccessGrantSource"))
+        std::borrow::Cow::Borrowed(concat!(module_path!(), "::AccessPermissionSource"))
     }
 
     fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        AccessGrantSourceSchema::json_schema(generator)
+        AccessPermissionSourceSchema::json_schema(generator)
     }
 }
 
@@ -2407,16 +2453,16 @@ impl schemars::JsonSchema for AccessGrantSource {
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(untagged)]
-enum AccessGrantSourceSchema {
-    Entity(Box<EntityAccessGrantSourceSchema>),
-    Action(ActionAccessGrantSourceSchema),
+enum AccessPermissionSourceSchema {
+    Entity(Box<EntityAccessPermissionSourceSchema>),
+    Action(ActionAccessPermissionSourceSchema),
 }
 
 #[cfg(feature = "schema")]
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct EntityAccessGrantSourceSchema {
+struct EntityAccessPermissionSourceSchema {
     entity: String,
     operations: BTreeSet<Operation>,
     #[serde(default)]
@@ -2434,7 +2480,7 @@ struct EntityAccessGrantSourceSchema {
     #[serde(default)]
     sortable_fields: BTreeSet<String>,
     #[serde(default)]
-    spatial_queries: Option<SpatialQueryGrantSource>,
+    spatial_queries: Option<SpatialQueryPermissionSource>,
     row_boundaries: Vec<RowBoundarySource>,
     /// Current active membership required for each stored reference key.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2442,17 +2488,17 @@ struct EntityAccessGrantSourceSchema {
     #[serde(default)]
     request_visibility: Option<RequestVisibilitySource>,
     #[serde(default)]
-    lookups: Vec<LookupGrantSource>,
+    lookups: Vec<LookupPermissionSource>,
     #[serde(default)]
-    read_paths: Vec<ReadPathGrantSource>,
+    read_paths: Vec<ReadPathPermissionSource>,
     #[serde(default)]
-    review_stages: Vec<ReviewStageGrantSource>,
+    review_stages: Vec<ReviewStagePermissionSource>,
     #[serde(default)]
-    apply_targets: Vec<ApplyTargetGrantSource>,
+    apply_targets: Vec<ApplyTargetPermissionSource>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     submitter_targets: BTreeSet<String>,
     #[serde(default)]
-    request_presence: Vec<RequestPresenceGrantSource>,
+    request_presence: Vec<RequestPresencePermissionSource>,
     #[serde(default)]
     allow_count: bool,
     #[serde(default)]
@@ -2465,11 +2511,11 @@ struct EntityAccessGrantSourceSchema {
 #[allow(dead_code)]
 #[derive(schemars::JsonSchema)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ActionAccessGrantSourceSchema {
+struct ActionAccessPermissionSourceSchema {
     action: String,
     operations: BTreeSet<Operation>,
     #[serde(default)]
-    targets: Vec<ActionTargetGrantSource>,
+    targets: Vec<ActionTargetPermissionSource>,
     #[serde(default)]
     results: BTreeSet<String>,
 }
@@ -2477,15 +2523,15 @@ struct ActionAccessGrantSourceSchema {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct SpatialQueryGrantSource {
+pub struct SpatialQueryPermissionSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bbox: Option<SpatialBboxGrantSource>,
+    pub bbox: Option<SpatialBboxPermissionSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct SpatialBboxGrantSource {
+pub struct SpatialBboxPermissionSource {
     pub maximum_longitude_span_degrees: serde_json::Number,
     pub maximum_latitude_span_degrees: serde_json::Number,
 }
@@ -2493,7 +2539,7 @@ pub struct SpatialBboxGrantSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct LookupGrantSource {
+pub struct LookupPermissionSource {
     pub selector: String,
     pub value_origin: LookupValueOrigin,
     #[serde(default)]
@@ -2511,7 +2557,7 @@ pub enum LookupValueOrigin {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReadPathGrantSource {
+pub struct ReadPathPermissionSource {
     pub path: String,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
@@ -2526,16 +2572,16 @@ pub struct ReadPathGrantSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReviewStageGrantSource {
+pub struct ReviewStagePermissionSource {
     pub stage: String,
     #[serde(default)]
-    pub targets: Vec<ReviewStageTargetGrantSource>,
+    pub targets: Vec<ReviewStageTargetPermissionSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ReviewStageTargetGrantSource {
+pub struct ReviewStageTargetPermissionSource {
     pub entity: String,
     #[serde(default)]
     pub readable_fields: BTreeSet<String>,
@@ -2546,7 +2592,7 @@ pub struct ReviewStageTargetGrantSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ApplyTargetGrantSource {
+pub struct ApplyTargetPermissionSource {
     pub entity: String,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
@@ -2555,7 +2601,7 @@ pub struct ApplyTargetGrantSource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct RequestPresenceGrantSource {
+pub struct RequestPresencePermissionSource {
     pub request_type: String,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
@@ -2572,7 +2618,7 @@ pub enum RequestVisibilitySource {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct ActionTargetGrantSource {
+pub struct ActionTargetPermissionSource {
     pub entity: String,
     /// Explicit row reach; an empty array intentionally permits all rows.
     pub row_boundaries: Vec<RowBoundarySource>,
@@ -2599,7 +2645,7 @@ pub enum EventTrigger {
 pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
     match parse_json(bytes, "project") {
         Ok(project) => Ok(project),
-        Err(failure) => Err(removed_singular_projection_diagnostics(
+        Err(failure) => Err(removed_project_field_diagnostics(
             parse_json_strict(bytes).ok().as_ref(),
         )
         .unwrap_or(failure)),
@@ -2615,27 +2661,43 @@ pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailur
         Ok(project) => Ok(project),
         Err(failure) => {
             let value = serde_norway::from_slice::<Value>(bytes).ok();
-            Err(removed_singular_projection_diagnostics(value.as_ref()).unwrap_or(failure))
+            Err(removed_project_field_diagnostics(value.as_ref()).unwrap_or(failure))
         }
     }
 }
 
-fn removed_singular_projection_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
-    let projection = value?.as_object()?.get("manifestProjection")?.as_object()?;
+fn removed_project_field_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
+    let project = value?.as_object()?;
     let mut diagnostics = Vec::new();
-    if projection.contains_key("dataset") {
-        diagnostics.push(Diagnostic::error(
-            "manifest_projection.dataset.removed",
-            "project.manifestProjection.dataset",
-            "manifestProjection.dataset was removed; use manifestProjection.datasets[] or run `bregctl project migrate <PROJECT>`",
-        ));
+    if let Some(projection) = project.get("manifestProjection").and_then(Value::as_object) {
+        if projection.contains_key("dataset") {
+            diagnostics.push(Diagnostic::error(
+                "manifest_projection.dataset.removed",
+                "project.manifestProjection.dataset",
+                "manifestProjection.dataset was removed; use manifestProjection.datasets[] or run `bregctl project migrate <PROJECT>`",
+            ));
+        }
+        if projection.contains_key("dataService") {
+            diagnostics.push(Diagnostic::error(
+                "manifest_projection.data_service.removed",
+                "project.manifestProjection.dataService",
+                "manifestProjection.dataService was removed; use manifestProjection.dataServices[] or run `bregctl project migrate <PROJECT>`",
+            ));
+        }
     }
-    if projection.contains_key("dataService") {
-        diagnostics.push(Diagnostic::error(
-            "manifest_projection.data_service.removed",
-            "project.manifestProjection.dataService",
-            "manifestProjection.dataService was removed; use manifestProjection.dataServices[] or run `bregctl project migrate <PROJECT>`",
-        ));
+    if let Some(profiles) = project.get("accessProfiles").and_then(Value::as_array) {
+        for (index, profile) in profiles.iter().enumerate() {
+            if profile
+                .as_object()
+                .is_some_and(|profile| profile.contains_key("grants"))
+            {
+                diagnostics.push(Diagnostic::error(
+                    "access_profile.grants.removed",
+                    format!("project.accessProfiles[{index}].grants"),
+                    "accessProfiles[].grants was replaced by accessProfiles[].permissions; rename the key to permissions",
+                ));
+            }
+        }
     }
     (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
 }

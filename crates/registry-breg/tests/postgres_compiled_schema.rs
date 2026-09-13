@@ -1190,7 +1190,7 @@ fn additive_catalog_registry(variant: AdditiveCatalogVariant) -> registry_breg::
             "id": "writer",
             "default": true,
             "principalClaim": "registry_principal",
-            "grants": [{
+            "permissions": [{
                 "entity": "entry",
                 "operations": ["create", "get", "list", "patch"],
                 "readableFields": writable_fields,
@@ -1231,7 +1231,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"writer","default":true,"principalClaim":"registry_principal",
               "requiredPurposes":["operations"],
-              "grants":[
+              "permissions":[
                 {
                   "entity":"entry","operations":["create","get","list","patch"],
                   "readableFields":["tenant","region","label"],
@@ -1251,7 +1251,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
             {
               "id":"reviewer","principalClaim":"registry_principal",
               "requiredPurposes":["review"],
-              "grants":[{
+              "permissions":[{
                 "entity":"entry","operations":["get","list"],
                 "readableFields":["tenant","region","label"],
                 "rowBoundaries":[
@@ -1289,7 +1289,7 @@ fn derived_registry() -> registry_breg::CompiledRegistry {
             }]
           }],
           "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"registry_principal","grants":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal","permissions":[{
               "entity":"household","operations":["create","get","list"],
               "readableFields":["tenant","size","child-count","observed-on"],
               "writableFields":["tenant","size"],

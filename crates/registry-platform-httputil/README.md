@@ -15,7 +15,11 @@ Outbound HTTP utilities for registry services.
   limits.
 - `ServiceBaseUrl`, bearer token providers, and `PrivateKeyJwt` for hardened
   credential-bearing clients without product semantics. The private-key-JWT
-  provider preserves its closed `client_credentials` request shape.
+  provider uses a closed `client_credentials` request shape. Its `exchange`
+  method accepts a bounded JWT subject assertion and uses RFC 8693 with the
+  provider's configured resource and scopes. Every exchange is fresh and does
+  not use or replace the service-token cache. Returned task bounds remain the
+  consuming resource server's authorization responsibility.
 - Shared strict response-header bounds and exact-one delta-seconds
   `Retry-After` parsing.
 - `ProxyHeaderPolicy` plus request and response header filters for proxy-safe

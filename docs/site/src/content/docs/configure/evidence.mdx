@@ -138,6 +138,16 @@ atomic revision (`products/evidence/contracts/bundle.schema.yaml`). Its top-leve
 | `authorityProfiles` | Named requester-tag gates: which grants (requirement, purpose, audience, subject roles, selector profiles, value origins) a caller carrying those tags holds. |
 | `requirements` | The assertion definitions themselves: id, closed acquisition, purposes, subject roles, reference frameworks, evidence type, validity, derivation script and parameters, output concepts, fixtures, and disclosure-guard family. |
 
+Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every Evidence
+access token. The claim name defaults to `registry_actor_kind` and can be changed with
+`authentication.claims.actorKind`. Its value must be exactly `human`, `agent`, or `service`;
+a missing or malformed value causes authentication to fail before Evidence evaluates authority or
+accesses a source.
+
+{/* Evidence: crates/registry-evidence/src/auth.rs, Authenticator::extract_context();
+    crates/registry-platform-oidc/src/authorization_claims.rs, actor_kind();
+    products/evidence/contracts/bundle.schema.yaml. */}
+
 Everything under `bundle/` is mounted read-only and covered by one revision digest computed over
 the exact bundle bytes; there is no partial edit, hot reload, or fallback
 (`bundle.schema.yaml`, `atomic_revision`). Allowed bundle directories are `adapters/`,
@@ -241,7 +251,7 @@ The runtime names its Unix socket, mount, key name, pinned nonzero version, and 
 The private key stays in Transit. Startup validates the configured public P-256 JWK, pinned version,
 custody controls, and a sign-and-verify operation before the deployment is ready.
 Follow
-[Configure Transit signing for Evidence Gateway and Registry Mint](../../tutorials/move-evidence-to-production-signing/)
+[Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/)
 for provider key, public JWK, proxy, and policy setup.
 
 ### `audit-hmac-key`
@@ -421,8 +431,8 @@ command contract.
 
 ## Next
 
-- [Configure Registry Mint](../mint/) to issue access tokens for this deployment when it has no
-  other identity provider.
+- Configure the deployment's OAuth issuer to issue access tokens matching this bundle's
+  authentication and authority profile.
 - [Enable SD-JWT VC in a deployment](../enable-sd-jwt-vc/) to serialize the same assertion as a
   wallet-usable credential instead of a signed JWS.
 - [Verify and interpret the Evidence Gateway audit chain](../../operate/evidence-audit/) for the

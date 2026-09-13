@@ -38,7 +38,7 @@ fn owner_request_visibility_is_rejected_outside_authenticated_request_reads() {
         .find(|profile| profile.id == "site-planner")
         .expect("site planner exists");
     site_planner
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.entity == "asset-item")
         .expect("asset item grant exists")
@@ -57,7 +57,7 @@ fn owner_request_visibility_is_rejected_outside_authenticated_request_reads() {
         .find(|profile| profile.id == "correction-submitter")
         .expect("correction submitter exists");
     let grant = submitter
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.entity == "placement-correction-request")
         .expect("request grant exists");
@@ -87,7 +87,7 @@ fn request_reason_read_fields_default_to_reason_and_allow_an_explicit_empty_proj
         .iter_mut()
         .find(|profile| profile.id == "correction-submitter")
         .expect("submitter")
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.entity == "placement-correction-request")
         .expect("request grant");
@@ -108,7 +108,7 @@ fn request_reason_read_fields_default_to_reason_and_allow_an_explicit_empty_proj
 #[test]
 fn request_reason_read_fields_reject_unknown_metadata_fields() {
     let mut project = serde_json::to_value(acceptance_project()).expect("project serializes");
-    project["accessProfiles"][0]["grants"][0]["readableRequestFields"] =
+    project["accessProfiles"][0]["permissions"][0]["readableRequestFields"] =
         serde_json::json!(["actor"]);
     assert!(registry_breg::contract::parse_project_json(
         &serde_json::to_vec(&project).expect("JSON")
@@ -124,7 +124,7 @@ fn request_reason_permissions_refuse_non_request_entity_overrides() {
         .iter_mut()
         .find(|profile| profile.id == "site-planner")
         .expect("site planner")
-        .grants
+        .permissions
         .iter_mut()
         .find(|grant| grant.entity == "asset-item")
         .expect("ordinary entity grant");

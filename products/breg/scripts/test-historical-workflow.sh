@@ -255,6 +255,7 @@ claims = {
     "iat": now,
     "iss": "https://issuer.example/history",
     "jti": f"history-{now}-{sys.argv[2]}-{sys.argv[3] or 'none'}",
+    "registry_actor_kind": "service",
     "registry_principal": sys.argv[2],
     "sub": sys.argv[2],
 }

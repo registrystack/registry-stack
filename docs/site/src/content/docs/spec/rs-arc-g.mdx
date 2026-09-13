@@ -9,7 +9,6 @@ source_repos:
   - registry-platform
   - registry-relay
   - registry-evidence
-  - registry-mint
   - solmara-lab
 last_reviewed: "2026-08-21"
 doc_type: specification
@@ -105,7 +104,6 @@ flowchart TD
 
     subgraph support["Supporting components"]
         platform["Registry Platform<br/>(registry-platform)<br/>Shared Rust primitives: auth, OIDC,<br/>audit, crypto, bounded read-only SQLite"]
-        mint["Registry Mint<br/>(registry-mint)<br/>Issues short-lived access tokens where<br/>a deployment has no identity provider"]
         oid4vci["Wallet delivery front end<br/>Speaks OID4VCI to a wallet;<br/>signs nothing"]
     end
 
@@ -116,14 +114,12 @@ flowchart TD
     relayctl -- "sealed package" --> relay
     platform -- "shared primitives" --> relay
     platform -- "shared primitives" --> evidence
-    platform -- "shared primitives" --> mint
-    mint -- "access token verified by" --> evidence
     evidence -- "signed assertion" --> oid4vci
     relay -. "published image" .-> solmara
     evidence -. "published image" .-> solmara
 ```
 
-This section restates the essential relationships as text. Registry Manifest produces a static discovery bundle for static publishers and for clients that inspect a description offline. Registry Platform supplies shared primitives to the runtime services, including the bounded read-only SQLite boundary. `relayctl` compiles an adopter's authoring project into a sealed package; a Relay process verifies that package and serves read-only consultation routes from it. Each Evidence Gateway evaluation answers one bounded question about one complete subject-role set from its own configured sources, and a request batch can group up to sixteen independent audience-scoped evaluations. Registry Mint issues the access tokens a resource server such as Evidence Gateway verifies, and that dependency runs one way only. The wallet delivery front end carries an Evidence-signed credential to a holder wallet over the one protocol Evidence declines to speak. Solmara Lab consumes published stack images in runnable demo topologies, but it is not a formal Registry Stack product.
+This section restates the essential relationships as text. Registry Manifest produces a static discovery bundle for static publishers and for clients that inspect a description offline. Registry Platform supplies shared primitives to the runtime services, including the bounded read-only SQLite boundary. `relayctl` compiles an adopter's authoring project into a sealed package; a Relay process verifies that package and serves read-only consultation routes from it. Each Evidence Gateway evaluation answers one bounded question about one complete subject-role set from its own configured sources, and a request batch can group up to sixteen independent audience-scoped evaluations. The wallet delivery front end carries an Evidence-signed credential to a holder wallet over the one protocol Evidence declines to speak. Solmara Lab consumes published stack images in runnable demo topologies, but it is not a formal Registry Stack product.
 
 ## 3. Components
 
@@ -153,15 +149,9 @@ Evidence Gateway (`registry-evidence`) is a single-crate Rust service and the `e
 
 Evidence Gateway Version 1 supports its declared holder-bound subject-binding mode and bounded issuance envelope, but has no credential lifecycle, no interactive holder-binding ceremony or issuance session, no status list, no revocation, no delegated or federated evaluation between peers, no policy decision point, no replay subsystem, and no worker or document subsystem. It does not depend on Relay, does not consult it, and does not read a metadata manifest. Evidence Gateway may consume a Relay-protected API through its ordinary fixed HTTP source contract, and that consumption grants it none of Relay's authorization model.
 
-### Registry Mint
-
-Registry Mint (`registry-mint`) is a supporting service rather than a third runtime pattern: it is a minimal OAuth 2.0 token issuer and the `mint` binary, for deployments that have no identity provider of their own. A registered client authenticates with an RFC 7523 `private_key_jwt` client assertion by default, which is verified only against the keys registered for the client the assertion names. A standard authorization client that cannot sign assertions may explicitly select `client_secret_basic` or `client_secret_post`; the secret is verified only against that client's registered fingerprints and cannot be combined with Evidence authority or delegation. The authority claims carried by the minted access token are read from the server-side client registry and never from the assertion or token request. Issuer identity, signing keys, listener, and token policy are startup-only and immutable for the process lifetime; the client registry is reloadable, so onboarding, offboarding, and client credential rotation do not require restarting a resource server. Registry Mint evaluates no requirement, reads no registry source, and issues no assertion.
-
-The dependency runs one way. A resource server such as Evidence Gateway verifies a Mint-issued token as an ordinary OIDC access token, and Evidence Gateway carries no dependency on Registry Mint. In the workspace, `registry-mint` takes `registry-evidence` as a development dependency so that Mint's tests drive the Evidence Gateway authenticator against real tokens.
-
 ### Wallet delivery front end
 
-The wallet delivery front end (`registry-evidence-oid4vci`) is a supporting service in the same sense as Registry Mint. It speaks OID4VCI 1.0 Final to a holder wallet, the wallet-facing protocol Evidence Gateway deliberately refuses to speak, and delivers an Evidence-signed credential over it. It never signs a credential and holds no Evidence signing key. It never holds a holder private key: it receives holder public keys inside wallet-signed proofs and passes them to Evidence Gateway unchanged. It adds no Evidence semantics, so every authorization decision, every source acquisition, and every signature stays behind the Evidence Gateway runtime contract.
+The wallet delivery front end (`registry-evidence-oid4vci`) is a supporting service outside the runtime product patterns. It speaks OID4VCI 1.0 Final to a holder wallet, the wallet-facing protocol Evidence Gateway deliberately refuses to speak, and delivers an Evidence-signed credential over it. It never signs a credential and holds no Evidence signing key. It never holds a holder private key: it receives holder public keys inside wallet-signed proofs and passes them to Evidence Gateway unchanged. It adds no Evidence semantics, so every authorization decision, every source acquisition, and every signature stays behind the Evidence Gateway runtime contract.
 
 Everything the service remembers lives in memory, bounded, for minutes. A restart therefore invalidates every outstanding offer, and single use is enforced per process. Both are documented limits of a single-replica deployment.
 
@@ -191,11 +181,9 @@ The following ordered flow describes how a request moves through the stack from 
 
 5. **Serving.** A Relay process verifies the package by re-deriving it, opens its issuer, audit sink, source, and listener only after that verification succeeds, and serves read-only consultation routes. Every attempt is recorded to the audit chain before the source is read, and the request is refused when the audit sink cannot accept the record.
 
-6. **Access-token issuance.** Where a deployment has no identity provider of its own, Registry Mint issues the short-lived access token the caller presents. A registered client authenticates with `private_key_jwt` by default, or a standard authorization client explicitly selects a compatible client-secret method, and Mint reads the token's authority claims from its server-side client registry. A deployment that already runs an identity provider skips this step entirely.
+6. **Assertion.** Evidence Gateway authenticates the caller's access token against its one trusted issuer, matches exactly one authority path per evaluation, evaluates one predefined requirement over its own fixed bounded sources, and returns one signed minimum-disclosure assertion per available evaluation. A singular request carries one evaluation; a request batch groups up to sixteen ordered audience-scoped evaluations under one common requirement and purpose. Caller identity and authorization details may authorize or parameterize an evaluation, but do not become evidence. Each assertion carries the answer the requirement defines, not the source record behind it.
 
-7. **Assertion.** Evidence Gateway authenticates the caller's access token against its one trusted issuer, matches exactly one authority path per evaluation, evaluates one predefined requirement over its own fixed bounded sources, and returns one signed minimum-disclosure assertion per available evaluation. A singular request carries one evaluation; a request batch groups up to sixteen ordered audience-scoped evaluations under one common requirement and purpose. Caller identity and authorization details may authorize or parameterize an evaluation, but do not become evidence. Each assertion carries the answer the requirement defines, not the source record behind it.
-
-8. **Wallet delivery.** Where a deployment enables it, the wallet delivery front end carries an Evidence-signed credential to a holder wallet over OID4VCI. It adds no claim and no signature of its own.
+7. **Wallet delivery.** Where a deployment enables it, the wallet delivery front end carries an Evidence-signed credential to a holder wallet over OID4VCI. It adds no claim and no signature of its own.
 
 ## 5. Architectural invariants
 
@@ -209,7 +197,7 @@ REQ-ARC-G-003: A runtime service MUST NOT expose a source-registry data mutation
 
 REQ-ARC-G-004: Every request that touches person-level data MUST be audited. Registry Platform provides the audit envelope primitives, verified to exist in the shared crate; Relay and Evidence Gateway MUST compose those primitives on routes that return person-level records or evidence assertions. This requirement states an invariant a conforming deployment meets; it is not a claim that every route in a given build has been individually audited.
 
-REQ-ARC-G-005: A primitive that must behave identically across runtime services (authentication, OIDC, audit, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers, bounded read-only SQLite access) SHOULD be sourced from Registry Platform rather than reimplemented in Relay, Evidence Gateway, or Registry Mint. This keeps cross-service security behavior consistent and auditable in one place.
+REQ-ARC-G-005: A primitive that must behave identically across runtime services (authentication, OIDC, audit, HTTP security, outbound HTTP policy, cryptography, SD-JWT VC helpers, bounded read-only SQLite access) SHOULD be sourced from Registry Platform rather than reimplemented in Relay, Evidence Gateway. This keeps cross-service security behavior consistent and auditable in one place.
 
 REQ-ARC-G-007: Evidence Gateway MUST own requirement evaluation, disclosure shape, and assertion signing. Relay MUST NOT evaluate a requirement or sign an evidence assertion. Where Evidence Gateway consumes a Relay-protected API, it MUST do so through its ordinary fixed HTTP source contract and MUST NOT inherit Relay's authorization model.
 
@@ -218,8 +206,6 @@ REQ-ARC-G-010: The portable metadata layer describes; it does not authorize and 
 REQ-ARC-G-014: Evidence Gateway MUST return only the answer its predefined requirement defines, never the source record behind that answer. The response MUST be constructed by the service core after the complete declared concept set has been produced and validated; configured bundle logic MUST NOT construct a response envelope, a subject identifier, or any claim outside that declared set.
 
 REQ-ARC-G-015: Every signed Evidence Gateway assertion, whether returned directly or nested in a request-batch envelope, MUST be a flattened JWS JSON document over the exact evidence payload, and a signing failure MUST fail closed rather than release unsigned output. Where a deployment enables the SD-JWT VC serialization (`application/dc+sd-jwt`), that serialization MUST project the identical payload and MUST NOT be read as a credential lifecycle: Evidence Gateway Version 1 defines no issuance session, no holder-binding ceremony, no status list, no revocation, and no presentation verification.
-
-REQ-ARC-G-016: The dependency between Registry Mint and a resource server MUST run one way. Registry Mint issues an access token that a resource server such as Evidence Gateway verifies as an ordinary OIDC access token; Evidence Gateway MUST NOT depend on Registry Mint, and a deployment that already operates an identity provider MUST be able to run Evidence Gateway without Registry Mint.
 
 REQ-ARC-G-017: An Evidence Gateway request batch MUST preserve the boundary of each independent audience-scoped evaluation. The service MUST validate and authorize every item before source access, return results in request order, sign each available assertion independently, and release the complete response or nothing. An unavailable item MAY be represented only by its closed positional sentinel; any other item failure MUST abort the complete request. Request batching several subject sets MUST remain distinct from holder-bound issuance batching several credentials for one subject evaluation. An optional source-batch optimization MAY reduce physical HTTP calls but MUST NOT transfer authorization, source transport, result association, evidence construction, signing, or audit authority out of the Rust core.
 
@@ -250,8 +236,7 @@ else.
 The sequence is ordered by increasing commitment rather than by data dependency. Describing a registry costs nothing and can be reviewed offline. Exposing it commits an institution to a governed contract that a reviewer can read before a listener opens. Asserting commits it to a signed answer about a live record.
 
 Registry Platform supports the runtime services with the shared primitives that make each stage
-auditable, Registry Mint supplies access tokens where a deployment has no identity provider, and the
-wallet delivery front end carries a signed credential to a holder wallet. The external Solmara Lab
+auditable, and the wallet delivery front end carries a signed credential to a holder wallet. The external Solmara Lab
 adopter demo exercises the sequence using published stack images.
 
 ## Conformance
@@ -267,7 +252,6 @@ An implementation conforms to this specification when it respects the following 
 - REQ-ARC-G-010: discovery artifacts are treated as description, not as authorization, enforcement, or proof that a record exists.
 - REQ-ARC-G-014: an Evidence Gateway response carries the defined answer and not the source record behind it.
 - REQ-ARC-G-015: a signed response is a flattened JWS JSON document, signing failure fails closed, and the SD-JWT VC serialization projects the same payload without adding a credential lifecycle.
-- REQ-ARC-G-016: the Registry Mint dependency runs one way, and Evidence Gateway runs without Registry Mint where an identity provider already exists.
 - REQ-ARC-G-017: request batching preserves independent evaluation boundaries, ordered results, per-assertion signing, atomic release, and Rust ownership of source and result association.
 - REQ-ARC-G-018: a Relay deployment serves only from a re-derived sealed package and exposes no administrative plane.
 - REQ-ARC-G-019: authoring and serving are separate processes over one shared library.
@@ -302,7 +286,6 @@ This specification is `verified`: it is distilled from published artifacts a rea
 - The [boundary map](../../map/boundaries-and-map/) records each component's boundaries with their source citations. It is a distillation source for the components (Section 3) and the invariants (Section 5).
 - The [architecture overview](../../explanation/architecture/) gives the narrative data and contract flow that Section 4 makes precise.
 - The [relayctl reference](../../reference/relayctl/) and the [Evidence Gateway API reference](../../reference/apis/registry-evidence/) show the surfaces named in Section 3.
-- The [Registry Mint reference](../../reference/mint/) records the token issuer described in Section 3.
 - The [standards register](../../reference/standards/) records the adoption mode for each standard listed in `standards_referenced`.
 
 ## Next

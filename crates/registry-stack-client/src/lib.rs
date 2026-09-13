@@ -47,8 +47,10 @@ pub mod casework {
         ReleaseRequest, RequesterHostedItem, RoutingActivity, RoutingCondition, RoutingPredicate,
         RoutingRule, SaveDraftRequest, SourceBinding, SourcePolicy, SourceReceipt,
         SourceRequestPolicy, StaffingDiagnostic, SubjectClockAnchor, SubjectClockCompletion,
-        SubjectClockPause, SubjectRef, TeamRecord, Uuid, WorkItem, WorkItemPage, WorkItemRouting,
-        WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
+        SubjectClockPause, SubjectRef, TaskApprovalRequest, TaskAssertionResponse, TaskGrantBounds,
+        TaskGrantList, TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+        TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
+        WorkItemPage, WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
     };
 }
 

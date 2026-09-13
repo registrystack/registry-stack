@@ -12,7 +12,7 @@ standards_referenced: []
 ---
 
 An immediate action is a named registry operation a caller invokes instead of writing records
-directly. Base Registry Engine (BReg) admits the action's declared inputs, checks the grant that
+directly. Base Registry Engine (BReg) admits the action's declared inputs, checks the permission that
 permits it, and applies a bounded set of writes in one transaction. A fixed-effect action maps
 admitted inputs onto declared effects. A handler action computes those effects in a Rhai script the
 project ships. Neither shape adds domain code to the server: an action stays configuration a
@@ -92,7 +92,7 @@ Runtime configuration binds the same provider ID separately from the signed logi
 its own `evidenceProviders` map with `baseUrl`, `trustBindingId`, `tokenRef`, `trustedJwksRef`,
 `revokedKeyIds`, and an optional `caBundleRef`. The endpoint, token, and trusted JWKS are operator
 bindings that no script can replace. Computed identifiers stay request values: they cannot become
-authenticated claims or grants, and the action grant covers all declared processing, so a caller
+authenticated claims or grants, and the action permission covers all declared processing, so a caller
 input selecting optional disclosure adds no authority.
 
 The limits are fixed, and offline action explanation reports them:
@@ -137,7 +137,7 @@ operator command that removes it once a window has closed.
 ## Next
 
 - [Declare change requests and actions](../../configure/breg-change-control/) to author the action,
-  its inputs, and the grant that invokes it.
+  its inputs, and the permission that invokes it.
 - [Base Registry Engine configuration reference](../../reference/breg-configuration/) for every
   authoring field a fragment names.
 - [Retain, erase, and audit](../../operate/breg-retention/) for the retention scopes an operator

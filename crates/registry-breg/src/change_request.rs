@@ -17,13 +17,14 @@ use crate::diagnostics::Diagnostic;
 use crate::model::{
     ChangeRequestOperation, CompiledChangeRequest, CompiledChangeRequestActionRoute,
     CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
-    CompiledChangeRequestApplyGrant, CompiledChangeRequestDisposition, CompiledChangeRequestEffect,
-    CompiledChangeRequestMutation, CompiledChangeRequestPlanner, CompiledChangeRequestPlannerKind,
-    CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
-    CompiledChangeRequestPresenceGrant, CompiledChangeRequestReferenceSources,
-    CompiledChangeRequestRetentionMode, CompiledChangeRequestReviewGrant,
-    CompiledChangeRequestReviewMode, CompiledChangeRequestStage, CompiledChangeRequestTarget,
-    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledEntity,
+    CompiledChangeRequestApplyPermission, CompiledChangeRequestDisposition,
+    CompiledChangeRequestEffect, CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
+    CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
+    CompiledChangeRequestPlannerWrite, CompiledChangeRequestPresencePermission,
+    CompiledChangeRequestReferenceSources, CompiledChangeRequestRetentionMode,
+    CompiledChangeRequestReviewMode, CompiledChangeRequestReviewPermission,
+    CompiledChangeRequestStage, CompiledChangeRequestTarget, CompiledChangeRequestTargetBinding,
+    CompiledChangeRequestValue, CompiledEntity,
 };
 
 /// Path to an entity, identified so a diagnostic can name which entity it concerns.
@@ -607,7 +608,7 @@ pub(crate) fn compile_change_requests(
             }
         }
     }
-    compile_presence_grants(entities, &mut compiled, &mut errors);
+    compile_presence_permissions(entities, &mut compiled, &mut errors);
 
     if !errors.is_empty() {
         return Err(errors);
@@ -802,9 +803,10 @@ fn compile_request_entity(
             (effects, changed_fields, target_entities, None)
         };
     let actions = compile_action_routes(&stages);
-    let review_grants =
-        compile_review_grants(request_entity, &stages, &changed_fields, entities, errors);
-    let apply_grants = compile_apply_grants(request_entity, &target_entities, entities, errors);
+    let review_permissions =
+        compile_review_permissions(request_entity, &stages, &changed_fields, entities, errors);
+    let apply_permissions =
+        compile_apply_permissions(request_entity, &target_entities, entities, errors);
     if !request_entity
         .access_profiles
         .values()
@@ -824,8 +826,8 @@ fn compile_request_entity(
         review_mode,
         &application,
         &stages,
-        &review_grants,
-        &apply_grants,
+        &review_permissions,
+        &apply_permissions,
         &target_entities,
         errors,
     );
@@ -834,8 +836,8 @@ fn compile_request_entity(
         entities,
         effects: &effects,
         stages: &stages,
-        review_grants: &review_grants,
-        apply_grants: &apply_grants,
+        review_permissions: &review_permissions,
+        apply_permissions: &apply_permissions,
         target_entities: &target_entities,
         review_mode,
         application: &application,
@@ -852,9 +854,9 @@ fn compile_request_entity(
         effects,
         stages,
         actions,
-        review_grants,
-        apply_grants,
-        presence_grants: Vec::new(),
+        review_permissions,
+        apply_permissions,
+        presence_permissions: Vec::new(),
         target_entities,
         maximum_targets: MAX_CHANGE_REQUEST_TARGETS,
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
@@ -868,8 +870,8 @@ fn validate_automatic_apply_profile(
     review_mode: CompiledChangeRequestReviewMode,
     application: &CompiledChangeRequestApplication,
     stages: &[CompiledChangeRequestStage],
-    review_grants: &[CompiledChangeRequestReviewGrant],
-    apply_grants: &[CompiledChangeRequestApplyGrant],
+    review_permissions: &[CompiledChangeRequestReviewPermission],
+    apply_permissions: &[CompiledChangeRequestApplyPermission],
     target_entities: &BTreeSet<String>,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -891,7 +893,7 @@ fn validate_automatic_apply_profile(
                 profile.operations.contains(&Operation::ApproveRequest)
                     && final_stage.is_some_and(|stage| {
                         target_entities.iter().all(|target_entity_id| {
-                            review_grants.iter().any(|grant| {
+                            review_permissions.iter().any(|grant| {
                                 grant.profile_id == profile.id
                                     && grant.stage == stage
                                     && grant.target_entity_id == *target_entity_id
@@ -902,7 +904,7 @@ fn validate_automatic_apply_profile(
         };
         can_trigger_ready
             && target_entities.iter().all(|target_entity_id| {
-                apply_grants.iter().any(|grant| {
+                apply_permissions.iter().any(|grant| {
                     grant.profile_id == profile.id && grant.target_entity_id == *target_entity_id
                 })
             })
@@ -1507,18 +1509,18 @@ fn compile_action_routes(
     actions
 }
 
-fn compile_review_grants(
+fn compile_review_permissions(
     request_entity: &CompiledEntity,
     stages: &[CompiledChangeRequestStage],
     changed_fields: &BTreeMap<String, BTreeSet<String>>,
     entities: &BTreeMap<String, CompiledEntity>,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledChangeRequestReviewGrant> {
+) -> Vec<CompiledChangeRequestReviewPermission> {
     let stage_ids = stages
         .iter()
         .map(|stage| stage.id.as_str())
         .collect::<BTreeSet<_>>();
-    let mut grants = Vec::new();
+    let mut permissions = Vec::new();
     for profile in request_entity.access_profiles.values() {
         let profile_base = profile_path(&request_entity.id, &profile.id);
         for grant in &profile.review_stages {
@@ -1533,58 +1535,59 @@ fn compile_review_grants(
                 errors.push(Diagnostic::error(
                     "change_request.review_stage.operation_required",
                     format!("{profile_base}.operations"),
-                    "review stage grants require approve_request, reject_request, or request_revision authority",
+                    "review stage permissions require approve_request, reject_request, or request_revision authority",
                 ));
             }
-            let stage_grant_path = format!("{profile_base}.reviewStages[stage={}]", grant.stage);
+            let stage_permission_path =
+                format!("{profile_base}.reviewStages[stage={}]", grant.stage);
             if !stage_ids.contains(grant.stage.as_str()) {
                 errors.push(Diagnostic::error(
                     "change_request.review_stage.unknown",
-                    format!("{stage_grant_path}.stage"),
-                    "a review grant refers to an unknown review stage",
+                    format!("{stage_permission_path}.stage"),
+                    "a review permission refers to an unknown review stage",
                 ));
                 continue;
             }
             for target in &grant.targets {
-                let target_grant_path =
-                    format!("{stage_grant_path}.targets[entity={}]", target.entity);
+                let target_permission_path =
+                    format!("{stage_permission_path}.targets[entity={}]", target.entity);
                 let Some(target_entity) = entities.get(&target.entity) else {
                     errors.push(Diagnostic::error(
                         "change_request.review_stage.target_unknown",
-                        format!("{target_grant_path}.entity"),
-                        "a review grant targets an unknown entity",
+                        format!("{target_permission_path}.entity"),
+                        "a review permission targets an unknown entity",
                     ));
                     continue;
                 };
                 validate_target_fields(
                     target_entity,
                     &target.readable_fields,
-                    &format!("{target_grant_path}.readableFields"),
+                    &format!("{target_permission_path}.readableFields"),
                     errors,
                 );
                 validate_row_boundaries(
                     target_entity,
                     &target.row_boundaries,
-                    &format!("{target_grant_path}.rowBoundaries"),
+                    &format!("{target_permission_path}.rowBoundaries"),
                     errors,
                 );
-                validate_grant_access_requirements(
+                validate_permission_access_requirements(
                     target_entity,
                     profile,
                     &target.row_boundaries,
-                    &target_grant_path,
+                    &target_permission_path,
                     errors,
                 );
                 if let Some(required) = changed_fields.get(&target.entity) {
                     if !required.is_subset(&target.readable_fields) {
                         errors.push(Diagnostic::error(
                             "change_request.review_projection.incomplete",
-                            format!("{target_grant_path}.readableFields"),
+                            format!("{target_permission_path}.readableFields"),
                             "review target projections must cover every changed target field",
                         ));
                     }
                 }
-                grants.push(CompiledChangeRequestReviewGrant {
+                permissions.push(CompiledChangeRequestReviewPermission {
                     profile_id: profile.id.clone(),
                     stage: grant.stage.clone(),
                     target_entity_id: target.entity.clone(),
@@ -1629,23 +1632,23 @@ fn compile_review_grants(
             ));
         }
     }
-    grants.sort_by(|left, right| {
+    permissions.sort_by(|left, right| {
         (&left.stage, &left.profile_id, &left.target_entity_id).cmp(&(
             &right.stage,
             &right.profile_id,
             &right.target_entity_id,
         ))
     });
-    grants
+    permissions
 }
 
-fn compile_apply_grants(
+fn compile_apply_permissions(
     request_entity: &CompiledEntity,
     target_entities: &BTreeSet<String>,
     entities: &BTreeMap<String, CompiledEntity>,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledChangeRequestApplyGrant> {
-    let mut grants = Vec::new();
+) -> Vec<CompiledChangeRequestApplyPermission> {
+    let mut permissions = Vec::new();
     for profile in request_entity.access_profiles.values() {
         let profile_base = profile_path(&request_entity.id, &profile.id);
         if !profile.apply_targets.is_empty()
@@ -1654,34 +1657,34 @@ fn compile_apply_grants(
             errors.push(Diagnostic::error(
                 "change_request.apply_target.operation_required",
                 format!("{profile_base}.operations"),
-                "apply target grants require apply_request authority",
+                "apply target permissions require apply_request authority",
             ));
         }
         for target in &profile.apply_targets {
-            let target_grant_path =
+            let target_permission_path =
                 format!("{profile_base}.applyTargets[entity={}]", target.entity);
             let Some(target_entity) = entities.get(&target.entity) else {
                 errors.push(Diagnostic::error(
                     "change_request.apply_target.unknown",
-                    format!("{target_grant_path}.entity"),
-                    "an apply grant targets an unknown entity",
+                    format!("{target_permission_path}.entity"),
+                    "an apply permission targets an unknown entity",
                 ));
                 continue;
             };
             validate_row_boundaries(
                 target_entity,
                 &target.row_boundaries,
-                &format!("{target_grant_path}.rowBoundaries"),
+                &format!("{target_permission_path}.rowBoundaries"),
                 errors,
             );
-            validate_grant_access_requirements(
+            validate_permission_access_requirements(
                 target_entity,
                 profile,
                 &target.row_boundaries,
-                &target_grant_path,
+                &target_permission_path,
                 errors,
             );
-            grants.push(CompiledChangeRequestApplyGrant {
+            permissions.push(CompiledChangeRequestApplyPermission {
                 profile_id: profile.id.clone(),
                 target_entity_id: target.entity.clone(),
                 row_boundaries: target.row_boundaries.clone(),
@@ -1707,14 +1710,14 @@ fn compile_apply_grants(
             "at least one profile must be able to apply the complete change-request target set",
         ));
     }
-    grants.sort_by(|left, right| {
+    permissions.sort_by(|left, right| {
         (&left.profile_id, &left.target_entity_id)
             .cmp(&(&right.profile_id, &right.target_entity_id))
     });
-    grants
+    permissions
 }
 
-fn compile_presence_grants(
+fn compile_presence_permissions(
     entities: &BTreeMap<String, CompiledEntity>,
     plans: &mut BTreeMap<String, CompiledChangeRequest>,
     errors: &mut Vec<Diagnostic>,
@@ -1735,7 +1738,7 @@ fn compile_presence_grants(
                     errors.push(Diagnostic::error(
                         "change_request.presence.request_type_unknown",
                         format!("{presence_path}.requestType"),
-                        "a request-presence grant refers to an unknown request type",
+                        "a request-presence permission refers to an unknown request type",
                     ));
                     continue;
                 };
@@ -1748,7 +1751,7 @@ fn compile_presence_grants(
                     &format!("{presence_path}.rowBoundaries"),
                     errors,
                 );
-                validate_grant_access_requirements(
+                validate_permission_access_requirements(
                     request_entity,
                     profile,
                     &grant.row_boundaries,
@@ -1759,7 +1762,7 @@ fn compile_presence_grants(
                     errors.push(Diagnostic::error(
                         "change_request.presence.target_unaffected",
                         format!("{presence_path}.requestType"),
-                        "a request-presence grant must name a request type that can affect the granted target entity",
+                        "a request-presence permission must name a request type that can affect the granted target entity",
                     ));
                     continue;
                 }
@@ -1813,8 +1816,8 @@ fn compile_presence_grants(
                     }
                 }
                 if let Some(plan) = plans.get_mut(&grant.request_type) {
-                    plan.presence_grants
-                        .push(CompiledChangeRequestPresenceGrant {
+                    plan.presence_permissions
+                        .push(CompiledChangeRequestPresencePermission {
                             profile_id: profile.id.clone(),
                             target_entity_id: target_entity.id.clone(),
                             request_row_boundaries: grant.row_boundaries.clone(),
@@ -1824,14 +1827,14 @@ fn compile_presence_grants(
         }
     }
     for plan in plans.values_mut() {
-        plan.presence_grants.sort_by(|left, right| {
+        plan.presence_permissions.sort_by(|left, right| {
             (&left.target_entity_id, &left.profile_id)
                 .cmp(&(&right.target_entity_id, &right.profile_id))
         });
     }
 }
 
-fn validate_grant_access_requirements(
+fn validate_permission_access_requirements(
     entity: &CompiledEntity,
     profile: &AccessProfileSource,
     row_boundaries: &[RowBoundarySource],
@@ -1857,9 +1860,9 @@ fn validate_target_fields(
     for field in fields {
         if !entity.fields.contains_key(field) && !entity.attachments.contains_key(field) {
             errors.push(Diagnostic::error(
-                "change_request.grant.field_unknown",
+                "change_request.permission.field_unknown",
                 path,
-                "a change-request grant refers to an unknown target field or attachment slot",
+                "a change-request permission refers to an unknown target field or attachment slot",
             ));
         }
     }
@@ -1881,9 +1884,9 @@ fn validate_row_boundaries(
             ))
         {
             errors.push(Diagnostic::error(
-                "change_request.grant.row_boundary_invalid",
+                "change_request.permission.row_boundary_invalid",
                 path,
-                "change-request grant row boundaries must be direct, non-empty, and duplicate-free",
+                "change-request permission row boundaries must be direct, non-empty, and duplicate-free",
             ));
         }
         if boundary.field == "id" {
@@ -1891,9 +1894,9 @@ fn validate_row_boundaries(
         }
         let Some(field) = entity.fields.get(&boundary.field) else {
             errors.push(Diagnostic::error(
-                "change_request.grant.row_boundary_field_unknown",
+                "change_request.permission.row_boundary_field_unknown",
                 path,
-                "a change-request grant row boundary refers to an unknown field",
+                "a change-request permission row boundary refers to an unknown field",
             ));
             continue;
         };
@@ -1902,7 +1905,7 @@ fn validate_row_boundaries(
             FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
         ) {
             errors.push(Diagnostic::error(
-                "change_request.grant.row_boundary_type_unsupported",
+                "change_request.permission.row_boundary_type_unsupported",
                 path,
                 "CRS84 point and structured fields cannot be change-request row-boundary fields",
             ));
@@ -2014,8 +2017,8 @@ struct ContractFingerprintInput<'a> {
     entities: &'a BTreeMap<String, CompiledEntity>,
     effects: &'a [CompiledChangeRequestEffect],
     stages: &'a [CompiledChangeRequestStage],
-    review_grants: &'a [CompiledChangeRequestReviewGrant],
-    apply_grants: &'a [CompiledChangeRequestApplyGrant],
+    review_permissions: &'a [CompiledChangeRequestReviewPermission],
+    apply_permissions: &'a [CompiledChangeRequestApplyPermission],
     target_entities: &'a BTreeSet<String>,
     review_mode: CompiledChangeRequestReviewMode,
     application: &'a CompiledChangeRequestApplication,
@@ -2028,8 +2031,8 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
         entities,
         effects,
         stages,
-        review_grants,
-        apply_grants,
+        review_permissions,
+        apply_permissions,
         target_entities,
         review_mode,
         application,
@@ -2051,16 +2054,16 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
         "stages": stages,
         "reviewAuthority": authority_payload(
             request_entity,
-            review_grants.iter().map(|grant| grant.profile_id.as_str()).collect(),
+            review_permissions.iter().map(|grant| grant.profile_id.as_str()).collect(),
             [Operation::ApproveRequest, Operation::RejectRequest, Operation::RequestRevision]
         ),
-        "reviewGrants": review_grant_payload(review_grants),
+        "reviewPermissions": review_permission_payload(review_permissions),
         "applyAuthority": authority_payload(
             request_entity,
-            apply_grants.iter().map(|grant| grant.profile_id.as_str()).collect(),
+            apply_permissions.iter().map(|grant| grant.profile_id.as_str()).collect(),
             [Operation::ApplyRequest]
         ),
-        "applyGrants": apply_grant_payload(apply_grants),
+        "applyPermissions": apply_permission_payload(apply_permissions),
         "limits": {
             "maximumTargets": MAX_CHANGE_REQUEST_TARGETS,
             "maximumFieldMutations": MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
@@ -2149,7 +2152,9 @@ fn authority_payload<const N: usize>(
     json!(profiles)
 }
 
-fn review_grant_payload(grants: &[CompiledChangeRequestReviewGrant]) -> Vec<serde_json::Value> {
+fn review_permission_payload(
+    grants: &[CompiledChangeRequestReviewPermission],
+) -> Vec<serde_json::Value> {
     let mut grants = grants.iter().collect::<Vec<_>>();
     grants.sort_by(|left, right| {
         (&left.profile_id, &left.stage, &left.target_entity_id).cmp(&(
@@ -2172,7 +2177,9 @@ fn review_grant_payload(grants: &[CompiledChangeRequestReviewGrant]) -> Vec<serd
         .collect()
 }
 
-fn apply_grant_payload(grants: &[CompiledChangeRequestApplyGrant]) -> Vec<serde_json::Value> {
+fn apply_permission_payload(
+    grants: &[CompiledChangeRequestApplyPermission],
+) -> Vec<serde_json::Value> {
     let mut grants = grants.iter().collect::<Vec<_>>();
     grants.sort_by(|left, right| {
         (&left.profile_id, &left.target_entity_id)

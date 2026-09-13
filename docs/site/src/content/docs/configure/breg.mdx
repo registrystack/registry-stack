@@ -27,7 +27,7 @@ This page shapes the records.
 Everything on these four pages runs without a database.
 Database setup, packaging, and activation belong to [Deploy a registry](../../operate/breg/), and if you have never run a registry, [Create and query your first registry](../../tutorials/first-breg/) comes first.
 
-If `bregctl` is not installed yet, the release installer places `breg`, `bregctl`, and `mint` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
+If `bregctl` is not installed yet, the release installer places `breg` and `bregctl` together in `~/.local/bin` on Linux amd64, Linux arm64, and macOS on Apple Silicon:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
@@ -125,6 +125,17 @@ and a snippet copied from a Relay page does not compile here.
 | `entities` | Entities declared in this file. |
 | `accessProfiles` | Every profile a token can select. |
 | `vocabularies` | Closed code lists that `vocabulary-code` fields reference. |
+
+Configure the OpenID Connect (OIDC) issuer to include `registry_actor_kind` on every BReg access
+token. The value must be exactly `human`, `agent`, or `service`; a missing or malformed value causes
+authentication to fail before BReg selects an access profile. An `actorKind` on an access profile
+further restricts that profile to the matching token kind and must be paired with
+`requesterClients`. Omit `actorKind` only when the profile deliberately accepts all three declared
+actor kinds.
+
+{/* Evidence: crates/registry-breg/src/auth.rs, RegistryAuthenticator::authenticate();
+    crates/registry-breg/src/api/mod.rs, authorize_profile_claims();
+    crates/registry-breg/src/compiler.rs. */}
 
 Identifiers follow a closed grammar: a lowercase ASCII letter first, then lowercase letters, digits, hyphens, or underscores, at most 64 bytes.
 `check` refuses anything else with `identifier.invalid`, so an event id such as `record.status.changed` fails where `record-status-changed-v1` passes.
@@ -424,7 +435,7 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 
 ## Next
 
-- [Control access per profile](../breg-access/): profiles, grants, row boundaries, and the offline admission preview.
+- [Control access per profile](../breg-access/): profiles, permissions, row boundaries, and the offline admission preview.
 - [Declare change requests and actions](../breg-change-control/): reviewed changes and writes that touch several records at once.
 - [Test with journeys](../breg-journeys/): `check`, `explain`, `generate`, findings, and journeys.
 - [Modeling patterns for registries](../../explanation/registry-modeling-patterns/): how to shape entities, references, and history.

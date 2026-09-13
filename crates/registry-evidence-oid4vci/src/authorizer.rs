@@ -1,24 +1,27 @@
 //! The authorization boundary of the adopter-facing offer endpoint.
 //!
-//! This is the resource-server half of the process. It verifies a Mint-issued
-//! access token through `registry-platform-oidc`, on the same strict profile
-//! Evidence's own authenticator builds: an exact issuer, a closed audience
-//! list, a closed algorithm list, a closed access-token `typ` list, a ceiling
-//! on token lifetime, and keys resolved only through the configured key set.
+//! This is the resource-server half of the process. It verifies an access token
+//! from the configured issuer through `registry-platform-oidc`, on the strict
+//! profile Evidence's own authenticator builds: an exact issuer, a closed
+//! audience list, a closed algorithm list, a closed access-token `typ` list, a
+//! ceiling on token lifetime, and keys resolved only through the configured key
+//! set.
 //!
-//! The client half of the process, which authenticates *to* Mint with this
-//! service's own private key, is [`crate::issuer`]. The two never share a code
-//! path: nothing here reads the client key, nothing here is derived from the
-//! client identity, and the two are configured by separate documents. A
-//! deployment whose client key is unusable still authorizes offers, and a
-//! deployment whose offer issuer is unreachable still requests credentials.
+//! The client half of the process, which authenticates to the configured token
+//! endpoint with this service's own private key, is [`crate::issuer`]. The two
+//! never share a code path: nothing here reads the client key, nothing here is
+//! derived from the client identity, and the two are configured by separate
+//! documents. A deployment whose client key is unusable still authorizes
+//! offers, and a deployment whose offer issuer is unreachable still requests
+//! credentials.
 
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use registry_platform_httputil::FetchUrlPolicy;
 use registry_platform_oidc::{
-    JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier, TokenVerifierConfig,
+    grant_claims, ClaimNames, JwksFetcher, JwksFetcherConfig, OidcError, TokenVerifier,
+    TokenVerifierConfig,
 };
 
 use crate::config::{AccessTokenAlgorithm, OfferAuthorizationConfig, ValidationMode};
@@ -61,17 +64,22 @@ pub trait OfferAuthorizer: Send + Sync {
     async fn authorize(&self, credential: &str) -> Result<AuthorizedOffer, AuthorizationError>;
 }
 
-/// The Mint-issued access token verifier.
+/// The configured issuer's access-token verifier.
 #[derive(Debug)]
 pub struct MintResourceServer {
     verifier: Arc<TokenVerifier>,
+    claims: ClaimNames,
+    /// Scopes every offer token must carry. Checked against the verified
+    /// token's scope set after verification, with the same closed refusal a
+    /// refused client gets, before any offer is stored or Evidence contacted.
+    required_scopes: Vec<String>,
 }
 
 impl MintResourceServer {
     /// Build the resource server from its own configuration document.
     ///
-    /// Nothing about the client identity this service authenticates to Mint
-    /// with is read here, on purpose: the offer boundary must be configurable,
+    /// Nothing about the outbound token-client identity is read here, on
+    /// purpose: the offer boundary must be configurable,
     /// and auditable, without reference to who this service is elsewhere.
     #[must_use]
     pub fn from_config(config: &OfferAuthorizationConfig, mode: ValidationMode) -> Self {
@@ -80,17 +88,40 @@ impl MintResourceServer {
             JwksFetcherConfig::defaults(),
             fetch_url_policy(config, mode),
         ));
-        Self::new(Arc::new(TokenVerifier::new(
-            verifier_profile(config),
-            fetcher,
-        )))
+        let required_scopes = config.required_scopes.clone().unwrap_or_default();
+        Self {
+            verifier: Arc::new(TokenVerifier::new(verifier_profile(config), fetcher)),
+            required_scopes,
+            claims: config.claims.clone(),
+        }
     }
 
     /// Build the resource server over an already constructed verifier, for a
-    /// deployment that resolved its key source another way.
+    /// deployment that resolved its key source another way. No scope gate is
+    /// applied; the verifier alone decides.
     #[must_use]
     pub fn new(verifier: Arc<TokenVerifier>) -> Self {
-        Self { verifier }
+        Self {
+            verifier,
+            required_scopes: Vec::new(),
+            claims: ClaimNames::default(),
+        }
+    }
+
+    /// Apply the issuer's contextual claim names when supplying a verifier
+    /// directly. Invalid mappings are refused during authorization.
+    #[must_use]
+    pub fn with_claim_names(mut self, claims: ClaimNames) -> Self {
+        self.claims = claims;
+        self
+    }
+
+    /// State scopes every offer token must carry, for a deployment that built
+    /// its verifier another way but still wants the scope gate.
+    #[must_use]
+    pub fn with_required_scopes(mut self, required_scopes: Vec<String>) -> Self {
+        self.required_scopes = required_scopes;
+        self
     }
 }
 
@@ -158,13 +189,45 @@ impl OfferAuthorizer for MintResourceServer {
             return Err(AuthorizationError::Missing);
         }
         match self.verifier.verify(credential).await {
-            Ok(verified) => Ok(AuthorizedOffer {
-                client: verified
-                    .matched_client
-                    .or_else(|| verified.claims.client_id.clone())
-                    .or_else(|| verified.claims.azp.clone()),
-                subject: verified.claims.sub.clone(),
-            }),
+            Ok(verified) => {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|_| AuthorizationError::Refused)?
+                    .as_secs();
+                if !matches!(grant_claims(&verified.claims, &self.claims, now), Ok(None))
+                    || !matches!(
+                        grant_claims(&verified.claims, &ClaimNames::default(), now),
+                        Ok(None)
+                    )
+                {
+                    // A wallet offer creates a deferred bearer lifecycle whose
+                    // later redemption cannot recheck the task authority. No
+                    // complete, partial, malformed, or expired task grant under
+                    // either configured or reserved claim names may cross it.
+                    return Err(AuthorizationError::Refused);
+                }
+                // The scope gate runs only on the verified token's scope set:
+                // a correctly signed token for this audience whose client
+                // holds static attributes but no offer scope grants nothing.
+                if !self.required_scopes.is_empty() {
+                    let present: std::collections::HashSet<&str> =
+                        verified.scopes.iter().map(String::as_str).collect();
+                    if !self
+                        .required_scopes
+                        .iter()
+                        .all(|scope| present.contains(scope.as_str()))
+                    {
+                        return Err(AuthorizationError::Refused);
+                    }
+                }
+                Ok(AuthorizedOffer {
+                    client: verified
+                        .matched_client
+                        .or_else(|| verified.claims.client_id.clone())
+                        .or_else(|| verified.claims.azp.clone()),
+                    subject: verified.claims.sub.clone(),
+                })
+            }
             Err(error) if is_key_source_failure(&error) => {
                 tracing::warn!(
                     target: "registry_evidence_oid4vci::authorizer",
@@ -228,8 +291,8 @@ mod tests {
     #[test]
     fn the_resource_server_is_built_from_the_offer_document_alone() {
         // The construction takes the offer boundary and the validation mode.
-        // There is no parameter for the Mint client identity, so no key or
-        // identifier belonging to the client half can reach this one.
+        // There is no parameter for the outbound token-client identity, so no
+        // key or identifier belonging to the client half can reach this one.
         let config = valid_config();
         let _server = MintResourceServer::from_config(&config.offers, config.validation_mode);
     }

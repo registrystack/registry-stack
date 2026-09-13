@@ -1,0 +1,32 @@
+resource_type: agent_type
+id: 01900000-0000-7000-8000-000000000011
+name: default
+ouHandle: default
+schema:
+  modelProvider:
+    type: string
+    displayName: Model Provider
+    required: false
+    enum:
+      - openai
+      - anthropic
+      - gemini
+      - mistral
+      - custom
+  model:
+    type: string
+    displayName: Model
+    required: false
+  function:
+    type: string
+    displayName: Function
+    required: false
+    enum:
+      - task-automation
+      - rag-retrieval
+      - code-gen
+      - data-analysis
+      - orchestrator
+      - sub-agent
+      - assistant
+      - custom

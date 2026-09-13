@@ -60,11 +60,13 @@ connection. A token endpoint using a private CA needs its own byte-valued
 `trusted_root_certificates` inside `private_key_jwt`; the two trust inputs are
 deliberately independent.
 
-The built-in private-key-JWT flow sends only `grant_type`,
-`client_assertion_type`, and `client_assertion`. It does not send `scope`,
-`resource`, a body `client_id`, or deployment-defined form members. When an
-issuer requires any of those fields, acquire a short-lived bearer separately
-and pass it through `authorization={"static": token}`.
+The built-in private-key-JWT flow sends `grant_type`, a body `client_id`,
+`client_assertion_type`, and `client_assertion`. Optional `resource` and
+`scopes` members add the RFC 8707 `resource` parameter and the space-delimited
+OAuth `scope` parameter respectively; omitting them sends neither parameter.
+The flow accepts no deployment-defined form members. When an issuer requires
+other fields, acquire a short-lived bearer separately and pass it through
+`authorization={"static": token}`.
 
 Every method is blocking and releases the Python GIL while the private
 current-thread Tokio runtime waits for I/O. Conditional methods return a plain

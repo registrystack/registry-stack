@@ -37,15 +37,13 @@ Everything you keep goes into one directory, `tutorial-work`.
 
 ## Install both products
 
-Install `breg`, `bregctl`, and `mint`, then `casework` and `caseworkctl`.
-[Registry Mint](../../reference/glossary/#registry-mint) issues the local access tokens this
-tutorial uses, standing in for the identity provider a deployment would have; both installers
-ship it, and either copy serves:
+Install `breg` and `bregctl`, then `casework` and `caseworkctl`.
+Each product's local development lifecycle uses the pinned stock issuer to obtain short-lived
+access tokens, standing in for the identity provider a deployment would have:
 
 ```sh
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/breg-install.sh | bash
 bregctl --version
-mint --version
 ```
 
 ```sh
@@ -56,8 +54,8 @@ caseworkctl --version
 Each installer checks its binaries against the release `SHA256SUMS` before anything reaches
 `~/.local/bin`, and installs them together or not at all.
 Keep that directory on your `PATH`.
-The two commands must print the same version, because `caseworkctl dev` drives `bregctl` and
-refuses one from another release.
+The two commands must print the same version, because `caseworkctl source add` and the local
+`--source-project` bridge drive `bregctl` and refuse one from another release.
 
 :::note[Before these binaries serve anyone else]
 The URL takes the latest release, and a deployment pins a version instead.
@@ -95,7 +93,7 @@ The `professional-licences` starter is a registry of professional licences, with
 `professional-license` entity and a `scope-correction` change request that proposes a correction to
 one licence and applies it only after a review stage named `review`.
 Its `dev-clients.yaml` declares the `reader`, `editor`, and `reviewer` clients the local session
-registers with Mint.
+registers with its development issuer.
 
 The `professional-review` template is a Casework deployment over that registry: one source,
 `professional-register`, using the `breg` adapter; one request kind, the `scope-correction` entity,
@@ -132,8 +130,8 @@ In `registry.yaml`, a lifecycle event on `scope-correction` tells Casework when 
 and a `casework-reader` access profile lets Casework read requests and nothing else.
 In `dev-clients.yaml`, a `casework-reader` client is the credential the local Casework session
 reads the registry with, and `administrator`, `supervisor`, and `staff` are the Casework project's
-own people, registered with the registry's Mint so one token serves both products. Staff and
-Supervisor are explicitly admitted to BReg because they review and apply its requests;
+own people, registered with the registry's development issuer so one token serves both products.
+Staff and Supervisor are explicitly admitted to BReg because they review and apply its requests;
 Administrator remains a Casework-only caller.
 
 Read the preview, then write it:
@@ -171,13 +169,14 @@ Nothing here is configured for anyone else's data.
 Start the registry:
 
 ```sh
-bregctl dev tutorial-work/registry
+bregctl dev start tutorial-work/registry
 ```
 
 The first start downloads the pinned PostgreSQL image, so it takes longer than the later ones.
 The command returns once the registry answers, with `status ready` in its report.
-`dev` started PostgreSQL in a container, started Mint, registered the seven clients from
-`dev-clients.yaml` under a fresh key each, built the registry package, and started `breg`.
+`dev start` started PostgreSQL and the pinned stock issuer in containers, registered the seven
+clients from `dev-clients.yaml` under a fresh key each, built the registry package, and started
+`breg`.
 
 The report names the registry address, the token endpoint, the audience, and one credential
 directory per client, as absolute paths under your directory:
@@ -187,7 +186,7 @@ bregctl dev succeeded.
   status            ready
   project           <your-directory>/tutorial-work/registry
   breg url          http://127.0.0.1:8090
-  token endpoint    http://127.0.0.1:8091/token
+  token endpoint    http://127.0.0.1:8091/oauth2/token
   audience          urn:breg:dev:<identifier>
 ```
 
@@ -205,14 +204,14 @@ The services keep running after the command returns, so this one terminal is eno
 Start the Casework project beside the running registry:
 
 ```sh
-caseworkctl dev tutorial-work/casework --source-project tutorial-work/registry
+caseworkctl dev start tutorial-work/casework --source-project tutorial-work/registry
 ```
 
 `--source-project` names the registry project whose local session stands in for the deployed
 registry.
 The command returns once Casework answers, with `status: ready` in its report.
-`dev` started a second PostgreSQL container, read the registry session's state, borrowed its Mint as
-the token issuer, exported the `casework-reader` credential and the three human clients from the
+`dev start` started a second PostgreSQL container, read the registry session's state, reused its
+stock issuer, exported the `casework-reader` credential and the three human clients from the
 registry session, wrote an operator file binding the source to the registry's address, migrated the
 database, started `casework`, and seeded the [directory](../../reference/glossary/#directory) from
 `dev-clients.yaml`.
@@ -230,22 +229,19 @@ caseworkUrl: http://127.0.0.1:8092
 sources: {"professional-register":{"bregUrl":"http://127.0.0.1:8090","project":"<your-directory>/tutorial-work/registry"}}
 stateFile: <your-directory>/tutorial-work/casework/.casework/dev/state.json
 status: ready
-tokenEndpoint: http://127.0.0.1:8091/token
+tokenEndpoint: http://127.0.0.1:8091/oauth2/token
 ```
 
 The `clients`, `directory`, `journal`, `operatorConfig`, and `project` lines between them are
 omitted here.
-The audience and the token endpoint are the registry session's: a Staff token minted there is
+The audience and the token endpoint are the registry session's: a Staff token issued there is
 valid at both products, which is what lets Casework carry your authority to the registry.
 
-Use the two addresses from the reports. These assignments use the default ports or the
-`CASEWORKCTL_DEV_CASEWORK_PORT` override; if you started the registry with `--mint-port`, replace
-the token endpoint:
+Use the Casework address from the report. This assignment uses the default port or the
+`CASEWORKCTL_DEV_CASEWORK_PORT` override:
 
 ```sh
 casework_url="http://127.0.0.1:${CASEWORKCTL_DEV_CASEWORK_PORT:-8092}"
-token_endpoint="http://127.0.0.1:8091/token"
-credentials=tutorial-work/casework/.casework/dev/credentials
 ```
 
 Keep this terminal open so the values remain available to the later commands.
@@ -289,27 +285,22 @@ add` declared and through reconciliation, which the local session runs every fiv
 
 ## Open the inbox as Staff
 
-Ask Mint for a token as the `staff` client and write it into a file `curl` can send as an
-authorization header:
+Ask Casework's development lifecycle for a fresh token as the `staff` client. It writes an
+owner-only header file that `curl` can send directly:
 
 ```sh
-umask 077
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token staff tutorial-work/casework
 ```
 
-Success prints nothing.
-`mint token` signs a request with the client's private key and posts it to the token endpoint, the
-way an application would; the token carries the `casework:staff` scope Casework's `staff` profile
-requires and the `starter:reviewer` scope the registry's `reviewer` profile requires, and lasts five
-minutes.
+The report names
+`tutorial-work/casework/.casework/dev/secrets/staff.header`. The lifecycle signs the token request
+with the retained client key; the token carries the `casework:staff` scope Casework's `staff`
+profile requires and the `starter:reviewer` scope the registry's `reviewer` profile requires, and
+lasts five minutes.
 
 :::caution[Header files hold live tokens]
-`tutorial-work/staff.header` holds a bearer token that acts as Staff at both products until it
-expires.
-`umask 077` makes it readable only by your user.
+The generated `staff.header` holds a bearer token that acts as Staff at both products until it
+expires. The development lifecycle makes it readable only by your user.
 Keep it out of version control, screenshots, and support messages.
 :::
 
@@ -320,7 +311,7 @@ reconciliation rather than at the moment you submitted:
 ```sh
 for _ in $(seq 1 30); do
   curl --silent --show-error \
-    --header @tutorial-work/staff.header \
+    --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
     --header 'Registry-Casework-Profile: staff' \
     --header 'Registry-Source-Profile: reviewer' \
     --output tutorial-work/inbox.json --write-out 'HTTP %{http_code}\n' \
@@ -406,7 +397,7 @@ the item was observed.
 
 {/* Evidence: crates/registry-casework/src/http.rs, list_items() and source_profile();
     crates/registry-casework-breg/src/lib.rs;
-    crates/registry-mint/src/cli.rs. */}
+    crates/registry-caseworkctl/src/dev/mod.rs, fresh_token(). */}
 
 ## Approve the review
 
@@ -416,10 +407,7 @@ Renew the Staff token before you act, so time spent reading the inbox cannot tur
 an authentication refusal:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token staff tutorial-work/casework
 ```
 
 Take the identifier and the offered `ifMatch` value of the review item from the inbox rather than
@@ -434,7 +422,7 @@ Claim it:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
   --header 'Registry-Casework-Profile: staff' \
   --header 'Registry-Source-Profile: reviewer' \
   --header "If-Match: $claim_match" \
@@ -495,8 +483,8 @@ python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["i
 }
 ```
 
-The holder is the issuer and subject Mint put in the token, the registry's Mint and the
-`registry_principal` claim the `staff` client declares, and the revision moved to 2.
+The holder is the issuer and subject in the token, paired with the `registry_principal` claim the
+`staff` client declares, and the revision moved to 2.
 `actions` now offers the three decisions the registry's `review` stage admits, beside `release` and
 `delegate`, each carrying the new `ifMatch`.
 
@@ -512,7 +500,7 @@ Approve:
 
 ```sh
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
   --header 'Registry-Casework-Profile: staff' \
   --header 'Registry-Source-Profile: reviewer' \
   --header "If-Match: $approve_match" \
@@ -578,13 +566,10 @@ work item on the same request.
 Renew the token, then poll the inbox for an item whose `occurrenceKind` is `application`:
 
 ```sh
-mint token --url "$token_endpoint" \
-  --client-id "$(cat "$credentials/staff/client-id")" \
-  --key "$credentials/staff/assertion-key.jwk" \
-  | sed 's/^/Authorization: Bearer /' > tutorial-work/staff.header
+caseworkctl dev token staff tutorial-work/casework
 for _ in $(seq 1 30); do
   curl --silent --show-error \
-    --header @tutorial-work/staff.header \
+    --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
     --header 'Registry-Casework-Profile: staff' \
     --header 'Registry-Source-Profile: reviewer' \
     --output tutorial-work/inbox.json --write-out 'HTTP %{http_code}\n' \
@@ -635,7 +620,7 @@ Claim it the same way:
 item_id=$(python3 -c 'import json; items = json.load(open("tutorial-work/inbox.json"))["items"]; print(next(item["itemId"] for item in items if item["occurrenceKind"] == "application"))')
 claim_match=$(python3 -c 'import json; items = json.load(open("tutorial-work/inbox.json"))["items"]; actions = next(item["actions"] for item in items if item["occurrenceKind"] == "application"); print(next(action["ifMatch"] for action in actions if action["operation"] == "claim"))')
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
   --header 'Registry-Casework-Profile: staff' \
   --header 'Registry-Source-Profile: reviewer' \
   --header "If-Match: $claim_match" \
@@ -657,7 +642,7 @@ Build the application from it and send it:
 python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["item"]; json.dump({"displayedBinding": item["binding"], "sourceProfileId": "reviewer", "operation": "apply"}, open("tutorial-work/apply.json", "w"), indent=2)'
 apply_match=$(python3 -c 'import json; actions = json.load(open("tutorial-work/claimed.json"))["item"]["actions"]; print(next(action["ifMatch"] for action in actions if action["operation"] == "apply"))')
 curl --silent --show-error \
-  --header @tutorial-work/staff.header \
+  --header @tutorial-work/casework/.casework/dev/secrets/staff.header \
   --header 'Registry-Casework-Profile: staff' \
   --header 'Registry-Source-Profile: reviewer' \
   --header "If-Match: $apply_match" \
@@ -801,7 +786,7 @@ carried your decisions.
 ### Renew an expired token
 
 A local token lasts five minutes.
-Run the `mint token` command for the `staff` client again; it replaces the header file.
+Run `caseworkctl dev token staff tutorial-work/casework` again; it replaces the header file.
 If it fails, the registry session is stopped: start it again with the command from
 [Start the registry](#start-the-registry), then start Casework, then renew.
 
@@ -809,22 +794,22 @@ If it fails, the registry session is stopped: start it again with the command fr
 
 | Symptom | Next move |
 | --- | --- |
-| `bregctl`, `caseworkctl`, or `mint` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
-| `caseworkctl dev` refuses over a reported version | The `bregctl`, `casework`, or `mint` it resolved comes from another release than `caseworkctl`. The refusal names both versions. Install both products from the same release, or put the matching build first on `PATH`. |
-| `caseworkctl dev` refuses a project that declares a source | It was started without `--source-project`. A source binding needs a running registry session; pass `--source-project tutorial-work/registry` after `bregctl dev` reports `ready`. |
-| `bregctl dev` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--mint-port`, or `--database-port` on the first start; later starts keep the ports you chose. With `--mint-port`, change the `token_endpoint` assignment in [Start Casework](#start-casework). |
-| `caseworkctl dev` refuses a port | Something else listens on 8092 or 55433. Set `CASEWORKCTL_DEV_CASEWORK_PORT` or `CASEWORKCTL_DEV_DATABASE_PORT`, or pass `--casework-port` or `--database-port`, on the first start; the `casework_url` assignment picks the first up. The session borrows the registry's Mint, so its own Mint port is unused. |
+| `bregctl` or `caseworkctl` is not found | Add the installer's directory, `~/.local/bin` unless you changed it, to `PATH` in this terminal. |
+| A `dev start` command refuses over a reported version | One of the product binaries it resolved comes from another release. The refusal names both versions. Install both products from the same release, or put the matching build first on `PATH`. |
+| `caseworkctl dev start` refuses a project that declares a source | It was started without `--source-project`. A source binding needs a running registry session; pass `--source-project tutorial-work/registry` after `bregctl dev start` reports `ready`. |
+| `bregctl dev start` refuses a port | Something else listens on 8090, 8091, or 55432. Pass `--breg-port`, `--issuer-port`, or `--database-port` on the first start; later starts keep the ports you chose. |
+| `caseworkctl dev start` refuses a port | Something else listens on 8092, 8093, or 55433. Set `CASEWORKCTL_DEV_CASEWORK_PORT`, `CASEWORKCTL_DEV_ISSUER_PORT`, or `CASEWORKCTL_DEV_DATABASE_PORT`, or pass the matching port option on the first start; later starts keep the ports you chose. |
 | Either `dev` command fails before it reports `ready` | Read the refusal: it names the check that failed. Otherwise check that Docker is running. `bregctl dev events tutorial-work/registry` and `caseworkctl dev events tutorial-work/casework` show the retained journals; do not share the credential files beside them. |
-| The inbox loop runs its full minute with no item | Check that the submit step reported `"operation": "submit_request"`, and that the registry session is still running: `bregctl dev tutorial-work/registry` reuses a running session and reports `status ready`. Then read the Casework journal with `caseworkctl dev events tutorial-work/casework` for the source reconciliation it logged. |
+| The inbox loop runs its full minute with no item | Check that the submit step reported `"operation": "submit_request"`, and that the registry session is still running: `bregctl dev start tutorial-work/registry` reuses a running session and reports `status ready`. Then read the Casework journal with `caseworkctl dev events tutorial-work/casework` for the source reconciliation it logged. |
 | An inbox read returns `400` with code `source-profile.required` | A source-backed inbox is read under a registry profile. Send `Registry-Source-Profile: reviewer`. |
-| A request returns `401` with code `authentication.refused` | The token expired, or the header file is stale. Mint it again, as [Renew an expired token](#renew-an-expired-token) describes. |
+| A request returns `401` with code `authentication.refused` | The token expired, or the header file is stale. Acquire it again, as [Renew an expired token](#renew-an-expired-token) describes. |
 | A request returns `400` with code `request.invalid` | Another required or structured input is missing or malformed. Every request carries `Registry-Casework-Profile`, and every write also carries `Idempotency-Key`; source-backed reads name a source profile as described above. |
 | A decision returns `428` with code `precondition.required` | The `If-Match` header is missing. Take the `ifMatch` value from the `actions` entry for the operation you want in the claim response. |
 | A claim or decision returns `412` with code `precondition.failed` | The item moved. Re-read it, take the `ifMatch` value from the `actions` entry for the operation you want, and send it again. |
 | An inbox read or a claim returns `409` | The item is synchronizing with the registry, or another caller holds it. Read the inbox again a few seconds later; its `actions` array shows what remains open to you. |
 | A decision returns `422` with code `request.source-rejected` | The registry refused the promoted action body. Fix the decision request before trying again; re-reading the inbox does not fix this refusal. |
 | A decision returns `502` with code `source.bad-gateway` | The registry answered outside its registered contract. Check that the registry session is `ready`; if it is, inspect the Casework journal for the invalid response class. |
-| You opened a fresh terminal | Run the `casework_url`, `token_endpoint`, and `credentials` assignments from [Start Casework](#start-casework) again. The header file and `tutorial-work` directory are still there. |
+| You opened a fresh terminal | Run the `casework_url` assignment from [Start Casework](#start-casework) again. The header file and `tutorial-work` directory are still there. |
 
 ## Next
 

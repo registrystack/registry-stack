@@ -44,7 +44,7 @@ sequenceDiagram
     Note over C,E: The assertion contains no person_id,<br/>name, or date_of_birth
 ```
 
-Before the request, Registry Mint gives the tutorial caller short-lived local authorization.
+Before the request, the pinned local issuer gives the tutorial caller short-lived local authorization.
 Evidence Gateway and the registry process the identifier and date of birth to answer the question, but the
 released assertion contains only the governed answer and an opaque subject binding.
 
@@ -57,7 +57,7 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 evidencectl --version
 ```
 
-The installer provides `evidencectl` and the local Evidence Gateway and Registry Mint runtimes used later
+The installer provides `evidencectl` and the local Evidence Gateway runtime used later
 in the tutorial. The platforms those binaries cover, and the C library floor they need, are in
 [platform support](../../explanation/known-limitations/#platform-support).
 
@@ -358,7 +358,7 @@ evidencectl source mock serve --config mocks/source.yaml
 Source mock ready: mode=materialized origin=http://127.0.0.1:4010 served=3 skipped=0
 ```
 
-Start Evidence Gateway and Registry Mint:
+Start Evidence Gateway and the pinned local issuer:
 
 ```sh
 evidencectl dev start .
@@ -366,10 +366,10 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
-This command starts Evidence Gateway and Mint only. The source mock remains the process you started in
+This command starts Evidence Gateway and its local issuer only. The source mock remains the process you started in
 the first terminal. If either port is already taken, the start refuses before it starts a new
 generation and names the port and the flag that moves the session: `free 127.0.0.1:8080, or start
 this session with --evidence-port <port>`. Use
@@ -387,7 +387,7 @@ evidencectl request prepare adult-status \
 ```
 
 The Evidence client prepares the request and closes its pinned verification expectations locally,
-before a response exists. `evidencectl` separately asks the local Mint for short-lived
+before a response exists. `evidencectl` separately asks the local issuer for short-lived
 authorization. It sends no HTTP request to Evidence Gateway and does not contact the registry. The
 command creates exactly these owner-only artifacts:
 
@@ -547,7 +547,7 @@ issuer metadata, tamper refusal, and structured-field projection.
 
 ## Stop the local services
 
-Stop Evidence Gateway and Mint before reading the completed audit chain:
+Stop Evidence Gateway and the local issuer before reading the completed audit chain:
 
 ```sh
 evidencectl dev stop
@@ -579,10 +579,10 @@ record or access token.
 Choose two different unused ports when you start the local services:
 
 ```sh
-evidencectl dev --evidence-port 8180 --mint-port 8181 start .
+evidencectl dev --evidence-port 8180 --issuer-port 8181 start .
 ```
 
-Evidence Gateway uses the selected ports consistently in its runtime, Mint authorization, readiness
+Evidence Gateway uses the selected ports consistently in its runtime, issuer authorization, readiness
 checks, and generated request artifacts. Send the assertion request to the selected Evidence Gateway port,
 such as `http://127.0.0.1:8180/v1/evidence`.
 

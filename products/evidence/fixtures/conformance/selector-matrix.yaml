@@ -64,8 +64,6 @@ profiles:
       audience: urn:example:fixture:audience:requester-a
       exact_role_profile_origin: [subject, demographics-with-event-v1, authenticated-grant]
       configured_grant_claims:
-        grantIdClaim: evidence_grant_id
-        grantAuthorityClaim: evidence_authority
       verified_grant_binding:
         grant_id: synthetic-grant-001
         grant_authority: urn:example:fixture:authority:grant-a

@@ -314,6 +314,7 @@ impl PostgresRevisionReadService {
             &self.audit_profile,
             ReadTerminalAudit {
                 terminal: TerminalAudit {
+                    grant: None,
                     outcome,
                     method: request.method,
                     operation_id: request.operation_id.clone(),
@@ -374,6 +375,7 @@ impl RevisionReadService for PostgresRevisionReadService {
                 &self.expected,
                 &self.audit_profile,
                 crate::audit::HttpRefusalAudit {
+                    grant: None,
                     method: request.method,
                     operation_id: &request.operation_id,
                     target_record: request.target_record.as_deref(),

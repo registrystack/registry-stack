@@ -27,14 +27,13 @@ authentication:
   kind: oidc-access-token
   issuer: https://identity.invalid
   audiences: [evidence-fixture]
+  allowedClients: [evidence-task-agent]
   tokenTypes: [at+jwt]
   algorithms: [ES256]
   jwksUri: https://identity.invalid/.well-known/jwks.json
   principalClaim: sub
   requesterTagsClaim: evidence_tags
   evidenceAudienceClaim: evidence_audience
-  grantIdClaim: evidence_grant_id
-  grantAuthorityClaim: evidence_authority
   maximumTokenLifetimeSeconds: 300
   revokedKeyIds: []
 audit: {format: keyed-jsonl, hashSecretRef: secret:file/audit-hash-key, hashKeyVersion: 1, failClosed: true}
@@ -191,6 +190,8 @@ sources:
 
 authorityProfiles:
   statutory-caseworker-v1:
+    requesterClients: [evidence-task-agent]
+    grantSourceIssuer: https://casework.invalid
     kind: statutory
     requesterTags: [fixture-agency]
     grants:

@@ -15,7 +15,7 @@ import manifest or named connection.
 Start with an authored registry whose selected access profile already grants
 the lookup and the readable fields you intend to expose. The exporter reads
 the compiled model, including locked modules and derived SQL assets. It does
-not change the registry or create an access grant.
+not change the registry or create an access permission.
 
 ```sh
 mkdir exports

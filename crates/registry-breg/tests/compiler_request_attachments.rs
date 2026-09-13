@@ -28,7 +28,7 @@ fn source() -> Value {
             }
         }],
         "accessProfiles":[{
-            "id":"operator","default":true,"principalClaim":"principal","grants":[{
+            "id":"operator","default":true,"principalClaim":"principal","permissions":[{
                 "entity":"request",
                 "operations":["get","list","create","patch","submit_request","approve_request","reject_request","request_revision","apply_request"],
                 "readableFields":["item","label","supporting-file"],
@@ -87,7 +87,7 @@ fn request_slots_keep_field_authority_without_creating_scalar_query_columns() {
         .change_request
         .as_ref()
         .unwrap()
-        .review_grants
+        .review_permissions
         .iter()
         .any(
             |grant| grant.target_entity_id == "request" && grant.readable_fields.contains(&slot.id)
@@ -97,7 +97,7 @@ fn request_slots_keep_field_authority_without_creating_scalar_query_columns() {
         assert!(!query.processing_fields.contains(&slot.id));
     }
     let mut only_slot = source();
-    only_slot["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["supporting-file"]);
+    only_slot["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["supporting-file"]);
     compile(&only_slot).expect("slot-only writable projections are valid");
 }
 
@@ -132,12 +132,12 @@ fn every_slot_policy_member_changes_compiled_and_request_contract_identity() {
     }
     let mut renamed = original.clone();
     renamed["entities"][1]["attachments"][0]["id"] = json!("replacement-file");
-    renamed["accessProfiles"][0]["grants"][0]["readableFields"] =
+    renamed["accessProfiles"][0]["permissions"][0]["readableFields"] =
         json!(["item", "label", "replacement-file"]);
-    renamed["accessProfiles"][0]["grants"][0]["writableFields"] =
+    renamed["accessProfiles"][0]["permissions"][0]["writableFields"] =
         json!(["item", "label", "replacement-file"]);
-    renamed["accessProfiles"][0]["grants"][0]["reviewStages"][0]["targets"][1]["readableFields"] =
-        json!(["replacement-file"]);
+    renamed["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"][1]
+        ["readableFields"] = json!(["replacement-file"]);
     let compiled = compile(&renamed).unwrap();
     assert_ne!(compiled.revision(), baseline.revision());
     assert_ne!(
@@ -157,9 +157,9 @@ fn absence_omits_attachment_members_from_source_and_compiled_contracts() {
         .as_object_mut()
         .unwrap()
         .remove("attachments");
-    source["accessProfiles"][0]["grants"][0]["readableFields"] = json!(["item", "label"]);
-    source["accessProfiles"][0]["grants"][0]["writableFields"] = json!(["item", "label"]);
-    source["accessProfiles"][0]["grants"][0]["reviewStages"][0]["targets"]
+    source["accessProfiles"][0]["permissions"][0]["readableFields"] = json!(["item", "label"]);
+    source["accessProfiles"][0]["permissions"][0]["writableFields"] = json!(["item", "label"]);
+    source["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"]
         .as_array_mut()
         .unwrap()
         .pop();
@@ -305,7 +305,7 @@ fn content_types_are_bounded_concrete_and_unique() {
 fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
     for member in ["filterableFields", "sortableFields"] {
         let mut candidate = source();
-        candidate["accessProfiles"][0]["grants"][0][member] = json!(["supporting-file"]);
+        candidate["accessProfiles"][0]["permissions"][0][member] = json!(["supporting-file"]);
         assert_diagnostic(
             &candidate,
             "attachment.access.processing_unsupported",
@@ -315,7 +315,7 @@ fn attachments_cannot_be_anonymous_or_scalar_query_inputs() {
         );
     }
     let mut candidate = source();
-    candidate["accessProfiles"][0]["grants"][0]["rowBoundaries"] =
+    candidate["accessProfiles"][0]["permissions"][0]["rowBoundaries"] =
         json!([{"field":"supporting-file", "claim":"owner", "operator":"equals"}]);
     assert_diagnostic(
         &candidate,

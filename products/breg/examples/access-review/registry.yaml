@@ -46,7 +46,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [record:read]
     requiredPurposes: [record-administration]
-    grants:
+    permissions:
       - entity: record
         operations: [get, list]
         readableFields: [code, label, district]

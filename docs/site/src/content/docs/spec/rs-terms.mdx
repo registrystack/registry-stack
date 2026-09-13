@@ -7,7 +7,6 @@ source_repos:
   - registry-relay
   - registry-stack
   - registry-evidence
-  - registry-mint
   - registry-platform
   - registry-manifest
   - solmara-lab
@@ -81,9 +80,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **Evidence Gateway** (`registry-evidence`): Single-crate minimum-disclosure assertion service and its `evidence` binary. Given authenticated authority, an authorized purpose, and a predefined requirement, it returns a signed assertion that answers the requirement rather than the source record. Evidence Gateway has no credential issuance lifecycle.
 
-**Registry Mint** (`registry-mint`): Supporting service, not a fifth product pattern. It issues short-lived, audience-bound access tokens to registered machine clients so a resource server such as Evidence Gateway can require signed tokens without a general-purpose identity provider. The dependency runs one way only: Registry Mint's tests drive Evidence Gateway's authenticator, and Evidence Gateway does not depend on Registry Mint.
-
-**wallet delivery front end** (`registry-evidence-oid4vci`): Supporting service in the same sense as Registry Mint. It speaks OID4VCI 1.0 Final to a holder wallet and delivers an Evidence Gateway-signed credential over it. It signs no credential, holds no signing key and no holder private key, and adds no Evidence Gateway semantics of its own.
+**wallet delivery front end** (`registry-evidence-oid4vci`): Supporting service outside the runtime product patterns. It speaks OID4VCI 1.0 Final to a holder wallet and delivers an Evidence Gateway-signed credential over it. It signs no credential, holds no signing key and no holder private key, and adds no Evidence Gateway semantics of its own.
 
 **Solmara Lab** (`solmara-lab`): Separately maintained adopter demo for the fictional Republic of Solmara. It runs published Registry Stack images in local and hosted topologies. Solmara Lab is not a formal Registry Stack product and has no conformance weight in the Registry Stack specifications.
 
@@ -99,7 +96,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **minimum disclosure**: The rule that one Evidence Gateway response carries the smallest sufficient answer to one requirement and never the source record. The assertion payload is closed against additional properties, subject selector profiles and selector values MUST NOT appear in it, and the output gate admits only the exact concept identifiers and value forms the requirement declares. Registry Stack product term.
 
-**access token**: The bearer credential a caller presents to Evidence Gateway. Evidence Gateway accepts one authentication kind whose issuer, audiences, accepted token types, algorithms, key set location, and claim names are fixed in the immutable bundle, and it reads authority only from those configured claim names. Registry Mint issues such tokens; any issuer writing the same claims serves equally well. Caller-supplied data outside the verified token MUST NOT create authority.
+**access token**: The bearer credential a caller presents to Evidence Gateway. Evidence Gateway accepts one authentication kind whose issuer, audiences, accepted token types, algorithms, key set location, and claim names are fixed in the immutable bundle, and it reads authority only from those configured claim names. The deployment's configured issuer supplies such tokens. Caller-supplied data outside the verified token MUST NOT create authority.
 
 **subject binding**: The opaque, role-bound handle an assertion carries in place of a subject's selector values. It is derived by HMAC under a deployment secret over one canonical scope tuple: binding-key version, operator trust domain, binding scope, purpose, subject role, selector profile, and the complete canonical selector field set and its values. A relying party cannot recompute a binding under either mode and MUST pin the expected bindings from independent trusted state. Registry Stack product term.
 
@@ -123,7 +120,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **OID4VCI**: OpenID for Verifiable Credential Issuance. The Evidence Gateway runtime implements it in no part, and OID4VCI in any part is a frozen Evidence Gateway Version 1 non-goal under both subject binding modes, so no serialization has a credential offer, pre-authorized code, authorization or token endpoint, `c_nonce`, credential endpoint, deferred issuance, or wallet grant. The separate `registry-evidence-oid4vci` front end speaks it, which is why it is a separate service.
 
-**eSignet**: Open-source identity and authentication service (part of MOSIP). No stack service calls it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. The integration runs the other way: a separately maintained eSignet provider authenticates a citizen against a Base Registry Engine (BReg) registry through one governed lookup carrying a Registry Mint token, which makes eSignet an ordinary governed client of a registry. See [Authenticate citizens with eSignet](../../explanation/esignet-authentication-over-breg/). Not a Registry Stack product term.
+**eSignet**: Open-source identity and authentication service (part of MOSIP). No stack service calls it. Evidence Gateway authenticates callers against one configured OIDC issuer and key set named in its immutable bundle and names no specific identity product. The integration runs the other way: a separately maintained eSignet provider authenticates a citizen against a Base Registry Engine (BReg) registry through one governed lookup carrying a token from its configured OAuth issuer, which makes eSignet an ordinary governed client of a registry. See [Authenticate citizens with eSignet](../../explanation/esignet-authentication-over-breg/). Not a Registry Stack product term.
 
 ## 3. Metadata and standards terms
 
@@ -173,7 +170,7 @@ The registry stack comprises four formal products: Registry Platform, Registry R
 
 **deployment project**: The directory an Evidence Gateway operator authors and mounts: a `runtime.yaml` file holding process-local bindings, and a `bundle/` directory holding the governed configuration, scripts, schemas, codelists, and fixtures. The bundle is loaded read-only at startup, so a new revision is a new deployment rather than a live change. Registry Stack product term.
 
-**JWKS**: JSON Web Key Set. Evidence Gateway publishes its signing keys at `GET /.well-known/evidence/jwks.json` and Registry Mint publishes its own at a configured path, default `/.well-known/jwks.json`. Both are served without authentication so a verifier can obtain the public key without holding a credential.
+**JWKS**: JSON Web Key Set. Evidence Gateway publishes its signing keys without authentication at `GET /.well-known/evidence/jwks.json` so a verifier can obtain the public key without holding a credential.
 
 **authoring project**: The mutable directory an adopter edits for one Relay deployment: a governed contract, the reviewed source schema observations, and the fixture cases that prove them, which `relayctl` compiles and seals into one Relay package. `relay` never serves an authoring project, only the sealed package built from it. A project describes exactly one Relay deployment and spans no other product; an Evidence Gateway deployment is authored separately as a deployment project. Registry Stack product term.
 

@@ -251,7 +251,6 @@ class MonorepoFixture:
             "crates/registry-relay-client-py",
             "crates/registry-evidence",
             "crates/registry-evidencectl",
-            "crates/registry-mint",
             "crates/registry-evidence-oid4vci",
             "crates/registry-breg",
             "crates/registry-bregctl",

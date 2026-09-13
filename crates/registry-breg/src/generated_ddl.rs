@@ -805,7 +805,7 @@ fn request_row_boundary_fields(entity: &CompiledEntity) -> BTreeSet<String> {
         })
         .collect::<BTreeSet<_>>();
     if let Some(request) = &entity.change_request {
-        for grant in &request.presence_grants {
+        for grant in &request.presence_permissions {
             fields.extend(
                 grant
                     .request_row_boundaries
@@ -893,7 +893,7 @@ fn runtime_privileges(
     if entity
         .change_request
         .as_ref()
-        .is_some_and(|request| !request.presence_grants.is_empty())
+        .is_some_and(|request| !request.presence_permissions.is_empty())
     {
         privileges.insert(TablePrivilege::Select);
     }
@@ -1242,7 +1242,7 @@ fn spatial_candidate_predicates(entity: &CompiledEntity) -> Vec<String> {
 fn spatial_bbox_predicate(
     entity: &CompiledEntity,
     geometry_field: &str,
-    bbox: &crate::contract::SpatialBboxGrantSource,
+    bbox: &crate::contract::SpatialBboxPermissionSource,
 ) -> String {
     let geometry = quote_identifier(&spatial_geometry_column_name(&entity.id, geometry_field));
     let source = quote_identifier(&entity.fields[geometry_field].physical_name);
@@ -1698,7 +1698,7 @@ fn change_request_presence_policies_for_table(
         return Vec::new();
     };
     let mut policies = Vec::new();
-    for grant in &request.presence_grants {
+    for grant in &request.presence_permissions {
         let Some(target_entity) = entities.get(&grant.target_entity_id) else {
             continue;
         };
@@ -1729,7 +1729,7 @@ fn change_request_presence_expression(
     request_entity: &CompiledEntity,
     target_profile: &crate::contract::AccessProfileSource,
     request: &crate::model::CompiledChangeRequest,
-    grant: &crate::model::CompiledChangeRequestPresenceGrant,
+    grant: &crate::model::CompiledChangeRequestPresencePermission,
 ) -> String {
     let context = change_request_presence_context_expression();
     [
@@ -1896,7 +1896,7 @@ fn change_request_target_policies_for_table(
                 }
             }
             for grant in request
-                .review_grants
+                .review_permissions
                 .iter()
                 .filter(|grant| grant.target_entity_id == target_entity.id)
             {
@@ -1929,7 +1929,7 @@ fn change_request_target_policies_for_table(
                 });
             }
             for grant in request
-                .apply_grants
+                .apply_permissions
                 .iter()
                 .filter(|grant| grant.target_entity_id == target_entity.id)
             {
@@ -2082,7 +2082,7 @@ fn change_request_planner_write_policies(
         }
     }
     for grant in request
-        .review_grants
+        .review_permissions
         .iter()
         .filter(|grant| grant.target_entity_id == target_entity.id)
     {
@@ -2119,7 +2119,7 @@ fn change_request_planner_write_policies(
         });
     }
     for grant in request
-        .apply_grants
+        .apply_permissions
         .iter()
         .filter(|grant| grant.target_entity_id == target_entity.id)
     {
@@ -2263,7 +2263,7 @@ fn change_request_review_expression(
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
     effect: &CompiledChangeRequestEffect,
-    grant: &crate::model::CompiledChangeRequestReviewGrant,
+    grant: &crate::model::CompiledChangeRequestReviewPermission,
 ) -> String {
     [
         change_request_common_expression(
@@ -2286,7 +2286,7 @@ fn change_request_planner_review_expression(
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
     write: &crate::model::CompiledChangeRequestPlannerWrite,
-    grant: &crate::model::CompiledChangeRequestReviewGrant,
+    grant: &crate::model::CompiledChangeRequestReviewPermission,
     review_fields: &BTreeSet<String>,
 ) -> String {
     [
@@ -2314,7 +2314,7 @@ fn change_request_application_expression(
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
     effect: &CompiledChangeRequestEffect,
-    grant: &crate::model::CompiledChangeRequestApplyGrant,
+    grant: &crate::model::CompiledChangeRequestApplyPermission,
 ) -> String {
     [
         change_request_common_expression(
@@ -2337,7 +2337,7 @@ fn change_request_planner_application_expression(
     request_entity: &CompiledEntity,
     request: &crate::model::CompiledChangeRequest,
     write: &crate::model::CompiledChangeRequestPlannerWrite,
-    grant: &crate::model::CompiledChangeRequestApplyGrant,
+    grant: &crate::model::CompiledChangeRequestApplyPermission,
 ) -> String {
     [
         change_request_planner_common_expression(
@@ -2604,7 +2604,7 @@ fn immediate_action_target_policies_for_table(
             .iter()
             .filter(|effect| effect.target.entity_id == target_entity.id)
         {
-            for grant in action.grants.iter().filter(|grant| {
+            for grant in action.permissions.iter().filter(|grant| {
                 grant.operations.contains(&Operation::Invoke)
                     && grant
                         .targets
@@ -2711,7 +2711,7 @@ fn immediate_action_target_policies_for_table(
             let CompiledActionTargetUseSource::Input { input } = &target_use.source else {
                 continue;
             };
-            for grant in action.grants.iter().filter(|grant| {
+            for grant in action.permissions.iter().filter(|grant| {
                 grant.operations.contains(&Operation::Invoke)
                     && grant
                         .targets
@@ -2769,7 +2769,7 @@ fn immediate_action_application_expression(
             immediate_action_context_expression(),
             target_entity,
             action
-                .grants
+                .permissions
                 .iter()
                 .find(|grant| grant.profile_id == profile_id)
                 .and_then(|grant| {
@@ -2804,7 +2804,7 @@ fn immediate_action_link_expression(
             immediate_action_link_context_expression(),
             target_entity,
             action
-                .grants
+                .permissions
                 .iter()
                 .find(|grant| grant.profile_id == profile_id)
                 .and_then(|grant| {
@@ -4041,7 +4041,7 @@ mod tests {
                 "geojson":{"geometryField":"location"}
               }],
               "accessProfiles":[{
-                "id":"map-reader","default":true,"principalClaim":"principal","grants":[{
+                "id":"map-reader","default":true,"principalClaim":"principal","permissions":[{
                   "entity":"site","operations":["get","list"],"readableFields":["code","location"],
                   "spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.25,"maximumLatitudeSpanDegrees":1.5}},
                   "rowBoundaries": []

@@ -73,8 +73,8 @@ SHARDS = {
         "registry-evidence-verifier",
         "registry-evidencectl",
     ),
-    "mint": ("registry-mint",),
     "developer-tools": (
+        "registry-thunderid-tooling",
         "registry-cli-docs",
         "registry-language-server",
     ),
@@ -204,12 +204,11 @@ EVIDENCE_TUTORIAL_INPUTS = frozenset(
 
 # Every input the Base Registry Engine tutorial gate replays or is built from.
 # The gate starts the quickstart launcher the page tells a reader to run, so
-# the launcher and the Registry Mint key helper it reaches are inputs to the
-# replay exactly as the page is: a change to either changes what a reader gets.
+# the launcher and pinned issuer tooling are inputs to the replay alongside
+# the page: a change to either changes what a reader gets.
 BREG_TUTORIAL_INPUTS = (
     "Cargo.lock",
     "Cargo.toml",
-    "crates/registry-mint/demo/support/key_material.py",
     "docs/site/package-lock.json",
     "docs/site/package.json",
     "docs/site/scripts/check-breg-tutorial.sh",
@@ -222,7 +221,7 @@ BREG_TUTORIAL_INPUTS = (
 
 # Every input the Registry Casework tutorial gate replays or is built from. The
 # gate starts the all-in-one local runtime the page tells a reader to run, and
-# that runtime starts Registry Mint from the project's own client declarations,
+# that runtime starts stock ThunderID from the project's own client declarations,
 # so the page and the gate are inputs to the replay exactly as the toolset is.
 # The project template the page initializes is written by registry-caseworkctl,
 # so package routing already carries it.
@@ -283,7 +282,6 @@ CLI_REFERENCE_INPUTS = (
         "crates/registry-evidence-oid4vci/src/cli.rs",
     ),
     ("crates/registry-evidencectl/src/**", "crates/registry-evidencectl/src/lib.rs"),
-    ("crates/registry-mint/src/cli.rs", "crates/registry-mint/src/cli.rs"),
     ("crates/registry-relay-v2/src/cli.rs", "crates/registry-relay-v2/src/cli.rs"),
     ("crates/registry-relayctl/src/**", "crates/registry-relayctl/src/lib.rs"),
     ("crates/registry-breg/src/cli.rs", "crates/registry-breg/src/cli.rs"),
@@ -371,11 +369,10 @@ LINUX_NODE_RELEASE_RECIPE_INPUTS = frozenset(
 # wallet-flow test, so the adapter is deliberately not exempt.
 EVIDENCE_TUTORIAL_EXEMPT_PACKAGES = frozenset({"registry-evidence-client-node"})
 
-# The gate also builds and runs `mint`, because one tutorial serves assertions
-# to a caller holding a real Mint-issued token.
+# The tutorial uses the maintained stock issuer lifecycle for bearer tokens.
 EVIDENCE_TUTORIAL_PACKAGES = (
     EVIDENCE_PACKAGES - EVIDENCE_TUTORIAL_EXEMPT_PACKAGES
-) | frozenset(SHARDS["mint"])
+) | frozenset({"registry-thunderid-tooling"})
 
 # The application tutorial imports the assembled `registry-stack-client`
 # wheel, which the gate builds from every product's Python binding, so a
@@ -387,22 +384,20 @@ ASSEMBLED_PYTHON_CLIENT_PACKAGES = frozenset(
 )
 
 # The gate builds and runs exactly these: the registry, the tool that applies
-# its package, and Registry Mint, because the launcher the tutorial starts
+# its package, and issuer tooling, because the launcher the tutorial starts
 # issues the operator token the reader's first authenticated call carries. The
 # clients in the Base Registry Engine shard are not on the replayed path.
-BREG_TUTORIAL_PACKAGES = frozenset({"registry-breg", "registry-bregctl"}) | frozenset(
-    SHARDS["mint"]
+BREG_TUTORIAL_PACKAGES = frozenset(
+    {"registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
 )
 
 # The gate builds and runs exactly these: the Casework runtime, the tool that
-# starts and seeds the local session, Registry Mint, because every call the
-# reader makes carries a token that session issued, and the Base Registry
-# Engine runtime and tool, because the two-product page runs a registry beside
-# Casework and connects the two. The clients in the Casework shard are not on
-# the replayed path.
+# starts and seeds the local session, and issuer tooling, because every call the
+# reader makes carries a token that session issued. The clients in the Casework
+# shard are not on the replayed path.
 CASEWORK_TUTORIAL_PACKAGES = frozenset(
-    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl"}
-) | frozenset(SHARDS["mint"])
+    {"registry-casework", "registry-caseworkctl", "registry-breg", "registry-bregctl", "registry-thunderid-tooling"}
+)
 
 # The offline proof of the native BReg to Evidence composition drives bregctl,
 # evidencectl and the Evidence runtime over the reviewed teaching inputs. It
@@ -928,7 +923,16 @@ def classify(
         # integration test edge, not a production runtime Cargo dependency.
         "breg_contracts": registry_record_cross_product
         or bool(affected & BREG_PACKAGES)
-        or "registry-evidence" in affected,
+        or "registry-evidence" in affected
+        or any(
+            matches(
+                path,
+                "crates/registry-casework/src/**",
+                "crates/registry-casework-core/src/task_grant.rs",
+                "crates/registry-thunderid-tooling/**",
+            )
+            for path in paths
+        ),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
         "casework_postgres": bool(affected & CASEWORK_PACKAGES),
         "release_tool": release_tool,

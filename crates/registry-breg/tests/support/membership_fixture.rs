@@ -18,8 +18,8 @@ pub fn source(root: &str) -> Value {
     } else {
         format!("{root}s")
     });
-    value["accessProfiles"][0]["grants"][0]["entity"] = json!(root);
-    value["accessProfiles"][1]["grants"][2]["entity"] = json!(root);
+    value["accessProfiles"][0]["permissions"][0]["entity"] = json!(root);
+    value["accessProfiles"][1]["permissions"][2]["entity"] = json!(root);
     value
 }
 

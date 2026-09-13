@@ -18,7 +18,7 @@ fn project(pattern: Option<&str>) -> registry_breg::contract::RegistryProject {
         },
         "entities":[{"id":"entry","primaryDataset":"records","route":"entries","mutationMode":"mutable","classification":"internal",
             "fields":[{"id":"identifier","type":"string","maxLength":100,"classification":"internal"}]}],
-        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","grants":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":[]}]}]
+        "accessProfiles":[{"id":"reader","default":true,"principalClaim":"sub","permissions":[{"entity":"entry","operations":["get","list"],"readableFields":["identifier"],"rowBoundaries":[]}]}]
     });
     if let Some(pattern) = pattern {
         value["entities"][0]["fields"][0]["pattern"] = json!(pattern);

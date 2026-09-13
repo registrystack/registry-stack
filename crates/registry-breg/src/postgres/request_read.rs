@@ -501,7 +501,7 @@ pub(super) async fn attachment_version_is_authorized(
                 continue;
             }
         } else if entity.change_request.as_ref().is_some_and(|plan| {
-            plan.apply_grants.iter().any(|grant| {
+            plan.apply_permissions.iter().any(|grant| {
                 grant.profile_id == claims.access_profile() && grant.target_entity_id == entity.id
             })
         }) {
@@ -2066,17 +2066,17 @@ mod tests {
                 "fields":[{"id":"label","type":"string","maxLength":64,"classification":"internal"}]
               }],
               "accessProfiles":[{
-                "id":"reader","principalClaim":"principal","grants":[{
+                "id":"reader","principalClaim":"principal","permissions":[{
                   "entity":"request","operations":["get"],"readableFields":["label"],
                   "rowBoundaries": []
                 }]
               },{
-                "id":"empty-editor","principalClaim":"principal","grants":[{
+                "id":"empty-editor","principalClaim":"principal","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],
                   "rowBoundaries": []
                 }]
               },{
-                "id":"editor","default":true,"principalClaim":"principal","grants":[{
+                "id":"editor","default":true,"principalClaim":"principal","permissions":[{
                   "entity":"request","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
                   "rowBoundaries": []
                 }]
@@ -2624,7 +2624,7 @@ mod tests {
                 ]
               }],
               "accessProfiles":[{
-                "id":"operator","default":true,"principalClaim":"principal","grants":[{
+                "id":"operator","default":true,"principalClaim":"principal","permissions":[{
                   "entity":"target","operations":["get"],"readableFields":["proposed-site"],
                   "rowBoundaries": []
                 }]

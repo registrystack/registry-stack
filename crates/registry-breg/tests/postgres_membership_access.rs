@@ -412,7 +412,7 @@ async fn real_postgres_membership_reads_recheck_live_membership_and_hide_process
 
 fn claims(idp: &MockIdp, principal: &str, scopes: &[&str]) -> String {
     idp.mint_token(
-        json!({"aud":"urn:breg:membership", "principal":principal, "scope":scopes.join(" ")}),
+        json!({"aud":"urn:breg:membership", "registry_actor_kind":"service", "principal":principal, "scope":scopes.join(" ")}),
     )
 }
 struct AlwaysReady;
@@ -496,7 +496,7 @@ async fn real_postgres_membership_successors_match_fresh_install_when_added_chan
         managed_schema_fingerprint, reconcile_compiled_runtime_acl_for_test,
     };
     let mut base = membership_fixture::source("facility");
-    base["accessProfiles"][0]["grants"][0]["membershipBoundaries"] = json!([]);
+    base["accessProfiles"][0]["permissions"][0]["membershipBoundaries"] = json!([]);
     let mut previous = membership_fixture::compile(&base).unwrap();
     let upgraded = postgres_harness::TestDatabase::create(1).await;
     let (migration, task) = upgraded.connect_migration().await;
@@ -505,7 +505,7 @@ async fn real_postgres_membership_successors_match_fresh_install_when_added_chan
         .unwrap();
     let guarded = membership_fixture::source("facility");
     let mut changed = guarded.clone();
-    changed["accessProfiles"][0]["grants"][0]["membershipBoundaries"][0]["principalField"] =
+    changed["accessProfiles"][0]["permissions"][0]["membershipBoundaries"][0]["principalField"] =
         json!("private-note");
     for (stage, source) in [("added", guarded), ("changed", changed), ("removed", base)] {
         let candidate = membership_fixture::compile(&source).unwrap();

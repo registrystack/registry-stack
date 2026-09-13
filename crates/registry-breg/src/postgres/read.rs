@@ -925,6 +925,7 @@ impl PostgresRecordReadService {
             &request.selected_fields,
         )?;
         Ok(TerminalAudit {
+            grant: None,
             outcome,
             method: request.method,
             operation_id: request.operation_id.clone(),
@@ -1022,6 +1023,7 @@ impl RecordReadService for PostgresRecordReadService {
                 &self.expected,
                 &self.audit_profile,
                 crate::audit::HttpRefusalAudit {
+                    grant: None,
                     method: request.method,
                     operation_id: &request.operation_id,
                     target_record: request.target_record.as_deref(),
@@ -3156,7 +3158,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
+                    "permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","location"], "rowBoundaries": []}]
                   }]
                 }"#,
             )
@@ -3206,7 +3208,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],
@@ -3289,7 +3291,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"case","operations":["list"],
                       "readableFields":["label"],"filterableFields":["label"],"sortableFields":["label"],
                       "rowBoundaries": []
@@ -3557,7 +3559,7 @@ mod tests {
                   }],
                   "accessProfiles":[{
                     "id":"public","default":true,"anonymous":true,
-                    "grants":[{
+                    "permissions":[{
                       "entity":"site",
                       "operations":["list"],
                       "readableFields":["code","location"],

@@ -413,7 +413,7 @@ fn compiled_registry(
         }],
         "accessProfiles":[{
             "id":"reader","default":true,"principalClaim":"registry_principal",
-            "grants":[{
+            "permissions":[{
                 "entity":"entry","operations":["create","get","list","lookup"],
                 "readableFields":["code","active","population"],
                 "writableFields":["code","tenant","amount"],
@@ -451,7 +451,7 @@ fn compiled_registry(
             }))
             .expect("third independent derived relation"),
         );
-        let grant = &mut project.access_profiles[0].grants[0];
+        let grant = &mut project.access_profiles[0].permissions[0];
         grant.readable_fields.insert("priority".to_owned());
         grant.readable_fields.insert("amount".to_owned());
         grant.filterable_fields.insert("code".to_owned());

@@ -74,7 +74,7 @@ linkable. Reader has no history grant. Editor/reviewer history includes old
 readable values. The Manifest projection describes the editor's model and
 grants no runtime access.
 
-Reader, editor and reviewer retain explicit registry-wide learning grants.
+Reader, editor and reviewer retain explicit registry-wide learning permissions.
 Holder reads require the verified scalar `person_reference` claim to equal the
 licence `person-reference` field. Holder and editor request lists use owner
 visibility; reviewer lists expose the authorized queue with native state filters.
@@ -104,7 +104,7 @@ external URI strings remain unchanged and trigger no lookup.
 The normal and security journey suites exercise independent creation,
 submission, separate approval and application, rejection, unchanged unrelated
 fields, local vocabulary refusal and date validation. The maintained real-router
-starter test additionally checks missing grants, direct mutation refusal,
+starter test additionally checks missing permissions, direct mutation refusal,
 reader minimization and same-principal review refusal. Compiler checks establish
 authoring validity; only an executed PostgreSQL test proves runtime behavior.
 

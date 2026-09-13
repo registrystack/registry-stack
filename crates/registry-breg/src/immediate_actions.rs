@@ -19,9 +19,9 @@ use crate::diagnostics::Diagnostic;
 use crate::logical_names::{default_api_name, reserved_logical_name, valid_api_name};
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionAccessEntry, CompiledActionEffect,
-    CompiledActionGrant, CompiledActionInput, CompiledActionInventory, CompiledActionMutation,
+    CompiledActionInput, CompiledActionInventory, CompiledActionMutation, CompiledActionPermission,
     CompiledActionRequirement, CompiledActionRoute, CompiledActionTarget,
-    CompiledActionTargetBinding, CompiledActionTargetGrant, CompiledActionTargetUse,
+    CompiledActionTargetBinding, CompiledActionTargetPermission, CompiledActionTargetUse,
     CompiledActionTargetUseSource, CompiledActionValue, CompiledEntity, HttpMethod,
 };
 
@@ -44,7 +44,7 @@ pub(crate) fn compile_immediate_actions(
     assets: &[crate::contract::ModuleAssetSource],
 ) -> Result<CompiledActionInventory, Vec<Diagnostic>> {
     let mut errors = Vec::new();
-    validate_action_grant_sources(actions, profiles, &mut errors);
+    validate_action_permission_sources(actions, profiles, &mut errors);
     let mut compiled_actions = Vec::new();
     let mut routes = Vec::new();
     let mut access = Vec::new();
@@ -138,7 +138,7 @@ fn compile_action(
         &target_uses,
         errors,
     );
-    let grants = compile_grants(
+    let permissions = compile_permissions(
         action,
         entities,
         profiles,
@@ -146,11 +146,11 @@ fn compile_action(
         &result_effects,
         errors,
     );
-    if grants.is_empty() {
+    if permissions.is_empty() {
         errors.push(Diagnostic::error(
-            "action.grant.missing",
-            "project.accessProfiles[].grants",
-            "an immediate action requires at least one explicit invoke grant",
+            "action.permission.missing",
+            "project.accessProfiles[].permissions",
+            "an immediate action requires at least one explicit invoke permission",
         ));
     }
     let condition_route = target_uses
@@ -169,14 +169,14 @@ fn compile_action(
             &inputs,
             (&effects, handler.as_ref()),
             &requires,
-            &grants,
+            &permissions,
         ),
         handler,
         inputs,
         effects,
         requires,
         target_uses,
-        grants,
+        permissions,
         result_effects,
         maximum_targets: MAX_CHANGE_REQUEST_TARGETS,
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
@@ -1392,72 +1392,74 @@ fn maximum_snapshot_bytes(
     Some(total)
 }
 
-fn compile_grants(
+fn compile_permissions(
     action: &ActionSource,
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     target_uses: &[CompiledActionTargetUse],
     result_effects: &BTreeSet<String>,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledActionGrant> {
+) -> Vec<CompiledActionPermission> {
     let mut grants = Vec::new();
     let mut profile_action = BTreeSet::new();
     for profile in profiles {
         for grant in profile
-            .grants
+            .permissions
             .iter()
             .filter(|grant| grant.action.as_deref() == Some(action.id.as_str()))
         {
             if !profile_action.insert((profile.id.as_str(), action.id.as_str())) {
                 errors.push(Diagnostic::error(
-                    "action.grant.duplicate",
-                    "project.accessProfiles[].grants[].action",
+                    "action.permission.duplicate",
+                    "project.accessProfiles[].permissions[].action",
                     "an access profile cannot grant the same action more than once",
                 ));
             }
             if profile.anonymous {
                 errors.push(Diagnostic::error(
-                    "action.grant.anonymous_forbidden",
-                    "project.accessProfiles[].grants[].action",
+                    "action.permission.anonymous_forbidden",
+                    "project.accessProfiles[].permissions[].action",
                     "anonymous access profiles cannot invoke immediate actions",
                 ));
             }
             if !grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
-                    "action.grant.exclusive",
-                    "project.accessProfiles[].grants[]",
-                    "an access grant must name either one entity or one action",
+                    "action.permission.exclusive",
+                    "project.accessProfiles[].permissions[]",
+                    "an access permission must name either one entity or one action",
                 ));
             }
             if grant.operations != BTreeSet::from([Operation::Invoke]) {
                 errors.push(Diagnostic::error(
-                    "action.grant.operation.invalid",
-                    "project.accessProfiles[].grants[].operations",
-                    "immediate-action grants support only the invoke operation",
+                    "action.permission.operation.invalid",
+                    "project.accessProfiles[].permissions[].operations",
+                    "immediate-action permissions support only the invoke operation",
                 ));
             }
-            if !entity_grant_fields_empty(grant) {
+            if !entity_permission_fields_empty(grant) {
                 errors.push(Diagnostic::error(
-                    "action.grant.entity_fields_forbidden",
-                    "project.accessProfiles[].grants[]",
-                    "action grants cannot declare entity projection, query, request, or writable fields",
+                    "action.permission.entity_fields_forbidden",
+                    "project.accessProfiles[].permissions[]",
+                    "action permissions cannot declare entity projection, query, request, or writable fields",
                 ));
             }
-            let targets = compile_grant_targets(entities, profile, grant, errors);
-            validate_grant_covers_uses(&targets, target_uses, errors);
+            let targets = compile_permission_targets(entities, profile, grant, errors);
+            validate_permission_covers_uses(&targets, target_uses, errors);
             for result in &grant.results {
                 if !result_effects.contains(result) {
                     errors.push(Diagnostic::error(
-                        "action.grant.result_unknown",
-                        "project.accessProfiles[].grants[].results",
-                        "action result grants must name declared effect identifiers",
+                        "action.permission.result_unknown",
+                        "project.accessProfiles[].permissions[].results",
+                        "action result permissions must name declared effect identifiers",
                     ));
                 }
             }
-            grants.push(CompiledActionGrant {
+            grants.push(CompiledActionPermission {
                 profile_id: profile.id.clone(),
                 default: profile.default,
                 anonymous: profile.anonymous,
+                actor_kind: profile.actor_kind,
+                requester_clients: profile.requester_clients.clone(),
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
@@ -1471,29 +1473,29 @@ fn compile_grants(
     grants
 }
 
-fn validate_action_grant_sources(
+fn validate_action_permission_sources(
     actions: &BTreeMap<String, CollectedActionSource>,
     profiles: &[ProjectAccessProfileSource],
     errors: &mut Vec<Diagnostic>,
 ) {
     for profile in profiles {
-        for grant in &profile.grants {
+        for grant in &profile.permissions {
             match (grant.entity.is_empty(), grant.action.as_deref()) {
                 (true, None) => errors.push(Diagnostic::error(
-                    "access_profile.grant.target_missing",
-                    "project.accessProfiles[].grants[]",
-                    "an access grant must name either one entity or one action",
+                    "access_profile.permission.target_missing",
+                    "project.accessProfiles[].permissions[]",
+                    "an access permission must name either one entity or one action",
                 )),
                 (false, Some(_)) => errors.push(Diagnostic::error(
-                    "access_profile.grant.target_exclusive",
-                    "project.accessProfiles[].grants[]",
-                    "an access grant must name either one entity or one action",
+                    "access_profile.permission.target_exclusive",
+                    "project.accessProfiles[].permissions[]",
+                    "an access permission must name either one entity or one action",
                 )),
                 (true, Some(action)) if !actions.contains_key(action) => {
                     errors.push(Diagnostic::error(
-                        "action.grant.action_unknown",
-                        "project.accessProfiles[].grants[].action",
-                        "an action grant refers to an unknown action",
+                        "action.permission.action_unknown",
+                        "project.accessProfiles[].permissions[].action",
+                        "an action permission refers to an unknown action",
                     ));
                 }
                 _ => {}
@@ -1502,26 +1504,26 @@ fn validate_action_grant_sources(
     }
 }
 
-fn compile_grant_targets(
+fn compile_permission_targets(
     entities: &BTreeMap<String, CompiledEntity>,
     profile: &ProjectAccessProfileSource,
-    grant: &crate::contract::AccessGrantSource,
+    grant: &crate::contract::AccessPermissionSource,
     errors: &mut Vec<Diagnostic>,
-) -> Vec<CompiledActionTargetGrant> {
+) -> Vec<CompiledActionTargetPermission> {
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for target in &grant.targets {
         if !seen.insert(target.entity.as_str()) {
             errors.push(Diagnostic::error(
-                "action.grant.target.duplicate",
-                "project.accessProfiles[].grants[].targets[].entity",
-                "action target grants must be unique per entity",
+                "action.permission.target.duplicate",
+                "project.accessProfiles[].permissions[].targets[].entity",
+                "action target permissions must be unique per entity",
             ));
         }
         let Some(entity) = entities.get(&target.entity) else {
             errors.push(Diagnostic::error(
-                "action.grant.target_unknown",
-                "project.accessProfiles[].grants[].targets[].entity",
+                "action.permission.target_unknown",
+                "project.accessProfiles[].permissions[].targets[].entity",
                 "an action target grant refers to an unknown entity",
             ));
             continue;
@@ -1529,17 +1531,17 @@ fn compile_grant_targets(
         validate_row_boundaries(
             entity,
             &target.row_boundaries,
-            "project.accessProfiles[].grants[].targets[].rowBoundaries",
+            "project.accessProfiles[].permissions[].targets[].rowBoundaries",
             errors,
         );
-        validate_grant_access_requirements(
+        validate_permission_access_requirements(
             entity,
             profile,
             &target.row_boundaries,
-            "project.accessProfiles[].grants[].targets",
+            "project.accessProfiles[].permissions[].targets",
             errors,
         );
-        targets.push(CompiledActionTargetGrant {
+        targets.push(CompiledActionTargetPermission {
             entity_id: target.entity.clone(),
             row_boundaries: target.row_boundaries.clone(),
         });
@@ -1548,8 +1550,8 @@ fn compile_grant_targets(
     targets
 }
 
-fn validate_grant_covers_uses(
-    targets: &[CompiledActionTargetGrant],
+fn validate_permission_covers_uses(
+    targets: &[CompiledActionTargetPermission],
     target_uses: &[CompiledActionTargetUse],
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -1559,9 +1561,9 @@ fn validate_grant_covers_uses(
             .any(|target| target.entity_id == use_.entity_id)
         {
             errors.push(Diagnostic::error(
-                "action.grant.targets.incomplete",
-                "project.accessProfiles[].grants[].targets",
-                "action grants must cover every created, patched, and referenced target entity",
+                "action.permission.targets.incomplete",
+                "project.accessProfiles[].permissions[].targets",
+                "action permissions must cover every created, patched, and referenced target entity",
             ));
         }
     }
@@ -1583,7 +1585,7 @@ fn validate_row_boundaries(
             ))
         {
             errors.push(Diagnostic::error(
-                "action.grant.row_boundary_invalid",
+                "action.permission.row_boundary_invalid",
                 path,
                 "action target row boundaries must be direct, non-empty, and duplicate-free",
             ));
@@ -1593,7 +1595,7 @@ fn validate_row_boundaries(
         }
         let Some(field) = entity.fields.get(&boundary.field) else {
             errors.push(Diagnostic::error(
-                "action.grant.row_boundary_field_unknown",
+                "action.permission.row_boundary_field_unknown",
                 path,
                 "an action target row boundary refers to an unknown field",
             ));
@@ -1604,7 +1606,7 @@ fn validate_row_boundaries(
             FieldTypeSource::Crs84Point { .. } | FieldTypeSource::Structured { .. }
         ) {
             errors.push(Diagnostic::error(
-                "action.grant.row_boundary_type_unsupported",
+                "action.permission.row_boundary_type_unsupported",
                 path,
                 "CRS84 point and structured fields cannot be action target row-boundary fields",
             ));
@@ -1612,7 +1614,7 @@ fn validate_row_boundaries(
     }
 }
 
-fn validate_grant_access_requirements(
+fn validate_permission_access_requirements(
     entity: &CompiledEntity,
     profile: &ProjectAccessProfileSource,
     row_boundaries: &[RowBoundarySource],
@@ -1624,6 +1626,9 @@ fn validate_grant_access_requirements(
             id: profile.id.clone(),
             default: profile.default,
             anonymous: profile.anonymous,
+            actor_kind: profile.actor_kind,
+            requester_clients: profile.requester_clients.clone(),
+            task_grant: None,
             principal_claim: profile.principal_claim.clone(),
             required_scopes: profile.required_scopes.clone(),
             required_purposes: profile.required_purposes.clone(),
@@ -1658,7 +1663,7 @@ fn compile_action_routes(
     errors: &mut Vec<Diagnostic>,
 ) -> Vec<CompiledActionRoute> {
     let route_profiles = action
-        .grants
+        .permissions
         .iter()
         .filter_map(|grant| {
             profiles
@@ -1728,7 +1733,7 @@ fn route_default_profile<'a>(
     defaults.first().copied()
 }
 
-fn entity_grant_fields_empty(grant: &crate::contract::AccessGrantSource) -> bool {
+fn entity_permission_fields_empty(grant: &crate::contract::AccessPermissionSource) -> bool {
     grant.readable_fields.is_empty()
         && crate::contract::is_default_readable_request_fields(&grant.readable_request_fields)
         && grant.writable_fields.is_empty()
@@ -1756,7 +1761,7 @@ fn contract_fingerprint(
         Option<&crate::model::CompiledActionHandler>,
     ),
     requires: &[CompiledActionRequirement],
-    grants: &[CompiledActionGrant],
+    permissions: &[CompiledActionPermission],
 ) -> String {
     let target_entities = effects
         .iter()
@@ -1781,7 +1786,7 @@ fn contract_fingerprint(
         "inputs": inputs,
         "targetEntities": target_contracts,
         "effects": effects,
-        "grants": grants,
+        "permissions": permissions,
         "limits": {
             "maximumTargets": MAX_CHANGE_REQUEST_TARGETS,
             "maximumFieldMutations": MAX_CHANGE_REQUEST_FIELD_MUTATIONS,

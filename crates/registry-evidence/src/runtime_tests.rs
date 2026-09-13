@@ -587,8 +587,8 @@ async fn real_router_serves_all_definitions_concurrently_without_crossing_bounda
         .await;
     parent_discovery.assert_status_ok();
     let parent_definitions = parent_discovery.json::<EvidenceDefinitions>();
-    assert_eq!(parent_definitions.definitions.len(), 4);
-    let adult_definition = parent_definitions
+    assert_eq!(parent_definitions.definitions.len(), 1);
+    let adult_definition = standard_definitions
         .definitions
         .iter()
         .find(|definition| definition.requirement.ends_with(":adult-status:v1"))
@@ -1323,6 +1323,8 @@ async fn discovery_requires_authentication_and_returns_no_unentitled_definitions
         "sub": "unentitled-discovery-principal",
         "iat": now - 1,
         "exp": now + 3600,
+        "client_id": "evidence-task-agent",
+        "registry_actor_kind": "service",
         "evidence_tags": ["unentitled-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     }));
@@ -2311,15 +2313,18 @@ async fn authorization_refusal_is_minimally_audited() {
     assert_eq!(
         record.keys().map(String::as_str).collect::<BTreeSet<_>>(),
         BTreeSet::from([
+            "actorKind",
             "actorPseudonym",
             "assuranceProfile",
             "bundleRevision",
+            "clientPseudonym",
             "decision",
             "durationMilliseconds",
             "eventId",
             "occurredAt",
             "operation",
             "phase",
+            "reason",
             "requesterPseudonym",
             "safeErrorCategory",
             "schema",
@@ -2332,7 +2337,10 @@ async fn authorization_refusal_is_minimally_audited() {
     assert_eq!(record["phase"], json!("denial"));
     assert_eq!(record["decision"], json!("not-authorized"));
     assert_eq!(record["safeErrorCategory"], json!("not-authorized"));
+    assert_eq!(record["actorKind"], json!("service"));
+    assert_eq!(record["reason"], json!("authorization.profile"));
     assert!(record["requesterPseudonym"].is_string());
+    assert!(record["clientPseudonym"].is_string());
     assert!(record["actorPseudonym"].is_string());
     for protected in [
         principal,
@@ -2352,6 +2360,42 @@ async fn authorization_refusal_is_minimally_audited() {
             "the refusal event must not retain protected request or authority material"
         );
     }
+}
+
+#[tokio::test]
+async fn invalid_grant_refusal_keeps_only_a_valid_identifier_pseudonym() {
+    let fixture = acceptance_runtime().await;
+    let http = TestServer::new(build_app(Arc::clone(&fixture.runtime)));
+    for (identifier, keep) in [
+        (json!("expired-grant-canary"), true),
+        (json!({"bad":"shape"}), false),
+        (json!(""), false),
+    ] {
+        let mut claims = parent_grant_claims();
+        claims["registry_grant_id"] = identifier;
+        claims["registry_grant_exp"] = json!(Utc::now().timestamp() - 1);
+        http.post("/v1/evidence")
+            .add_header(
+                "authorization",
+                format!("Bearer {}", access_token(Some(claims))),
+            )
+            .json(&parent_request())
+            .await
+            .assert_status_forbidden();
+        let audit = fs::read_to_string(&fixture.audit_path).unwrap();
+        let event: Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
+        let pseudonym = event["record"]["grantPseudonym"].as_str();
+        assert_eq!(
+            pseudonym.is_some(),
+            keep,
+            "a valid grant identifier survives grant refusal"
+        );
+        if let Some(pseudonym) = pseudonym {
+            assert!(pseudonym.starts_with("hmac-sha256:"));
+        }
+        assert!(!audit.contains("expired-grant-canary"));
+    }
+    assert!(fixture.server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -2468,6 +2512,7 @@ async fn missing_principal_never_falls_back_to_client_id_or_azp() {
         "azp": "fallback-authorized-party-canary",
         "iat": now - 1,
         "exp": now + 3600,
+        "registry_actor_kind": "service",
         "evidence_tags": ["fixture-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     }));
@@ -2523,6 +2568,119 @@ async fn sender_constrained_tokens_are_denied_rather_than_downgraded() {
         let audit = fs::read_to_string(&fixture.audit_path).expect("audit is readable");
         assert!(!audit.contains("sender-constraint-canary"));
     }
+}
+
+/// The admission gate: explicit allowed clients and a required scope,
+/// checked after signature verification and before any authority claim is
+/// read. This is the consumer half of the case where an issuer returns a
+/// correctly signed token for a known resource with zero scopes while still
+/// emitting the client's static attributes — audience plus attributes alone
+/// must not gain Evidence access. The tokens are in-process, test-only signed
+/// fixtures; they prove consumer enforcement, not any issuer's behavior.
+#[tokio::test]
+async fn admission_gates_refuse_unadmitted_clients_and_missing_scopes() {
+    let authenticator = admitted_authenticator(&["records-reader"], &["evidence:invoke"]);
+
+    authenticator
+        .authenticate(&access_token(Some(json!({
+            "client_id": "records-reader",
+            "scope": "records:read evidence:invoke",
+        }))))
+        .await
+        .expect("the admitted client carrying the required scope authenticates");
+
+    // The exact failure A04 names: the desired audience, the client's static
+    // attributes, a valid signature — and no scope grant for this resource.
+    for (label, extra) in [
+        (
+            "no scope claim at all",
+            json!({"client_id": "records-reader"}),
+        ),
+        (
+            "an empty scope claim",
+            json!({"client_id": "records-reader", "scope": ""}),
+        ),
+        (
+            "scopes that were narrowed to another resource",
+            json!({"client_id": "records-reader", "scope": "records:read"}),
+        ),
+    ] {
+        let error = authenticator
+            .authenticate(&access_token(Some(extra)))
+            .await
+            .expect_err(&format!("{label} was accepted"));
+        assert!(
+            matches!(error, AuthenticationError::Verification),
+            "{label}: {error:?}"
+        );
+    }
+
+    // A client outside the allowlist is refused even with every scope, and
+    // neither the principal nor the requester tags stand in for admission.
+    for (label, extra) in [
+        (
+            "an unadmitted client identifier",
+            json!({"client_id": "other-client", "scope": "evidence:invoke"}),
+        ),
+        (
+            "no client identity at all",
+            json!({"scope": "evidence:invoke"}),
+        ),
+    ] {
+        let error = authenticator
+            .authenticate(&access_token(Some(extra)))
+            .await
+            .expect_err(&format!("{label} was accepted"));
+        assert!(
+            matches!(error, AuthenticationError::Verification),
+            "{label}: {error:?}"
+        );
+    }
+
+    /// An authenticator whose verifier carries the explicit client allowlist and
+    /// whose scope gate carries the required scopes, both as a generated
+    /// configuration would state them through `Authenticator::from_config`.
+    fn admitted_authenticator(allowed_clients: &[&str], required_scopes: &[&str]) -> Authenticator {
+        let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
+        let jwks: JwkSet = serde_json::from_value(json!({"keys": [private.public()]}))
+            .expect("static auth JWKS parses");
+        let fetcher = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
+        let verifier = Arc::new(TokenVerifier::new(
+            TokenVerifierConfig::access_token_profile(
+                TOKEN_ISSUER,
+                vec![TOKEN_AUDIENCE.to_owned()],
+                vec![Algorithm::ES256],
+                vec!["at+jwt".to_owned()],
+            )
+            .with_allowed_clients(allowed_clients.iter().map(|id| id.to_string()).collect()),
+            fetcher,
+        ));
+        Authenticator::new(
+            verifier,
+            AuthenticationClaimsConfig {
+                principal_claim: "sub".to_owned(),
+                requester_tags_claim: "evidence_tags".to_owned(),
+                evidence_audience_claim: "evidence_audience".to_owned(),
+                contextual_claims: registry_platform_oidc::ClaimNames::default(),
+                actor_claim: None,
+            },
+        )
+        .with_required_scopes(
+            required_scopes
+                .iter()
+                .map(|scope| scope.to_string())
+                .collect(),
+        )
+        .with_resources(vec![TOKEN_AUDIENCE.to_owned()])
+    }
+
+    // Without stated admission the previous behavior stands: any
+    // issuer-vouched client, and no scope gate.
+    let permissive = authenticator_with_client_admission(None, None);
+    permissive
+        .authenticate(&access_token(Some(json!({"client_id": "other-client"}))))
+        .await
+        .expect("absent admission fields keep the existing behavior");
 }
 
 #[tokio::test]
@@ -6505,6 +6663,10 @@ async fn reordered_grant_subjects_resolve_by_role_and_emit_declaration_order() {
         .map(|subject| subject["role"].as_str().expect("role is text").to_owned())
         .collect::<Vec<_>>();
     assert_eq!(roles, ["child", "candidate-parent"]);
+    assert!(first_event["record"]["authority"]["approverPseudonym"]
+        .as_str()
+        .is_some());
+    assert!(!audit.contains("h:synthetic-approver"));
 
     // The verifier accepts the expected subject set in any expectation order.
     let serialized = serde_json::to_vec(&jws).expect("JWS serializes");
@@ -6620,6 +6782,8 @@ async fn security_contract_rejects_unknown_and_unauthorized_requests_before_sour
         "sub": "unentitled-principal",
         "iat": now - 1,
         "exp": now + 3600,
+        "client_id": "evidence-task-agent",
+        "registry_actor_kind": "service",
         "evidence_tags": ["unentitled-tag"],
         "evidence_audience": EVIDENCE_AUDIENCE
     }));
@@ -6754,6 +6918,8 @@ async fn failed_selector_budget_is_enforced_by_the_runtime_and_scoped_to_authori
         "sub": "shared-selector-principal",
         "iat": now - 1,
         "exp": now + 3600,
+        "client_id": "evidence-task-agent",
+        "registry_actor_kind": "service",
         "evidence_tags": ["alternate-fixture-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     }));
@@ -6969,15 +7135,13 @@ async fn one_runtime_proves_all_definitions_and_collapses_unresolved_relationshi
         .await
         .expect_err("caller candidate substitution is rejected before source access");
     assert_eq!(error.problem(), ProblemCode::InvalidSelector);
+    let mut wrong_authority_claims = parent_grant_claims();
+    wrong_authority_claims["registry_grant_authority"] = json!("different-authority");
     let unauthorized = fixture
         .runtime
         .evaluate(
             "operation-acceptance-unauthorized",
-            &access_token(Some(json!({
-                "evidence_grant_id": "grant-canary",
-                "evidence_authority": "different-authority",
-                "grant": {"candidate_parent": parent_candidate()}
-            }))),
+            &access_token(Some(wrong_authority_claims)),
             &parent_request(),
         )
         .await
@@ -7456,10 +7620,21 @@ async fn every_runtime_applicable_acceptance_case_reaches_terminal_audit_and_ver
                 .await;
 
             let principal = format!("principal-{definition}-{index}");
-            let token_claims = case
+            let fixture_claims = case
                 .get("verified_token_claims")
-                .cloned()
-                .or_else(|| is_relationship.then(|| parent_grant_claims_for(parent_candidate())));
+                .or_else(|| common.get("verified_token_claims"));
+            let token_claims = if is_relationship {
+                let mut claims = parent_grant_claims_for(parent_candidate());
+                if let Some(Value::Object(fixture_claims)) = fixture_claims {
+                    claims
+                        .as_object_mut()
+                        .expect("task grant claims are an object")
+                        .extend(fixture_claims.clone());
+                }
+                Some(claims)
+            } else {
+                fixture_claims.cloned()
+            };
             let token = access_token_for(&principal, token_claims);
             let evaluation_time = acceptance_case_time(case, common);
             let audit_before = fs::read_to_string(&fixture.audit_path)
@@ -9321,30 +9496,38 @@ fn authenticator_with_actor_claim(actor_claim: &str) -> Authenticator {
 }
 
 fn authenticator_with_optional_actor_claim(actor_claim: Option<&str>) -> Authenticator {
+    authenticator_with_client_admission(actor_claim, Some(vec!["evidence-task-agent".to_owned()]))
+}
+
+fn authenticator_with_client_admission(
+    actor_claim: Option<&str>,
+    allowed_clients: Option<Vec<String>>,
+) -> Authenticator {
     let private = PrivateJwk::parse(AUTH_PRIVATE_JWK).expect("auth test key parses");
     let jwks: JwkSet = serde_json::from_value(json!({"keys": [private.public()]}))
         .expect("static auth JWKS parses");
     let fetcher = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
-    let verifier = Arc::new(TokenVerifier::new(
-        TokenVerifierConfig::access_token_profile(
-            TOKEN_ISSUER,
-            vec![TOKEN_AUDIENCE.to_owned()],
-            vec![Algorithm::ES256],
-            vec!["at+jwt".to_owned()],
-        ),
-        fetcher,
-    ));
+    let mut verifier_config = TokenVerifierConfig::access_token_profile(
+        TOKEN_ISSUER,
+        vec![TOKEN_AUDIENCE.to_owned()],
+        vec![Algorithm::ES256],
+        vec!["at+jwt".to_owned()],
+    );
+    if let Some(allowed_clients) = allowed_clients {
+        verifier_config = verifier_config.with_allowed_clients(allowed_clients);
+    }
+    let verifier = Arc::new(TokenVerifier::new(verifier_config, fetcher));
     Authenticator::new(
         verifier,
         AuthenticationClaimsConfig {
             principal_claim: "sub".to_owned(),
             requester_tags_claim: "evidence_tags".to_owned(),
             evidence_audience_claim: "evidence_audience".to_owned(),
-            grant_id_claim: "evidence_grant_id".to_owned(),
-            grant_authority_claim: "evidence_authority".to_owned(),
+            contextual_claims: registry_platform_oidc::ClaimNames::default(),
             actor_claim: actor_claim.map(str::to_owned),
         },
     )
+    .with_resources(vec![TOKEN_AUDIENCE.to_owned()])
 }
 
 /// The same authenticator, but resolving the issuer's keys over HTTP from a
@@ -9360,7 +9543,8 @@ fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
             vec![TOKEN_AUDIENCE.to_owned()],
             vec![Algorithm::ES256],
             vec!["at+jwt".to_owned()],
-        ),
+        )
+        .with_allowed_clients(vec!["evidence-task-agent".to_owned()]),
         Arc::new(JwksFetcher::new_with_fetch_url_policy(
             jwks_uri.to_owned(),
             JwksFetcherConfig::defaults(),
@@ -9373,11 +9557,11 @@ fn fetching_authenticator(jwks_uri: &str) -> Authenticator {
             principal_claim: "sub".to_owned(),
             requester_tags_claim: "evidence_tags".to_owned(),
             evidence_audience_claim: "evidence_audience".to_owned(),
-            grant_id_claim: "evidence_grant_id".to_owned(),
-            grant_authority_claim: "evidence_authority".to_owned(),
+            contextual_claims: registry_platform_oidc::ClaimNames::default(),
             actor_claim: None,
         },
     )
+    .with_resources(vec![TOKEN_AUDIENCE.to_owned()])
 }
 
 fn access_token(extra: Option<Value>) -> String {
@@ -9396,6 +9580,8 @@ fn access_token_for_issuer(issuer: &str, principal: &str, extra: Option<Value>) 
         "sub": principal,
         "iat": now - 1,
         "exp": now + 298,
+        "client_id": "evidence-task-agent",
+        "registry_actor_kind": "service",
         "evidence_tags": ["fixture-agency"],
         "evidence_audience": EVIDENCE_AUDIENCE
     });
@@ -9430,9 +9616,21 @@ fn parent_grant_claims() -> Value {
 }
 
 fn parent_grant_claims_for(candidate: Value) -> Value {
+    let now = Utc::now().timestamp();
     json!({
-        "evidence_grant_id": "synthetic-parentage-grant-001",
-        "evidence_authority": AUTHORITY,
+        "registry_actor_kind": "agent",
+        "registry_grant_id": "synthetic-parentage-grant-001",
+        "registry_grant_authority": AUTHORITY,
+        "registry_grant_source_issuer": "https://casework.invalid",
+        "registry_grant_client": "evidence-task-agent",
+        "registry_grant_resource": TOKEN_AUDIENCE,
+        "registry_purpose": "fixture-enrolment",
+        "registry_grant_exp": now + 298,
+        "registry_grant_bounds": {
+            "type": "evidence",
+            "requirement": "urn:example:fixture:requirement:legal-parent-relationship:v1"
+        },
+        "registry_approver": "h:synthetic-approver",
         "grant": {"candidate_parent": candidate}
     })
 }
@@ -11360,6 +11558,7 @@ fn audit_probe_event(index: usize) -> EvidenceAuditEvent {
         AuditAuthority {
             kind: AuditAuthorityKind::Statutory,
             grant_pseudonym: None,
+            approver_pseudonym: None,
         },
         vec![AuditSubject {
             role: "subject".to_owned(),

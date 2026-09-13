@@ -39,10 +39,10 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
             .find(|profile| profile["id"] == "holder")
             .unwrap();
         match case {
-            "missing-get" => holder["grants"][0]["operations"] = json!(["list"]),
-            "unknown-target" => holder["grants"][1]["submitterTargets"] = json!(["unknown"]),
+            "missing-get" => holder["permissions"][0]["operations"] = json!(["list"]),
+            "unknown-target" => holder["permissions"][1]["submitterTargets"] = json!(["unknown"]),
             "unreadable-reference" => {
-                holder["grants"][1]["readableFields"] = json!([
+                holder["permissions"][1]["readableFields"] = json!([
                     "licensed-activities",
                     "authorization-conditions",
                     "reason",
@@ -54,14 +54,14 @@ fn native_reference_admission_requires_complete_manual_same_profile_authority() 
                     json!("automatic")
             }
             "request-target" => {
-                holder["grants"][1]["submitterTargets"] = json!(["scope-correction"]);
+                holder["permissions"][1]["submitterTargets"] = json!(["scope-correction"]);
                 candidate["entities"][1]["fields"][0]["target"] = json!("scope-correction");
             }
             "optional-reference" => {
                 candidate["entities"][1]["fields"][0]["required"] = json!(false)
             }
             "unwritable-reference" => {
-                holder["grants"][1]["writableFields"] = json!([
+                holder["permissions"][1]["writableFields"] = json!([
                     "licensed-activities",
                     "authorization-conditions",
                     "reason",

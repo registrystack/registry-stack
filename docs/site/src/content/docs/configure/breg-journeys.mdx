@@ -73,7 +73,7 @@ bregctl explain queries ./my-registry
 `model` prints every entity, field, and profile as compiled.
 `routes` prints every HTTP route with its method, path, operation, and the profiles that may select it, including the default.
 `queries` prints, per entity and operation, the fields a response may carry, the filterable fields with example `$filter` expressions, and the query bounds a request stays within.
-`access` prints the compiled grants per profile in a human-readable form and, with `--scenario`, previews admission; [control access per profile](../breg-access/) covers it.
+`access` prints the compiled permissions per profile in a human-readable form and, with `--scenario`, previews admission; [control access per profile](../breg-access/) covers it.
 `change-requests` and `actions` are covered on [declare change requests and actions](../breg-change-control/), and `events` on [author a registry project](../breg/).
 
 Read `explain queries` before you write a client or a journey: a request that filters on a field the profile cannot filter is refused, not empty.
@@ -110,7 +110,7 @@ These are all the findings the compiler can report, each attached to the documen
 | `access.profile.no_writable_fields` | The profile grants `create` or `patch` and names no writable field. | List the writable fields, or remove the write operations. |
 | `access.profile.related_disclosure` | A read path discloses related records under the root profile rather than the target entity's own profiles. | Review its fields and the target entity's access requirements. |
 | `access.profile.revision_history` | History can disclose values removed from the current record. | Review historical disclosure separately. |
-| `access.profile.row_boundary_not_writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the grant. |
+| `access.profile.row_boundary_not_writable` | The profile grants `create` and a row boundary whose field it cannot write, so the row policy refuses every create. | Add the boundary field to the writable fields, or remove `create` from the permission. |
 | `access.profile.snapshot_history` | Snapshot reads reproduce retained historical rows under current authorization. | Review stored-field projection, filters, and row boundaries separately. |
 | `access.profile.unrestricted_collection` | The profile can list every row; caller filters are not authorization. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
 | `access.profile.unrestricted_rows` | The profile's granted operations reach every row and no claim-bound boundary narrows them. | Add a claim-bound row boundary, or accept a registry-wide role knowingly. |
@@ -230,10 +230,10 @@ Running the journeys needs more than the project: an empty PostgreSQL database, 
 | `check` passes but `check --deny-findings` fails. | A finding is present. Read it and either change the project or accept the finding knowingly. |
 | `generate` fails with `output.parent.invalid`. | The output directory's parent does not exist. Create it, or give a destination inside a directory that exists. |
 | `generate` fails with `output.destination.invalid`. | The output directory already exists, or the path contains `..`. Give a new path; remove the old directory first if you meant to regenerate. |
-| A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the grant, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
+| A journey step fails with 404 where you expected data. | The profile's row boundary or purpose excluded the caller. Compare the step's `claims` with the permission, or preview them with `explain access --scenario` ([control access per profile](../breg-access/)). |
 | A journey filters or sorts on a field and is refused. | The profile's `filterableFields` or `sortableFields` do not list it. Check `explain queries` for the forms the profile may use. |
 | `bregctl dev` refuses the start with `test.step.failed` at `journeys[0].steps[2]`. | The rehearsal ran your journeys and that step failed. The refusal carries the step's own message; correct the step and start again. The full report stays in the project's private `.breg/dev/logs`. |
-| A step is refused because a logical reference was refused. | The refusal names the class: a field the entity does not declare, a field the grant does not make writable, a request body with no field, a step identifier that is not stable, a step naming both an entity and an action or neither, or a capture no earlier step declares. It never repeats the value you wrote. |
+| A step is refused because a logical reference was refused. | The refusal names the class: a field the entity does not declare, a field the permission does not make writable, a request body with no field, a step identifier that is not stable, a step naming both an entity and an action or neither, or a capture no earlier step declares. It never repeats the value you wrote. |
 
 ## Next
 

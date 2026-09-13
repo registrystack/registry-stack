@@ -49,6 +49,7 @@ fn profile(id: &str, role: CaseworkRole, kinds: &[&str]) -> AccessProfile {
 
 fn project(version: &str, outcomes: Vec<HostedOutcomePolicy>) -> CaseworkProject {
     CaseworkProject {
+        task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
         casework: CaseworkIdentity {

@@ -1,0 +1,25 @@
+attributes:
+  synthetic_tag: fixture-agency
+description: Fixture private_key_jwt client
+id: 0197aaaa-0000-7000-8000-0000000000a1
+inboundAuthConfig:
+- config:
+    certificate:
+      type: JWKS
+      value: '{"keys":[{"kty":"EC","crv":"P-256","alg":"ES256","kid":"synthetic-client-key-1","x":"TH-XDvwYtzdc43QDOiBjfdQZTCx1k9Rz5ELDu_2NS8JW","y":"eLx0gh3VmCC2DeubmC0CdDgno7aEBYEkz5Legyg-2Go0"}]}'
+    clientId: synthetic-machine-client
+    grantTypes:
+    - client_credentials
+    publicClient: false
+    token:
+      accessToken:
+        clientConfig:
+          attributes:
+          - synthetic_tag
+          validityPeriod: 300
+    tokenEndpointAuthMethod: private_key_jwt
+  type: oauth2
+name: Synthetic Machine Client
+ouHandle: default
+resource_type: agent
+type: default

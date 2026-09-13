@@ -148,6 +148,7 @@ fn metadata() -> RoutingSourceMetadata {
 
 fn routing_project() -> CaseworkProject {
     CaseworkProject {
+        task_templates: Vec::new(),
         api_version: registry_casework_core::CASEWORK_API_VERSION.to_owned(),
         kind: registry_casework_core::CASEWORK_KIND.to_owned(),
         casework: CaseworkIdentity {

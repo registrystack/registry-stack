@@ -11,8 +11,6 @@ import platform
 import re
 import subprocess
 import sys
-import time
-import urllib.request
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,7 +29,6 @@ ALLOWED_PARAMETERS = {
     "randomSeed",
     "rateOps",
     "recoveryDuration",
-    "vus",
     "warmupDuration",
     "warmupOps",
 }
@@ -44,11 +41,6 @@ SAFE_SEED_FIELDS = {
     "business_id_count",
 }
 SAFE_SAMPLE_TAGS = {"status", "method", "name", "scenario", "expected_response"}
-SAFE_METRIC_LABELS = {"route", "method", "status", "state", "le"}
-PROMETHEUS_LINE = re.compile(
-    r'^(?P<name>[a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(?P<labels>.*)\})?\s+(?P<value>[-+0-9.eE]+|NaN|Inf|-Inf)$'
-)
-PROMETHEUS_LABEL = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)="((?:\\.|[^"\\])*)"')
 JWT_PATTERN = re.compile(rb"[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}\.[A-Za-z0-9_-]{12,}")
 SQL_TEXT_PATTERN = re.compile(
     rb"\b(?:SELECT\s+.+\s+FROM|INSERT\s+INTO|UPDATE\s+.+\s+SET|DELETE\s+FROM)\b",
@@ -165,67 +157,6 @@ def finish_manifest(arguments: argparse.Namespace) -> None:
     _write_json(arguments.path, manifest)
 
 
-def _parse_prometheus(body: str) -> list[dict[str, Any]]:
-    metrics = []
-    for line in body.splitlines():
-        if not line or line.startswith("#"):
-            continue
-        match = PROMETHEUS_LINE.match(line)
-        if not match or not match.group("name").startswith("breg_"):
-            continue
-        labels: dict[str, str] = {}
-        raw_labels = match.group("labels") or ""
-        for label in PROMETHEUS_LABEL.finditer(raw_labels):
-            name = label.group(1)
-            if name not in SAFE_METRIC_LABELS:
-                raise EvidenceError(f"metrics endpoint exposed unexpected label {name}")
-            labels[name] = bytes(label.group(2), "utf-8").decode("unicode_escape")
-        metrics.append({"name": match.group("name"), "labels": labels, "value": float(match.group("value"))})
-    return metrics
-
-
-def _process_sample(pid_file: Path) -> dict[str, Any] | None:
-    try:
-        pid_text = pid_file.read_text(encoding="ascii").strip()
-        if not pid_text.isdigit():
-            return None
-        output = subprocess.run(
-            ["ps", "-p", pid_text, "-o", "%cpu=", "-o", "rss="],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=5,
-        ).stdout.strip()
-        cpu, rss = output.split()
-        return {"cpuPercent": float(cpu), "rssBytes": int(rss) * 1024}
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-
-
-def sample_metrics(arguments: argparse.Namespace) -> None:
-    arguments.out.parent.mkdir(parents=True, exist_ok=True)
-    with arguments.out.open("a", encoding="utf-8", buffering=1) as handle:
-        while True:
-            try:
-                with urllib.request.urlopen(arguments.url, timeout=5) as response:
-                    body = response.read().decode("utf-8")
-                sample: dict[str, Any] = {"timestamp": _utc_now(), "metrics": _parse_prometheus(body)}
-                processes = {
-                    name: reading
-                    for name, path in (("server", arguments.breg_pid), ("mint", arguments.mint_pid))
-                    if path is not None and (reading := _process_sample(path)) is not None
-                }
-                if processes:
-                    sample["processes"] = processes
-                handle.write(json.dumps(sample, sort_keys=True, separators=(",", ":")) + "\n")
-            except (OSError, UnicodeError, EvidenceError) as error:
-                handle.write(
-                    json.dumps({"timestamp": _utc_now(), "sampleError": type(error).__name__}, sort_keys=True)
-                    + "\n"
-                )
-            time.sleep(arguments.interval)
-
-
 def _metric_values(summary: dict[str, Any], name: str) -> dict[str, Any]:
     metric = summary.get("metrics", {}).get(name, {})
     values = metric.get("values", {}) if isinstance(metric, dict) else {}
@@ -317,41 +248,6 @@ def _sample_summary(path: Path) -> dict[str, Any]:
     }
 
 
-def _telemetry_summary(path: Path) -> dict[str, Any]:
-    waiting_peak = 0.0
-    cpu_peak: dict[str, float] = defaultdict(float)
-    rss_peak: dict[str, int] = defaultdict(int)
-    samples = 0
-    errors = 0
-    if not path.exists():
-        return {"samples": 0, "sampleErrors": 0, "poolWaitingPeak": None, "processes": {}}
-    with path.open(encoding="utf-8") as handle:
-        for line in handle:
-            item = json.loads(line)
-            if "sampleError" in item:
-                errors += 1
-                continue
-            samples += 1
-            for metric in item.get("metrics", []):
-                if (
-                    metric.get("name") == "breg_pool_connections"
-                    and metric.get("labels", {}).get("state") == "waiting"
-                ):
-                    waiting_peak = max(waiting_peak, float(metric["value"]))
-            for name, process in item.get("processes", {}).items():
-                cpu_peak[name] = max(cpu_peak[name], float(process["cpuPercent"]))
-                rss_peak[name] = max(rss_peak[name], int(process["rssBytes"]))
-    return {
-        "samples": samples,
-        "sampleErrors": errors,
-        "poolWaitingPeak": waiting_peak if samples else None,
-        "processes": {
-            name: {"cpuPercentPeak": cpu_peak[name], "rssBytesPeak": rss_peak[name]}
-            for name in sorted(set(cpu_peak) | set(rss_peak))
-        },
-    }
-
-
 def _db_wait_summary(path: Path) -> dict[str, Any]:
     peaks = {"auditLockWaiters": 0, "lockWaiters": 0, "blockedBackends": 0}
     samples = 0
@@ -419,7 +315,6 @@ def summarize(arguments: argparse.Namespace) -> None:
         },
         "httpStatuses": sample_details["statuses"],
         "phases": sample_details["phaseResults"],
-        "telemetry": _telemetry_summary(arguments.telemetry),
         "database": {"snapshot": db_after, "waits": _db_wait_summary(arguments.db_waits)},
         "thresholds": thresholds,
         "pass": (
@@ -515,18 +410,10 @@ def parser() -> argparse.ArgumentParser:
     finish.add_argument("--exit-code", type=int, required=True)
     finish.add_argument("--k6-exit-code", type=int, required=True)
 
-    sample = commands.add_parser("sample-metrics")
-    sample.add_argument("--url", required=True)
-    sample.add_argument("--out", type=Path, required=True)
-    sample.add_argument("--interval", type=float, default=1.0)
-    sample.add_argument("--server-pid", type=Path)
-    sample.add_argument("--mint-pid", type=Path)
-
     summary = commands.add_parser("summarize")
     summary.add_argument("--manifest", type=Path, required=True)
     summary.add_argument("--k6-summary", type=Path, required=True)
     summary.add_argument("--samples", type=Path, required=True)
-    summary.add_argument("--telemetry", type=Path, required=True)
     summary.add_argument("--db-after", type=Path, required=True)
     summary.add_argument("--db-waits", type=Path, required=True)
     summary.add_argument("--safety", type=Path, required=True)
@@ -553,8 +440,6 @@ def main() -> int:
             create_manifest(arguments)
         elif arguments.command == "finish":
             finish_manifest(arguments)
-        elif arguments.command == "sample-metrics":
-            sample_metrics(arguments)
         elif arguments.command == "summarize":
             summarize(arguments)
         elif arguments.command == "aggregate-sweep":

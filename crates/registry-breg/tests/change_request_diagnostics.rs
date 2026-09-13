@@ -51,12 +51,12 @@ fn change_control_direct_write_grant_identifies_entity_and_profile() {
               "review":{"stages":[{"id":"review","approvals":1}]}}
           }],
           "accessProfiles":[{
-            "id":"asset-operator","principalClaim":"principal","grants":[{
+            "id":"asset-operator","principalClaim":"principal","permissions":[{
               "entity":"asset","operations":["get","patch"],"readableFields":["label"],"writableFields":["label"],
               "rowBoundaries": []
             }]
           },{
-            "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
               "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
@@ -92,7 +92,7 @@ fn change_control_required_for_empty_identifies_entity() {
               "review":{"stages":[{"id":"review","approvals":1}]}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
               "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
@@ -128,7 +128,7 @@ fn change_request_review_stage_approvals_invalid_identifies_entity_and_stage() {
               "review":{"stages":[{"id":"review","approvals":0}]}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
               "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
@@ -166,7 +166,7 @@ fn change_request_effect_paths_use_index_when_id_missing_and_id_when_present() {
             ],"review":{"stages":[{"id":"review","approvals":1}]}}
           }],
           "accessProfiles":[{
-            "id":"reviewer","default":true,"principalClaim":"principal","grants":[{
+            "id":"reviewer","default":true,"principalClaim":"principal","permissions":[{
               "entity":"asset-placement-request","operations":["get","submit_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["asset","label"],
               "reviewStages":[{"stage":"review","targets":[{"entity":"asset","readableFields":["label"], "rowBoundaries": []}]}],
               "applyTargets":[{"entity":"asset", "rowBoundaries": []}],
@@ -206,7 +206,7 @@ fn change_request_submit_operation_missing_identifies_entity() {
               "review":{"stages":[{"id":"review","approvals":1}]}}
           }],
           "accessProfiles":[{
-            "id":"asset-placement-reader","default":true,"principalClaim":"principal","grants":[{
+            "id":"asset-placement-reader","default":true,"principalClaim":"principal","permissions":[{
               "entity":"asset-placement-request","operations":["get"],"readableFields":["asset","label"],
               "rowBoundaries": []
             }]

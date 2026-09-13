@@ -39,6 +39,8 @@ def rosters(version: str) -> dict[str, list[str]]:
         f"mint-{tag}-{ASSET}",
         f"evidence-oid4vci-{tag}-{ASSET}",
     ]
+    if parsed >= (0, 30, 0):
+        core.remove(f"mint-{tag}-{ASSET}")
     breg = []
     bregctl = []
     if parsed >= (0, 26, 0):

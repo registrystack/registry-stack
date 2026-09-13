@@ -31,6 +31,7 @@ p256.workspace = true
 rcgen.workspace = true
 registry-platform-canonical-json.workspace = true
 registry-platform-httputil.workspace = true
+registry-thunderid-tooling.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-breg = { workspace = true, features = ["runtime", "tooling"] }
 registry-breg-client.workspace = true
@@ -49,6 +50,7 @@ time.workspace = true
 tokio = { workspace = true, features = ["rt"] }
 uuid = { workspace = true, features = ["serde"] }
 zeroize.workspace = true
+registry-platform-crypto.workspace = true
+url.workspace = true
 
 [dev-dependencies]
-registry-platform-crypto.workspace = true

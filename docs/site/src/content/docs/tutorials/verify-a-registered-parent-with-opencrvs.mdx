@@ -599,8 +599,8 @@ derivation cannot add names, dates, addresses, or any other birth-registration f
 
 ## Start the project
 
-Compile the editable artifacts into a private local generation and start Evidence Gateway with Registry
-Mint:
+Compile the editable artifacts into a private local generation and start Evidence Gateway with its
+local issuer:
 
 ```sh
 evidencectl dev start .
@@ -608,7 +608,7 @@ evidencectl dev start .
 
 ```text
 Evidence ready at http://127.0.0.1:8080
-Mint ready at http://127.0.0.1:8081
+Issuer ready at http://127.0.0.1:8081
 ```
 
 `dev` runs the real Evidence Gateway configuration check before either service becomes ready. Unresolved

@@ -35,6 +35,7 @@ pub struct CaseworkService {
     pub(crate) store: PostgresStore,
     adapters: Arc<BTreeMap<String, Arc<dyn SourceAdapter>>>,
     pub(crate) project: Arc<CaseworkProject>,
+    pub(crate) task_authority: Option<Arc<crate::task_grants::TaskAuthority>>,
     audit_publisher_health: AuditPublisherHealth,
 }
 
@@ -115,6 +116,7 @@ impl CaseworkService {
             adapters: Arc::new(registered),
             project: Arc::new(project),
             audit_publisher_health: AuditPublisherHealth::default(),
+            task_authority: None,
         })
     }
 

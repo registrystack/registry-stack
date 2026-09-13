@@ -1,12 +1,11 @@
 ---
 title: Error and status code reference
-description: The closed RFC 9457 problem set Relay returns, with each code's status, title, and detail, and where the Evidence Gateway and Registry Mint error contracts are documented.
+description: The closed RFC 9457 problem set Relay returns, with each code's status, title, and detail, and where the Evidence Gateway error contract is documented.
 status: current
 owner: registry-docs
 source_repos:
   - registry-relay
   - registry-evidence
-  - registry-mint
 last_reviewed: "2026-08-11"
 doc_type: reference
 locale: en
@@ -14,7 +13,7 @@ standards_referenced: []
 ---
 
 Registry Stack HTTP surfaces use product-specific error contracts. This page carries Relay's set in
-full and points to the Evidence Gateway, Registry Mint, and OID4VCI supporting-service contracts.
+full and points to the Evidence Gateway and OID4VCI supporting-service contracts.
 
 ## Relay
 
@@ -131,16 +130,6 @@ Every problem body has exactly `type`, `title`, `status`, `detail`, `code`, and
 never disclose subject data, source diagnostics, or the server-minted audit
 identifier.
 
-## Registry Mint
-
-Registry Mint is an OAuth 2.0 token endpoint, so its token and protocol failures use the OAuth form
-`{"error": "<code>"}` over four codes (`invalid_request`,
-`unsupported_grant_type`, `invalid_client`, and `server_error`), transcribed with their statuses
-and causes in the [Registry Mint reference](../mint/). The one to know before reading it:
-every client authentication failure has the same public status, code, body, and authentication
-header, regardless of whether the asserted client id is registered. An unready `GET /ready` instead
-returns `503 {"status":"not ready"}`.
-
 ## Evidence OID4VCI supporting service
 
 The OID4VCI delivery service has its own closed protocol error vocabulary in the
@@ -154,5 +143,4 @@ serialization and response headers are in `crates/registry-relay-v2/src/problem.
 is `TraceContext` in `crates/registry-platform-httpsec/src/server.rs`.
 
 The codes this page points at rather than repeating are transcribed on their own pages from
-`crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml`
-(Evidence Gateway) and `crates/registry-mint/src/error.rs` (Registry Mint).
+`crates/registry-evidence/src/problem.rs` with `products/evidence/contracts/problem-contract.yaml` (Evidence Gateway).

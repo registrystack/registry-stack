@@ -46,7 +46,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:asset:register]
     requiredPurposes: [asset-registration]
-    grants:
+    permissions:
       - action: register-asset-with-inspection
         operations: [invoke]
         targets:
@@ -61,7 +61,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredScopes: [registry:asset:audit]
     requiredPurposes: [asset-audit]
-    grants:
+    permissions:
       - entity: asset
         operations: [get, list]
         readableFields: [asset-code, label, asset-type, jurisdiction]

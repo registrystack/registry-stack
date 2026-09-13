@@ -705,13 +705,7 @@ async fn execute(
             bail!("scenario client/profile is not explicitly declared in dev clients");
         }
         if !native.contains_key(&step.client) {
-            let mint = state
-                .binaries
-                .get("mint")
-                .map(|b| b.path.clone())
-                .map(Ok)
-                .unwrap_or_else(|| super::executable("mint", None))?;
-            super::token(&mint, state, &step.client)?;
+            super::token_async(state, &step.client).await?;
             let token = private::read(
                 &state
                     .root()
@@ -1406,7 +1400,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["grants"]
+        let grant = editor["permissions"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -1436,7 +1430,7 @@ mod tests {
             .iter_mut()
             .find(|profile| profile["id"] == "editor")
             .unwrap();
-        let grant = editor["grants"]
+        let grant = editor["permissions"]
             .as_array_mut()
             .unwrap()
             .iter_mut()
@@ -1613,7 +1607,7 @@ mod tests {
         })
     }
     #[test]
-    #[ignore = "requires source-built bregctl/breg/mint and Docker; creates one disposable owned dev database"]
+    #[ignore = "requires source-built bregctl/breg and Docker; creates one disposable owned dev database"]
     fn native_create_and_apply_recover_after_process_exit_without_duplicate_revisions() {
         let temp = tempfile::Builder::new()
             .prefix("breg-example-recovery-")
@@ -1646,11 +1640,9 @@ mod tests {
         owned.succeed(&[
             "--breg-bin",
             binaries.join("breg").to_str().unwrap(),
-            "--mint-bin",
-            binaries.join("mint").to_str().unwrap(),
             "--breg-port",
             &ports[0],
-            "--mint-port",
+            "--issuer-port",
             &ports[1],
             "--database-port",
             &ports[2],

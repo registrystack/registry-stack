@@ -77,7 +77,7 @@ accessProfiles:
   requiredScopes:
   - records:read
   - membership:use
-  grants:
+  permissions:
   - entity: facility
     rowBoundaries: []
     operations:
@@ -108,7 +108,7 @@ accessProfiles:
   requiredScopes:
   - records:manage
   - membership:use
-  grants:
+  permissions:
   - entity: organization
     rowBoundaries: []
     operations:

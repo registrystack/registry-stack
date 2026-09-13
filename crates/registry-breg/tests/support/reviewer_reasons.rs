@@ -438,7 +438,7 @@ fn reason_registry() -> registry_breg::CompiledRegistry {
         .unwrap()
         .clone();
     hidden["id"] = json!("reason-hidden");
-    hidden["grants"][0]["readableRequestFields"] = json!([]);
+    hidden["permissions"][0]["readableRequestFields"] = json!([]);
     profiles.push(hidden);
     let project =
         parse_project_json(&serde_json::to_vec(&source).unwrap()).expect("reason fixture parses");

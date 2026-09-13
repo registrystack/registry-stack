@@ -342,6 +342,107 @@ impl CaseworkClient {
             .await
     }
 
+    pub async fn preview_task_templates(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskTemplatePreviews>, CaseworkClientError>
+    {
+        require_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "task-templates"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn list_task_grants(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantList>, CaseworkClientError> {
+        require_source_profile(&auth)?;
+        self.get_json(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "task-grants"],
+            &[],
+        )
+        .await
+    }
+
+    pub async fn approve_task_grant(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        approval: &registry_casework_core::TaskApprovalRequest,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantView>, CaseworkClientError> {
+        require_source_profile(&auth)?;
+        self.mutate(
+            &auth,
+            &["v1", "work-items", &item_id.to_string(), "task-grants"],
+            expected_revision,
+            idempotency_key,
+            approval,
+        )
+        .await
+    }
+
+    pub async fn revoke_task_grant(
+        &self,
+        auth: CaseworkAuth<'_>,
+        item_id: Uuid,
+        grant_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantRevocation>, CaseworkClientError>
+    {
+        require_source_profile(&auth)?;
+        let url = self.url(&[
+            "v1",
+            "work-items",
+            &item_id.to_string(),
+            "task-grants",
+            &grant_id.to_string(),
+            "revoke",
+        ])?;
+        self.send_json(self.authorized(self.http.post(url), &auth)?, StatusCode::OK)
+            .await
+    }
+
+    /// Obtain an assertion using this agent's short-lived bootstrap token.
+    /// No human or source profile header is sent and no credential is retained.
+    pub async fn task_assertion(
+        &self,
+        token: &crate::BearerToken,
+        grant_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskAssertionResponse>, CaseworkClientError>
+    {
+        let url = self.url(&["v1", "task-grants", &grant_id.to_string(), "assertion"])?;
+        let request = self
+            .http
+            .post(url)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        self.send_json(request, StatusCode::OK).await
+    }
+
+    /// Perform a fresh check using the service token registered for the resource.
+    pub async fn task_grant_status(
+        &self,
+        token: &crate::BearerToken,
+        grant_id: Uuid,
+    ) -> Result<CaseworkComplete<registry_casework_core::TaskGrantStatus>, CaseworkClientError>
+    {
+        let url = self.url(&["v1", "task-grants", &grant_id.to_string(), "status"])?;
+        let request = self
+            .http
+            .get(url)
+            .header(AUTHORIZATION, token.authorization_header_value())
+            .header(ACCEPT, JSON_MEDIA_TYPE);
+        self.send_json(request, StatusCode::OK).await
+    }
+
     pub async fn claim_work_item(
         &self,
         auth: CaseworkAuth<'_>,

@@ -844,7 +844,7 @@ fn staged_rhai_project() -> Value {
             "id": "staged-final-reviewer",
             "principalClaim": "registry_principal",
             "requiredPurposes": ["person-name-final"],
-            "grants": [{
+            "permissions": [{
                 "entity": "person-name-change-request",
                 "operations": ["get", "approve_request", "apply_request"],
                 "readableFields": ["person", "given-name", "family-name", "handling"],

@@ -824,7 +824,7 @@ fn complete_extension_surface_modules_are_order_independent() {
     let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"],"webhook":{"destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
-        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","grants":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
+        r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
         module_digest(&field_module),
         module_digest(&event_module)
     );
@@ -1790,7 +1790,7 @@ fn project_planner_build_request() -> PackageBuildRequest {
             }}
           }}],
           "accessProfiles":[{{
-            "id":"operator","default":true,"principalClaim":"principal","grants":[
+            "id":"operator","default":true,"principalClaim":"principal","permissions":[
               {{"rowBoundaries": [], "entity":"target","operations":["get","list"],"readableFields":["label"]}},
               {{"rowBoundaries": [], "entity":"request","operations":["create","patch","get","list","submit_request","revise_request","cancel_request","approve_request","reject_request","request_revision","apply_request"],"readableFields":["target","label"],"writableFields":["target","label"],
                 "reviewStages":[{{"stage":"review","targets":[{{"rowBoundaries": [], "entity":"target","readableFields":["label"]}}]}}],
@@ -2489,7 +2489,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         serde_json::json!([{"id":"by-code","fields":["code"]}]);
     source["accessProfiles"].as_array_mut().unwrap().push(serde_json::json!({
         "id":"source","principalClaim":"registry_principal","requiredScopes":["registry:source:lookup"],
-        "grants":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
+        "permissions":[{"entity":"record","operations":["lookup"],"readableFields":["code","status"],
             "lookups":[{"selector":"by-code","valueOrigin":"request"}],"rowBoundaries":[]}]}));
     let candidate = compile(&source);
     let changes = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
@@ -2502,7 +2502,7 @@ fn lookup_grant_addition_uses_its_routed_authority_without_storage_ddl() {
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
     // Changing an existing query projection does not become a grant addition.
     source["package"]["sequence"] = serde_json::json!(3);
-    source["accessProfiles"][1]["grants"][0]["readableFields"] =
+    source["accessProfiles"][1]["permissions"][0]["readableFields"] =
         serde_json::json!(["code", "status", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&candidate, &widened, PRIOR_REVISION);
@@ -2526,7 +2526,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
             "fields":[{"id":"record","type":"reference","target":"record","classification":"internal"},
                       {"id":"child","type":"reference","target":"child","classification":"internal"}]})
     ]);
-    source["accessProfiles"][0]["grants"].as_array_mut().unwrap().extend([
+    source["accessProfiles"][0]["permissions"].as_array_mut().unwrap().extend([
         serde_json::json!({"entity":"child","operations":["get"],"readableFields":["code","label"],"rowBoundaries":[]}),
         serde_json::json!({"entity":"link","operations":["get"],"readableFields":["record","child"],"rowBoundaries":[]})
     ]);
@@ -2536,7 +2536,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
     };
     let previous = compile(&source);
     source["package"]["sequence"] = serde_json::json!(2);
-    source["accessProfiles"][0]["grants"][0]["readPaths"] =
+    source["accessProfiles"][0]["permissions"][0]["readPaths"] =
         serde_json::json!([{"path":"children","readableFields":["code"]}]);
     let granted = compile(&source);
     let query = granted
@@ -2566,7 +2566,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         .any(|change| change.code == CompiledRegistryChangeCode::QueryInventoryChanged));
 
     source["package"]["sequence"] = serde_json::json!(3);
-    source["accessProfiles"][0]["grants"][0]["readPaths"][0]["readableFields"] =
+    source["accessProfiles"][0]["permissions"][0]["readPaths"][0]["readableFields"] =
         serde_json::json!(["code", "label"]);
     let widened = compile(&source);
     let changes = compiled_registry_change_set(&granted, &widened, PRIOR_REVISION);
@@ -2575,7 +2575,7 @@ fn cross_entity_read_path_grant_addition_and_removal_are_policy_successors() {
         "an existing query projection change still requires review"
     );
 
-    source["accessProfiles"][0]["grants"][0]["readPaths"] = serde_json::json!([]);
+    source["accessProfiles"][0]["permissions"][0]["readPaths"] = serde_json::json!([]);
     let removed = compile(&source);
     let changes = compiled_registry_change_set(&granted, &removed, PRIOR_REVISION);
     let plan = change_set_to_applicable_migration_plan(&changes)

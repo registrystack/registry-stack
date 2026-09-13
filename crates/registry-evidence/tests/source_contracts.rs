@@ -3349,6 +3349,7 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
             "clientIdRef": "secret:file/oauth-client-id",
             "clientAssertionKeyRef": "secret:file/oauth-client-key",
             "audience": "https://api.invalid/",
+            "resource": "https://api.invalid/records",
             "maximumCacheSeconds": 60
         }),
     );
@@ -3379,6 +3380,7 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
         contains_parameter(&form, "grant_type", "client_credentials")
             && contains_parameter(&form, "client_id", "synthetic-client")
             && contains_parameter(&form, "audience", "https://api.invalid/")
+            && contains_parameter(&form, "resource", "https://api.invalid/records")
             && contains_parameter(
                 &form,
                 "client_assertion_type",
@@ -3426,6 +3428,117 @@ async fn a_private_key_jwt_source_sends_an_endpoint_audienced_assertion_and_no_s
         claims["jti"].as_str().is_some_and(|jti| !jti.is_empty()),
         "the assertion carries no replay identifier"
     );
+}
+
+/// RFC 8707 resource is a governed form parameter, independent of the
+/// provider-specific audience field. It neither changes the token endpoint nor
+/// becomes a credential in the URL, for either client-secret placement.
+#[tokio::test]
+async fn oauth_resource_indicator_is_sent_exactly_in_both_client_secret_forms() {
+    for placement in ["basic-header", "form-body"] {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "access_token": "synthetic-access-token", "token_type": "Bearer", "expires_in": 60
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/data"))
+            .and(header("authorization", "Bearer synthetic-access-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let (_root, secrets) = resolver(&[
+            ("oauth-client-id", "synthetic-client"),
+            ("oauth-client-secret", "synthetic-secret"),
+        ]);
+        let source = fixed_source(
+            &server.uri(),
+            json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": format!("{}/token", server.uri()),
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientSecretRef": "secret:file/oauth-client-secret",
+                "credentialPlacement": placement,
+                "audience": "https://legacy.invalid/",
+                "resource": "https://api.invalid:443/records",
+                "maximumCacheSeconds": 60
+            }),
+        );
+        SourceExecutor::new(&source, secrets)
+            .expect("resource-bound OAuth source compiles")
+            .execute(
+                &[selector("record")],
+                &prepared_http_request(&RequestParts {
+                    query: vec![],
+                    body: Some(json!({})),
+                }),
+                Utc::now(),
+            )
+            .await
+            .expect("resource-bound OAuth source request succeeds");
+        let requests = server.received_requests().await.expect("request journal");
+        let token = requests
+            .iter()
+            .find(|request| request.url.path() == "/token")
+            .expect("token request was recorded");
+        assert!(
+            query_parameters(&token.url).is_empty(),
+            "token URL has a query"
+        );
+        let form = encoded_parameters(&token.body);
+        assert!(contains_parameter(
+            &form,
+            "resource",
+            "https://api.invalid:443/records"
+        ));
+        assert!(contains_parameter(
+            &form,
+            "audience",
+            "https://legacy.invalid/"
+        ));
+        assert_eq!(
+            form.iter().filter(|(name, _)| name == "resource").count(),
+            1
+        );
+        assert_eq!(form.len(), if placement == "form-body" { 5 } else { 3 });
+    }
+}
+
+#[test]
+fn oauth_resource_indicator_rejects_unusable_identifiers_before_credentials() {
+    let (_root, secrets) = resolver(&[]);
+    for resource in [
+        "",
+        "api.invalid/records",
+        "https://api.invalid/records#fragment",
+        "https://user@api.invalid/records",
+        "https://api.invalid/record with space",
+        "https://api.invalid/é",
+        "https://api.invalid/records\n",
+    ] {
+        let source = fixed_source(
+            "https://source.invalid",
+            json!({
+                "kind": "oauth2-client-credentials",
+                "tokenEndpoint": "https://issuer.invalid/token",
+                "clientIdRef": "secret:file/oauth-client-id",
+                "clientSecretRef": "secret:file/oauth-client-secret",
+                "credentialPlacement": "form-body",
+                "resource": resource,
+                "maximumCacheSeconds": 60
+            }),
+        );
+        assert_eq!(
+            SourceExecutor::new(&source, Arc::clone(&secrets)).err(),
+            Some(SourceError::InvalidPlan),
+            "invalid resource was compiled"
+        );
+    }
 }
 
 /// An authorization server behind a proxy, or one following the RFC 7523

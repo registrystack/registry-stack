@@ -1,13 +1,12 @@
 ---
 title: Inspect and diagnose a running deployment
-description: Inspect Relay, Evidence Gateway, and Registry Mint runtime health, readiness, audit, and API shape, then classify failures with stable diagnostics.
+description: Inspect Relay and Evidence Gateway runtime health, readiness, audit, and API shape, then classify failures with stable diagnostics.
 status: current
 owner: registry-docs
 source_repos:
   - registry-stack
   - registry-relay
   - registry-evidence
-  - registry-mint
   - registry-platform
 last_reviewed: "2026-08-11"
 doc_type: how-to
@@ -15,7 +14,7 @@ locale: en
 standards_referenced: []
 ---
 
-Use this procedure to inspect a running Relay, Evidence Gateway, or Registry Mint instance and
+Use this procedure to inspect a running Relay or Evidence Gateway instance and
 diagnose source or startup failure, caller authorization failure, format mismatch, cursor error,
 ambiguity, or audit-write failure without collecting source rows or secret values.
 
@@ -24,7 +23,7 @@ ambiguity, or audit-write failure without collecting source rows or secret value
 - Use the protected operator network and a least-privilege posture or API credential.
 - Know the active product and instance for Relay: its runtime file path, bound source path, and
   package `packageRevision` digest. Know the deployment revision for Evidence Gateway and
-  Registry Mint.
+  Evidence Gateway.
 - Keep public problem responses, operator diagnostics, and protected audit records in separate
   access classes.
 - Reproduce with synthetic identifiers unless separate authority permits another probe.
@@ -34,10 +33,9 @@ ambiguity, or audit-write failure without collecting source rows or secret value
 Public problem details give callers stable, minimized classifications; Relay's `404
 resource.not_found` concealment for both an unknown and an unauthorized access profile is one
 instance of that discipline.
-Relay, Evidence Gateway, and Registry Mint each write their own audit or operational records and keep
-their own keys separate: Relay's audit sink, Evidence Gateway's keyed JSONL audit
-chain (`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data), and Registry Mint's
-keyed JSONL token-decision chain.
+Relay and Evidence Gateway each write their own audit or operational records and keep their own keys
+separate: Relay's audit sink and Evidence Gateway's keyed JSONL audit chain
+(`products/evidence/OPERATOR-CONTRACT.md`, Audit and operational data).
 
 No deployment exposes a cross-product view: each product reports only its own health, readiness,
 and audit chain. Relay V2 has no separate operator-facing posture or admin surface beyond
@@ -55,9 +53,9 @@ Inspect each surface for its own purpose:
 
 | Surface | Use | Boundary |
 | --- | --- | --- |
-| `GET /health` (Relay, Evidence Gateway, Registry Mint) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
-| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Relay's `/ready` ANDs audit-sink readiness, bound SQLite source readiness, and OIDC issuer readiness when an issuer is configured; Evidence Gateway checks its signing, audit, subject-binding, and source credentials, while Mint checks that clients exist, its audit writer is healthy, and its signing provider is available |
-| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway and `mint verify-audit` for Mint. Relay V2 has no equivalent offline verification command; inspect the sealed segment sequence directly |
+| `GET /health` (Relay and Evidence Gateway) | Process liveness | Does not check all dependencies or data freshness; Evidence Gateway's `/health` answers 200 even when a source credential is missing |
+| `GET /ready` | Current traffic-admission readiness | Does not prove backup freshness or country approval; Relay's `/ready` ANDs audit-sink readiness, bound SQLite source readiness, and OIDC issuer readiness when an issuer is configured; Evidence Gateway checks its signing, audit, subject-binding, and source credentials |
+| Product audit records | Security and request evidence | Retained chain integrity does not prove complete off-host receipt; use `evidence verify-audit` for Evidence Gateway. Relay V2 has no equivalent offline verification command; inspect the sealed segment sequence directly |
 | `GET /openapi.json` | Concrete API shape for the running instance | Relay's document reflects the operations compiled into the running package and needs no credential; Evidence Gateway's is the released generated artifact, unauthenticated and independent of the deployed bundle |
 | Evidence Gateway `GET /metrics` (only when `metricsListener` is configured) | Request-boundary counts and latency by route, method, status, and problem code | Absent unless configured; never serves evidence routes and reveals no request content |
 
@@ -71,8 +69,6 @@ curl -fsS https://<relay-host>/health
 curl -fsS https://<relay-host>/ready
 curl -fsS https://<evidence-host>/health
 curl -fsS https://<evidence-host>/ready
-curl -fsS https://<mint-host>/health
-curl -fsS https://<mint-host>/ready
 ```
 
 Fetch a running Relay instance's `/openapi.json` directly and compare it against the package's
@@ -254,7 +250,6 @@ Retain:
   response header, and the output of `evidence verify-audit` when a signing or
   audit failure is suspected. The public trace is not the internal audit
   operation identifier.
-- Registry Mint's operation identifier from its local log and the output of `mint verify-audit`
   when a token-decision audit failure is suspected. Do not retain the assertion or access token.
 - Redacted audit correlation ids and the tested synthetic canary outcome.
 - The traffic-admission or escalation decision.

@@ -27,7 +27,7 @@ signing, and deployment configuration.
 
 At the other edges, Registry Manifest owns portable metadata and DCAT rendering
 and receives a one-way projection, Registry Relay is a separate read-only
-publication boundary, and Registry Mint issues tokens while an operated BReg
+publication boundary, and an operated OAuth issuer issues tokens while a BReg
 runtime stays an independent OAuth resource server. Authoring, signing, and
 migration authority stay separate: tooling can edit, diff, and check
 configuration, and cannot mint a package signature or hold the production

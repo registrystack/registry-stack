@@ -103,7 +103,7 @@
       "requiredScopes": [
         "attachments:operate"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "record",
           "operations": [
@@ -130,7 +130,7 @@
       "requiredScopes": [
         "attachments:submit"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "correction-request",
           "operations": [
@@ -165,7 +165,7 @@
       "requiredScopes": [
         "attachments:submit"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "correction-request",
           "operations": [
@@ -200,7 +200,7 @@
       "requiredScopes": [
         "attachments:review"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "correction-request",
           "operations": [
@@ -249,7 +249,7 @@
       "requiredScopes": [
         "attachments:apply"
       ],
-      "grants": [
+      "permissions": [
         {
           "entity": "correction-request",
           "operations": [

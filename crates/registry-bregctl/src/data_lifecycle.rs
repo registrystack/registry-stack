@@ -1176,7 +1176,7 @@ mod tests {
             "accessProfiles": [{
                 "id": PROFILE,
                 "principalClaim": "principal",
-                "grants": [{
+                "permissions": [{
                     "entity": ENTITY,
                     "operations": ["create", "batch", "list"],
                     "readableFields": ["code"],

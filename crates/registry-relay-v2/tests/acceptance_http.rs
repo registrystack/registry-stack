@@ -18,10 +18,6 @@ use http::header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, ETAG, LINK, VARY}
 use http::{HeaderMap, HeaderName, HeaderValue, Method, Request, StatusCode};
 use jsonschema::{Draft, JSONSchema};
 use oxjsonld::JsonLdParser;
-use registry_mint::{
-    config::MintConfig,
-    server::{build_app as build_mint_app, MintService},
-};
 use registry_platform_audit::{
     AuditChainHasher, AuditEnvelope, AuditError, AuditSink, ChainState, JsonlFileSink,
 };
@@ -71,6 +67,13 @@ use registry_relay_v2::server::{
 };
 use registry_relay_v2::sqlite_runtime::{RuntimeSourceBinding, SqliteRuntime, SqliteRuntimeLimits};
 use registry_relay_v2::startup::build_authenticator_for_supervised_local_development;
+use registry_thunderid_tooling::{
+    container::Session,
+    description::SessionIdentity,
+    local::{self, LocalClient},
+    render,
+    version::ThunderIdPin,
+};
 use serde_json::{json, Map, Value};
 use tempfile::TempDir;
 use tower::ServiceExt as _;
@@ -167,195 +170,145 @@ impl ClientLoopback {
     }
 }
 
-struct MintLoopback {
+struct StockIssuerLoopback {
     issuer: String,
     token_provider: Arc<dyn TokenProvider>,
-    shutdown: tokio::sync::oneshot::Sender<()>,
-    server: tokio::task::JoinHandle<Result<(), std::io::Error>>,
-    _temp: TempDir,
+    label: String,
+    id: String,
+    port: u16,
+    image: String,
+    docker: PathBuf,
+    temp: TempDir,
 }
 
-impl MintLoopback {
+impl StockIssuerLoopback {
     async fn start_social_assistance(audience: &str) -> Self {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))
-            .expect("Mint acceptance listener reserves");
-        listener
-            .set_nonblocking(true)
-            .expect("Mint acceptance listener becomes nonblocking");
-        let address = listener
-            .local_addr()
-            .expect("Mint acceptance address resolves");
-        let issuer = format!("http://{address}");
-        let token_endpoint = format!("{issuer}/token");
+        let audience = audience.to_owned();
+        tokio::task::spawn_blocking(move || Self::start(&audience))
+            .await
+            .unwrap()
+    }
 
-        let temp = tempfile::tempdir().expect("Mint acceptance deployment creates");
-        let root = temp.path();
-        fs::create_dir(root.join("clients")).expect("Mint client directory creates");
-        fs::create_dir(root.join("public-keys")).expect("Mint public-key directory creates");
-        fs::create_dir(root.join("secrets")).expect("Mint secret directory creates");
-
-        let (service_public, service_private) = mint_service_key_pair(9);
-        let public_file = format!(
-            "{}.jwk.json",
-            service_public["kid"]
-                .as_str()
-                .expect("Mint service key has an id")
+    fn start(audience: &str) -> Self {
+        let reservation = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = reservation.local_addr().unwrap().port();
+        let issuer = format!("http://127.0.0.1:{port}");
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let label = format!("relay-acceptance-{port}");
+        let id = format!(
+            "relay-acceptance-{port}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         );
-        fs::write(
-            root.join("public-keys").join(&public_file),
-            service_public.to_string(),
+        let (public, private) = issuer_client_key_pair(11);
+        let description = local::local_description(
+            SessionIdentity {
+                label: label.clone(),
+                id: id.clone(),
+            },
+            port,
+            temp.path().join("issuer"),
+            audience.to_owned(),
+            vec![LocalClient {
+                client_id: "relay-consumer".into(),
+                public_jwks: json!({"keys":[public]}).to_string(),
+                claims: BTreeMap::from([
+                    ("purpose".into(), "benefit-delivery".into()),
+                    ("service_area".into(), "AREA-A".into()),
+                    ("registry_actor_kind".into(), "service".into()),
+                ]),
+                scopes: vec!["registry:social-assistance:caseworker".into()],
+                allow_human_fixture: false,
+            }],
         )
-        .expect("Mint governed public key writes");
-        write_owner_only(
-            &root.join("secrets/signing.jwk"),
-            service_private.to_string().as_bytes(),
-        );
-        write_owner_only(
-            &root.join("secrets/audit-hmac-key"),
-            b"0123456789abcdef0123456789abcdef",
-        );
-
-        let (client_private, client_public) = fixtures::ed25519_pair();
-        let client_public =
-            serde_json::to_value(client_public).expect("Mint client public key serializes");
-        fs::write(
-            root.join("clients/relay-consumer.yaml"),
-            format!(
-                "clientId: relay-consumer\nprincipal: synthetic-social-caseworker\nauthorization:\n  scopes: [registry:social-assistance:caseworker]\n  claims:\n    purpose: benefit-delivery\n    service_area: AREA-A\nkeys: [{client_public}]\n"
-            ),
+        .expect("stock issuer description");
+        render::render(&description).expect("stock issuer render");
+        let image = ThunderIdPin::load().expect("stock issuer pin").image;
+        let docker = std::env::var_os("DOCKER_BIN")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                    .map(|path| path.join("docker"))
+                    .find(|path| path.is_file())
+                    .expect("Docker is required for the stock issuer acceptance gate")
+            });
+        drop(reservation);
+        local::start(
+            &Session {
+                label: &label,
+                id: &id,
+                port,
+                state_root: &temp.path().join("issuer"),
+                image: &image,
+            },
+            &docker,
+            &mut || false,
         )
-        .expect("Mint Relay registration writes");
-
-        let config_path = root.join("mint.yaml");
-        fs::write(
-            &config_path,
-            format!(
-                r#"version: 1
-validationMode: supervised-local-development
-issuer: {issuer}
-listener: {{address: 127.0.0.1, port: {}}}
-signing:
-  algorithm: ES256
-  activePublicJwkFile: public-keys/{public_file}
-  publishedPublicJwkFiles: []
-  revokedKeyIds: []
-signer:
-  kind: local-jwk
-  privateKeyRef: secret:file/signing.jwk
-secretProviders:
-  file: {{root: {}}}
-audit:
-  path: audit/mint.jsonl
-  maximumFileBytes: 1073741824
-  hashKeyRef: secret:file/audit-hmac-key
-  hashKeyVersion: 1
-accessTokens:
-  audiences: [{audience}]
-  lifetimeSeconds: 300
-clientAssertion:
-  audience: {token_endpoint}
-  algorithms: [EdDSA]
-clients:
-  directory: clients
-"#,
-                address.port(),
-                root.join("secrets").display(),
-            ),
-        )
-        .expect("Mint Relay deployment writes");
-
-        let config = MintConfig::load(&config_path).expect("Mint Relay configuration loads");
-        let service = Arc::new(
-            MintService::load(config)
-                .await
-                .expect("Mint Relay deployment loads"),
-        );
-        let app = build_mint_app(service);
-        let listener = tokio::net::TcpListener::from_std(listener)
-            .expect("Mint acceptance listener transfers to Tokio");
-        let (shutdown, shutdown_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                })
-                .await
-        });
-
-        let http = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(Duration::from_secs(1))
-            .build()
-            .expect("Mint acceptance readiness client builds");
-        tokio::time::timeout(Duration::from_secs(5), async {
-            loop {
-                if http
-                    .get(format!("{issuer}/ready"))
-                    .send()
-                    .await
-                    .is_ok_and(|response| response.status().is_success())
-                {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("Mint becomes ready before the acceptance deadline");
-
-        let provider: Arc<dyn TokenProvider> = Arc::new(
-            PrivateKeyJwt::new(PrivateKeyJwtConfig::new(
-                url::Url::parse(&token_endpoint).expect("Mint token endpoint parses"),
+        .expect("stock issuer starts");
+        let provider = PrivateKeyJwt::new(
+            PrivateKeyJwtConfig::new(
+                format!("{issuer}/oauth2/token").parse().unwrap(),
                 "relay-consumer",
-                client_private,
-            ))
-            .expect("Mint private-key-JWT provider builds"),
-        );
-
+                registry_platform_crypto::PrivateJwk::parse(&private.to_string()).unwrap(),
+            )
+            .with_audience(&issuer)
+            .with_resource(audience)
+            .with_scopes(["registry:social-assistance:caseworker"]),
+        )
+        .expect("registered private-key-JWT provider");
         Self {
             issuer,
-            token_provider: provider,
-            shutdown,
-            server,
-            _temp: temp,
+            token_provider: Arc::new(provider),
+            label,
+            id,
+            port,
+            image,
+            docker,
+            temp,
         }
     }
 
     async fn stop(self) {
-        self.shutdown
-            .send(())
-            .expect("Mint acceptance server is running");
-        tokio::time::timeout(Duration::from_secs(5), self.server)
+        tokio::task::spawn_blocking(move || drop(self))
             .await
-            .expect("Mint acceptance server shuts down before timeout")
-            .expect("Mint acceptance server task completes")
-            .expect("Mint acceptance server shuts down cleanly");
+            .unwrap();
+    }
+}
+impl Drop for StockIssuerLoopback {
+    fn drop(&mut self) {
+        let _ = local::stop(
+            &Session {
+                label: &self.label,
+                id: &self.id,
+                port: self.port,
+                state_root: &self.temp.path().join("issuer"),
+                image: &self.image,
+            },
+            &self.docker,
+        );
     }
 }
 
-fn mint_service_key_pair(seed: u8) -> (Value, Value) {
+fn issuer_client_key_pair(seed: u8) -> (Value, Value) {
     let scalar = [seed; 32];
-    let signing =
-        p256::ecdsa::SigningKey::from_slice(&scalar).expect("the Mint acceptance scalar is valid");
+    let signing = p256::ecdsa::SigningKey::from_slice(&scalar)
+        .expect("the issuer acceptance scalar is valid");
     let encoded = signing.verifying_key().to_encoded_point(false);
     let x = URL_SAFE_NO_PAD.encode(encoded.x().expect("an uncompressed point has x"));
     let y = URL_SAFE_NO_PAD.encode(encoded.y().expect("an uncompressed point has y"));
     let public = PublicJwk::parse(
         &json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "x":x, "y":y}).to_string(),
     )
-    .expect("the Mint acceptance public key parses");
-    let kid = public.jkt().expect("the Mint service thumbprint computes");
+    .expect("the issuer acceptance public key parses");
+    let kid = public.jkt().expect("the issuer client thumbprint computes");
     (
         json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y}),
         json!({"kty":"EC", "crv":"P-256", "alg":"ES256", "kid":kid, "x":x, "y":y,
                "d":URL_SAFE_NO_PAD.encode(scalar)}),
     )
-}
-
-fn write_owner_only(path: &Path, contents: &[u8]) {
-    fs::write(path, contents).expect("Mint acceptance secret writes");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
-        .expect("Mint acceptance secret becomes owner-only");
 }
 
 fn complete<T>(outcome: Conditional<T>, operation: &str) -> registry_relay_client::Complete<T> {
@@ -1102,17 +1055,11 @@ async fn rust_client_drives_the_real_relay_router_across_the_public_surface() {
 }
 
 #[tokio::test]
-async fn mint_registered_authority_drives_a_protected_relay_lookup() {
+#[ignore = "exact gate: starts the pinned stock issuer container"]
+async fn stock_issuer_registered_authority_drives_a_protected_relay_lookup() {
     let mut relay = ProjectHarness::open("social-assistance").await;
-    let audience = relay
-        .runtime
-        .authentication
-        .issuer
-        .as_ref()
-        .expect("social-assistance declares an issuer")
-        .audience
-        .clone();
-    let mint = MintLoopback::start_social_assistance(&audience).await;
+    let audience = "urn:registrystack:relay:acceptance:social-assistance".to_owned();
+    let stock = StockIssuerLoopback::start_social_assistance(&audience).await;
 
     if let Some(fixture_idp) = relay.idp.take() {
         fixture_idp.stop().await;
@@ -1123,15 +1070,16 @@ async fn mint_registered_authority_drives_a_protected_relay_lookup() {
         .issuer
         .clone()
         .expect("social-assistance declares an issuer");
-    issuer.discovery_url = Some(format!("{}/.well-known/openid-configuration", mint.issuer));
-    issuer.algorithms = vec!["ES256".into()];
+    issuer.discovery_url = Some(format!("{}/.well-known/openid-configuration", stock.issuer));
+    issuer.audience = audience;
+    issuer.algorithms = vec!["RS256".into()];
     let authenticator = build_authenticator_for_supervised_local_development(&issuer)
         .await
-        .expect("Relay startup discovers Mint and loads its signing key");
+        .expect("Relay startup discovers the stock issuer and loads its signing key");
     relay.replace_authenticator(authenticator);
 
     let loopback =
-        ClientLoopback::start_with_provider(&relay, Some(Arc::clone(&mint.token_provider))).await;
+        ClientLoopback::start_with_provider(&relay, Some(Arc::clone(&stock.token_provider))).await;
     let request = LookupRequest::default()
         .options(
             RecordOptions::default()
@@ -1149,8 +1097,8 @@ async fn mint_registered_authority_drives_a_protected_relay_lookup() {
             .client
             .lookup_record("assistance-enrolment", "by-case-and-person", &request, None)
             .await
-            .expect("Mint-authorized Relay lookup succeeds"),
-        "Mint-authorized Relay lookup",
+            .expect("Stock-issuer-authorized Relay lookup succeeds"),
+        "Stock-issuer-authorized Relay lookup",
     );
     match result.value {
         RecordResponse::Json(record) => {
@@ -1167,7 +1115,7 @@ async fn mint_registered_authority_drives_a_protected_relay_lookup() {
     }
 
     loopback.stop().await;
-    mint.stop().await;
+    stock.stop().await;
 }
 
 #[tokio::test]

@@ -8,7 +8,7 @@ authorization, concurrency checks, idempotency, audit, events, and receipt.
 The fixed-effect fixtures are intentionally small:
 
 - `fixtures/asset-registration-actions` creates an asset and its initial
-  inspection in one action. The grant returns only the `asset` effect in the
+  inspection in one action. The permission returns only the `asset` effect in the
   action receipt, so callers do not receive the `initial-inspection` reference.
 - `fixtures/household-contact-actions` creates a person and membership, then
   patches the selected household's contact reference. It also links a service
@@ -73,12 +73,12 @@ the persisted entity field at `entities[].fields`, which may still expose
 `assetCode`. After a module edit, run `bregctl project lock <project>`
 before repeating check, explain, generate, and the schema-test journey below.
 
-An action grant is exclusive. It names `action`, uses only `operations:
+An action permission is exclusive. It names `action`, uses only `operations:
 [invoke]`, and supplies target authority for every entity that the compiled
 effect graph creates, patches, or references:
 
 ```yaml
-grants:
+permissions:
   - action: register-household-contact
     operations: [invoke]
     targets:
@@ -98,17 +98,17 @@ grants:
 ```
 
 Do not add `readableFields`, `writableFields`, query fields, request-stage
-fields, SQL fragments, or Rust customization to an action grant. The action
+fields, SQL fragments, or Rust customization to an action permission. The action
 contract and typed entities define the writable ceiling, and `results` controls
 which minimal record and revision references appear in the application receipt.
 
-For ordinary entity grants, keep boundary-bearing fields out of patch grants
+For ordinary entity permissions, keep boundary-bearing fields out of patch permissions
 unless moving a row between caller-visible boundaries is intentional and reviewed.
 The household fixture splits setup authority from maintenance authority:
 `household-operator` can create required `district` values for seed households
 and service centers, while `household-maintainer` can patch only
 `household-name`. The action patch of `contact-person` is governed by the
-`contact-registrar` action grant and its target row boundaries.
+`contact-registrar` action permission and its target row boundaries.
 
 ## Input-only Rhai handlers
 
@@ -243,7 +243,7 @@ points are not supported. The compiler rejects unknown inputs, fields,
 incompatible values, duplicate checks, and requirements above the existing
 128-field or 2 MiB bounds.
 
-The selected action grant must explicitly include the target entity and meet
+The selected action permission must explicitly include the target entity and meet
 its mandatory scopes, purposes, and row boundaries. That grant admits the
 reviewed action's exact required processing, including checking a field that
 the caller cannot retrieve. It does not grant ordinary reads or expose the
@@ -650,7 +650,7 @@ values and cannot become authenticated claims or grants. Rhai may trim and
 concatenate values, refuse before a call, and conditionally call another declared
 capability. Use `value.trim();` because Rhai trims strings in place. Declared
 capabilities are optional; declared local targets still require admission even
-if the handler omits their write slots. The action grant covers all declared
+if the handler omits their write slots. The action permission covers all declared
 processing, so a caller input selecting optional disclosure adds no authority.
 
 Each capability permits one call, with at most two per action. Effective defaults
@@ -703,7 +703,7 @@ migration database, the command verifies the expected Registry identity, catalog
 and readiness while holding the Registry transaction lock through deletion.
 Ordinary history erasure does not cover this separate retention scope.
 
-Eligibility remains an operation-level rule. Configure grants so CRUD, other
+Eligibility remains an operation-level rule. Configure permissions so CRUD, other
 actions and reviewed changes cannot bypass the intended registration procedure.
 Native database constraints still protect local stored invariants. Synthetic
 `evidenceCalls` mocks verify control flow, selectors, typed results and exact

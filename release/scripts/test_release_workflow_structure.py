@@ -144,12 +144,11 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         for package in (
             "registry-evidence",
             "registry-evidencectl",
-            "registry-mint",
             "registry-evidence-oid4vci",
         ):
             self.assertIn(f"-p {package}", build)
         self.assertIn("cargo build --release --locked", build)
-        self.assertIn("for binary in evidence evidencectl mint evidence-oid4vci", build)
+        self.assertIn("for binary in evidence evidencectl evidence-oid4vci", build)
 
         assemble = step_run(
             document,
@@ -1774,7 +1773,6 @@ class SupportingWorkflowStructureTest(unittest.TestCase):
                 "casework",
                 "discovery",
                 "evidence",
-                "mint",
                 "relay",
             ],
         }

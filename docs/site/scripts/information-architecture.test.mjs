@@ -198,7 +198,6 @@ test('uses the product navigation in its published order', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
-    'Registry Mint',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -280,6 +279,7 @@ test('keeps consumer and wallet-provider guidance in separate Evidence groups', 
   assert.ok(wallet, 'Evidence must provide a separate wallet-provider entry point');
   assert.deepEqual(consumer.items.map((item) => item.slug), [
     'tutorials/request-evidence-from-an-application',
+    'configure/request-an-access-token',
     'tutorials/verify-an-assertion-as-a-consumer',
     'tutorials/manage-evidence-verifier-trust',
     'explanation/openfn-adaptors',
@@ -318,20 +318,18 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
-    'Registry Mint',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
   }
 
   // Short forms are what made one product look like several. `Relay`, `BReg`,
-  // `Mint`, and `Discovery` are ordinary inside a page that has already named
+  // and `Discovery` are ordinary inside a page that has already named
   // the product; a top-level label is where a reader arrives, so it carries
   // the full name or none at all.
   for (const label of topLevelLabels(sidebarSource)) {
     for (const [shortForm, formal] of [
       ['Relay', 'Registry Relay'],
-      ['Mint', 'Registry Mint'],
       ['Discovery', 'Registry Discovery'],
       ['BReg', 'Base Registry Engine'],
       ['Evidence', 'Evidence Gateway'],
@@ -460,7 +458,6 @@ test('keeps the BReg guide and references in one adoption path', () => {
     'tutorials/derive-a-registry-from-publicschema',
     'tutorials/review-registry-changes',
     'tutorials/send-registry-events-to-a-webhook',
-    'tutorials/query-a-spatial-registry-from-qgis',
     'configure/breg',
     'configure/breg-access',
     'configure/breg-change-control',
@@ -622,9 +619,8 @@ test('organizes Evidence Gateway tasks without publishing the obsolete Relay com
     'Evidence Gateway task group',
   );
   assert.doesNotMatch(evidence, /label: 'Verify and trust'/);
-  // Token issuance stays with Registry Mint. The Evidence consumer group is
-  // separate from provider authoring and wallet-delivery guidance.
-  assert.doesNotMatch(evidence, /label: 'Registry Mint'/);
+  // Token issuance stays with the deployment's identity provider. The Evidence
+  // consumer group is separate from provider authoring and wallet-delivery guidance.
   assert.doesNotMatch(evidence, /label: 'Verify as a relying party'/);
   // explanation/integration-patterns held two seats, which left Starlight
   // unable to say which one is the active page and made prev/next ambiguous.

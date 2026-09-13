@@ -820,15 +820,15 @@ fn render_change_request(
             "inputSchema": openapi_input_schema_id(&entity.id, action.operation.access_operation()),
             "responseSchema": "ChangeRequestActionResponse",
         })).collect::<Vec<_>>(),
-        "reviewGrants": request.review_grants,
-        "applyGrants": request.apply_grants,
-        "presenceGrants": request.presence_grants,
+        "reviewPermissions": request.review_permissions,
+        "applyPermissions": request.apply_permissions,
+        "presencePermissions": request.presence_permissions,
         "targetEntities": request.target_entities,
     })
 }
 
 /// Source-free change-request capability projection for caller-filtered
-/// Registry metadata. It intentionally omits effects, grants, targets and all
+/// Registry metadata. It intentionally omits effects, permissions, targets and all
 /// planner provenance, so this descriptive surface cannot manufacture action
 /// authority or disclose hidden configuration.
 #[allow(dead_code)] // Called by the production /v1/registry metadata route.
@@ -1127,7 +1127,7 @@ fn action_response_result_shapes(
         return vec![known_action_result_effects(action, results)];
     }
     let mut shapes = action
-        .grants
+        .permissions
         .iter()
         .map(|grant| known_action_result_effects(action, &grant.results))
         .collect::<BTreeSet<_>>();
@@ -1366,7 +1366,7 @@ fn selected_profile_from_access_profiles(
 
 fn action_profile_ids(action: &CompiledAction) -> Vec<String> {
     action
-        .grants
+        .permissions
         .iter()
         .map(|grant| grant.profile_id.clone())
         .collect::<BTreeSet<_>>()
@@ -1380,7 +1380,7 @@ fn action_selected_result_effects(
 ) -> BTreeSet<String> {
     match selected_profile {
         Some(profile) => action
-            .grants
+            .permissions
             .iter()
             .filter(|grant| grant.profile_id == profile)
             .flat_map(|grant| grant.results.iter().cloned())
@@ -1530,7 +1530,7 @@ fn action_operation_security(
     let mut requires_bearer = false;
     for profile in &profiles {
         let Some(grant) = action
-            .grants
+            .permissions
             .iter()
             .find(|grant| grant.profile_id == *profile)
         else {
@@ -2261,7 +2261,7 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                     if let Some(stage) = spec.route.request_stage.as_deref() {
                         targets.extend(
                             request
-                                .review_grants
+                                .review_permissions
                                 .iter()
                                 .filter(|grant| grant.profile_id == profile && grant.stage == stage)
                                 .map(|grant| grant.target_entity_id.clone()),
@@ -2271,7 +2271,7 @@ fn request_action_target_entities(spec: OpenApiOperationSpec<'_>) -> Vec<String>
                 Operation::ApplyRequest => {
                     targets.extend(
                         request
-                            .apply_grants
+                            .apply_permissions
                             .iter()
                             .filter(|grant| grant.profile_id == profile)
                             .map(|grant| grant.target_entity_id.clone()),
@@ -4702,9 +4702,9 @@ mod spatial_tests {
                 ]
             }],
             "accessProfiles":[
-                {"id":"map","default":true,"principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": []}]},
-                {"id":"plain","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]},
-                {"id":"geometry-only","principalClaim":"principal","grants":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": []}]}
+                {"id":"map","default":true,"principalClaim":"principal","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code","label","location"],"spatialQueries":{"bbox":{"maximumLongitudeSpanDegrees":0.5,"maximumLatitudeSpanDegrees":0.25}}, "rowBoundaries": []}]},
+                {"id":"plain","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["code"], "rowBoundaries": []}]},
+                {"id":"geometry-only","principalClaim":"principal","permissions":[{"entity":"site","operations":["get","list"],"readableFields":["location"], "rowBoundaries": []}]}
             ]
         }"#).expect("spatial artifact fixture parses");
         compile_project(&project, &[], CompileProfile::Authoring)

@@ -170,7 +170,7 @@ export async function checkNotarySurface(siteRoot = defaultSiteRoot) {
     [
       'Current documentation names Registry Notary, which no adopter can meet.',
       ...findings.map(({ path, line, excerpt }) => `${path}:${line}: ${excerpt}`),
-      'Rewrite the page around Registry Relay, Evidence, and Registry Mint. Leave',
+      'Rewrite the page around Registry Relay and Evidence. Leave',
       'the retirement itself to the decision record and the changelog. Where a',
       'shipped schema, validator, or image name still spells the identifier,',
       'write it as code and say nothing about the product behind it.',

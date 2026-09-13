@@ -27,7 +27,7 @@ same registry.
   outcome="A Python program and a Node program that read, page, and write your local registry through the unified client and handle a refusal explicitly."
   time="About 20 minutes after the prerequisite"
   level="Python or Node application developer"
-  prerequisites={['Python 3.10 or later, or Node 22.12 or later', 'The registry from Create and query your first registry, still running', 'The breg and mint binaries on your path']}
+  prerequisites={['Python 3.10 or later, or Node 22.12 or later', 'The registry from Create and query your first registry, still running', 'The breg and bregctl binaries on your path']}
 />
 
 ## Before you start
@@ -38,22 +38,23 @@ registry address and the path of a token file; the programs in this tutorial rea
 
 ```sh
 registry_url=http://127.0.0.1:8090
+registry_project="$PWD/tutorial-work/project"
 token_file="$PWD/tutorial-work/operator-token"
 ```
 
-The first tutorial wrote the token into a header file for `curl`; the client wants the bare token.
-It lasts five minutes, and the install takes longer than that, so mint one now, as the `operator`
-client, and again whenever a call fails with status `401`:
+The first tutorial wrote a header file for `curl`; the client wants the bare token.
+The token lasts five minutes. Request a fresh token as the `operator` client now
+and repeat these commands whenever a call fails with status `401`:
 
 ```sh
-credentials="$PWD/tutorial-work/project/.breg/dev/credentials/operator"
+bregctl dev token operator "$registry_project"
 umask 077
-mint token --url http://127.0.0.1:8091/token \
-  --client-id "$(cat "$credentials/client-id")" --key "$credentials/assertion-key.jwk" \
+sed 's/^Authorization: Bearer //' "$registry_project/.breg/dev/secrets/operator.header" \
   > "$token_file"
 ```
 
-Success prints nothing. The file is readable only by your user; the programs read it and never print it.
+The command reports the private header-file path. The extracted token stays in a
+file readable only by your user; the programs read it and never print it.
 
 ## Install the client
 
@@ -354,7 +355,7 @@ inspect a refused write through one error type.
 | `pip` or `npm` finds no matching version | The registry is older than v0.26.1, or `version` does not match `breg --version` | Install a v0.26.1 or later release, start the registry with it, and reinstall at its exact version |
 | `KeyError: 'REGISTRY_URL'` in Python, or `configuration` in Node | `REGISTRY_URL` is not set | Prefix the command with both assignments as shown in [Construct a client and probe the registry](#construct-a-client-and-probe-the-registry) |
 | `KeyError: 'REGISTRY_TOKEN_FILE'` in Python, or a `TypeError` naming the `path` argument in Node | `REGISTRY_TOKEN_FILE` is not set | Prefix the command with both assignments |
-| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes | Renew it with the `mint token` command in [Before you start](#before-you-start) and rerun |
+| `problem` with status `401` and code `authentication.refused` | The token is older than five minutes | Renew it with the `bregctl dev token` command in [Before you start](#before-you-start) and rerun |
 | `transport` with a `connect` transport kind | The registry is not running | Start it again with the first tutorial's `bregctl dev` command and renew the token |
 | `problem` with status `400` and code `query.invalid` | A filter names a field the profile does not allow | Filter on `code` or `status` only |
 | `metadata_selection` with code `not_found` or `profile_mismatch` | The operation identifier or the profile does not match the project | Use `records.record.create` with the `operator` profile |

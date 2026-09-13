@@ -131,7 +131,7 @@ values, against the explicit synthetic expectation file. Default reports expose
 identity, field names, shapes and counts, without dumping input values, record
 IDs or source. A mismatch reports a path without disclosing the values.
 These checks prove calculation and decoding, not PostgreSQL patterns, target
-existence, grants, locks, conditions, atomicity or delivery.
+existence, permissions, locks, conditions, atomicity or delivery.
 `check` reports that the identifier's native pattern is unverified offline;
 the PostgreSQL journey below validates its syntax and enforcement.
 

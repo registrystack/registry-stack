@@ -29,6 +29,7 @@ pub(crate) const REQUEST_TABLES: &[(&str, &[&str])] = &[
         &["DELETE", "INSERT", "SELECT"],
     ),
     ("registry_request_proposals", &["INSERT", "SELECT"]),
+    ("registry_request_task_authority", &["INSERT", "SELECT"]),
     ("registry_request_targets", &["INSERT", "SELECT"]),
     ("registry_request_decisions", &["INSERT", "SELECT"]),
     ("registry_request_applications", &["INSERT", "SELECT"]),
@@ -89,6 +90,17 @@ pub(crate) async fn install(
                  REFERENCES registry_internal.registry_request_state,
              CHECK ((snapshot IS NULL) = (erased_at IS NOT NULL)),
              CHECK (snapshot IS NULL OR jsonb_typeof(snapshot) = 'object')
+         );
+         CREATE TABLE IF NOT EXISTS registry_internal.registry_request_task_authority (
+             request_entity_id text NOT NULL,
+             request_id uuid NOT NULL,
+             proposal_version bigint NOT NULL,
+             binding jsonb NOT NULL CHECK (
+                 jsonb_typeof(binding) = 'object' AND octet_length(binding::text) <= 65536
+             ),
+             PRIMARY KEY (request_entity_id, request_id, proposal_version),
+             FOREIGN KEY (request_entity_id, request_id, proposal_version)
+                 REFERENCES registry_internal.registry_request_proposals
          );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_targets (
              request_entity_id text NOT NULL,
@@ -255,6 +267,60 @@ pub(crate) async fn install(
             .map_err(|_| MutationError::Unavailable)?;
     }
     Ok(())
+}
+
+/// Retain verified submitter authority separately from all later reviewers.
+/// The proposal foreign key binds these claims to its immutable effect digest.
+pub(crate) async fn save_task_authority(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    proposal_version: i64,
+    binding: &crate::task_grant::TaskGrantBinding,
+) -> Result<(), MutationError> {
+    binding
+        .validate()
+        .map_err(|_| MutationError::PreconditionFailed)?;
+    let value = serde_json::to_value(binding).map_err(|_| MutationError::Unavailable)?;
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_task_authority
+             (request_entity_id, request_id, proposal_version, binding)
+         VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+            &[&entity_id, &record_id, &proposal_version, &value],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    let stored = load_task_authority(transaction, entity_id, record_id, proposal_version).await?;
+    if stored.as_ref() != Some(binding) {
+        return Err(MutationError::IdempotencyConflict);
+    }
+    Ok(())
+}
+
+/// Call only after proving current visibility of the corresponding request.
+pub(crate) async fn load_task_authority(
+    transaction: &Transaction<'_>,
+    entity_id: &str,
+    record_id: Uuid,
+    proposal_version: i64,
+) -> Result<Option<crate::task_grant::TaskGrantBinding>, MutationError> {
+    let row = transaction
+        .query_opt(
+            "SELECT binding FROM registry_internal.registry_request_task_authority
+         WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3",
+            &[&entity_id, &record_id, &proposal_version],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    row.map(|row| {
+        let binding: crate::task_grant::TaskGrantBinding =
+            serde_json::from_value(row.get::<_, Value>(0))
+                .map_err(|_| MutationError::Unavailable)?;
+        binding.validate().map_err(|_| MutationError::Unavailable)?;
+        Ok(binding)
+    })
+    .transpose()
 }
 
 #[derive(Clone, Eq, PartialEq)]
@@ -1557,6 +1623,60 @@ mod tests {
                 assert!(allowed, "declared runtime table privilege is granted");
             }
         }
+        migration_task.abort();
+        database.cleanup().await;
+    }
+
+    #[tokio::test]
+    async fn proposal_task_authority_is_immutable_and_separate_from_reviewer() {
+        let (database, mut migration, migration_task) = install_schema().await;
+        let request_id = Uuid::new_v4();
+        let submitted = workflow(request_id)
+            .submit(
+                context("submitter", 1),
+                proposal(Uuid::new_v4(), "site-a", "site-b"),
+            )
+            .expect("submit")
+            .into_workflow();
+        let grant: crate::task_grant::TaskGrantBinding = serde_json::from_value(json!({
+            "grantId": Uuid::new_v4().to_string(), "authority": "casework",
+            "sourceIssuer": "https://casework.test", "principal": "original-agent",
+            "client": "original-client", "resource": "urn:breg:test", "purpose": "review",
+            "bounds": {"type":"breg", "permissions":[{"collection":"people", "operations":["get","patch"]}]},
+            "subjects": {"person_reference":"synthetic-person"},
+            "expiresAt": chrono::Utc::now().timestamp() + 900,
+        })).expect("binding");
+        let tx = migration.transaction().await.expect("transaction");
+        initialize_draft(&tx, REQUEST_ENTITY, request_id, "submitter")
+            .await
+            .expect("draft");
+        save(&tx, REQUEST_ENTITY, request_id, 1, &submitted)
+            .await
+            .expect("proposal");
+        save_task_authority(&tx, REQUEST_ENTITY, request_id, 1, &grant)
+            .await
+            .expect("bind");
+        save_task_authority(&tx, REQUEST_ENTITY, request_id, 1, &grant)
+            .await
+            .expect("exact replay");
+        let reviewed = request_revision(submitted, "human-reviewer", 2);
+        save(&tx, REQUEST_ENTITY, request_id, 2, &reviewed)
+            .await
+            .expect("review");
+        assert_eq!(
+            load_task_authority(&tx, REQUEST_ENTITY, request_id, 1)
+                .await
+                .unwrap(),
+            Some(grant.clone())
+        );
+        let mut changed = serde_json::to_value(&grant).unwrap();
+        changed["client"] = json!("replacement-client");
+        let changed = serde_json::from_value(changed).unwrap();
+        assert_eq!(
+            save_task_authority(&tx, REQUEST_ENTITY, request_id, 1, &changed).await,
+            Err(MutationError::IdempotencyConflict)
+        );
+        tx.commit().await.expect("commit");
         migration_task.abort();
         database.cleanup().await;
     }

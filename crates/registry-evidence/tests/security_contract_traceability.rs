@@ -337,7 +337,8 @@ fn every_frozen_profile_negative_is_bound_to_a_mapped_security_negative() {
 fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &TestReference) {
     // Evidence security invariants may be implemented by the runtime, its
     // relying-party client, the portable verifier, the narrowly shared
-    // platform primitives they use, or the OpenID4VCI delivery front end,
+    // platform primitives they use, the governed Casework authority, or the
+    // OpenID4VCI delivery front end,
     // which owns the wallet-facing boundary the runtime deliberately does not
     // speak. The front end is a permitted implementer of its own delivery
     // negatives only; a delivery negative proven in a shared primitive rather
@@ -347,6 +348,7 @@ fn assert_reference_is_an_executable_test(root: &Path, entry_id: &str, test: &Te
         "crates/registry-evidence-client/",
         "crates/registry-evidence-verifier/",
         "crates/registry-evidence-oid4vci/",
+        "crates/registry-casework/",
         "crates/registry-platform-audit/",
         "crates/registry-platform-config/",
         "crates/registry-platform-crypto/",
@@ -395,7 +397,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         "registry.evidence.acceptance-test-traceability/v1"
     );
 
-    let expected = (1..=84)
+    let expected = (1..=85)
         .map(|row| format!("acceptance-row-{row:02}"))
         .collect::<Vec<_>>();
     let mapped = traceability
@@ -405,7 +407,7 @@ fn every_acceptance_row_is_bound_to_an_executable_test() {
         .collect::<Vec<_>>();
     assert_eq!(
         mapped, expected,
-        "acceptance row mapping is not the 84 required rows in order"
+        "acceptance row mapping is not the 85 required rows in order"
     );
 
     for entry in &traceability.entries {

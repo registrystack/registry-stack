@@ -15,9 +15,10 @@ use crate::contract::{
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
     FieldSource, FieldTypeSource, GeoJsonSource, LookupValueOrigin, ManifestProjectionTextSource,
-    ModuleAssetSource, MutationMode, Operation, ReadPathGrantSource, RegistryModule,
-    RegistryProject, SpatialBboxGrantSource, SpatialQueryGrantSource, UniqueWhenPredicate,
-    ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
+    ModuleAssetSource, MutationMode, Operation, ReadPathPermissionSource, RegistryModule,
+    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource,
+    UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
+    MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::validate_derived_sql;
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -1595,46 +1596,131 @@ fn expand_project_access(
                 "an authenticated profile requires a direct principal claim",
             ));
         }
+        if profile.requester_clients.iter().any(|client| {
+            client.is_empty()
+                || client.len() > 512
+                || client.chars().any(char::is_control)
+                || client.chars().any(char::is_whitespace)
+        }) {
+            errors.push(Diagnostic::error(
+                "access_profile.requester_client.invalid",
+                "project.accessProfiles[].requesterClients",
+                "a requester client must be a bounded non-whitespace identifier",
+            ));
+        }
+        if profile.actor_kind.is_some() == profile.requester_clients.is_empty() {
+            errors.push(Diagnostic::error(
+                "access_profile.actor_client.binding_required",
+                "project.accessProfiles[]",
+                "actorKind and requesterClients must be declared together",
+            ));
+        }
+        if profile.task_grant.is_some()
+            && (profile.anonymous
+                || profile.actor_kind != Some(crate::contract::ActorKindSource::Agent)
+                || profile.requester_clients.is_empty()
+                || profile.required_purposes.is_empty())
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.task_grant.binding_required",
+                "project.accessProfiles[].taskGrant",
+                "a task-grant profile must be authenticated, actorKind agent, and declare requesterClients and requiredPurposes",
+            ));
+        }
+        if let Some(task_grant) = &profile.task_grant {
+            if task_grant.authority.is_empty()
+                || task_grant.authority.len() > 512
+                || task_grant.authority.chars().any(char::is_control)
+                || !task_grant.source_issuer.starts_with("https://")
+                || task_grant.source_issuer.chars().any(char::is_whitespace)
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.task_grant.invalid",
+                    "project.accessProfiles[].taskGrant",
+                    "taskGrant must declare a bounded authority and an absolute sourceIssuer URI",
+                ));
+            }
+            if profile.permissions.iter().any(|permission| {
+                let governed_request_draft = !permission.entity.is_empty()
+                    && entities
+                        .get(&permission.entity)
+                        .is_some_and(|entity| entity.change_request.is_some());
+                permission
+                    .operations
+                    .iter()
+                    .any(|operation| match operation {
+                        Operation::Create | Operation::Patch => !governed_request_draft,
+                        Operation::Tombstone | Operation::Batch | Operation::Invoke => true,
+                        _ => false,
+                    })
+            }) {
+                errors.push(Diagnostic::error(
+                    "access_profile.task_grant.direct_mutation_forbidden",
+                    "project.accessProfiles[].permissions[].operations",
+                    "a task-grant profile can author only governed request drafts; direct target mutations, batch operations, tombstones, and immediate actions are forbidden",
+                ));
+            }
+        }
+        let compiled_task_grant = profile.task_grant.as_ref().map(|task_grant| {
+            let permissions = profile
+                .permissions
+                .iter()
+                .filter(|permission| !permission.entity.is_empty())
+                .filter_map(|permission| {
+                    entities.get(&permission.entity).map(|entity| {
+                        crate::contract::CompiledTaskGrantPermissionSource {
+                            collection: entity.route.clone(),
+                            operations: permission.operations.clone(),
+                        }
+                    })
+                })
+                .collect();
+            crate::contract::CompiledTaskGrantSource {
+                authority: task_grant.authority.clone(),
+                source_issuer: task_grant.source_issuer.clone(),
+                permissions,
+            }
+        });
         let mut granted_entities = BTreeSet::new();
-        for grant in &profile.grants {
+        for grant in &profile.permissions {
             if grant.action.is_some() {
                 if !grant.entity.is_empty() {
                     errors.push(Diagnostic::error(
-                        "access_profile.grant.target_exclusive",
-                        "project.accessProfiles[].grants[]",
-                        "an access grant must name either one entity or one action",
+                        "access_profile.permission.target_exclusive",
+                        "project.accessProfiles[].permissions[]",
+                        "an access permission must name either one entity or one action",
                     ));
                 }
                 continue;
             }
             if !grant.targets.is_empty() || !grant.results.is_empty() {
                 errors.push(Diagnostic::error(
-                    "access_profile.grant.action_fields_forbidden",
-                    "project.accessProfiles[].grants[]",
-                    "entity access grants cannot declare action target or result fields",
+                    "access_profile.permission.action_fields_forbidden",
+                    "project.accessProfiles[].permissions[]",
+                    "entity access permissions cannot declare action target or result fields",
                 ));
             }
             if grant.entity.is_empty() {
                 errors.push(Diagnostic::error(
-                    "access_profile.grant.target_missing",
-                    "project.accessProfiles[].grants[]",
-                    "an access grant must name either one entity or one action",
+                    "access_profile.permission.target_missing",
+                    "project.accessProfiles[].permissions[]",
+                    "an access permission must name either one entity or one action",
                 ));
                 continue;
             }
             if !granted_entities.insert(grant.entity.as_str()) {
                 errors.push(Diagnostic::error(
-                    "access_profile.grant.duplicate",
-                    "project.accessProfiles[].grants[].entity",
-                    "an access profile contains duplicate entity grants",
+                    "access_profile.permission.duplicate",
+                    "project.accessProfiles[].permissions[].entity",
+                    "an access profile contains duplicate entity permissions",
                 ));
                 continue;
             }
             let Some(entity) = entities.get_mut(&grant.entity) else {
                 errors.push(Diagnostic::error(
-                    "access_profile.grant.entity_unknown",
-                    "project.accessProfiles[].grants[].entity",
-                    "an access grant refers to an unknown entity",
+                    "access_profile.permission.entity_unknown",
+                    "project.accessProfiles[].permissions[].entity",
+                    "an access permission refers to an unknown entity",
                 ));
                 continue;
             };
@@ -1654,6 +1740,9 @@ fn expand_project_access(
                 id: profile.id.clone(),
                 default: profile.default,
                 anonymous: profile.anonymous,
+                actor_kind: profile.actor_kind,
+                requester_clients: profile.requester_clients.clone(),
+                task_grant: compiled_task_grant.clone(),
                 principal_claim: profile.principal_claim.clone(),
                 required_scopes: profile.required_scopes.clone(),
                 required_purposes: profile.required_purposes.clone(),
@@ -1786,7 +1875,7 @@ fn validate_entities(
             None if grants_batch => errors.push(Diagnostic::error(
                 "entity.batch.required",
                 "entities[].batch",
-                "an entity granted batch access must declare bounded batch configuration",
+                "an entity permissioned batch access must declare bounded batch configuration",
             )),
             Some(batch)
                 if batch.maximum_items == 0
@@ -3097,8 +3186,8 @@ fn validate_profiles(
                 ));
             }
         }
-        validate_lookup_grants(access, entity, &fields, errors);
-        validate_read_path_grants(access, entity, entities, errors);
+        validate_lookup_permissions(access, entity, &fields, errors);
+        validate_read_path_permissions(access, entity, entities, errors);
         if access.allow_count
             && !access.operations.contains(&Operation::List)
             && !access.operations.contains(&Operation::Snapshot)
@@ -3106,7 +3195,7 @@ fn validate_profiles(
             errors.push(Diagnostic::error(
                 "access_profile.count.unavailable",
                 "entities[].accessProfiles[].allowCount",
-                "direct count access requires an explicit list or snapshot grant",
+                "direct count access requires an explicit list or snapshot permission",
             ));
         }
     }
@@ -3188,7 +3277,7 @@ fn validate_spatial_queries(
         errors.push(Diagnostic::error(
             "access_profile.spatial_queries.empty",
             "entities[].accessProfiles[].spatialQueries",
-            "spatial query grants must declare one supported query",
+            "spatial query permissions must declare one supported query",
         ));
         return;
     }
@@ -3215,7 +3304,7 @@ fn validate_spatial_queries(
         errors.push(Diagnostic::error(
             "access_profile.spatial_queries.bbox.list_required",
             "entities[].accessProfiles[].spatialQueries.bbox",
-            "bbox spatial queries require an explicit list grant",
+            "bbox spatial queries require an explicit list permission",
         ));
     }
     let Some(geojson) = &entity.geojson else {
@@ -3264,7 +3353,7 @@ fn validate_bbox_span(
     }
 }
 
-fn validate_lookup_grants(
+fn validate_lookup_permissions(
     access: &AccessProfileSource,
     entity: &EntitySource,
     fields: &BTreeMap<&str, &FieldSource>,
@@ -3277,7 +3366,7 @@ fn validate_lookup_grants(
         errors.push(Diagnostic::error(
             "access_profile.lookup.operation_required",
             "entities[].accessProfiles[].lookups",
-            "lookup grants require the lookup operation",
+            "lookup permissions require the lookup operation",
         ));
     }
     let selectors = entity
@@ -3291,14 +3380,14 @@ fn validate_lookup_grants(
             errors.push(Diagnostic::error(
                 "access_profile.lookup.duplicate",
                 "entities[].accessProfiles[].lookups",
-                "lookup selector grants must be unique",
+                "lookup selector permissions must be unique",
             ));
         }
         let Some(selector) = selectors.get(lookup.selector.as_str()) else {
             errors.push(Diagnostic::error(
                 "access_profile.lookup.selector_unknown",
                 "entities[].accessProfiles[].lookups[].selector",
-                "a lookup grant refers to an unknown selector profile",
+                "a lookup permission refers to an unknown selector profile",
             ));
             continue;
         };
@@ -3344,7 +3433,7 @@ fn validate_lookup_grants(
     }
 }
 
-fn validate_read_path_grants(
+fn validate_read_path_permissions(
     access: &AccessProfileSource,
     entity: &EntitySource,
     entities: &BTreeMap<String, EntitySource>,
@@ -3361,27 +3450,27 @@ fn validate_read_path_grants(
             errors.push(Diagnostic::error(
                 "access_profile.read_path.duplicate",
                 "entities[].accessProfiles[].readPaths",
-                "read-path grants must be unique",
+                "read-path permissions must be unique",
             ));
         }
         let Some(path) = paths.get(grant.path.as_str()) else {
             errors.push(Diagnostic::error(
                 "access_profile.read_path.unknown",
                 "entities[].accessProfiles[].readPaths[].path",
-                "a read-path grant refers to an unknown path",
+                "a read-path permission refers to an unknown path",
             ));
             continue;
         };
-        validate_read_path_grant_fields(access, entity, entities, path, grant, errors);
+        validate_read_path_permission_fields(access, entity, entities, path, grant, errors);
     }
 }
 
-fn validate_read_path_grant_fields(
+fn validate_read_path_permission_fields(
     access: &AccessProfileSource,
     source: &EntitySource,
     entities: &BTreeMap<String, EntitySource>,
     path: &crate::contract::ReadPathSource,
-    grant: &ReadPathGrantSource,
+    grant: &ReadPathPermissionSource,
     errors: &mut Vec<Diagnostic>,
 ) {
     let Some(target) = entities.get(&path.to) else {
@@ -3396,7 +3485,7 @@ fn validate_read_path_grant_fields(
         errors.push(Diagnostic::error(
             "access_profile.read_path.readable_fields_empty",
             "entities[].accessProfiles[].readPaths[].readableFields",
-            "a read-path grant must declare readable fields",
+            "a read-path permission must declare readable fields",
         ));
     }
     if !grant.filterable_fields.is_subset(&grant.readable_fields)
@@ -3451,7 +3540,7 @@ fn validate_read_path_grant_fields(
         errors.push(Diagnostic::error(
             "access_profile.read_path.field_unknown",
             "entities[].accessProfiles[].readPaths[]",
-            "a read-path grant refers to an unknown target field",
+            "a read-path permission refers to an unknown target field",
         ));
     }
     if access.anonymous {
@@ -3492,7 +3581,7 @@ fn validate_read_path_grant_fields(
         errors.push(Diagnostic::error(
             "access_profile.read_path.self_target",
             "entities[].accessProfiles[].readPaths[].path",
-            "a read-path grant cannot target the source entity",
+            "a read-path permission cannot target the source entity",
         ));
     }
 }
@@ -4735,7 +4824,7 @@ fn review_route_profile_covers_stage(
     stage: &str,
 ) -> bool {
     plan.target_entities.iter().all(|target| {
-        plan.review_grants.iter().any(|grant| {
+        plan.review_permissions.iter().any(|grant| {
             grant.profile_id == profile_id
                 && grant.stage == stage
                 && grant.target_entity_id == *target
@@ -4748,7 +4837,7 @@ fn apply_route_profile_covers_targets(
     profile_id: &str,
 ) -> bool {
     plan.target_entities.iter().all(|target| {
-        plan.apply_grants
+        plan.apply_permissions
             .iter()
             .any(|grant| grant.profile_id == profile_id && grant.target_entity_id == *target)
     })
@@ -5107,7 +5196,7 @@ fn read_path_query_operation(
     source: &CompiledEntity,
     target: &CompiledEntity,
     profile: &AccessProfileSource,
-    grant: &ReadPathGrantSource,
+    grant: &ReadPathPermissionSource,
     route_id: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledQueryOperation> {
@@ -5338,9 +5427,9 @@ fn compiled_spatial_capability(
     entity: &CompiledEntity,
     profile: &AccessProfileSource,
 ) -> Option<CompiledSpatialQueryCapability> {
-    let SpatialQueryGrantSource {
+    let SpatialQueryPermissionSource {
         bbox:
-            Some(SpatialBboxGrantSource {
+            Some(SpatialBboxPermissionSource {
                 maximum_longitude_span_degrees,
                 maximum_latitude_span_degrees,
             }),

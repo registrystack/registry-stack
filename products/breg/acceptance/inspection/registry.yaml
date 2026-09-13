@@ -201,7 +201,7 @@ accessProfiles:
     principalClaim: registry_principal
     requiredPurposes:
       - facility-inspection
-    grants:
+    permissions:
       - entity: inspection
         rowBoundaries: []
         operations:

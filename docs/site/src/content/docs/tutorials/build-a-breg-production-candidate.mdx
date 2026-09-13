@@ -171,7 +171,7 @@ docker exec breg-candidate-postgres psql -U postgres -c 'ALTER SYSTEM SET ssl = 
 
 The last command prints `ALTER SYSTEM` and a one-row `pg_reload_conf` result of `t`.
 
-{/* Evidence: crates/registry-breg/src/postgres/config.rs, require_tls_config; products/breg/quickstart/run.sh, ordinary_postgres_image. */}
+{/* Evidence: crates/registry-breg/src/postgres/config.rs, require_tls_config; crates/registry-bregctl/src/dev/mod.rs, IMAGE. */}
 
 ## Prepare the disposable database
 
