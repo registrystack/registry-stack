@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
+REMOTE_PACKAGE_SOURCE_RE = re.compile(r"\b(?:https?|ftp)://", re.IGNORECASE)
 
 RUST_BUILDER = (
     "rust:1.95-trixie@sha256:"
@@ -326,9 +327,10 @@ def check_repository(root: Path = ROOT) -> list[str]:
     )
     for needle, detail in installer_requirements:
         require(installer, needle, RUNTIME_LIBC6_INSTALLER, detail, failures)
-    if "deb.debian.org" in installer:
+    if REMOTE_PACKAGE_SOURCE_RE.search(installer):
         failures.append(
-            f"{RUNTIME_LIBC6_INSTALLER}: mutable Debian package source remains"
+            f"{RUNTIME_LIBC6_INSTALLER}: runtime package installer must not "
+            "fetch remote sources"
         )
 
     for relative in DOCKERFILES:

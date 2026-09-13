@@ -228,6 +228,27 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                     any(expected in failure for failure in failures), failures
                 )
 
+    def test_runtime_libc6_installer_rejects_remote_package_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.repository_copy(root)
+            installer = root / POLICY.RUNTIME_LIBC6_INSTALLER
+            installer.write_text(
+                installer.read_text(encoding="utf-8")
+                + "\ncurl https://packages.example.invalid/libc6.deb\n",
+                encoding="utf-8",
+            )
+
+            failures = POLICY.check_repository(root)
+
+            self.assertTrue(
+                any(
+                    "installer must not fetch remote sources" in failure
+                    for failure in failures
+                ),
+                failures,
+            )
+
     def test_release_images_pin_dated_libc6_package_inputs(self) -> None:
         relative = Path("release/docker/Dockerfile.relay")
         for runtime_libc6_add in POLICY.RUNTIME_LIBC6_ADDS:

@@ -1517,20 +1517,20 @@ class RegistryReleaseTest(TestCase):
                 "RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \\",
                 "--mount=type=bind,source=LICENSE,target=/workspace/LICENSE \\",
                 "--mount=type=bind,source=release/scripts/install-runtime-libc6.sh,"
-                "target=/workspace/install-runtime-libc6.sh,readonly \\",
+                + "target=/workspace/install-runtime-libc6.sh,readonly \\",
             ],
             bind_mounts,
         )
         self.assertEqual(
             [
                 "ADD --checksum=sha256:967aa62605721081c3eb2a17650611a792aa802d76a6511d1840242623d204c9 "
-                "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
-                "pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb "
-                "/workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb",
+                + "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
+                + "pool/main/g/glibc/libc6_2.41-12+deb13u4_amd64.deb "
+                + "/workspace/runtime-packages/libc6_2.41-12+deb13u4_amd64.deb",
                 "ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8aa688cc "
-                "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
-                "pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb "
-                "/workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb",
+                + "https://snapshot.debian.org/archive/debian/20260913T000000Z/"
+                + "pool/main/g/glibc/libc6_2.41-12+deb13u4_arm64.deb "
+                + "/workspace/runtime-packages/libc6_2.41-12+deb13u4_arm64.deb",
                 "COPY --from=runtime-root /workspace/runtime-root/ /",
             ],
             copy_instructions,
