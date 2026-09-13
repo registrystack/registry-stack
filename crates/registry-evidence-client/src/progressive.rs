@@ -14,6 +14,7 @@ use crate::{
     prepare::{EvidenceRequestSpec, SubjectExpectations, SubjectRequest},
     request::SelectorValue,
     response_format::EvidenceResponseFormat,
+    retained::RetainedEvidenceVerification,
     VerifiedEvidence,
 };
 
@@ -126,6 +127,7 @@ pub struct VerifiedAssertion {
     assertion: Vec<u8>,
     values: BTreeMap<String, PublicValue>,
     subject_continuity: SubjectContinuity,
+    retained_verification: RetainedEvidenceVerification,
 }
 
 #[derive(Clone)]
@@ -135,6 +137,7 @@ pub struct VerifiedAudienceScopedCredential {
     credential: String,
     values: BTreeMap<String, PublicValue>,
     subject_continuity: SubjectContinuity,
+    retained_verification: RetainedEvidenceVerification,
 }
 
 pub enum VerifiedAudienceScopedEvidence {
@@ -242,6 +245,11 @@ macro_rules! verified_accessors {
             #[must_use]
             pub fn subject_continuity(&self) -> &SubjectContinuity {
                 &self.subject_continuity
+            }
+            /// The pre-response trust and policy snapshot for offline verification.
+            #[must_use]
+            pub fn retained_verification(&self) -> &RetainedEvidenceVerification {
+                &self.retained_verification
             }
         }
     };
@@ -505,6 +513,7 @@ pub(crate) fn progressive_result(
     raw: crate::RawEvidenceResponse,
     verified: VerifiedEvidence,
     matched: bool,
+    retained_verification: RetainedEvidenceVerification,
 ) -> Result<VerifiedAudienceScopedEvidence, EvidenceClientError> {
     let values = definition
         .concepts
@@ -551,6 +560,7 @@ pub(crate) fn progressive_result(
                 assertion: raw.body().to_vec(),
                 values,
                 subject_continuity: continuity,
+                retained_verification,
             },
         )),
         EvidenceResponseFormat::SdJwtVc => {
@@ -564,6 +574,7 @@ pub(crate) fn progressive_result(
                     credential,
                     values,
                     subject_continuity: continuity,
+                    retained_verification,
                 },
             ))
         }
@@ -631,6 +642,100 @@ mod tests {
             ]),
         );
         assert!(select_definition(&definitions, &extra_field).is_err());
+    }
+
+    #[test]
+    fn a_context_derived_only_subject_needs_no_caller_selector() {
+        let mut definitions = definitions();
+        definitions.definitions[0].subjects[0].selector.value_origin =
+            SelectorValueOrigin::AuthenticatedContext;
+        let request = AudienceScopedRequest::new("status-check", BTreeMap::new());
+        let selected = select_definition(&definitions, &request)
+            .expect("one context-derived definition is selectable without caller values");
+        let spec = spec_from_definition(&definitions, selected, &request, 300, 30)
+            .expect("the context-derived request closes");
+        assert_eq!(spec.subjects.len(), 1);
+        assert!(spec.subjects[0].selector_values.is_none());
+    }
+
+    #[test]
+    fn a_selected_definition_must_match_its_own_pins_before_send() {
+        let profile = crate::EvidenceClientProfile::from_slice(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema": "registry.evidence-client-profile/v1",
+                "baseUrl": "https://evidence.example.org",
+                "clientId": "client",
+                "privateKey": {"source": "environment", "variable": "EVIDENCE_KEY"},
+                "expected": {"definitions": {"status-check": {
+                    "configurationRevision": format!("sha256:{}", "1".repeat(64)),
+                    "evidenceType": "urn:example:evidence-type:status",
+                    "purpose": "decision",
+                    "assuranceProfile": "local",
+                    "responseFormat": "signed-jws"
+                }}}
+            }))
+            .expect("the pinned profile serializes"),
+        )
+        .expect("the pinned profile loads");
+        let mut definitions = definitions();
+        let selected = select_definition(&definitions, &request()).unwrap();
+        crate::client::validate_definition_expectation(
+            &profile,
+            &definitions,
+            selected,
+            EvidenceResponseFormat::SignedJws,
+        )
+        .expect("the selected definition matches all pins");
+
+        let mut sibling = definitions.definitions[0].clone();
+        sibling.handle = "other-check".to_owned();
+        sibling.requirement = "urn:example:requirement:other".to_owned();
+        sibling.configuration_revision = format!("sha256:{}", "2".repeat(64));
+        definitions.definitions.push(sibling);
+        let selected = select_definition(&definitions, &request()).unwrap();
+        crate::client::validate_definition_expectation(
+            &profile,
+            &definitions,
+            selected,
+            EvidenceResponseFormat::SignedJws,
+        )
+        .expect("an unrelated definition may change independently");
+
+        for changed in ["revision", "type", "purpose", "assurance", "format"] {
+            let mut changed_definitions = definitions.clone();
+            let format = if changed == "format" {
+                EvidenceResponseFormat::SdJwtVc
+            } else {
+                EvidenceResponseFormat::SignedJws
+            };
+            match changed {
+                "revision" => {
+                    changed_definitions.definitions[0].configuration_revision =
+                        format!("sha256:{}", "3".repeat(64))
+                }
+                "type" => {
+                    changed_definitions.definitions[0].evidence_type =
+                        "urn:example:evidence-type:changed".to_owned()
+                }
+                "purpose" => changed_definitions.definitions[0].purpose = "changed".to_owned(),
+                "assurance" => {
+                    changed_definitions.assurance_profile =
+                        registry_evidence_verifier::AssuranceProfile::Production
+                }
+                "format" => {}
+                _ => unreachable!(),
+            }
+            assert!(
+                crate::client::validate_definition_expectation(
+                    &profile,
+                    &changed_definitions,
+                    &changed_definitions.definitions[0],
+                    format,
+                )
+                .is_err(),
+                "{changed} drift must fail before send"
+            );
+        }
     }
 
     #[test]
