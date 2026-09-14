@@ -33,16 +33,10 @@ const MAX_CONTEXT_TEXT_BYTES: usize = 512;
 const MAX_ATTRIBUTES_BYTES: usize = 4096;
 const MAX_ASSERTION_BYTES: usize = 32 * 1024;
 const MAX_ASSERTION_LIFETIME_SECONDS: i64 = 60;
-/// The furthest ahead a verified context may place its deadline.
-///
-/// A context is a snapshot of host-owned source facts, and every token handed
-/// out under it is bounded by that deadline. It therefore carries the ceiling
-/// the token cache already applies: past a day, the host verifies again. The
-/// deadline reaches this crate from adopter configuration, so bounding it here
-/// is what keeps a mistyped or hostile value from naming a verification that
-/// never expires.
-const MAX_CONTEXT_LIFETIME_SECONDS: i64 =
-    super::private_key_jwt::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS;
+/// Longest any exchanged token remains cached, even when its verified outer
+/// context lasts longer or the token issuer states no lifetime.
+const MAX_EXCHANGE_CACHE_SECONDS: u64 =
+    super::private_key_jwt::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS as u64;
 const REFRESH_MARGIN: Duration = Duration::from_secs(5);
 const MAX_REMOTE_ASSERTION_RESPONSE_BYTES: u64 = 40 * 1024;
 
@@ -124,10 +118,9 @@ impl ExchangeContext {
             .all(|value| valid_text(value))
             || grant_id.as_ref().is_some_and(|value| !valid_text(value))
             || deadline <= now
-            || deadline - now > MAX_CONTEXT_LIFETIME_SECONDS
         {
             return Err(TokenError::Invalid {
-                reason: "the verified exchange context is incomplete, expired, or unbounded",
+                reason: "the verified exchange context is incomplete or expired",
             });
         }
         Ok(Self {
@@ -686,17 +679,24 @@ impl TokenProvider for ExchangeAuthorization {
             return Err(TokenError::Unavailable);
         }
         // The verified context deadline bounds every token this provider hands
-        // out, so it is also the bound for one the issuer stated no lifetime
-        // for. Holding such a token no longer than the context is what lets one
-        // verified context serve the several requests an operation makes,
-        // without any token outliving the facts it was issued against. A
-        // context is bounded to a day when it is built, so this addition has
-        // room; taking it in checked form is what keeps an arithmetic edge from
-        // ever panicking a token acquisition, and it is refused here, before an
-        // exchange is spent on a token that could not be held.
-        let context_deadline = now
+        // out. A non-renewable, first-party exchange also uses it as the bound
+        // for a token whose issuer states no lifetime, so one verified context
+        // can serve the several requests an operation makes. A renewable remote
+        // source must instead fetch a fresh assertion on the next request: with
+        // no issuer lifetime there is no safe refresh instant, and retaining the
+        // token until the outer context deadline would bypass the authority's
+        // current grant check. The outer context may legitimately last longer
+        // than the token-cache ceiling, so calculate its remaining lifetime in
+        // checked form and clamp only the cache deadline.
+        let context_remaining = self
+            .context
+            .deadline
+            .checked_sub(wall_now)
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .ok_or(TokenError::Unavailable)?;
+        let context_cache_deadline = now
             .checked_add(Duration::from_secs(
-                (self.context.deadline - wall_now) as u64,
+                context_remaining.min(MAX_EXCHANGE_CACHE_SECONDS),
             ))
             .ok_or(TokenError::Unavailable)?;
         let assertion = self.source.assertion(&self.context).await?;
@@ -714,9 +714,10 @@ impl TokenProvider for ExchangeAuthorization {
         // is used once and dropped. The context deadline answers an issuer's
         // silence, never an issuer's own accounting.
         let expires_at = match acquired.expires_at {
-            Some(issued) => Some(issued.min(context_deadline)),
+            Some(issued) => Some(issued.min(context_cache_deadline)),
             None if acquired.lifetime_stated => None,
-            None => Some(context_deadline),
+            None if self.renewable => None,
+            None => Some(context_cache_deadline),
         };
         if let Some(expires_at) = expires_at {
             *self.cached.write().await = Some(CachedExchange {
@@ -1134,34 +1135,34 @@ mod tests {
         ]));
     }
 
-    #[test]
-    fn a_context_deadline_reaching_past_a_day_is_refused() {
-        // The deadline arrives from adopter configuration, and a context is a
-        // snapshot of facts the host verified once. One that outlives the day
-        // the token cache allows is refused where it is built, so no exchange
-        // is spent under it and no arithmetic is asked to name the instant it
-        // would expire.
-        let now = now_seconds().unwrap();
-        assert!(ExchangeContext::first_party(
-            "https://authority.example",
-            "person-1",
-            "https://records.example",
-            "generation-1",
-            now + MAX_CONTEXT_LIFETIME_SECONDS,
+    #[tokio::test]
+    async fn a_context_deadline_beyond_the_cache_ceiling_is_accepted_safely() {
+        // The outer verified authorization and an access-token cache have
+        // different lifetimes. Casework grants may outlive the one-day cache
+        // ceiling, and even an extreme valid deadline must not overflow the
+        // monotonic cache calculation or extend the cached token past a day.
+        let server = MockServer::start().await;
+        endpoint(&server, None).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", i64::MAX),
+            source(&["records:read"]),
         )
-        .is_ok());
-        for deadline in [now + MAX_CONTEXT_LIFETIME_SECONDS + 1, i64::MAX] {
-            assert!(matches!(
-                ExchangeContext::first_party(
-                    "https://authority.example",
-                    "person-1",
-                    "https://records.example",
-                    "generation-1",
-                    deadline,
-                ),
-                Err(TokenError::Invalid { .. })
-            ));
-        }
+        .unwrap();
+
+        provider.bearer_token().await.unwrap();
+        let remaining = provider
+            .cached
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .expires_at
+            .saturating_duration_since(Instant::now());
+        assert!(remaining <= Duration::from_secs(MAX_EXCHANGE_CACHE_SECONDS));
+        provider.bearer_token().await.unwrap();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
@@ -1318,6 +1319,37 @@ mod tests {
             Err(TokenError::Unavailable)
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lifetime_less_grant_token_requires_fresh_authority_check() {
+        // A remote authority source is renewable specifically so every refresh
+        // can re-check whether the grant remains active. Without an issuer
+        // lifetime there is no safe refresh instant, so the next request must
+        // obtain a fresh assertion instead of keeping the token until the
+        // immutable outer context deadline.
+        let server = MockServer::start().await;
+        endpoint(&server, None).await;
+        let grant = ExchangeContext::grant(
+            "https://casework.example",
+            "agent-1",
+            "https://issuer.example",
+            "grant-generation-1",
+            now_seconds().unwrap() + 120,
+            "grant-one",
+        )
+        .unwrap();
+        let provider = ExchangeAuthorization::from_authority(
+            exchange(&server, "urn:records", &["records:read"]),
+            grant,
+            Arc::new(GrantAuthority),
+        )
+        .unwrap();
+
+        provider.bearer_token().await.unwrap();
+        provider.bearer_token().await.unwrap();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[async_trait]
