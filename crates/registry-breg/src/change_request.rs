@@ -3,14 +3,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::compiler::operation_id;
 use crate::contract::{
-    AccessProfileSource, ChangeRequestApplicationModeSource, ChangeRequestDispositionSource,
-    ChangeRequestEffectSource, ChangeRequestPlannerSource, ChangeRequestValueSource,
-    Classification, EntitySource, FieldTypeSource, ModuleAssetSource, MutationMode, Operation,
+    AccessProfileSource, ChangeRequestApplicationModeSource,
+    ChangeRequestCurrentDatePredicateSource, ChangeRequestDispositionSource,
+    ChangeRequestEffectSource, ChangeRequestPlannerSource, ChangeRequestPredicateSource,
+    ChangeRequestSelectorSource, ChangeRequestValueSource, Classification, EntitySource,
+    FieldTypeSource, ModuleAssetSource, MutationMode, Operation, RegistryProject,
     RowBoundarySource, CHANGE_REQUEST_PLAN_ABI_V1,
 };
 use crate::diagnostics::Diagnostic;
@@ -18,13 +20,18 @@ use crate::model::{
     ChangeRequestOperation, CompiledChangeRequest, CompiledChangeRequestActionRoute,
     CompiledChangeRequestApplication, CompiledChangeRequestApplicationMode,
     CompiledChangeRequestApplyPermission, CompiledChangeRequestDisposition,
-    CompiledChangeRequestEffect, CompiledChangeRequestMutation, CompiledChangeRequestPlanner,
-    CompiledChangeRequestPlannerKind, CompiledChangeRequestPlannerLimits,
-    CompiledChangeRequestPlannerWrite, CompiledChangeRequestPresencePermission,
+    CompiledChangeRequestEffect, CompiledChangeRequestEvidence,
+    CompiledChangeRequestEvidenceExpected, CompiledChangeRequestEvidenceRequirement,
+    CompiledChangeRequestEvidenceSubject, CompiledChangeRequestGuardTarget,
+    CompiledChangeRequestMutation, CompiledChangeRequestPlanner, CompiledChangeRequestPlannerKind,
+    CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
+    CompiledChangeRequestPreconditions, CompiledChangeRequestPredicate,
+    CompiledChangeRequestPredicateExpected, CompiledChangeRequestPresencePermission,
     CompiledChangeRequestReferenceSources, CompiledChangeRequestRetentionMode,
     CompiledChangeRequestReviewMode, CompiledChangeRequestReviewPermission,
-    CompiledChangeRequestStage, CompiledChangeRequestTarget, CompiledChangeRequestTargetBinding,
-    CompiledChangeRequestValue, CompiledEntity,
+    CompiledChangeRequestSelector, CompiledChangeRequestStage, CompiledChangeRequestTarget,
+    CompiledChangeRequestTargetBinding, CompiledChangeRequestValue, CompiledCurrentDateRelation,
+    CompiledEntity, CompiledField,
 };
 
 /// Path to an entity, identified so a diagnostic can name which entity it concerns.
@@ -82,6 +89,15 @@ fn compile_application(
         entity_path(request_entity_id)
     );
     let queue_reasons_path = format!("{application_path}.queueReasons");
+    if !source.preconditions.is_empty()
+        && (source.mode != ChangeRequestApplicationModeSource::Manual || has_planner)
+    {
+        errors.push(Diagnostic::error(
+            "change_request.application.preconditions_manual_only",
+            format!("{application_path}.preconditions"),
+            "application preconditions require manual application and cannot run inside submit, approval, or planner transitions",
+        ));
+    }
     if source.mode == ChangeRequestApplicationModeSource::Planner {
         if !has_planner || source.allowed_dispositions.is_empty() {
             errors.push(Diagnostic::error(
@@ -140,6 +156,7 @@ fn compile_application(
             })
             .collect(),
         queue_reasons: source.queue_reasons.clone(),
+        preconditions: CompiledChangeRequestPreconditions::default(),
     }
 }
 
@@ -518,6 +535,7 @@ fn compile_planner(
 }
 
 pub(crate) fn compile_change_requests(
+    project: &RegistryProject,
     action_scripts: &BTreeSet<(Option<String>, String)>,
     sources: &BTreeMap<String, EntitySource>,
     origins: &BTreeMap<String, Option<String>>,
@@ -539,6 +557,7 @@ pub(crate) fn compile_change_requests(
         if source.change_request.is_some() {
             if let Some(entity) = entities.get(entity_id) {
                 if let Some(plan) = compile_request_entity(
+                    project,
                     source,
                     entity,
                     entities,
@@ -561,31 +580,44 @@ pub(crate) fn compile_change_requests(
             let authors_requests = profile.operations.contains(&Operation::Create)
                 || profile.operations.contains(&Operation::Patch);
             let valid = compiled.get(&entity.id).is_some_and(|plan| {
+                let references = plan
+                    .effects
+                    .iter()
+                    .filter_map(|effect| match &effect.target.binding {
+                        CompiledChangeRequestTargetBinding::Existing { from_field } => {
+                            Some((&effect.target.entity_id, from_field))
+                        }
+                        CompiledChangeRequestTargetBinding::ReservedCreate { .. } => None,
+                    })
+                    .chain(
+                        plan.application
+                            .preconditions
+                            .targets
+                            .iter()
+                            .map(|target| (&target.entity_id, &target.from_field)),
+                    )
+                    .collect::<Vec<_>>();
+                let referenced_entities = references
+                    .iter()
+                    .map(|(entity_id, _)| (*entity_id).clone())
+                    .collect::<BTreeSet<_>>();
                 plan.planner.is_none()
                     && plan.application.mode
                         == crate::model::CompiledChangeRequestApplicationMode::Manual
-                    && plan.target_entities == profile.submitter_targets
-                    && plan
-                        .effects
-                        .iter()
-                        .all(|effect| match &effect.target.binding {
-                            CompiledChangeRequestTargetBinding::Existing { from_field } => {
-                                // Admission reads the target identifier from the
-                                // request record, so an absent value would only
-                                // surface as a runtime refusal.
-                                profile.readable_fields.contains(from_field)
-                                    && entity
-                                        .fields
-                                        .get(from_field)
-                                        .is_some_and(|field| field.required)
-                                    // A profile that authors the request must be
-                                    // able to write the reference the effect reads,
-                                    // or its own create can never satisfy it.
-                                    && (!authors_requests
-                                        || profile.writable_fields.contains(from_field))
-                            }
-                            _ => false,
-                        })
+                    && referenced_entities == profile.submitter_targets
+                    && references.iter().all(|(_, from_field)| {
+                        // Admission reads each exact target identifier from the
+                        // request record, so an absent value would only surface
+                        // as a runtime refusal.
+                        profile.readable_fields.contains(*from_field)
+                            && entity
+                                .fields
+                                .get(*from_field)
+                                .is_some_and(|field| field.required)
+                            // A profile that authors the request must be able to
+                            // write the reference its admission contract reads.
+                            && (!authors_requests || profile.writable_fields.contains(*from_field))
+                    })
                     && profile.submitter_targets.iter().all(|id| {
                         !request_entity_ids.contains(id)
                             && entities
@@ -603,7 +635,7 @@ pub(crate) fn compile_change_requests(
                 errors.push(Diagnostic::error(
                     "change_request.submitter_targets.invalid",
                     format!("{}.submitterTargets", profile_path(&entity.id, &profile.id)),
-                    "submitterTargets requires manual application and exactly the fixed native-reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries",
+                    "submitterTargets requires manual application and exactly the fixed existing effect and application-guard reference targets; each reference must be required, readable, and writable wherever the profile authors the request, and each non-request target needs a same-profile get grant without membership boundaries",
                 ));
             }
         }
@@ -704,7 +736,488 @@ fn validate_change_controlled_direct_writes(
     }
 }
 
+fn compile_preconditions(
+    project: &RegistryProject,
+    request_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+    assets: &[ModuleAssetSource],
+    request: &crate::contract::ChangeRequestSource,
+    errors: &mut Vec<Diagnostic>,
+) -> CompiledChangeRequestPreconditions {
+    let source = &request.application.preconditions;
+    let base = format!(
+        "{}.changeRequest.application.preconditions",
+        entity_path(&request_entity.id)
+    );
+    let total_predicates = source
+        .request
+        .len()
+        .saturating_add(
+            source
+                .targets
+                .iter()
+                .map(|target| target.requires.len())
+                .sum(),
+        )
+        .saturating_add(source.evidence.iter().map(|item| item.requires.len()).sum());
+    if source.targets.len() > usize::from(MAX_CHANGE_REQUEST_TARGETS)
+        || source.evidence.len() > crate::action_evidence_contracts::MAX_EVIDENCE_CAPABILITIES
+        || total_predicates > usize::from(MAX_CHANGE_REQUEST_FIELD_MUTATIONS)
+        || serde_json::to_vec(source).map_or(true, |bytes| {
+            bytes.len() > MAX_CHANGE_REQUEST_SNAPSHOT_BYTES as usize
+        })
+    {
+        errors.push(Diagnostic::error(
+            "change_request.preconditions.bounds",
+            &base,
+            "application preconditions exceed the finite target, Evidence, predicate, or byte ceiling",
+        ));
+        return CompiledChangeRequestPreconditions::default();
+    }
+
+    let request_predicates = compile_predicates(
+        &source.request,
+        request_entity,
+        request_entity,
+        true,
+        &format!("{base}.request"),
+        errors,
+    );
+    let mut targets = Vec::new();
+    let mut target_ids = BTreeSet::new();
+    let effect_ids = request
+        .effects
+        .iter()
+        .enumerate()
+        .map(|(index, effect)| effect_id(effect, index))
+        .collect::<BTreeSet<_>>();
+    for target in &source.targets {
+        let path = format!("{base}.targets[id={}]", target.id);
+        validate_id(&target.id, &format!("{path}.id"), errors);
+        if !target_ids.insert(target.id.clone()) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_duplicate",
+                &path,
+                "precondition target identifiers must be duplicate-free",
+            ));
+            continue;
+        }
+        if effect_ids.contains(&target.id) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_effect_collision",
+                format!("{path}.id"),
+                "precondition target identifiers must not collide with effect identifiers",
+            ));
+            continue;
+        }
+        let Some(from_field) = request_entity.fields.get(&target.from_field) else {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_field_unknown",
+                format!("{path}.fromField"),
+                "a precondition target must use a declared request reference field",
+            ));
+            continue;
+        };
+        if !from_field.required
+            || !matches!(&from_field.field_type, FieldTypeSource::Reference { target: entity, .. } if entity == &target.entity)
+        {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_reference_invalid",
+                format!("{path}.fromField"),
+                "a precondition target must use a required request reference field for its exact entity",
+            ));
+            continue;
+        }
+        let Some(target_entity) = entities.get(&target.entity) else {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_entity_unknown",
+                format!("{path}.entity"),
+                "a precondition target must name a declared entity",
+            ));
+            continue;
+        };
+        if target.requires.is_empty() {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_empty",
+                format!("{path}.requires"),
+                "a precondition target must declare at least one finite predicate",
+            ));
+        }
+        targets.push(CompiledChangeRequestGuardTarget {
+            id: target.id.clone(),
+            entity_id: target.entity.clone(),
+            from_field: target.from_field.clone(),
+            requires: compile_predicates(
+                &target.requires,
+                target_entity,
+                request_entity,
+                true,
+                &format!("{path}.requires"),
+                errors,
+            ),
+        });
+    }
+    targets.sort_by(|left, right| left.id.cmp(&right.id));
+
+    let targets_by_id = targets
+        .iter()
+        .map(|target| (target.id.as_str(), target))
+        .collect::<BTreeMap<_, _>>();
+    let mut evidence = Vec::new();
+    let mut evidence_ids = BTreeSet::new();
+    for item in &source.evidence {
+        let path = format!("{base}.evidence[id={}]", item.id);
+        validate_id(&item.id, &format!("{path}.id"), errors);
+        if !evidence_ids.insert(item.id.clone()) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.evidence_duplicate",
+                &path,
+                "Evidence precondition identifiers must be duplicate-free",
+            ));
+            continue;
+        }
+        let capability = match crate::action_evidence_contracts::compile_request_evidence(
+            project, assets, item,
+        ) {
+            Ok(capability) => capability,
+            Err(()) => {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.evidence_invalid",
+                    &path,
+                    "require one exact signed-JWS audience-scoped reviewed contract, request-origin selectors, unique typed scalar outputs, and observation age 1..300 seconds",
+                ));
+                continue;
+            }
+        };
+        let mut subjects = BTreeMap::new();
+        for (role, subject) in &item.subjects {
+            let definition_subject = capability
+                .definition
+                .subjects
+                .iter()
+                .find(|candidate| candidate.role == *role);
+            let expected_fields = definition_subject
+                .into_iter()
+                .flat_map(|candidate| candidate.selector.fields.iter())
+                .map(registry_evidence_client::SelectorField::name)
+                .collect::<BTreeSet<_>>();
+            if expected_fields
+                != subject
+                    .selectors
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>()
+            {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.selector_fields_invalid",
+                    format!("{path}.subjects[{role}].selectors"),
+                    "an Evidence subject must bind exactly every field in its reviewed selector profile",
+                ));
+            }
+            let selectors = subject
+                .selectors
+                .iter()
+                .filter_map(|(selector_field_id, selector)| {
+                    let expected = definition_subject.and_then(|definition| {
+                        definition
+                            .selector
+                            .fields
+                            .iter()
+                            .find(|field| field.name() == selector_field_id)
+                    });
+                    let (compiled, registry_field) = match selector {
+                        ChangeRequestSelectorSource::RequestField { field } => (
+                            CompiledChangeRequestSelector::RequestField {
+                                field: field.clone(),
+                            },
+                            request_entity.fields.get(field),
+                        ),
+                        ChangeRequestSelectorSource::TargetField { target, field } => (
+                            CompiledChangeRequestSelector::TargetField {
+                                target: target.clone(),
+                                field: field.clone(),
+                            },
+                            targets_by_id.get(target.as_str()).and_then(|selected| {
+                                entities
+                                    .get(&selected.entity_id)
+                                    .and_then(|entity| entity.fields.get(field))
+                            }),
+                        ),
+                    };
+                    if expected.is_none_or(|expected| {
+                        registry_field.is_none_or(|field| {
+                            !field.required
+                                || !crate::action_evidence_contracts::selector_field_matches_field_type(
+                                    expected,
+                                    &field.field_type,
+                                )
+                        })
+                    }) {
+                        errors.push(Diagnostic::error(
+                            "change_request.preconditions.selector_binding_invalid",
+                            format!(
+                                "{path}.subjects[{role}].selectors[{selector_field_id}]"
+                            ),
+                            "an Evidence selector field must bind one required stored field of its exact scalar type",
+                        ));
+                        return None;
+                    }
+                    Some((selector_field_id.clone(), compiled))
+                })
+                .collect();
+            subjects.insert(
+                role.clone(),
+                CompiledChangeRequestEvidenceSubject {
+                    profile: subject.profile.clone(),
+                    selectors,
+                },
+            );
+        }
+        evidence.push(CompiledChangeRequestEvidence {
+            subjects,
+            requires: item
+                .requires
+                .iter()
+                .filter_map(|requirement| {
+                    let expected = match (
+                        requirement.equals.as_ref(),
+                        requirement.equals_from_request_field.as_ref(),
+                        requirement.at_least,
+                        requirement.at_most,
+                    ) {
+                        (Some(value), None, None, None) => CompiledChangeRequestEvidenceExpected::Literal {
+                            value: value.clone(),
+                        },
+                        (None, Some(field), None, None)
+                            if request_entity.fields.get(field).is_some_and(|candidate| {
+                                candidate.required
+                                    && scalar_field(candidate)
+                                    && crate::action_evidence_contracts::evidence_output_matches_field_type(
+                                        &capability,
+                                        &requirement.output,
+                                        &candidate.field_type,
+                                    )
+                            }) =>
+                        {
+                            CompiledChangeRequestEvidenceExpected::RequestField {
+                                field: field.clone(),
+                            }
+                        }
+                        (None, None, Some(value), None) => {
+                            CompiledChangeRequestEvidenceExpected::AtLeast { value }
+                        }
+                        (None, None, None, Some(value)) => {
+                            CompiledChangeRequestEvidenceExpected::AtMost { value }
+                        }
+                        _ => {
+                            errors.push(Diagnostic::error(
+                                "change_request.preconditions.evidence_requirement_invalid",
+                                format!("{path}.requires[output={}]", requirement.output),
+                                "an Evidence output predicate must declare exactly one typed literal or required scalar request field",
+                            ));
+                            return None;
+                        }
+                    };
+                    Some(CompiledChangeRequestEvidenceRequirement {
+                        output: requirement.output.clone(),
+                        expected,
+                    })
+                })
+                .collect(),
+            capability,
+        });
+    }
+    evidence.sort_by(|left, right| left.capability.id.cmp(&right.capability.id));
+    for target in &targets {
+        let fields = target
+            .requires
+            .iter()
+            .map(|predicate| predicate.field.as_str())
+            .chain(
+                evidence
+                    .iter()
+                    .flat_map(|item| item.subjects.values())
+                    .flat_map(|subject| subject.selectors.values())
+                    .filter_map(|selector| match selector {
+                        CompiledChangeRequestSelector::TargetField { target: id, field }
+                            if id == &target.id =>
+                        {
+                            Some(field.as_str())
+                        }
+                        _ => None,
+                    }),
+            )
+            .collect::<BTreeSet<_>>();
+        if fields.len() > crate::model::MAX_TARGET_CONTEXT_FIELDS {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.target_fields_exceeded",
+                format!("{base}.targets[id={}]", target.id),
+                "a guard cannot bind more than 128 distinct predicate and Evidence selector fields",
+            ));
+        }
+    }
+    CompiledChangeRequestPreconditions {
+        request: request_predicates,
+        targets,
+        evidence,
+    }
+}
+
+fn compile_predicates(
+    sources: &[ChangeRequestPredicateSource],
+    target_entity: &CompiledEntity,
+    request_entity: &CompiledEntity,
+    allow_current_date: bool,
+    base: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Vec<CompiledChangeRequestPredicate> {
+    let mut compiled = Vec::new();
+    let mut fields = BTreeSet::new();
+    for source in sources {
+        let path = format!("{base}[field={}]", source.field);
+        if !fields.insert(source.field.clone()) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.predicate_duplicate",
+                &path,
+                "a precondition can test a stored field only once",
+            ));
+            continue;
+        }
+        let Some(target_field) = target_entity.fields.get(&source.field) else {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.predicate_field_unknown",
+                format!("{path}.field"),
+                "a precondition predicate must name a stored field",
+            ));
+            continue;
+        };
+        if !scalar_field(target_field) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.predicate_field_invalid",
+                format!("{path}.field"),
+                "a precondition predicate must use a scalar stored field",
+            ));
+            continue;
+        }
+        let choices = usize::from(source.equals.is_some())
+            + usize::from(source.equals_from_request_field.is_some())
+            + usize::from(source.current_date.is_some())
+            + usize::from(source.at_least.is_some())
+            + usize::from(source.at_most.is_some());
+        let expected = if choices != 1 {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.predicate_operator_invalid",
+                &path,
+                "declare exactly one literal equality, request-field equality, or current UTC date comparison",
+            ));
+            continue;
+        } else if let Some(value) = &source.equals {
+            if !predicate_literal_valid(value, target_field) {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_value_invalid",
+                    format!("{path}.equals"),
+                    "a literal predicate must use a scalar value valid for its stored field",
+                ));
+                continue;
+            }
+            CompiledChangeRequestPredicateExpected::Literal {
+                value: value.clone(),
+            }
+        } else if let Some(field) = &source.equals_from_request_field {
+            if !request_entity
+                .fields
+                .get(field)
+                .is_some_and(|request_field| {
+                    request_field.required
+                        && scalar_field(request_field)
+                        && compatible_field_types(
+                            &request_field.field_type,
+                            &target_field.field_type,
+                        )
+                })
+            {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_request_field_invalid",
+                    format!("{path}.equalsFromRequestField"),
+                    "request-field equality requires an exact compatible scalar field",
+                ));
+                continue;
+            }
+            CompiledChangeRequestPredicateExpected::RequestField {
+                field: field.clone(),
+            }
+        } else if let Some(value) = source.at_least {
+            if target_field.field_type != FieldTypeSource::Int64 {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_numeric_invalid",
+                    &path,
+                    "inclusive numeric predicates require an int64 field",
+                ));
+                continue;
+            }
+            CompiledChangeRequestPredicateExpected::AtLeast { value }
+        } else if let Some(value) = source.at_most {
+            if target_field.field_type != FieldTypeSource::Int64 {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_numeric_invalid",
+                    &path,
+                    "inclusive numeric predicates require an int64 field",
+                ));
+                continue;
+            }
+            CompiledChangeRequestPredicateExpected::AtMost { value }
+        } else {
+            if !allow_current_date || target_field.field_type != FieldTypeSource::Date {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_current_date_invalid",
+                    format!("{path}.currentDate"),
+                    "current UTC date comparisons require a date field",
+                ));
+                continue;
+            }
+            CompiledChangeRequestPredicateExpected::CurrentDate {
+                relation: match source.current_date.expect("one predicate choice") {
+                    ChangeRequestCurrentDatePredicateSource::OnOrAfter => {
+                        CompiledCurrentDateRelation::OnOrAfter
+                    }
+                    ChangeRequestCurrentDatePredicateSource::OnOrBefore => {
+                        CompiledCurrentDateRelation::OnOrBefore
+                    }
+                },
+            }
+        };
+        compiled.push(CompiledChangeRequestPredicate {
+            field: source.field.clone(),
+            expected,
+        });
+    }
+    compiled.sort_by(|left, right| left.field.cmp(&right.field));
+    compiled
+}
+
+fn scalar_field(field: &CompiledField) -> bool {
+    !matches!(
+        field.field_type,
+        FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+    )
+}
+
+fn predicate_literal_valid(value: &Value, field: &CompiledField) -> bool {
+    !value.is_array()
+        && !value.is_object()
+        && if value.is_null() {
+            !field.required
+        } else {
+            crate::data::validate_field_value(
+                crate::data::FieldValue::Json(value),
+                &field.field_type,
+            )
+        }
+}
+
+#[allow(clippy::too_many_arguments)]
 fn compile_request_entity(
+    project: &RegistryProject,
     source: &EntitySource,
     request_entity: &CompiledEntity,
     entities: &BTreeMap<String, CompiledEntity>,
@@ -762,7 +1275,7 @@ fn compile_request_entity(
         CompiledChangeRequestReviewMode::Stages
     };
 
-    let application = compile_application(
+    let mut application = compile_application(
         &request_entity.id,
         request,
         request.planner.is_some(),
@@ -802,11 +1315,45 @@ fn compile_request_entity(
             validate_plan_bounds(request_entity, entities, &effects, errors);
             (effects, changed_fields, target_entities, None)
         };
+    application.preconditions =
+        compile_preconditions(project, request_entity, entities, assets, request, errors);
+    if !application.preconditions.is_empty() {
+        let base_bytes = match &planner {
+            Some(planner) => maximum_planner_snapshot_bytes(request_entity, &planner.writes),
+            None => maximum_snapshot_bytes(request_entity, entities, &effects),
+        };
+        let combined = base_bytes.and_then(|base| {
+            maximum_precondition_snapshot_bytes(
+                request_entity,
+                entities,
+                &application.preconditions,
+            )
+            .and_then(|guards| base.checked_add(guards))
+        });
+        if combined.is_none_or(|bytes| bytes > u64::from(MAX_CHANGE_REQUEST_SNAPSHOT_BYTES)) {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.bounds",
+                format!("{}.changeRequest.application.preconditions", entity_path(&request_entity.id)),
+                "the compiled Evidence contracts and maximum frozen guard values exceed the remaining proposal snapshot ceiling",
+            ));
+        }
+    }
     let actions = compile_action_routes(&stages);
     let review_permissions =
         compile_review_permissions(request_entity, &stages, &changed_fields, entities, errors);
+    let authority_targets = target_entities
+        .iter()
+        .cloned()
+        .chain(
+            application
+                .preconditions
+                .targets
+                .iter()
+                .map(|target| target.entity_id.clone()),
+        )
+        .collect::<BTreeSet<_>>();
     let apply_permissions =
-        compile_apply_permissions(request_entity, &target_entities, entities, errors);
+        compile_apply_permissions(request_entity, &authority_targets, entities, errors);
     if !request_entity
         .access_profiles
         .values()
@@ -828,7 +1375,7 @@ fn compile_request_entity(
         &stages,
         &review_permissions,
         &apply_permissions,
-        &target_entities,
+        &authority_targets,
         errors,
     );
     let contract_fingerprint = contract_fingerprint(ContractFingerprintInput {
@@ -838,7 +1385,7 @@ fn compile_request_entity(
         stages: &stages,
         review_permissions: &review_permissions,
         apply_permissions: &apply_permissions,
-        target_entities: &target_entities,
+        target_entities: &authority_targets,
         review_mode,
         application: &application,
         planner: planner.as_ref(),
@@ -857,6 +1404,9 @@ fn compile_request_entity(
         review_permissions,
         apply_permissions,
         presence_permissions: Vec::new(),
+        // This public set names records mutated by the request. Read-only
+        // application guard entities are represented by apply grants and the
+        // frozen precondition contract instead of becoming change targets.
         target_entities,
         maximum_targets: MAX_CHANGE_REQUEST_TARGETS,
         maximum_field_mutations: MAX_CHANGE_REQUEST_FIELD_MUTATIONS,
@@ -1953,6 +2503,87 @@ fn maximum_snapshot_bytes(
     Some(total)
 }
 
+// Account for the exact frozen shape, including each cloned reviewed definition.
+// Null placeholders avoid allocating maximum-sized strings during compilation.
+fn maximum_precondition_snapshot_bytes(
+    request_entity: &CompiledEntity,
+    entities: &BTreeMap<String, CompiledEntity>,
+    contract: &CompiledChangeRequestPreconditions,
+) -> Option<u64> {
+    let mut request_fields = BTreeSet::new();
+    let mut target_fields = BTreeMap::<&str, BTreeSet<&str>>::new();
+    for predicate in &contract.request {
+        request_fields.insert(predicate.field.as_str());
+        if let CompiledChangeRequestPredicateExpected::RequestField { field } = &predicate.expected
+        {
+            request_fields.insert(field.as_str());
+        }
+    }
+    for target in &contract.targets {
+        request_fields.insert(target.from_field.as_str());
+        let fields = target_fields.entry(target.id.as_str()).or_default();
+        for predicate in &target.requires {
+            fields.insert(predicate.field.as_str());
+            if let CompiledChangeRequestPredicateExpected::RequestField { field } =
+                &predicate.expected
+            {
+                request_fields.insert(field.as_str());
+            }
+        }
+    }
+    for evidence in &contract.evidence {
+        for selector in evidence
+            .subjects
+            .values()
+            .flat_map(|subject| subject.selectors.values())
+        {
+            match selector {
+                CompiledChangeRequestSelector::RequestField { field } => {
+                    request_fields.insert(field.as_str());
+                }
+                CompiledChangeRequestSelector::TargetField { target, field } => {
+                    target_fields
+                        .get_mut(target.as_str())?
+                        .insert(field.as_str());
+                }
+            }
+        }
+        for requirement in &evidence.requires {
+            if let CompiledChangeRequestEvidenceExpected::RequestField { field } =
+                &requirement.expected
+            {
+                request_fields.insert(field.as_str());
+            }
+        }
+    }
+    let mut extra = 0_u64;
+    let mut values = |entity: &CompiledEntity,
+                      fields: &BTreeSet<&str>|
+     -> Option<BTreeMap<String, Value>> {
+        let mut placeholders = BTreeMap::new();
+        for id in fields {
+            let field = entity.fields.get(*id)?;
+            extra = extra.checked_add(maximum_field_json_bytes(&field.field_type)?.max(4) - 4)?;
+            placeholders.insert((*id).to_owned(), Value::Null);
+        }
+        Some(placeholders)
+    };
+    let request_values = values(request_entity, &request_fields)?;
+    let mut targets = Vec::new();
+    for target in &contract.targets {
+        targets.push(json!({
+            "id":target.id, "entityId":target.entity_id,
+            "recordId":"ffffffff-ffff-4fff-bfff-ffffffffffff", "expectedRevision":9_007_199_254_740_991_i64,
+            "values":values(entities.get(&target.entity_id)?, target_fields.get(target.id.as_str())?)?,
+        }));
+    }
+    // Canonical JSON admits only safe integers in the placeholder, while
+    // PostgreSQL can retain an i64 revision. Reserve three digits per target.
+    extra = extra.checked_add(3_u64.checked_mul(targets.len() as u64)?)?;
+    let frozen = json!({"contract":contract, "requestValues":request_values, "targets":targets});
+    (canonicalize_json(&frozen).ok()?.len() as u64).checked_add(extra)
+}
+
 fn maximum_planner_snapshot_bytes(
     request_entity: &CompiledEntity,
     writes: &[CompiledChangeRequestPlannerWrite],
@@ -2076,6 +2707,7 @@ fn contract_fingerprint(input: ContractFingerprintInput<'_>) -> String {
         || application.mode != CompiledChangeRequestApplicationMode::Manual
         || !application.allowed_dispositions.is_empty()
         || !application.queue_reasons.is_empty()
+        || !application.preconditions.is_empty()
     {
         payload["version"] = json!(3);
         payload["reviewMode"] = json!(review_mode);
@@ -2219,7 +2851,27 @@ fn is_mutation_operation(operation: Operation) -> bool {
 }
 
 fn compatible_field_types(source: &FieldTypeSource, target: &FieldTypeSource) -> bool {
-    source == target
+    if source == target {
+        return true;
+    }
+    match (source, target) {
+        (
+            FieldTypeSource::VocabularyCode {
+                vocabulary: source_vocabulary,
+                values: source_values,
+            },
+            FieldTypeSource::VocabularyCode {
+                vocabulary: target_vocabulary,
+                values: target_values,
+            },
+        ) => {
+            source_vocabulary == target_vocabulary
+                && source_values
+                    .iter()
+                    .all(|value| target_values.contains(value))
+        }
+        _ => false,
+    }
 }
 
 fn effect_id(effect: &ChangeRequestEffectSource, index: usize) -> String {

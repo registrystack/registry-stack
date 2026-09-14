@@ -111,6 +111,66 @@ async fn count(database: &TestDatabase) -> i64 {
         .unwrap()
         .get(0)
 }
+
+async fn request_sentinel(database: &TestDatabase) {
+    database.admin.batch_execute("INSERT INTO registry_internal.registry_request_state
+        (request_entity_id,request_id,owner_reference,state,proposal_version,workflow_revision)
+        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002','synthetic-owner','applied',1,2);
+        INSERT INTO registry_internal.registry_request_proposals
+        (request_entity_id,request_id,proposal_version,request_record_revision,contract_fingerprint,effect_digest,snapshot)
+        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002',1,1,
+        'sha256:1111111111111111111111111111111111111111111111111111111111111111',
+        'sha256:2222222222222222222222222222222222222222222222222222222222222222','{}');
+        INSERT INTO registry_internal.registry_request_applications
+        (request_entity_id,request_id,proposal_version,application_id,effect_digest,applied_by,applied_at)
+        VALUES ('synthetic-request','00000000-0000-4000-8000-000000000002',1,
+        '00000000-0000-4000-8000-000000000003',
+        'sha256:2222222222222222222222222222222222222222222222222222222222222222',
+        'synthetic-applier',CURRENT_TIMESTAMP-INTERVAL '2 days');
+        INSERT INTO registry_internal.registry_request_evidence_uses
+        (application_id,ordinal,retained,created_at,expires_at) VALUES
+        ('00000000-0000-4000-8000-000000000003',0,'{\"synthetic\":\"expired\"}',
+        CURRENT_TIMESTAMP-INTERVAL '2 days',CURRENT_TIMESTAMP-INTERVAL '1 day'),
+        ('00000000-0000-4000-8000-000000000003',1,'{\"synthetic\":\"live\"}',
+        CURRENT_TIMESTAMP,CURRENT_TIMESTAMP+INTERVAL '1 day');").await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_request_evidence_erases_only_retained_uses() {
+    let database = TestDatabase::create(1).await;
+    let registry = registry();
+    let expected = install(
+        &database,
+        None,
+        &registry,
+        &database.runtime_role,
+        "request-retention",
+    )
+    .await;
+    request_sentinel(&database).await;
+    let operator = service(
+        &database,
+        &registry,
+        &expected,
+        database.migration_config.clone(),
+    );
+    assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 1);
+    let remaining = database
+        .admin
+        .query_one(
+            "SELECT
+           (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
+           (SELECT count(*) FROM registry_internal.registry_request_applications)",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(remaining.get::<_, i64>(0), 1);
+    assert_eq!(remaining.get::<_, i64>(1), 1);
+    assert_eq!(operator.erase_expired(cutoff()).await.unwrap(), 0);
+    drop(operator);
+    database.cleanup().await;
+}
 fn cutoff() -> chrono::DateTime<chrono::Utc> {
     chrono::Utc::now() - chrono::Duration::seconds(1)
 }

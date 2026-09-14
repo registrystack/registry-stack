@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Operator-only erasure of expired protected action Evidence material.
+//! Operator-only erasure of expired protected action and request Evidence material.
 
 use std::{path::Path, time::Duration};
 

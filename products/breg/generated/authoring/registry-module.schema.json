@@ -455,6 +455,12 @@
       "additionalProperties": false,
       "properties": {
         "equals": true,
+        "equalsInput": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "field": {
           "type": "string"
         },
@@ -464,8 +470,7 @@
       },
       "required": [
         "input",
-        "field",
-        "equals"
+        "field"
       ],
       "type": "object"
     },
@@ -699,6 +704,9 @@
           "$ref": "#/$defs/ChangeRequestApplicationModeSource",
           "default": "manual"
         },
+        "preconditions": {
+          "$ref": "#/$defs/ChangeRequestPreconditionsSource"
+        },
         "queueReasons": {
           "additionalProperties": {
             "type": "string"
@@ -707,6 +715,13 @@
         }
       },
       "type": "object"
+    },
+    "ChangeRequestCurrentDatePredicateSource": {
+      "enum": [
+        "on_or_after",
+        "on_or_before"
+      ],
+      "type": "string"
     },
     "ChangeRequestDispositionSource": {
       "enum": [
@@ -749,6 +764,126 @@
       "required": [
         "target",
         "operation"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestEvidenceRequirementSource": {
+      "additionalProperties": false,
+      "properties": {
+        "atLeast": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "atMost": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "equals": true,
+        "equalsFromRequestField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "output"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestEvidenceSource": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "maximumObservationAgeSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "provider": {
+          "type": "string"
+        },
+        "requirement": {
+          "type": "string"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestEvidenceRequirementSource"
+          },
+          "type": "array"
+        },
+        "subjects": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ChangeRequestEvidenceSubjectSource"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "provider",
+        "requirement",
+        "subjects",
+        "maximumObservationAgeSeconds"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestEvidenceSubjectSource": {
+      "additionalProperties": false,
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "selectors": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ChangeRequestSelectorSource"
+          },
+          "description": "Exact governed selector-profile field map. Every profile field must be\npresent exactly once and no undeclared field is admitted.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "profile",
+        "selectors"
+      ],
+      "type": "object"
+    },
+    "ChangeRequestGuardTargetSource": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "type": "string"
+        },
+        "fromField": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ChangeRequestPredicateSource"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "entity",
+        "fromField"
       ],
       "type": "object"
     },
@@ -827,6 +962,76 @@
       ],
       "type": "object"
     },
+    "ChangeRequestPreconditionsSource": {
+      "additionalProperties": false,
+      "properties": {
+        "evidence": {
+          "description": "Governed Evidence acquisitions required immediately before application.",
+          "items": {
+            "$ref": "#/$defs/ChangeRequestEvidenceSource"
+          },
+          "type": "array"
+        },
+        "request": {
+          "description": "Predicates over the frozen request intake itself.",
+          "items": {
+            "$ref": "#/$defs/ChangeRequestPredicateSource"
+          },
+          "type": "array"
+        },
+        "targets": {
+          "description": "Existing records read and revision-bound at proposal preparation.",
+          "items": {
+            "$ref": "#/$defs/ChangeRequestGuardTargetSource"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "ChangeRequestPredicateSource": {
+      "additionalProperties": false,
+      "properties": {
+        "atLeast": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "atMost": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "currentDate": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChangeRequestCurrentDatePredicateSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "equals": true,
+        "equalsFromRequestField": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field"
+      ],
+      "type": "object"
+    },
     "ChangeRequestRetentionModeSource": {
       "enum": [
         "retain",
@@ -900,6 +1105,48 @@
         "approvals"
       ],
       "type": "object"
+    },
+    "ChangeRequestSelectorSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "source": {
+              "const": "request_field",
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "source": {
+              "const": "target_field",
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "target",
+            "field"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ChangeRequestSource": {
       "additionalProperties": false,

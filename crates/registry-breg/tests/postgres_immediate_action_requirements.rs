@@ -45,10 +45,20 @@ async fn setup() -> (
     Arc<registry_breg::CompiledRegistry>,
     ExpectedRegistryIdentity,
 ) {
+    setup_with_project(support::project()).await
+}
+
+async fn setup_with_project(
+    source: Value,
+) -> (
+    TestDatabase,
+    Arc<registry_breg::CompiledRegistry>,
+    ExpectedRegistryIdentity,
+) {
     let database = TestDatabase::create(8).await;
     let registry = Arc::new(
         compile_project(
-            &parse_project_json(&serde_json::to_vec(&support::project()).unwrap()).unwrap(),
+            &parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap(),
             &[],
             CompileProfile::Authoring,
         )
@@ -130,7 +140,11 @@ fn app(
     ))
 }
 
-async fn invoke(mut app: axum::Router, key: &str, parent: &str) -> (StatusCode, Value) {
+async fn invoke(app: axum::Router, key: &str, parent: &str) -> (StatusCode, Value) {
+    invoke_with_input(app, key, json!({"parentId": parent, "label": "synthetic"})).await
+}
+
+async fn invoke_with_input(mut app: axum::Router, key: &str, input: Value) -> (StatusCode, Value) {
     let claims = VerifiedRequestClaims::authenticated(
         "registry_principal",
         "registrar",
@@ -151,8 +165,7 @@ async fn invoke(mut app: axum::Router, key: &str, parent: &str) -> (StatusCode, 
         .header("content-type", "application/json")
         .header("idempotency-key", key)
         .body(Body::from(
-            serde_json::to_vec(&json!({"input": {"parentId": parent, "label": "synthetic"}}))
-                .unwrap(),
+            serde_json::to_vec(&json!({"input": input})).unwrap(),
         ))
         .unwrap();
     request.extensions_mut().insert(claims);
@@ -161,6 +174,51 @@ async fn invoke(mut app: axum::Router, key: &str, parent: &str) -> (StatusCode, 
     let body =
         serde_json::from_slice(&to_bytes(response.into_body(), 128 * 1024).await.unwrap()).unwrap();
     (status, body)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn action_input_equality_is_authorized_atomic_and_replayed_from_the_receipt() {
+    let mut source = support::project();
+    source["actions"][0]["inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"expected-status", "apiName":"expectedStatus", "type":"vocabulary-code",
+            "vocabulary":"status", "values":["active","inactive"], "required":true,
+            "classification":"restricted"
+        }));
+    source["actions"][0]["requires"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("equals");
+    source["actions"][0]["requires"][0]["equalsInput"] = json!("expected-status");
+    let (database, registry, identity) = setup_with_project(source).await;
+    let app = app(&database, registry.clone(), identity, None);
+    let accepted = invoke_with_input(
+        app.clone(),
+        "input-equality",
+        json!({"parentId":ID, "label":"synthetic", "expectedStatus":"active"}),
+    )
+    .await;
+    assert_eq!(accepted.0, StatusCode::OK, "{}", accepted.1);
+    let after = counts(&database, &registry).await;
+    let replay = invoke_with_input(
+        app.clone(),
+        "input-equality",
+        json!({"parentId":ID, "label":"synthetic", "expectedStatus":"active"}),
+    )
+    .await;
+    assert_eq!(accepted, replay);
+    assert_eq!(after, counts(&database, &registry).await);
+    let refused = invoke_with_input(
+        app,
+        "input-mismatch",
+        json!({"parentId":ID, "label":"synthetic", "expectedStatus":"inactive"}),
+    )
+    .await;
+    assert_eq!(refused.0, StatusCode::PRECONDITION_FAILED, "{}", refused.1);
+    assert_eq!(after, counts(&database, &registry).await);
+    database.cleanup().await;
 }
 
 fn status_sql(registry: &registry_breg::CompiledRegistry) -> String {

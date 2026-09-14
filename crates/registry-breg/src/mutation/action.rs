@@ -1690,7 +1690,12 @@ async fn verify_action_requirements(
             .fields
             .get(&requirement.field)
             .ok_or(MutationError::InvalidRequest)?;
-        let expected = sql_value(&requirement.equals, &field.field_type)?;
+        let expected_value = match (&requirement.equals, &requirement.equals_input) {
+            (Some(value), None) => value,
+            (None, Some(input)) => inputs.get(input).ok_or(MutationError::InvalidRequest)?,
+            _ => return Err(MutationError::InvalidRequest),
+        };
+        let expected = sql_value(expected_value, &field.field_type)?;
         // The exact row is already authorized and locked until commit. Use its
         // PostgreSQL type's equality, including decimal and timestamp semantics.
         let sql = format!(
@@ -2105,9 +2110,8 @@ async fn insert_action_evidence(
             .map_err(MutationError::from)?;
         bytes = bytes
             .checked_add(
-                serde_json::to_vec(&retained)
-                    .map_err(|_| MutationError::Unavailable)?
-                    .len(),
+                crate::action_evidence_client::retained_jsonb_bytes(&retained)
+                    .map_err(MutationError::from)?,
             )
             .ok_or(MutationError::Unavailable)?;
         if bytes > crate::action_evidence::MAXIMUM_RETAINED_EVIDENCE_BYTES {
@@ -2131,20 +2135,32 @@ async fn insert_action_evidence(
 }
 
 /// Erase only expired protected Evidence material with the migration role.
+/// This covers both immediate-action and reviewed-request application uses.
 /// Runtime roles have INSERT only; history erasure has a separate scope.
 /// A future cutoff cannot erase material whose retention has not expired.
 pub(crate) async fn erase_expired_action_evidence(
     client: &tokio_postgres::Transaction<'_>,
     before: chrono::DateTime<chrono::Utc>,
 ) -> Result<u64, MutationError> {
-    client
+    let action_uses = client
         .execute(
             "DELETE FROM registry_internal.registry_action_evidence_uses
         WHERE expires_at <= LEAST($1, CURRENT_TIMESTAMP)",
             &[&before],
         )
         .await
-        .map_err(map_database_error)
+        .map_err(map_database_error)?;
+    let request_uses = client
+        .execute(
+            "DELETE FROM registry_internal.registry_request_evidence_uses
+        WHERE expires_at <= LEAST($1, CURRENT_TIMESTAMP)",
+            &[&before],
+        )
+        .await
+        .map_err(map_database_error)?;
+    action_uses
+        .checked_add(request_uses)
+        .ok_or(MutationError::Unavailable)
 }
 
 #[cfg(test)]

@@ -18,10 +18,11 @@ use crate::model::{
 };
 use crate::mutation::MutationError;
 use crate::request_workflow::{
-    ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenPlannerDisposition,
-    FrozenPlannerKind, FrozenPlanningBinding, FrozenQueueReason, FrozenReviewPolicy,
-    PackageFingerprint, PreparedEffect, PreparedFieldChange, PreparedProposal, PreparedTarget,
-    ProposalDigest, RecordId, RecordRevision, MAX_REQUEST_SNAPSHOT_BYTES,
+    ContractFingerprint, EffectId, EntityId, FieldId, FieldValue, FrozenApplicationPreconditions,
+    FrozenGuardTargetSnapshot, FrozenPlannerDisposition, FrozenPlannerKind, FrozenPlanningBinding,
+    FrozenQueueReason, FrozenReviewPolicy, PackageFingerprint, PreparedEffect, PreparedFieldChange,
+    PreparedProposal, PreparedTarget, ProposalDigest, RecordId, RecordRevision,
+    MAX_REQUEST_SNAPSHOT_BYTES,
 };
 use crate::rhai_planner::{
     CandidateChangeRequestEffect, CandidateChangeRequestMutation,
@@ -109,14 +110,17 @@ pub(crate) fn resolve_targets(
 /// `bases` contains only exact existing targets selected by `resolve_targets`.
 /// The storage adapter is responsible for protected source reads; this function
 /// validates values and produces one merged result per physical target.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare(
     registry: &CompiledRegistry,
     request_entity: &CompiledEntity,
     intake: &Map<String, Value>,
+    request_record_id: Uuid,
     request_record_revision: i64,
     package_fingerprint: &str,
     resolved: &ResolvedRequestTargets,
     bases: BTreeMap<(String, Uuid), (i64, Map<String, Value>)>,
+    guard_bases: BTreeMap<String, (Uuid, i64, Map<String, Value>)>,
 ) -> Result<PreparedRequest, MutationError> {
     let plan = request_entity
         .change_request
@@ -303,7 +307,7 @@ pub(crate) fn prepare(
         CompiledChangeRequestReviewMode::None => FrozenReviewPolicy::None,
         CompiledChangeRequestReviewMode::Stages => FrozenReviewPolicy::Stages,
     };
-    let proposal = workflow(PreparedProposal::new_with_binding(
+    let mut proposal = workflow(PreparedProposal::new_with_binding(
         workflow(RecordRevision::new(request_record_revision))?,
         workflow(ContractFingerprint::new(&plan.contract_fingerprint))?,
         workflow(PackageFingerprint::new(package_fingerprint))?,
@@ -313,6 +317,136 @@ pub(crate) fn prepare(
         effects,
         bytes,
     ))?;
+    if !plan.application.preconditions.is_empty() {
+        let expected_guards = plan
+            .application
+            .preconditions
+            .targets
+            .iter()
+            .map(|target| target.id.as_str())
+            .collect::<BTreeSet<_>>();
+        if guard_bases
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>()
+            != expected_guards
+        {
+            return Err(MutationError::PreconditionFailed);
+        }
+        let mut request_fields = BTreeSet::new();
+        for predicate in &plan.application.preconditions.request {
+            request_fields.insert(predicate.field.clone());
+            if let crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } =
+                &predicate.expected
+            {
+                request_fields.insert(field.clone());
+            }
+        }
+        for target in &plan.application.preconditions.targets {
+            request_fields.insert(target.from_field.clone());
+            for predicate in &target.requires {
+                if let crate::model::CompiledChangeRequestPredicateExpected::RequestField {
+                    field,
+                } = &predicate.expected
+                {
+                    request_fields.insert(field.clone());
+                }
+            }
+        }
+        for evidence in &plan.application.preconditions.evidence {
+            for subject in evidence.subjects.values() {
+                for selector in subject.selectors.values() {
+                    if let crate::model::CompiledChangeRequestSelector::RequestField { field } =
+                        selector
+                    {
+                        request_fields.insert(field.clone());
+                    }
+                }
+            }
+            for requirement in &evidence.requires {
+                if let crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } =
+                    &requirement.expected
+                {
+                    request_fields.insert(field.clone());
+                }
+            }
+        }
+        let request_values = request_fields
+            .into_iter()
+            .map(|field| {
+                intake
+                    .get(&field)
+                    .cloned()
+                    .or_else(|| {
+                        request_entity
+                            .fields
+                            .get(&field)
+                            .filter(|field| !field.required)
+                            .map(|_| Value::Null)
+                    })
+                    .map(|value| (field, value))
+                    .ok_or(MutationError::PreconditionFailed)
+            })
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+        let mut guard_snapshots = Vec::new();
+        for guard in &plan.application.preconditions.targets {
+            let (record_id, revision, data) = guard_bases
+                .get(&guard.id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            if guard.entity_id == request_entity.id && *record_id == request_record_id {
+                return Err(MutationError::PreconditionFailed);
+            }
+            if *revision <= 0 {
+                return Err(MutationError::PreconditionFailed);
+            }
+            let selector_fields =
+                plan.application
+                    .preconditions
+                    .evidence
+                    .iter()
+                    .flat_map(|evidence| evidence.subjects.values())
+                    .flat_map(|subject| subject.selectors.values())
+                    .filter_map(|selector| match selector {
+                        crate::model::CompiledChangeRequestSelector::TargetField {
+                            target,
+                            field,
+                        } if target == &guard.id => Some(field.clone()),
+                        _ => None,
+                    });
+            let fields = guard
+                .requires
+                .iter()
+                .map(|predicate| predicate.field.clone())
+                .chain(selector_fields)
+                .collect::<BTreeSet<_>>();
+            let values = fields
+                .into_iter()
+                .map(|field| {
+                    data.get(&field)
+                        .cloned()
+                        .map(|value| (field, value))
+                        .ok_or(MutationError::PreconditionFailed)
+                })
+                .collect::<Result<BTreeMap<_, _>, _>>()?;
+            guard_snapshots.push(FrozenGuardTargetSnapshot {
+                id: guard.id.clone(),
+                entity_id: guard.entity_id.clone(),
+                record_id: workflow(RecordId::new(record_id.to_string()))?,
+                expected_revision: *revision,
+                values,
+            });
+        }
+        guard_snapshots.sort_by(|left, right| left.id.cmp(&right.id));
+        proposal = workflow(proposal.with_application_preconditions(
+            FrozenApplicationPreconditions {
+                contract: plan.application.preconditions.clone(),
+                request_values,
+                targets: guard_snapshots,
+            },
+        ))?;
+    } else if !guard_bases.is_empty() {
+        return Err(MutationError::InvalidRequest);
+    }
     Ok(PreparedRequest {
         proposal,
         targets: snapshots.into_values().collect(),

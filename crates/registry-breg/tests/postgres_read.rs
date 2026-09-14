@@ -984,6 +984,31 @@ async fn real_postgres_reads_do_not_depend_on_the_database_time_zone() {
     assert_eq!(as_of.status(), StatusCode::OK);
     assert_ids(body_json(as_of).await, &[TEMPORAL_OLD_RECORD]);
 
+    // A valid four-digit RFC3339 input can cross into a BC year after its
+    // offset is normalized. This is the 35-byte JSONB string upper bound for
+    // reviewed timestamp selectors, including PostgreSQL's microseconds.
+    let bc_input = "0001-01-01T00:00:00.123456+01:00";
+    assert!(
+        time::OffsetDateTime::parse(bc_input, &time::format_description::well_known::Rfc3339)
+            .is_ok()
+    );
+    database
+        .admin
+        .execute("SET TIME ZONE 'UTC'", &[])
+        .await
+        .unwrap();
+    let projected: String = database
+        .admin
+        .query_one(
+            "SELECT to_jsonb($1::text::timestamptz) #>> '{}'",
+            &[&bc_input],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert_eq!(projected, "0001-12-31T23:00:00.123456+00:00 BC");
+    assert_eq!(projected.len(), 35);
+
     database.cleanup().await;
 }
 

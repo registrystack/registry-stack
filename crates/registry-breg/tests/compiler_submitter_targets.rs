@@ -11,6 +11,44 @@ fn source() -> Value {
     .unwrap()
 }
 
+fn create_only_guard_source() -> Value {
+    let mut candidate = source();
+    candidate["entities"].as_array_mut().unwrap().push(json!({
+        "id":"enrolment", "primaryDataset":"directory", "route":"enrolments",
+        "mutationMode":"create_only", "classification":"restricted",
+        "changeControl":{"requiredFor":["create"]},
+        "fields":[{
+            "id":"supporting-reference", "type":"string", "required":true,
+            "classification":"restricted", "minLength":1, "maxLength":500
+        }]
+    }));
+    candidate["entities"][1]["changeRequest"]["effects"] = json!([{
+        "id":"create-enrolment", "target":{"entity":"enrolment"}, "operation":"create",
+        "set":{"supporting-reference":{"fromField":"supporting-reference"}}
+    }]);
+    candidate["entities"][1]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"licence-guard", "entity":"professional-license", "fromField":"record",
+            "requires":[{"field":"person-reference", "equals":"person:holder"}]
+        }]}
+    });
+    let reviewer = candidate["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "reviewer")
+        .unwrap();
+    reviewer["permissions"][1]["reviewStages"][0]["targets"] = json!([{
+        "entity":"enrolment", "readableFields":["supporting-reference"], "rowBoundaries":[]
+    }]);
+    reviewer["permissions"][1]["applyTargets"] = json!([
+        {"entity":"enrolment", "rowBoundaries":[]},
+        {"entity":"professional-license", "rowBoundaries":[]}
+    ]);
+    candidate
+}
+
 #[test]
 fn native_reference_admission_requires_complete_manual_same_profile_authority() {
     let original = source();
@@ -118,4 +156,38 @@ fn professional_reviewer_can_filter_requests_by_readable_target_without_granting
             .all(|field| field.field != "record"),
         "reading the target reference must not implicitly grant filtering"
     );
+}
+
+#[test]
+fn create_only_requests_admit_exact_existing_application_guard_targets() {
+    let candidate = create_only_guard_source();
+    let project = parse_project_json(&serde_json::to_vec(&candidate).unwrap()).unwrap();
+    let compiled = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
+    let plan = compiled.entities()["scope-correction"]
+        .change_request
+        .as_ref()
+        .unwrap();
+    assert_eq!(
+        plan.target_entities,
+        ["enrolment".to_owned()].into_iter().collect()
+    );
+    assert_eq!(
+        compiled.entities()["scope-correction"].access_profiles["holder"].submitter_targets,
+        ["professional-license".to_owned()].into_iter().collect()
+    );
+
+    let mut widened = candidate;
+    let holder = widened["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "holder")
+        .unwrap();
+    holder["permissions"][1]["submitterTargets"] = json!(["professional-license", "enrolment"]);
+    let project = parse_project_json(&serde_json::to_vec(&widened).unwrap()).unwrap();
+    let failure = compile_project(&project, &[], CompileProfile::Authoring).unwrap_err();
+    assert!(failure
+        .diagnostics()
+        .iter()
+        .any(|diagnostic| diagnostic.code == "change_request.submitter_targets.invalid"));
 }
