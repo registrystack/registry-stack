@@ -15,6 +15,8 @@ pub const SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema";
 pub const EVIDENCE_SCHEMA_ID: &str =
     "https://registrystack.org/schemas/evidence/assertion-evidence-v1.json";
 pub const REQUEST_NONCE_PATTERN: &str = "^[A-Za-z0-9_-]{43}$";
+/// Maximum Unicode character count for a public Evidence string value.
+pub const MAX_PUBLIC_STRING_LENGTH: u32 = 1024;
 
 static EVIDENCE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> = OnceLock::new();
 static PUBLIC_VALUE_VALIDATOR: OnceLock<Result<JSONSchema, ContractValidationError>> =
@@ -123,14 +125,14 @@ pub fn evidence_schema() -> Value {
                 "anyOf": [
                     {"type": "boolean"},
                     {"type": "integer", "minimum": -9007199254740991_i64, "maximum": 9007199254740991_i64},
-                    {"type": "string", "minLength": 1, "maxLength": 1024},
+                    {"type": "string", "minLength": 1, "maxLength": MAX_PUBLIC_STRING_LENGTH},
                     {"$ref": "#/$defs/bucket"},
                     {"$ref": "#/$defs/entity-reference"},
                     {"$ref": "#/$defs/structured"},
                     {
                         "type": "array", "minItems": 1, "maxItems": 64,
                         "items": {"anyOf": [
-                            {"type": "string", "minLength": 1, "maxLength": 1024},
+                            {"type": "string", "minLength": 1, "maxLength": MAX_PUBLIC_STRING_LENGTH},
                             {"$ref": "#/$defs/entity-reference"}
                         ]}
                     }

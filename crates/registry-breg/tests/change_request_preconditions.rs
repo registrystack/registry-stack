@@ -467,6 +467,22 @@ fn preconditions_refuse_automatic_apply_incomplete_profiles_and_wrong_types() {
 }
 
 #[test]
+fn evidence_string_equality_requires_a_reachable_request_length() {
+    let mut source = project();
+    let report_reference = &mut source["entities"][1]["fields"][2];
+    report_reference["minLength"] = json!(1024);
+    report_reference["maxLength"] = json!(2048);
+    compile(source.clone()).expect("the public Evidence string limit remains reachable");
+
+    source["entities"][1]["fields"][2]["minLength"] = json!(1025);
+    let report = format!("{:?}", compile(source).unwrap_err());
+    assert!(
+        report.contains("change_request.preconditions.evidence_requirement_invalid"),
+        "a required request string longer than every public Evidence string must be refused: {report}"
+    );
+}
+
+#[test]
 fn changing_any_guard_or_selector_binding_changes_the_request_contract_fingerprint() {
     let baseline = compile(project()).unwrap().entities()["release-request"]
         .change_request

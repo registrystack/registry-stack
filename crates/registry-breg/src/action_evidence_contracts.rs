@@ -259,12 +259,17 @@ pub(crate) fn evidence_output_matches_field_type(
                     FieldTypeSource::Int64,
                 ) | (
                     ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String),
-                    FieldTypeSource::String { .. }
-                        | FieldTypeSource::Text { .. }
+                    FieldTypeSource::Text { .. }
                         | FieldTypeSource::Uuid
                         | FieldTypeSource::Reference { .. }
                         | FieldTypeSource::Timestamp,
                 )
+            ) || matches!(
+                (&expected.form, field_type),
+                (
+                    ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String),
+                    FieldTypeSource::String { min_length, .. },
+                ) if *min_length <= registry_evidence_verifier::contracts::MAX_PUBLIC_STRING_LENGTH
             )
         })
 }
