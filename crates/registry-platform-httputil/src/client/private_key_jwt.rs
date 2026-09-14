@@ -462,17 +462,21 @@ impl PrivateKeyJwt {
         (self.resource.as_deref(), &self.requested_scopes)
     }
 
+    /// `assertion_audience` is the audience the caller pinned, or `None` when
+    /// it pinned none. Both sides default an unpinned audience to the token
+    /// endpoint, so `None` is compared against this provider's own default
+    /// rather than against a second spelling of the same URL.
     pub(super) fn matches_discovered_binding(
         &self,
         client_id: &str,
-        token_endpoint: &str,
-        assertion_audience: &str,
+        token_endpoint: &Url,
+        assertion_audience: Option<&str>,
         resource: &str,
         scopes: &[String],
     ) -> bool {
         self.client_id == client_id
-            && self.token_endpoint.as_str() == token_endpoint
-            && self.audience == assertion_audience
+            && self.token_endpoint == *token_endpoint
+            && self.audience == assertion_audience.unwrap_or_else(|| token_endpoint.as_str())
             && self.resource.as_deref() == Some(resource)
             && self.requested_scopes == scopes
     }

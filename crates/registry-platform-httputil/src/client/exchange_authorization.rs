@@ -18,6 +18,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::{Mutex, RwLock};
+use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -443,9 +444,9 @@ impl ExchangeAuthorization {
     pub fn matches_discovered_binding(
         &self,
         client_id: &str,
-        token_endpoint: &str,
+        token_endpoint: &Url,
         issuer: &str,
-        assertion_audience: &str,
+        assertion_audience: Option<&str>,
         resource: &str,
         scopes: &[String],
     ) -> bool {
@@ -754,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn discovered_binding_requires_every_profile_and_issuer_pin() {
         let server = MockServer::start().await;
-        let token_endpoint = format!("{}/token", server.uri());
+        let token_endpoint = Url::parse(&format!("{}/token", server.uri())).unwrap();
         let authorization = ExchangeAuthorization::first_party(
             exchange(&server, "urn:registry:evidence", &["evidence:invoke"]),
             context("person-1", now_seconds().unwrap() + 120),
@@ -762,20 +763,21 @@ mod tests {
         )
         .unwrap();
         let matches = |client_id: &str,
-                       endpoint: &str,
+                       endpoint: &Url,
                        issuer: &str,
-                       audience: &str,
+                       audience: Option<&str>,
                        resource: &str,
                        scopes: &[String]| {
             authorization
                 .matches_discovered_binding(client_id, endpoint, issuer, audience, resource, scopes)
         };
         let scopes = vec!["evidence:invoke".to_owned()];
+        let other_endpoint = Url::parse("https://other.example/token").unwrap();
         assert!(matches(
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            &token_endpoint,
+            None,
             "urn:registry:evidence",
             &scopes,
         ));
@@ -783,15 +785,15 @@ mod tests {
             "other-client",
             &token_endpoint,
             "https://issuer.example",
-            &token_endpoint,
+            None,
             "urn:registry:evidence",
             &scopes
         ));
         assert!(!matches(
             "portal-client",
-            "https://other.example/token",
+            &other_endpoint,
             "https://issuer.example",
-            &token_endpoint,
+            None,
             "urn:registry:evidence",
             &scopes
         ));
@@ -799,7 +801,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://other.example",
-            &token_endpoint,
+            None,
             "urn:registry:evidence",
             &scopes
         ));
@@ -807,7 +809,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            "https://other.example/token",
+            Some("https://other.example/token"),
             "urn:registry:evidence",
             &scopes
         ));
@@ -815,7 +817,7 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            &token_endpoint,
+            None,
             "urn:registry:other",
             &scopes
         ));
@@ -823,9 +825,59 @@ mod tests {
             "portal-client",
             &token_endpoint,
             "https://issuer.example",
-            &token_endpoint,
+            None,
             "urn:registry:evidence",
             &["other:scope".to_owned()]
+        ));
+    }
+
+    #[tokio::test]
+    async fn discovered_binding_reads_the_token_endpoint_as_a_url() {
+        // A published token endpoint is a URL, not a byte string. An issuer may
+        // state a default port or an uppercase host and mean the endpoint the
+        // profile configured, so the comparison is made between URLs. Refusing
+        // the spelling would refuse a correctly configured deployment.
+        let configured = Url::parse("https://issuer.example:443/token").unwrap();
+        let authorization = ExchangeAuthorization::first_party(
+            PrivateKeyJwt::new(
+                super::super::private_key_jwt::PrivateKeyJwtConfig::new(
+                    configured,
+                    "portal-client",
+                    key(),
+                )
+                .with_resource("urn:registry:evidence")
+                .with_scopes(["evidence:invoke"]),
+            )
+            .unwrap(),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["evidence:invoke"]),
+        )
+        .unwrap();
+        let scopes = vec!["evidence:invoke".to_owned()];
+        for spelling in [
+            "https://issuer.example/token",
+            "https://issuer.example:443/token",
+            "https://ISSUER.example/token",
+        ] {
+            assert!(
+                authorization.matches_discovered_binding(
+                    "portal-client",
+                    &Url::parse(spelling).unwrap(),
+                    "https://issuer.example",
+                    None,
+                    "urn:registry:evidence",
+                    &scopes,
+                ),
+                "{spelling} was refused as a different token endpoint"
+            );
+        }
+        assert!(!authorization.matches_discovered_binding(
+            "portal-client",
+            &Url::parse("https://issuer.example/other").unwrap(),
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &scopes,
         ));
     }
 
