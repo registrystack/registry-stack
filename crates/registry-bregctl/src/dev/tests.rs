@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
@@ -2594,6 +2595,9 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
     );
     let serialized = serde_json::to_value(&clients).unwrap();
     config::clients(&serde_json::to_vec(&serialized).unwrap()).unwrap();
+    let oversized_scope_parameter = (0..32)
+        .map(|index| format!("scope-{index:02}-{}", "a".repeat(119)))
+        .collect::<Vec<_>>();
     for (name, value) in [
         ("tokenEndpoint", json!("https://elsewhere.example/token")),
         // The token endpoint carries the same port-zero hole as the provider
@@ -2603,6 +2607,8 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
         ("tokenEndpoint", json!("http://127.0.0.1/oauth2/token")),
         ("scopes", json!([])),
         ("scopes", json!(["evidence:invoke", "evidence:invoke"])),
+        ("scopes", json!(oversized_scope_parameter)),
+        ("clientId", json!(" \t")),
         ("resource", json!("not-a-resource")),
     ] {
         let mut rejected = serialized.clone();
@@ -2642,6 +2648,37 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
         .root()
         .join("secrets/evidence-token-qualification")
         .exists());
+}
+
+#[test]
+fn local_evidence_provider_revocations_match_the_verifiers_bound() {
+    let (_temp, state, mut clients, _files) = fixture();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    let revoked_key_ids = (0..=33)
+        .map(|index| URL_SAFE_NO_PAD.encode([index as u8; 32]))
+        .collect::<Vec<_>>();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: Some(token),
+            private_key_jwt: None,
+            trusted_jwks_file: jwks,
+            revoked_key_ids: revoked_key_ids[..33].to_vec(),
+            ca_bundle_file: None,
+        },
+    );
+    config::clients(&serde_json::to_vec(&clients).unwrap()).unwrap();
+    clients
+        .evidence_providers
+        .get_mut("qualification")
+        .unwrap()
+        .revoked_key_ids = revoked_key_ids;
+    assert!(config::clients(&serde_json::to_vec(&clients).unwrap()).is_err());
 }
 
 #[test]

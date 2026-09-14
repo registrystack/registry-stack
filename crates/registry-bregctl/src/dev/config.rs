@@ -381,7 +381,10 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if !governed_identifier(id)
             || provider.trust_binding_id.is_empty()
             || provider.trust_binding_id.len() > 128
-            || provider.revoked_key_ids.len() > 128
+            || registry_evidence_verifier::verifier::revoked_key_ids_are_usable(
+                &provider.revoked_key_ids,
+            )
+            .is_err()
             || origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
             // The Evidence client refuses a base URL carrying credentials, so
@@ -420,7 +423,7 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
                 || endpoint.password().is_some()
                 || endpoint.query().is_some()
                 || endpoint.fragment().is_some()
-                || credentials.client_id.is_empty()
+                || credentials.client_id.trim().is_empty()
                 || credentials.client_id.len() > 128
                 || !registry_platform_httputil::valid_resource_uri(&credentials.assertion_audience)
                 || !registry_platform_httputil::valid_resource_uri(&credentials.resource)
@@ -428,6 +431,8 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
                 || credentials.scopes.len() > 32
                 || credentials.scopes.iter().collect::<BTreeSet<_>>().len()
                     != credentials.scopes.len()
+                || credentials.scopes.join(" ").len()
+                    > registry_platform_httputil::MAXIMUM_SCOPE_PARAMETER_BYTES
                 || credentials.scopes.iter().any(|scope| {
                     scope.len() > 128
                         || scope.contains('*')

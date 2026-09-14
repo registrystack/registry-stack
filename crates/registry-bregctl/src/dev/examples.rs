@@ -763,6 +763,36 @@ fn retain(attempt: &mut Attempt, step: &Step, directory: &Path, retained: Value)
     attempt.save(directory)
 }
 
+/// Persist a committed invocation's receipt and any disclosed capture in one
+/// replacement. A successful handler may omit an authored result, in which
+/// case the completed receipt still clears the pending replay capsule.
+fn retain_invocation(
+    attempt: &mut Attempt,
+    step: &Step,
+    directory: &Path,
+    retained: Value,
+    capture: Option<Capture>,
+) -> Result<()> {
+    if let Some(capture) = capture {
+        attempt.captures.insert(
+            step.capture.clone().context("action capture missing")?,
+            capture,
+        );
+    }
+    retain(attempt, step, directory, retained)
+}
+
+fn require_retained_invocation_capture(attempt: &Attempt, step: &Step) -> Result<()> {
+    if attempt
+        .captures
+        .contains_key(step.capture.as_deref().context("action capture missing")?)
+    {
+        Ok(())
+    } else {
+        bail!("successful action did not disclose the configured capture result")
+    }
+}
+
 fn selected_steps<'a>(
     scenario: &'a Scenario,
     attempt: &Attempt,
@@ -971,12 +1001,17 @@ async fn execute(
         // user-deleted sample. Reads intentionally inspect the current record.
         if let Some(result) = attempt.completed.get(&step.id) {
             if step.operation != Operation::Get && step.operation != Operation::History {
+                if step.operation == Operation::Invoke {
+                    require_retained_invocation_capture(attempt, step)?;
+                }
                 results.insert(step.id.clone(), result.clone());
                 continue;
             }
         }
         let client = &native[&step.client];
         let contract = &metadata[&(step.client.clone(), step.access_profile.clone())];
+        let mut invocation_capture = None;
+        let mut committed_invocation_error = None;
         let result = if step.operation == Operation::Invoke {
             let action = action_binding(contract, step)?;
             let inputs = action_inputs(step, &action, input, &attempt.captures)?;
@@ -1016,29 +1051,27 @@ async fn execute(
             };
             let request = client.recover_action(&action, &prepared, &inputs, &key)?;
             let response = client.invoke_action(&action, &request, &key).await?;
-            // The action has run and its effects have committed. A handler
-            // receipt may disclose fewer results than the action declares, so
-            // reading the authored capture out of it can still refuse. Retain
-            // the step first: left pending, that refusal would replay the same
-            // idempotency key on every resume, receive the same receipt, and
-            // refuse again with no way past it.
             let receipt = serde_json::to_value(&response.value)?;
-            retain(attempt, step, directory, receipt.clone())?;
-            let result = response
+            match response
                 .value
                 .results()
                 .get(step.result.as_deref().context("action result missing")?)
-                .context("successful action did not disclose the configured capture result")?;
-            if result.entity_identifier() != step.entity {
-                bail!("action receipt capture entity differs from its authored declaration");
+            {
+                Some(result) if result.entity_identifier() == step.entity => {
+                    invocation_capture = Some(Capture {
+                        entity: step.entity.clone(),
+                        id: result.record_identifier(),
+                    });
+                }
+                Some(_) => {
+                    committed_invocation_error =
+                        Some("action receipt capture entity differs from its authored declaration");
+                }
+                None => {
+                    committed_invocation_error =
+                        Some("successful action did not disclose the configured capture result");
+                }
             }
-            attempt.captures.insert(
-                step.capture.clone().context("action capture missing")?,
-                Capture {
-                    entity: step.entity.clone(),
-                    id: result.record_identifier(),
-                },
-            );
             receipt
         } else if step.operation == Operation::Create {
             let binding = create_binding(contract, step)?;
@@ -1173,7 +1206,14 @@ async fn execute(
         } else {
             result.clone()
         };
-        retain(attempt, step, directory, retained)?;
+        if step.operation == Operation::Invoke {
+            retain_invocation(attempt, step, directory, retained, invocation_capture)?;
+        } else {
+            retain(attempt, step, directory, retained)?;
+        }
+        if let Some(error) = committed_invocation_error {
+            bail!(error);
+        }
         results.insert(step.id.clone(), result);
     }
     let next_step = if !attempt.completed.contains_key("submit") {
@@ -1485,12 +1525,13 @@ mod tests {
     }
 
     #[test]
-    fn a_committed_invocation_is_retained_before_its_receipt_is_read() {
+    fn a_committed_invocation_retains_its_receipt_and_capture_atomically() {
         // An invocation that commits and then discloses no authored capture is
         // a refusal, and the mutation behind it has already happened. Retaining
         // the step is what keeps that refusal from becoming a resume that
         // replays the same idempotency key, receives the same receipt, and
-        // fails on it again; the run loop skips a step it finds retained.
+        // fails on it again; the run loop refuses a retained invocation that
+        // has no capture without replaying its mutation.
         let temp = tempfile::tempdir().unwrap();
         fs::set_permissions(
             temp.path(),
@@ -1507,12 +1548,55 @@ mod tests {
             step: step.id.clone(),
             capsule: json!({"exact":"original bytes"}),
         });
-        retain(&mut value, &step, temp.path(), json!({"receipt":true})).unwrap();
+        let capture = Capture {
+            entity: step.entity.clone(),
+            id: uuid::Uuid::new_v4(),
+        };
+        retain_invocation(
+            &mut value,
+            &step,
+            temp.path(),
+            json!({"receipt":true}),
+            Some(capture.clone()),
+        )
+        .unwrap();
         assert!(value.pending.is_none());
         assert_eq!(value.completed[&step.id], json!({"receipt":true}));
+        assert_eq!(value.captures["entry"].id, capture.id);
         let reloaded = attempts(temp.path()).unwrap().pop().unwrap();
         assert!(reloaded.pending.is_none());
         assert_eq!(reloaded.completed[&step.id], json!({"receipt":true}));
+        assert_eq!(reloaded.captures["entry"].id, capture.id);
+
+        // A handler is allowed to omit a declared result. That is still a
+        // completed invocation whose exact idempotency capsule must not replay.
+        value.id = uuid::Uuid::new_v4();
+        value.completed.clear();
+        value.captures.clear();
+        value.pending = Some(Pending {
+            step: step.id.clone(),
+            capsule: json!({"exact":"original bytes"}),
+        });
+        retain_invocation(
+            &mut value,
+            &step,
+            temp.path(),
+            json!({"receipt":"without-result"}),
+            None,
+        )
+        .unwrap();
+        let reloaded = attempts(temp.path())
+            .unwrap()
+            .into_iter()
+            .find(|attempt| attempt.id == value.id)
+            .unwrap();
+        assert!(reloaded.pending.is_none());
+        assert!(reloaded.captures.is_empty());
+        assert!(require_retained_invocation_capture(&reloaded, &step).is_err());
+        assert_eq!(
+            reloaded.completed[&step.id],
+            json!({"receipt":"without-result"})
+        );
     }
 
     fn copy_tree(from: &Path, to: &Path) {
