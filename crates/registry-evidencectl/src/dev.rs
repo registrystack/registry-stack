@@ -701,6 +701,19 @@ fn verify_borrowed_registrations(
                 client.client_id
             );
         }
+        // An exchange client may present any assertion authority the shared
+        // issuer trusts, and a local Evidence bundle states no per-client
+        // pairing to refuse the others with. A client that is both is refused
+        // here rather than admitted without that rule.
+        if inventory["issuer"]["exchangeClients"]
+            .as_array()
+            .is_some_and(|declared| declared.iter().any(|id| id == &json!(client.client_id)))
+        {
+            bail!(
+                "BREG issuer owner registered Evidence client {} as an exchange client",
+                client.client_id
+            );
+        }
         let expected: Value = serde_json::from_str(&client.public_jwks)?;
         let public = read_owner_json(
             &root
@@ -3481,6 +3494,26 @@ requirements:
         assert!(
             verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[altered]).is_err()
         );
+        // An exchange client may present any authority the shared issuer
+        // trusts, and this bundle carries no per-client pairing to refuse the
+        // others. A client registered as both is refused here rather than
+        // admitted without that rule.
+        inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&client)
+        )
+        .is_err());
+        inventory["issuer"]["exchangeClients"] = json!([]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&client),
+        )
+        .unwrap();
         inventory["clients"][0]["allowBregAccess"] = json!(true);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
         assert!(

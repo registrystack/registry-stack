@@ -984,9 +984,34 @@ pub(super) fn refresh_issuer_registration(state: &State, clients: &Clients) -> R
 /// Every declared exchange client is registered against at least one
 /// connection, so a declared client always reaches the map and an empty map
 /// means this deployment exchanges nothing.
-fn assertion_issuers(clients: &Clients) -> BTreeMap<String, Vec<String>> {
+///
+/// A borrowed session declares no connection of its own and answers on the
+/// owner's BREG audience, so a token the owner's runtime refuses is a token
+/// this one accepts unless it applies the owner's pairing too. That pairing is
+/// read from the owner's retained registration, the same document its issuer
+/// was rendered from, rather than from a running owner session: every command
+/// that re-renders this runtime reaches the same rule whether or not the owner
+/// is currently serving.
+pub(super) fn assertion_issuers(
+    state: &State,
+    clients: &Clients,
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let owner = state
+        .issuer_project
+        .as_ref()
+        .map(|project| -> Result<Clients> {
+            serde_json::from_slice(&private::read(
+                &project.join(".breg/dev/clients.json"),
+                MAX_BYTES,
+            )?)
+            .context("shared issuer owner has invalid retained clients")
+        })
+        .transpose()?;
+    let composition = owner
+        .as_ref()
+        .map_or(&clients.issuer, |owner| &owner.issuer);
     let mut authorities: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for connection in &clients.issuer.exchange_issuers {
+    for connection in &composition.exchange_issuers {
         for client in &connection.clients {
             let registered = authorities.entry(client.clone()).or_default();
             if !registered.contains(&connection.issuer) {
@@ -994,7 +1019,7 @@ fn assertion_issuers(clients: &Clients) -> BTreeMap<String, Vec<String>> {
             }
         }
     }
-    authorities
+    Ok(authorities)
 }
 
 pub(super) fn runtime(
@@ -1035,6 +1060,7 @@ pub(super) fn runtime(
         )
         .chain(clients.issuer.browser_clients.iter())
         .collect::<Vec<_>>();
+    let assertion_issuers = assertion_issuers(state, clients)?;
     write_yaml(
         &root.join(if test {
             "runtime-test.yaml"
@@ -1048,7 +1074,7 @@ pub(super) fn runtime(
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
-            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers(clients),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )
