@@ -74,6 +74,7 @@ const OFFLINE_CHECK_PUBLIC_JWK_FILE: &str =
 pub(crate) enum CompiledConceptForm {
     Boolean,
     ControlledCategory,
+    BoundedIdentifier,
     BoundedInteger,
     Structured,
 }
@@ -2472,6 +2473,19 @@ fn compile_concept(
                 sd_jwt_vc: None,
             }
         }
+        AnswerType::BoundedIdentifier => ConceptPlan {
+            concept_alias: answer.concept.clone(),
+            concept_uri,
+            concept_form: CompiledConceptForm::BoundedIdentifier,
+            constraints: json!({
+                "prefix": answer.prefix.as_deref().expect("bounded identifier was validated"),
+                "minimumBytes": answer.minimum_bytes.expect("bounded identifier was validated"),
+                "maximumBytes": answer.maximum_bytes.expect("bounded identifier was validated"),
+            }),
+            codelist: None,
+            schema: None,
+            sd_jwt_vc: None,
+        },
         AnswerType::BoundedInteger => ConceptPlan {
             concept_alias: answer.concept.clone(),
             concept_uri,
@@ -3308,6 +3322,7 @@ fn render_governance_parts(
                 "form": match concept.concept_form {
                     CompiledConceptForm::Boolean => "boolean",
                     CompiledConceptForm::ControlledCategory => "controlled-category",
+                    CompiledConceptForm::BoundedIdentifier => "bounded-identifier",
                     CompiledConceptForm::BoundedInteger => "bounded-integer",
                     CompiledConceptForm::Structured => "reviewed-structured-value",
                 },
@@ -5111,6 +5126,49 @@ values: [under-18, adult]
         assert_eq!(
             codelist["id"],
             "urn:authority:concept:age-bracket:v1:categories"
+        );
+    }
+
+    #[test]
+    fn bounded_identifier_compiles_to_governed_string_constraints_without_a_codelist() {
+        let answer: QuestionAnswer = serde_norway::from_str("concept: report\nid: urn:example:concept:report\ntype: bounded-identifier\nprefix: 'urn:example:report:'\nminimumBytes: 20\nmaximumBytes: 64\n").expect("identifier answer parses");
+        assert!(registry_evidence_authoring::validate_answer(&answer).is_empty());
+        let concept = compile_concept("report-question", &answer, &BTreeMap::new())
+            .expect("identifier compiles");
+        assert_eq!(concept.concept_form, CompiledConceptForm::BoundedIdentifier);
+        assert_eq!(
+            concept.constraints,
+            json!({"prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64})
+        );
+        assert!(concept.codelist.is_none());
+    }
+
+    #[test]
+    fn local_project_compiles_a_bounded_identifier_question() {
+        let question = AGE_BRACKET_QUESTION.replace(
+            "type: controlled-category\n    values: [under-18, 18-to-24, 25-to-64, 65-or-older]",
+            "type: bounded-identifier\n    prefix: 'urn:example:report:'\n    minimumBytes: 20\n    maximumBytes: 64",
+        );
+        let derivation =
+            "fn answer(facts, selectors, context) { #{age_bracket: \"urn:example:report:A-01\"} }";
+        let fixture = Fixture::new(OPENAPI, &question, derivation, true);
+        let compiled = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect("bounded identifier project compiles");
+        assert_eq!(
+            compiled.questions[0].concepts[0].concept_form,
+            CompiledConceptForm::BoundedIdentifier
+        );
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(fixture.staging.join("bundle/evidence.yaml")).expect("bundle reads"),
+        )
+        .expect("bundle parses");
+        assert_eq!(
+            bundle["requirements"][0]["concepts"][0]["form"],
+            "bounded-identifier"
+        );
+        assert_eq!(
+            bundle["requirements"][0]["concepts"][0]["constraints"],
+            json!({"prefix":"urn:example:report:","minimumBytes":20,"maximumBytes":64})
         );
     }
 

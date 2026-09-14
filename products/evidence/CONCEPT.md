@@ -299,6 +299,7 @@ A typed value supplied for an Information Concept. Version one supports closed s
 
 - boolean;
 - controlled code or category;
+- bounded identifier with an exact governed prefix and byte bounds;
 - bounded integer or decimal;
 - date or time bucket;
 - audience-scoped entity reference;

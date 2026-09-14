@@ -18,6 +18,8 @@ use crate::diagnostics::Diagnostic;
 use crate::generated_ddl::DdlInventory;
 use crate::physical_names::PhysicalNameInventory;
 
+pub(crate) const MAX_TARGET_CONTEXT_FIELDS: usize = 128;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledField {
@@ -532,7 +534,11 @@ pub struct CompiledActionRequirement {
     pub input: String,
     pub entity_id: String,
     pub field: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "crate::contract::present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,

@@ -228,7 +228,7 @@ assertions, and no caller input selects a mode.
 | Possession proof | None at any point | A key-binding JWT the relying party verifies at presentation |
 | Correlation across verifiers | Prevented by the service | Delegated to the holder, who chooses which key to reuse and where |
 | Response formats | Signed JWS, SD-JWT VC, or the unsigned envelope, as permitted | Narrowed to the SD-JWT VC serialization and its batch envelope |
-| Value forms | All eleven | The two entity-reference forms are refused, because both take the audience as a derivation input |
+| Value forms | All twelve | Ten forms; the two entity-reference forms are refused, because both take the audience as a derivation input |
 | Contract status | Frozen Version 1 | Frozen, and every negative test the profile names resolves to an executable test |
 
 - The audience-scoped holder key is unverified: a request may carry an optional `holderKey` that is

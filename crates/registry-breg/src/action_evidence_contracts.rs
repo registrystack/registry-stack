@@ -149,6 +149,15 @@ pub(crate) fn compile_request_evidence(
                 + usize::from(requirement.at_least.is_some())
                 + usize::from(requirement.at_most.is_some());
             choices == 1
+                && requirement
+                    .at_least
+                    .or(requirement.at_most)
+                    .is_none_or(|value| {
+                        registry_evidence_verifier::model::safe_json_integer(
+                            &serde_json::Number::from(value),
+                        )
+                        .is_some()
+                    })
                 && definition.concepts.iter().any(|concept| {
                     concept.handle == requirement.output
                         && concept.scalar_expected_output().is_some_and(|expected| {
@@ -198,6 +207,12 @@ fn evidence_requirement_value_valid(
     value: &serde_json::Value,
     form: &ExpectedFormDocument,
 ) -> bool {
+    // Reuse the verifier's closed value schema, including structured scalar
+    // URI and pattern constraints, before comparing reviewed forms.
+    if !registry_evidence_verifier::contracts::public_value_contract_accepts(value).unwrap_or(false)
+    {
+        return false;
+    }
     match form {
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Boolean) => value.is_boolean(),
         ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::Integer) => value
@@ -244,12 +259,17 @@ pub(crate) fn evidence_output_matches_field_type(
                     FieldTypeSource::Int64,
                 ) | (
                     ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String),
-                    FieldTypeSource::String { .. }
-                        | FieldTypeSource::Text { .. }
+                    FieldTypeSource::Text { .. }
                         | FieldTypeSource::Uuid
                         | FieldTypeSource::Reference { .. }
                         | FieldTypeSource::Timestamp,
                 )
+            ) || matches!(
+                (&expected.form, field_type),
+                (
+                    ExpectedFormDocument::Scalar(ExpectedScalarFormDocument::String),
+                    FieldTypeSource::String { min_length, .. },
+                ) if *min_length <= registry_evidence_verifier::contracts::MAX_PUBLIC_STRING_LENGTH
             )
         })
 }
@@ -258,6 +278,44 @@ pub(crate) fn selector_field_matches_field_type(
     selector: &registry_evidence_client::SelectorField,
     field_type: &FieldTypeSource,
 ) -> bool {
+    if let registry_evidence_client::SelectorField::String {
+        minimum_bytes,
+        maximum_bytes,
+        ..
+    } = selector
+    {
+        match field_type {
+            FieldTypeSource::Uuid | FieldTypeSource::Reference { .. } => {
+                return (*minimum_bytes..=*maximum_bytes).contains(&36);
+            }
+            FieldTypeSource::String {
+                min_length,
+                max_length,
+            } => {
+                return u64::from(*min_length) <= *maximum_bytes
+                    && *minimum_bytes <= u64::from(*max_length) * 4;
+            }
+            FieldTypeSource::Text { max_length } => {
+                return *minimum_bytes <= u64::from(*max_length) * 4;
+            }
+            FieldTypeSource::Timestamp => {
+                // PostgreSQL's JSONB projection uses at least 25 bytes with
+                // a UTC offset. A valid year-0001 input can cross into BC on
+                // normalization and project 35 bytes, or 37 with JSON quotes.
+                return *maximum_bytes >= 25 && *minimum_bytes <= 35;
+            }
+            _ => {}
+        }
+    }
+    if let (
+        registry_evidence_client::SelectorField::ControlledCode { maximum_bytes, .. },
+        FieldTypeSource::VocabularyCode { values, .. },
+    ) = (selector, field_type)
+    {
+        return values
+            .iter()
+            .any(|value| !value.is_empty() && value.len() as u64 <= *maximum_bytes);
+    }
     matches!(
         (selector, field_type),
         (
@@ -269,9 +327,6 @@ pub(crate) fn selector_field_matches_field_type(
         ) | (
             registry_evidence_client::SelectorField::Date { .. },
             FieldTypeSource::Date
-        ) | (
-            registry_evidence_client::SelectorField::ControlledCode { .. },
-            FieldTypeSource::VocabularyCode { .. }
         ) | (
             registry_evidence_client::SelectorField::String { .. },
             FieldTypeSource::String { .. }
@@ -437,4 +492,62 @@ fn digest_fingerprint(bytes: impl AsRef<[u8]>) -> String {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     )
+}
+
+#[cfg(test)]
+mod requirement_literal_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn structured_scalar_literals_follow_the_complete_verifier_wire_shape() {
+        for (form, valid) in [
+            (
+                ExpectedScalarFormDocument::DateBucket,
+                json!({"form":"date-bucket", "scheme":"urn:example:year", "bucket":"2026"}),
+            ),
+            (
+                ExpectedScalarFormDocument::TimeBucket,
+                json!({"form":"time-bucket", "scheme":"urn:example:hour", "bucket":"09"}),
+            ),
+            (
+                ExpectedScalarFormDocument::EntityReference,
+                json!({"form":"audience-scoped-entity-reference", "reference":format!("urn:evidence:entity:v1_{}", "a".repeat(43))}),
+            ),
+        ] {
+            let expected = ExpectedFormDocument::Scalar(form);
+            assert!(evidence_requirement_value_valid(&valid, &expected));
+            for field in valid.as_object().unwrap().keys() {
+                let mut missing = valid.clone();
+                missing.as_object_mut().unwrap().remove(field);
+                assert!(!evidence_requirement_value_valid(&missing, &expected));
+            }
+            let mut extra = valid.clone();
+            extra["unexpected"] = json!(true);
+            assert!(!evidence_requirement_value_valid(&extra, &expected));
+            let mut wrong_type = valid.clone();
+            let field = if valid.get("reference").is_some() {
+                "reference"
+            } else {
+                "bucket"
+            };
+            wrong_type[field] = json!(42);
+            assert!(!evidence_requirement_value_valid(&wrong_type, &expected));
+        }
+        for invalid in [
+            json!({"form":"date-bucket", "scheme":"", "bucket":""}),
+            json!({"form":"time-bucket", "scheme":"urn:example:hour", "bucket":"-invalid"}),
+            json!({"form":"audience-scoped-entity-reference", "reference":"urn:example:record:1"}),
+        ] {
+            let form = match invalid["form"].as_str().unwrap() {
+                "date-bucket" => ExpectedScalarFormDocument::DateBucket,
+                "time-bucket" => ExpectedScalarFormDocument::TimeBucket,
+                _ => ExpectedScalarFormDocument::EntityReference,
+            };
+            assert!(!evidence_requirement_value_valid(
+                &invalid,
+                &ExpectedFormDocument::Scalar(form)
+            ));
+        }
+    }
 }

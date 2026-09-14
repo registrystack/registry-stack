@@ -381,6 +381,17 @@ fn subject_path(question: &Question, position: usize) -> FieldPath {
 /// answer's position in a question moves them with [`Finding::under`].
 #[must_use]
 pub fn validate_answer(answer: &QuestionAnswer) -> Vec<Finding> {
+    if answer.answer_type != AnswerType::BoundedIdentifier
+        && (answer.prefix.is_some()
+            || answer.minimum_bytes.is_some()
+            || answer.maximum_bytes.is_some())
+    {
+        return one(
+            FieldPath::root(),
+            "identifier-constraints-form",
+            "identifier constraints require a bounded-identifier answer",
+        );
+    }
     match answer.answer_type {
         AnswerType::Boolean => {
             if !answer.values.is_empty()
@@ -425,6 +436,61 @@ pub fn validate_answer(answer: &QuestionAnswer) -> Vec<Finding> {
                         "a controlled-category answer needs 2..={MAX_CATEGORIES} unique bounded values"
                     ),
                 );
+            }
+        }
+        AnswerType::BoundedIdentifier => {
+            if !answer.values.is_empty()
+                || answer.minimum.is_some()
+                || answer.maximum.is_some()
+                || answer.schema.is_some()
+                || answer.maximum_serialized_bytes.is_some()
+                || answer.sd_jwt_vc.is_some()
+            {
+                return one(
+                    FieldPath::root(),
+                    "bounded-identifier-shape",
+                    "a bounded identifier requires only prefix and byte bounds",
+                );
+            }
+            let Some(prefix) = answer.prefix.as_deref() else {
+                return one(
+                    FieldPath::root().key("prefix"),
+                    "bounded-identifier-prefix",
+                    "a bounded identifier requires an ASCII prefix ending in a separator",
+                );
+            };
+            if prefix.is_empty()
+                || prefix.len() > 512
+                || !prefix.is_ascii()
+                || !prefix.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric()
+                        || matches!(byte, b'.' | b'_' | b'-' | b':' | b'/' | b'#')
+                })
+                || !matches!(
+                    prefix.as_bytes().last(),
+                    Some(b'.' | b'_' | b'-' | b':' | b'/' | b'#')
+                )
+            {
+                return one(
+                    FieldPath::root().key("prefix"),
+                    "bounded-identifier-prefix",
+                    "a bounded identifier requires an ASCII prefix ending in a separator",
+                );
+            }
+            let (Some(minimum), Some(maximum)) = (answer.minimum_bytes, answer.maximum_bytes)
+            else {
+                return one(
+                    FieldPath::root(),
+                    "bounded-identifier-bounds",
+                    "a bounded identifier requires minimumBytes and maximumBytes in 1..=1024",
+                );
+            };
+            if minimum == 0
+                || minimum > maximum
+                || maximum > 1_024
+                || maximum <= prefix.len() as u64
+            {
+                return one(FieldPath::root(), "bounded-identifier-bounds", "a bounded identifier requires consistent byte bounds in 1..=1024 and room after its prefix");
             }
         }
         AnswerType::BoundedInteger => {

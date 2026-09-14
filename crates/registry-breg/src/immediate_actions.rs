@@ -667,10 +667,12 @@ fn compile_requirements(
         });
         let input_invalid = requirement.equals_input.as_ref().is_some_and(|input_id| {
             inputs.get(input_id.as_str()).is_none_or(|expected| {
-                matches!(
-                    expected.field_type,
-                    FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
-                ) || !compatible_field_types(&expected.field_type, &field.field_type)
+                !expected.required
+                    || matches!(
+                        expected.field_type,
+                        FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+                    )
+                    || !compatible_field_types(&expected.field_type, &field.field_type)
             })
         });
         if choices != 1

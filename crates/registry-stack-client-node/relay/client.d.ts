@@ -39,9 +39,45 @@ export interface PrivateKeyJwtConfig {
   trustedRootCertificates?: string | null
 }
 
+/** One immutable verified person or grant context. Reconstruct after host source facts change. */
+export interface ExchangeContext {
+  issuer: string
+  subject: string
+  audience: string
+  generation: string
+  deadlineSeconds: SafeInteger
+  grantId?: string | null
+}
+
+export type ExchangePrivateKeyJwtConfig = PrivateKeyJwtConfig & {
+  resource: string
+  scopes: ReadonlyArray<string>
+}
+
+export interface FirstPartyExchangeSource {
+  key: PrivateJwk
+  attributes: Readonly<Record<string, JsonValue>>
+}
+
+export interface RemoteExchangeSource {
+  endpoint: string
+  bootstrap: ExchangePrivateKeyJwtConfig
+  bootstrapResource: string
+  bootstrapScope: string
+  requestTimeoutMilliseconds?: SafeInteger | null
+  connectTimeoutMilliseconds?: SafeInteger | null
+  userAgent?: string | null
+  trustedRootCertificates?: string | null
+}
+
+export type ExchangeAuthorizationConfig =
+  | { client: ExchangePrivateKeyJwtConfig; context: ExchangeContext; firstParty: FirstPartyExchangeSource }
+  | { client: ExchangePrivateKeyJwtConfig; context: ExchangeContext; remote: RemoteExchangeSource }
+
 export type RelayAuthorization =
   | { static: string }
   | { privateKeyJwt: PrivateKeyJwtConfig }
+  | { exchange: ExchangeAuthorizationConfig }
 
 export interface RelayClientConfig {
   baseUrl: string

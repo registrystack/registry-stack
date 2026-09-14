@@ -87,9 +87,47 @@ export class PrivateKeyJwt {
   bearerToken(): Promise<string>
 }
 
+/** One immutable verified person or grant context. Reconstruct after host source facts change. */
+export interface ExchangeContext {
+  issuer: string
+  subject: string
+  audience: string
+  generation: string
+  deadlineSeconds: SafeInteger
+  grantId?: string | null
+}
+
+export type ExchangePrivateKeyJwtConfig = PrivateKeyJwtConfig & {
+  resource: string
+  scopes: ReadonlyArray<string>
+}
+
+export interface FirstPartyExchangeSource {
+  key: PrivateJwk
+  /** Reviewed host attributes; registry_actor_kind must be human and grant claims are refused. */
+  attributes: Readonly<Record<string, JsonValue>>
+}
+
+export interface RemoteExchangeSource {
+  /** Exact assertion URL supplied by the authority client, such as Casework.taskAssertionEndpoint. */
+  endpoint: string
+  bootstrap: ExchangePrivateKeyJwtConfig
+  bootstrapResource: string
+  bootstrapScope: string
+  requestTimeoutMilliseconds?: SafeInteger | null
+  connectTimeoutMilliseconds?: SafeInteger | null
+  userAgent?: string | null
+  trustedRootCertificates?: string | null
+}
+
+export type ExchangeAuthorizationConfig =
+  | { client: ExchangePrivateKeyJwtConfig; context: ExchangeContext; firstParty: FirstPartyExchangeSource }
+  | { client: ExchangePrivateKeyJwtConfig; context: ExchangeContext; remote: RemoteExchangeSource }
+
 export type BaseRegistryAuthorization =
   | { static: string }
   | { privateKeyJwt: PrivateKeyJwtConfig }
+  | { exchange: ExchangeAuthorizationConfig }
 
 export interface BaseRegistryClientConfig {
   baseUrl: string

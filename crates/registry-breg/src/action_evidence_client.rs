@@ -251,9 +251,42 @@ impl VerifiedAcquisition {
     }
 
     pub fn retained_bytes(&self) -> Result<usize, EvidenceAcquisitionFailure> {
-        serde_json::to_vec(&self.retained_serialization()?)
-            .map(|bytes| bytes.len())
-            .map_err(|_| EvidenceAcquisitionFailure::Verification)
+        self.retained_bytes_for("registry.breg.action-evidence-use/v1")
+    }
+
+    pub(crate) fn retained_bytes_for(
+        &self,
+        schema: &'static str,
+    ) -> Result<usize, EvidenceAcquisitionFailure> {
+        retained_jsonb_bytes(&self.retained_serialization_for(schema)?)
+    }
+}
+
+pub(crate) fn retained_jsonb_bytes(value: &Value) -> Result<usize, EvidenceAcquisitionFailure> {
+    let compact =
+        serde_json::to_vec(value).map_err(|_| EvidenceAcquisitionFailure::Verification)?;
+    Ok(compact
+        .len()
+        .saturating_add(postgres_jsonb_text_overhead(value)))
+}
+
+// jsonb::text adds one space after each object colon and array/object comma.
+// Pinned JWK extensions can contain floating JSON numbers. Serde stores these
+// as f64; PostgreSQL may expand an exponent by up to 308 decimal places, so
+// reserve 320 bytes for each one.
+fn postgres_jsonb_text_overhead(value: &Value) -> usize {
+    match value {
+        Value::Object(fields) => fields.values().fold(
+            fields.len().saturating_mul(2).saturating_sub(1),
+            |bytes, value| bytes.saturating_add(postgres_jsonb_text_overhead(value)),
+        ),
+        Value::Array(items) => items
+            .iter()
+            .fold(items.len().saturating_sub(1), |bytes, value| {
+                bytes.saturating_add(postgres_jsonb_text_overhead(value))
+            }),
+        Value::Number(number) if number.is_f64() => 320,
+        _ => 0,
     }
 }
 
@@ -308,6 +341,16 @@ mod tests {
     use super::*;
     use crate::action_evidence_validation::validate_selector_field;
     use registry_evidence_client::definitions::{SelectorField, SelectorValueOrigin};
+
+    #[test]
+    fn retained_jsonb_bound_counts_postgres_separator_spaces_at_one_mebibyte() {
+        for (payload_bytes, expected) in [(1_048_554, 1_048_576), (1_048_555, 1_048_577)] {
+            let retained = serde_json::json!({"a":"x".repeat(payload_bytes), "b":[1,2]});
+            let compact = serde_json::to_vec(&retained).unwrap().len();
+            assert_eq!(retained_jsonb_bytes(&retained).unwrap(), expected);
+            assert!(compact < expected);
+        }
+    }
 
     #[test]
     fn selector_types_and_byte_bounds_are_exact_and_errors_redacted() {
@@ -506,6 +549,14 @@ mod tests {
         assert_eq!(
             acquired.retained_bytes().unwrap(),
             serde_json::to_vec(&retained).unwrap().len()
+                + super::postgres_jsonb_text_overhead(&retained)
+        );
+        let request_schema = "registry.breg.request-application-evidence-use/v1";
+        let request_retained = acquired.retained_serialization_for(request_schema).unwrap();
+        assert_eq!(
+            acquired.retained_bytes_for(request_schema).unwrap(),
+            serde_json::to_vec(&request_retained).unwrap().len()
+                + super::postgres_jsonb_text_overhead(&request_retained)
         );
         assert!(acquired
             .validate_acceptance(Utc::now() + chrono::Duration::seconds(61))

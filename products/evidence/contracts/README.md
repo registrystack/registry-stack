@@ -87,6 +87,14 @@ breaking product improvement. A strict client or validator built against the
 older schema rejects the added members because that schema has
 `additionalProperties: false`.
 
+The governed `bounded-identifier` concept form adds exact, source-owned JSON
+string outputs with an immutable prefix and byte bounds. Its discovery and
+client-contract form is the existing scalar `string`; relying parties that
+compare a request field must compare the complete value exactly. Existing
+controlled categories remain finite reviewed codelists. A deployment using the
+new form needs an Evidence Gateway and authoring-tool version that recognizes
+its bundle declaration.
+
 Upgrade Evidence Gateway and every Evidence client or protocol adapter that
 reads its definitions response together. The current Evidence client treats a
 missing `holderBoundBatchMaxSize` as `1`, which supports a staged rollback or a

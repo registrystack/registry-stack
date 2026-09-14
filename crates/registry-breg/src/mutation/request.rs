@@ -293,6 +293,16 @@ impl MutationCoordinator {
         let workflow =
             crate::request_store::load(transaction.transaction(), &entity.id, request_id, false)
                 .await?;
+        if workflow.state() == RequestState::Applied {
+            // A new key may recover the committed application without fresh
+            // Evidence. The action transaction rechecks the original approved
+            // precondition, proposal identity, and current target authority.
+            transaction
+                .commit()
+                .await
+                .map_err(|_| MutationError::Unavailable)?;
+            return Ok(RequestEvidencePreflight::Receipt);
+        }
         let etag = request_action_etag(
             &self.audit_profile,
             claims,
@@ -328,6 +338,12 @@ impl MutationCoordinator {
             &frozen.request_values,
             &frozen.request_values,
             &current_date,
+            |field| {
+                entity
+                    .fields
+                    .get(field)
+                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+            },
         )?;
         let targets = crate::request_store::load_targets(
             transaction.transaction(),
@@ -404,6 +420,12 @@ impl MutationCoordinator {
                 &values,
                 &frozen.request_values,
                 &current_date,
+                |field| {
+                    registry.entities()[&guard.entity_id]
+                        .fields
+                        .get(field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+                },
             )?;
         }
         let requests = request_evidence_subjects(frozen)?;
@@ -1093,6 +1115,18 @@ impl MutationCoordinator {
                     &targets,
                     &actor_reference,
                 )?;
+                // A new idempotency key has no retained authority binding.
+                // Check read-only guards against the current apply grant too.
+                self.authorize_applied_guard_targets(
+                    transaction.transaction(),
+                    registry,
+                    input,
+                    claims,
+                    entity,
+                    &workflow,
+                    &actor_reference,
+                )
+                .await?;
                 let snapshot_reference = request_revision_snapshot_reference(
                     transaction.transaction(),
                     &entity.id,
@@ -1771,6 +1805,7 @@ impl MutationCoordinator {
             registry,
             entity,
             &submission.intake,
+            current.record_uuid,
             current.record_revision,
             &self.expected.package_revision,
             resolved,
@@ -2077,6 +2112,108 @@ impl MutationCoordinator {
     }
 
     #[allow(clippy::too_many_arguments)]
+    async fn authorize_applied_guard_targets(
+        &self,
+        transaction: &Transaction<'_>,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        entity: &CompiledEntity,
+        workflow: &RequestWorkflow,
+        actor: &str,
+    ) -> Result<(), MutationError> {
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
+        let Some(frozen) = proposal.application_preconditions() else {
+            return if plan.application.preconditions.is_empty() {
+                Ok(())
+            } else {
+                Err(MutationError::PreconditionFailed)
+            };
+        };
+        frozen
+            .validate()
+            .map_err(|_| MutationError::PreconditionFailed)?;
+        if frozen.contract != plan.application.preconditions {
+            return Err(MutationError::PreconditionFailed);
+        }
+        for guard in &frozen.targets {
+            let compiled = frozen
+                .contract
+                .targets
+                .iter()
+                .find(|candidate| candidate.id == guard.id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let record_id = Uuid::parse_str(guard.record_id.as_str())
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            let authority = input
+                .target_authority
+                .iter()
+                .find(|authority| authority.target_entity_id == guard.entity_id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let row = transaction
+                .query_opt(
+                    "SELECT snapshot FROM registry_internal.registry_revisions WHERE entity_id=$1 AND record_id=$2 AND record_revision=$3 AND erased_at IS NULL",
+                    &[&guard.entity_id, &record_id, &guard.expected_revision],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::PreconditionFailed)?;
+            let bytes: Vec<u8> = row
+                .try_get::<_, Option<Vec<u8>>>(0)
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::PreconditionFailed)?;
+            let snapshot = registry_platform_canonical_json::parse_json_strict(&bytes)
+                .map_err(|_| MutationError::Unavailable)?;
+            if registry_platform_canonical_json::canonicalize_json(&snapshot)
+                .map_err(|_| MutationError::Unavailable)?
+                != bytes
+            {
+                return Err(MutationError::Unavailable);
+            }
+            let snapshot = snapshot.as_object().ok_or(MutationError::Unavailable)?;
+            if guard
+                .values
+                .iter()
+                .any(|(field, value)| snapshot.get(field) != Some(value))
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            let binding = guard_target_binding(
+                entity,
+                workflow,
+                plan,
+                compiled,
+                record_id,
+                Some(guard.expected_revision),
+                &self.expected.package_revision,
+                actor,
+            )?;
+            ChangeRequestTargetContext::for_application(
+                registry,
+                claims,
+                request_authority_boundaries(authority)?,
+                binding,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?
+            .authorize_rows(
+                registry
+                    .entities()
+                    .get(&guard.entity_id)
+                    .ok_or(MutationError::InvalidRequest)?,
+                Some(snapshot),
+                snapshot,
+                record_id,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?;
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn lock_and_verify_application_preconditions(
         &self,
         transaction: &crate::postgres::GuardedTransaction<'_>,
@@ -2205,6 +2342,12 @@ impl MutationCoordinator {
                 &frozen.request_values,
                 &frozen.request_values,
                 &current_date,
+                |field| {
+                    entity
+                        .fields
+                        .get(field)
+                        .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+                },
             )?;
             for guard in &frozen.targets {
                 let record_id = Uuid::parse_str(guard.record_id.as_str())
@@ -2241,9 +2384,22 @@ impl MutationCoordinator {
                         .collect(),
                     &frozen.request_values,
                     &current_date,
+                    |field| {
+                        registry.entities()[&guard.entity_id]
+                            .fields
+                            .get(field)
+                            .is_some_and(|field| {
+                                matches!(field.field_type, FieldTypeSource::Timestamp)
+                            })
+                    },
                 )?;
             }
-            verify_request_evidence(frozen, frozen_evidence.unwrap_or_default())?;
+            verify_request_evidence(frozen, frozen_evidence.unwrap_or_default(), |field| {
+                entity
+                    .fields
+                    .get(field)
+                    .is_some_and(|field| matches!(field.field_type, FieldTypeSource::Timestamp))
+            })?;
         }
         Ok(observed)
     }
@@ -2843,6 +2999,7 @@ fn verify_compiled_predicates(
     actual: &BTreeMap<String, Value>,
     request_values: &BTreeMap<String, Value>,
     current_date: &str,
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     for predicate in predicates {
         let value = actual
@@ -2850,10 +3007,12 @@ fn verify_compiled_predicates(
             .ok_or(MutationError::PreconditionFailed)?;
         let accepted = match &predicate.expected {
             crate::model::CompiledChangeRequestPredicateExpected::Literal { value: expected } => {
-                value == expected
+                predicate_values_equal(value, expected, is_timestamp(&predicate.field))
             }
             crate::model::CompiledChangeRequestPredicateExpected::RequestField { field } => {
-                request_values.get(field) == Some(value)
+                request_values.get(field).is_some_and(|expected| {
+                    predicate_values_equal(value, expected, is_timestamp(&predicate.field))
+                })
             }
             crate::model::CompiledChangeRequestPredicateExpected::CurrentDate { relation } => {
                 value.as_str().is_some_and(|date| match relation {
@@ -2875,9 +3034,38 @@ fn verify_compiled_predicates(
     Ok(())
 }
 
+fn predicate_values_equal(actual: &Value, expected: &Value, timestamp: bool) -> bool {
+    if !timestamp || (actual.is_null() && expected.is_null()) {
+        return actual == expected;
+    }
+    let parse = |value: &Value| {
+        value.as_str().and_then(|value| {
+            let (normalized, day_offset) = if let Some(bc) = value.strip_suffix(" BC") {
+                // Valid year-0001 inputs can cross into BC when PostgreSQL
+                // normalizes their offset. RFC3339 year 0000 is that instant.
+                let rest = bc.strip_prefix("0001-")?;
+                (format!("0000-{rest}"), 0)
+            } else if let Some(rest) = value.strip_prefix("10000-01-01T") {
+                // A year-9999 input can similarly normalize into PostgreSQL's
+                // five-digit UTC year. Parse the prior day, then add one day.
+                (format!("9999-12-31T{rest}"), 1)
+            } else {
+                (value.to_owned(), 0)
+            };
+            time::OffsetDateTime::parse(&normalized, &time::format_description::well_known::Rfc3339)
+                .ok()
+                .map(|parsed| parsed.unix_timestamp_nanos() + day_offset * 86_400_000_000_000)
+        })
+    };
+    parse(actual)
+        .zip(parse(expected))
+        .is_some_and(|(actual, expected)| actual == expected)
+}
+
 fn verify_request_evidence(
     frozen: &crate::request_workflow::FrozenApplicationPreconditions,
     acquisitions: &[crate::action_evidence_client::VerifiedAcquisition],
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     if acquisitions.len() != frozen.contract.evidence.len() {
         return Err(MutationError::PreconditionFailed);
@@ -2893,6 +3081,7 @@ fn verify_request_evidence(
             &evidence.requires,
             &frozen.request_values,
             acquisition.outputs(),
+            &is_timestamp,
         )?;
     }
     Ok(())
@@ -2902,6 +3091,7 @@ fn verify_request_evidence_requirements(
     requirements: &[crate::model::CompiledChangeRequestEvidenceRequirement],
     request_values: &BTreeMap<String, Value>,
     outputs: &BTreeMap<String, Value>,
+    is_timestamp: impl Fn(&str) -> bool,
 ) -> Result<(), MutationError> {
     for requirement in requirements {
         let actual = outputs.get(&requirement.output);
@@ -2909,9 +3099,11 @@ fn verify_request_evidence_requirements(
             crate::model::CompiledChangeRequestEvidenceExpected::Literal { value } => {
                 actual == Some(value)
             }
-            crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } => {
-                actual == request_values.get(field)
-            }
+            crate::model::CompiledChangeRequestEvidenceExpected::RequestField { field } => actual
+                .zip(request_values.get(field))
+                .is_some_and(|(actual, expected)| {
+                    predicate_values_equal(actual, expected, is_timestamp(field))
+                }),
             crate::model::CompiledChangeRequestEvidenceExpected::AtLeast { value } => actual
                 .and_then(Value::as_i64)
                 .is_some_and(|actual| actual >= *value),
@@ -3127,16 +3319,112 @@ mod application_precondition_tests {
             ("valid-from".into(), json!("2026-09-12")),
             ("valid-through".into(), json!("2026-09-12")),
         ]);
-        assert!(
-            super::verify_compiled_predicates(&predicates, &request, &request, "2026-09-12")
-                .is_ok()
-        );
+        assert!(super::verify_compiled_predicates(
+            &predicates,
+            &request,
+            &request,
+            "2026-09-12",
+            |_| false
+        )
+        .is_ok());
         for date in ["2026-09-11", "2026-09-13"] {
             assert_eq!(
-                super::verify_compiled_predicates(&predicates, &request, &request, date),
+                super::verify_compiled_predicates(&predicates, &request, &request, date, |_| false),
                 Err(MutationError::PreconditionFailed)
             );
         }
+    }
+
+    #[test]
+    fn timestamp_equality_compares_instants_without_widening_string_equality() {
+        let actual = json!("2026-09-12T09:30:00+07:00");
+        let same_instant = json!("2026-09-12T02:30:00Z");
+        let different_instant = json!("2026-09-12T02:30:01Z");
+        let predicates = [CompiledChangeRequestPredicate {
+            field: "observed-at".into(),
+            expected: CompiledChangeRequestPredicateExpected::RequestField {
+                field: "requested-at".into(),
+            },
+        }];
+        let observed = BTreeMap::from([("observed-at".into(), actual.clone())]);
+        let requested = BTreeMap::from([("requested-at".into(), same_instant.clone())]);
+        assert!(super::verify_compiled_predicates(
+            &predicates,
+            &observed,
+            &requested,
+            "2026-09-12",
+            |_| true
+        )
+        .is_ok());
+        let literal = [CompiledChangeRequestPredicate {
+            field: "observed-at".into(),
+            expected: CompiledChangeRequestPredicateExpected::Literal {
+                value: same_instant.clone(),
+            },
+        }];
+        assert!(super::verify_compiled_predicates(
+            &literal,
+            &observed,
+            &requested,
+            "2026-09-12",
+            |_| true
+        )
+        .is_ok());
+        assert_eq!(
+            super::verify_compiled_predicates(
+                &predicates,
+                &observed,
+                &requested,
+                "2026-09-12",
+                |_| false,
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
+        assert!(super::predicate_values_equal(&actual, &same_instant, true));
+        assert!(!super::predicate_values_equal(
+            &actual,
+            &different_instant,
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &actual,
+            &same_instant,
+            false
+        ));
+        assert!(super::predicate_values_equal(
+            &json!(null),
+            &json!(null),
+            true
+        ));
+        assert!(!super::predicate_values_equal(&actual, &json!(null), true));
+        let stored_bc = json!("0001-12-31T23:00:00.123456+00:00 BC");
+        let submitted = json!("0001-01-01T00:00:00.123456+01:00");
+        assert!(super::predicate_values_equal(&stored_bc, &submitted, true));
+        assert!(!super::predicate_values_equal(
+            &stored_bc, &submitted, false
+        ));
+        let stored_next_year = json!("10000-01-01T00:00:00.12+00:00");
+        let submitted_previous_year = json!("9999-12-31T23:00:00.12-01:00");
+        assert!(time::OffsetDateTime::parse(
+            submitted_previous_year.as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339
+        )
+        .is_ok());
+        assert!(super::predicate_values_equal(
+            &stored_next_year,
+            &submitted_previous_year,
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &stored_next_year,
+            &json!("9999-12-31T23:00:00.13-01:00"),
+            true
+        ));
+        assert!(!super::predicate_values_equal(
+            &stored_next_year,
+            &submitted_previous_year,
+            false
+        ));
     }
 
     #[test]
@@ -3163,9 +3451,13 @@ mod application_precondition_tests {
             ("germination".into(), json!(9000)),
             ("purity".into(), json!(9920)),
         ]);
-        assert!(
-            super::verify_request_evidence_requirements(&requirements, &frozen, &passing).is_ok()
-        );
+        assert!(super::verify_request_evidence_requirements(
+            &requirements,
+            &frozen,
+            &passing,
+            |_| false
+        )
+        .is_ok());
         for (field, wrong) in [
             ("report-reference", json!("other-report")),
             ("germination", json!(8999)),
@@ -3174,10 +3466,54 @@ mod application_precondition_tests {
             let mut outputs = passing.clone();
             outputs.insert(field.into(), wrong);
             assert_eq!(
-                super::verify_request_evidence_requirements(&requirements, &frozen, &outputs),
+                super::verify_request_evidence_requirements(
+                    &requirements,
+                    &frozen,
+                    &outputs,
+                    |_| false
+                ),
                 Err(MutationError::PreconditionFailed)
             );
         }
+    }
+
+    #[test]
+    fn evidence_timestamp_request_binding_compares_instants_only_for_timestamp_fields() {
+        let requirements = [CompiledChangeRequestEvidenceRequirement {
+            output: "observed-at".into(),
+            expected: CompiledChangeRequestEvidenceExpected::RequestField {
+                field: "requested-at".into(),
+            },
+        }];
+        let requested = BTreeMap::from([("requested-at".into(), json!("2026-09-13T10:00:00Z"))]);
+        let observed = BTreeMap::from([("observed-at".into(), json!("2026-09-13T12:00:00+02:00"))]);
+        assert!(super::verify_request_evidence_requirements(
+            &requirements,
+            &requested,
+            &observed,
+            |field| field == "requested-at",
+        )
+        .is_ok());
+        assert_eq!(
+            super::verify_request_evidence_requirements(
+                &requirements,
+                &requested,
+                &observed,
+                |_| false
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
+        let different =
+            BTreeMap::from([("observed-at".into(), json!("2026-09-13T12:00:01+02:00"))]);
+        assert_eq!(
+            super::verify_request_evidence_requirements(
+                &requirements,
+                &requested,
+                &different,
+                |_| true,
+            ),
+            Err(MutationError::PreconditionFailed)
+        );
     }
 }
 

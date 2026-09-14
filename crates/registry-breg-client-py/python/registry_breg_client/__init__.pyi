@@ -1,8 +1,56 @@
-from typing import Any, Literal, Sequence, TypedDict
+from typing import Any, Literal, NotRequired, Sequence, TypedDict
 
 JsonScalar = str | int | float | bool | None
 JsonValue = JsonScalar | list["JsonValue"] | tuple["JsonValue", ...] | dict[str, "JsonValue"]
 RecordFormat = Literal["json", "json-ld"]
+
+class ExchangeContext(TypedDict):
+    issuer: str
+    subject: str
+    audience: str
+    generation: str
+    deadline_seconds: int
+    grant_id: NotRequired[str | None]
+
+class ExchangeKeyClient(TypedDict):
+    token_endpoint: str
+    client_id: str
+    client_key: dict[str, JsonValue]
+    resource: str
+    scopes: Sequence[str]
+    audience: NotRequired[str | None]
+    assertion_lifetime_seconds: NotRequired[int | None]
+    refresh_margin_seconds: NotRequired[int | None]
+    request_timeout_seconds: NotRequired[float | None]
+    connect_timeout_seconds: NotRequired[float | None]
+    user_agent: NotRequired[str | None]
+    trusted_root_certificates: NotRequired[str | None]
+
+class FirstPartyExchangeSource(TypedDict):
+    key: dict[str, JsonValue]
+    attributes: dict[str, JsonValue]
+
+class RemoteExchangeSource(TypedDict):
+    endpoint: str
+    bootstrap: ExchangeKeyClient
+    bootstrap_resource: str
+    bootstrap_scope: str
+    request_timeout_seconds: NotRequired[float | None]
+    connect_timeout_seconds: NotRequired[float | None]
+    user_agent: NotRequired[str | None]
+    trusted_root_certificates: NotRequired[str | None]
+
+class FirstPartyExchangeConfig(TypedDict):
+    client: ExchangeKeyClient
+    context: ExchangeContext
+    first_party: FirstPartyExchangeSource
+
+class RemoteExchangeConfig(TypedDict):
+    client: ExchangeKeyClient
+    context: ExchangeContext
+    remote: RemoteExchangeSource
+
+ExchangeAuthorization = TypedDict("ExchangeAuthorization", {"exchange": FirstPartyExchangeConfig | RemoteExchangeConfig})
 
 class BaseRegistryClientError(Exception):
     kind: str

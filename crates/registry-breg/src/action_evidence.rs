@@ -178,7 +178,11 @@ impl ActionEvidenceEvaluator {
                 .await
                 .map_err(MutationError::from)?;
             retained_bytes = retained_bytes
-                .checked_add(acquisition.retained_bytes().map_err(MutationError::from)?)
+                .checked_add(
+                    acquisition
+                        .retained_bytes_for("registry.breg.request-application-evidence-use/v1")
+                        .map_err(MutationError::from)?,
+                )
                 .ok_or(MutationError::Unavailable)?;
             if retained_bytes > MAXIMUM_RETAINED_EVIDENCE_BYTES {
                 return Err(MutationError::ActionEvidenceFailure { capability: None });

@@ -24,7 +24,7 @@ const MAX_CONTEXT_VALUE_BYTES: usize = 512;
 const MAX_BOUNDARY_SET_VALUES: usize = 64;
 const MAX_BOUNDARY_CONTEXT_BYTES: usize = 64 * 1024;
 const MAX_ENTITY_ID_BYTES: usize = 256;
-const MAX_TARGET_FIELDS: usize = 128;
+const MAX_TARGET_FIELDS: usize = crate::model::MAX_TARGET_CONTEXT_FIELDS;
 
 /// One finite compiler-validated row boundary installed into PostgreSQL.
 #[derive(Clone, Eq, PartialEq)]

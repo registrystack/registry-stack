@@ -585,7 +585,11 @@ pub struct ChangeRequestGuardTargetSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestPredicateSource {
     pub field: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
@@ -641,7 +645,11 @@ pub enum ChangeRequestSelectorSource {
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ChangeRequestEvidenceRequirementSource {
     pub output: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_from_request_field: Option<String>,
@@ -787,7 +795,11 @@ pub struct ActionHandlerRefusalSource {
 pub struct ActionRequirementSource {
     pub input: String,
     pub field: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "present_json_value",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub equals: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equals_input: Option<String>,
@@ -2940,4 +2952,11 @@ fn skip_quoted(bytes: &[u8], open: usize, delimiter: u8) -> usize {
         }
     }
     bytes.len()
+}
+
+// An omitted predicate differs from an explicit JSON null equality literal.
+pub(crate) fn present_json_value<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }

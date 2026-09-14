@@ -24,6 +24,7 @@ pyo3.workspace = true
 # Cargo passes both crates to Rustdoc, so sharing a name makes doctests ambiguous.
 breg-client-sdk = { package = "registry-breg-client", path = "../registry-breg-client", version = "0.31.0" }
 registry-platform-crypto.workspace = true
+registry-platform-httputil.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

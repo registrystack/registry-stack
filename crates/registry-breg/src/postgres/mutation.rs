@@ -344,29 +344,45 @@ impl PostgresRecordMutationService {
             _ => crate::mutation::FaultControl::Disabled,
         };
         let preflight = {
-            let client = self
-                .pool
-                .get()
+            let client = tokio::time::timeout_at(deadline, self.pool.get())
                 .await
+                .map_err(|_| MutationError::Unavailable)?
                 .map_err(|_| MutationError::Unavailable)?;
             let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
-            let result = self
-                .coordinator
-                .preflight_request_evidence_apply(
-                    guard.client(),
-                    &self.registry,
-                    &input,
-                    claims,
-                    deadline,
-                )
-                .await;
-            if result.is_err() && tokio::time::Instant::now() < deadline {
-                self.coordinator
-                    .record_request_boundary_refusal(guard.client(), &self.registry, &input, claims)
-                    .await?;
+            let result = tokio::time::timeout_at(deadline, async {
+                let result = self
+                    .coordinator
+                    .preflight_request_evidence_apply(
+                        guard.client(),
+                        &self.registry,
+                        &input,
+                        claims,
+                        deadline,
+                    )
+                    .await;
+                if result.is_err() && tokio::time::Instant::now() < deadline {
+                    self.coordinator
+                        .record_request_boundary_refusal(
+                            guard.client(),
+                            &self.registry,
+                            &input,
+                            claims,
+                        )
+                        .await?;
+                }
+                result
+            })
+            .await;
+            match result {
+                Ok(result) => {
+                    guard.disarm();
+                    result?
+                }
+                Err(_) => {
+                    guard.cancel_and_discard().await;
+                    return Err(MutationError::Unavailable);
+                }
             }
-            guard.disarm();
-            result?
         }; // The complete pool checkout is dropped before remote Evidence I/O.
         let acquisitions = match preflight {
             crate::mutation::RequestEvidencePreflight::Receipt => None,
@@ -379,10 +395,9 @@ impl PostgresRecordMutationService {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
         }
-        let client = self
-            .pool
-            .get()
+        let client = tokio::time::timeout_at(deadline, self.pool.get())
             .await
+            .map_err(|_| MutationError::Unavailable)?
             .map_err(|_| MutationError::Unavailable)?;
         let mut guard = RequestActionCancellationGuard::new(self.pool.clone(), client);
         // A concurrent committed receipt takes priority over a failed helper.

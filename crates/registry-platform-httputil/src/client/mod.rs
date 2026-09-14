@@ -7,10 +7,17 @@ use url::Url;
 
 pub use crate::{MAXIMUM_TRUSTED_ROOT_CERTIFICATES, MAXIMUM_TRUSTED_ROOT_CERTIFICATE_BUNDLE_BYTES};
 
+mod exchange_authorization;
+mod exchange_config;
 mod outbound;
 mod private_key_jwt;
 mod token;
 
+pub use exchange_authorization::{
+    ExchangeAssertionSource, ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
+    RemoteAssertionSource, SignedExchangeAssertion,
+};
+pub use exchange_config::exchange_authorization_from_json;
 pub use outbound::{
     base_url_without_userinfo, build_client, read_failure_kind, send_failure_kind,
     transport_protects_the_credential, OutboundOptions,
