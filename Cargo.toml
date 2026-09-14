@@ -28,6 +28,7 @@ members = [
     "crates/registry-platform-audit",
     "crates/registry-platform-authcommon",
     "crates/registry-platform-buildinfo",
+    "crates/registry-platform-calendar",
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
@@ -122,6 +123,7 @@ registry-stack-client = { path = "crates/registry-stack-client", version = "0.32
 registry-platform-audit = { path = "crates/registry-platform-audit", version = "0.32.0" }
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.32.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.32.0" }
+registry-platform-calendar = { path = "crates/registry-platform-calendar", version = "0.32.0" }
 registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.32.0" }
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.32.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.32.0" }

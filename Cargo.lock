@@ -5127,6 +5127,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "jsonschema",
+ "registry-platform-calendar",
  "registry-platform-canonical-json",
  "registry-platform-httputil",
  "registry-review-protocol",
@@ -5664,6 +5665,15 @@ dependencies = [
 [[package]]
 name = "registry-platform-buildinfo"
 version = "0.32.0"
+
+[[package]]
+name = "registry-platform-calendar"
+version = "0.31.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "registry-platform-canonical-json"

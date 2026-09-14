@@ -1,0 +1,18 @@
+[package]
+name = "registry-platform-calendar"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Timezone-correct working-day and opening-pattern calendar evaluation for Registry Stack."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono.workspace = true
+chrono-tz.workspace = true
+thiserror.workspace = true
