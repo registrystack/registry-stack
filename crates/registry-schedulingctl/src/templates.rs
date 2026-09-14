@@ -34,6 +34,11 @@ offerings:
       startIncrementMinutes: 30
       maxRecipients: 1
     cancellationCutoffMinutes: 240
+    reminders:
+      - minutesBefore: 1440
+        because: One reminder the day before a counter update.
+      - minutesBefore: 120
+        because: A second reminder two hours before, when stations are scarce.
     duplicateActiveKey: subject
     requiresCapabilities: []
     prerequisites: []
