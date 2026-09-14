@@ -117,6 +117,12 @@ An Evidence client the owner also registered as a token-exchange client is
 refused: an exchange client may present any assertion authority the shared
 issuer trusts, and a local Evidence bundle carries no per-client pairing to
 refuse the others with.
+The bundle a borrowed session compiles names the Evidence clients it admits, so
+the shared issuer's other clients are refused where Evidence enforces its own
+boundary rather than left to the issuer that holds them. It admits at most 32
+clients, and a project whose active clients change while that bundle compiles is
+refused rather than started against a boundary the bundle does not carry. A
+session that renders its own issuer names no clients and leaves admission to it.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,
