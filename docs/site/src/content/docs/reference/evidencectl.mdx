@@ -113,7 +113,7 @@ fixture. Both create disposable, unbound Evidence Gateway key material in the ig
 
 `evidencectl dev start [<project>]` starts Evidence Gateway and the pinned local issuer on loopback.
 When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--resource <URI>`
-registered for this Evidence service. The default resource is
+registered for this Evidence Gateway service. The default resource is
 `urn:registrystack:evidence:local:gateway`; a retained session keeps its selected resource and
 refuses a different one on restart. The compiled governed bundle binds this audience.
 {/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource;
