@@ -99,6 +99,28 @@ The origin must be numeric loopback HTTP with an explicit port. An explicit
 destination map starts no built-in receiver, so `dev events` has no inbox
 receipts; inspect the receiving service and `bregctl webhook list` instead.
 
+For a governed action package that declares Evidence providers, bind every
+required provider in the project's `dev-clients.yaml` before its first start:
+
+```yaml
+evidenceProviders:
+  qualification:
+    baseUrl: http://127.0.0.1:8093
+    trustBindingId: exact-local-trust-v1
+    tokenFile: /absolute/owner-only/evidence-token
+    trustedJwksFile: /absolute/owner-only/evidence-jwks.json
+    revokedKeyIds: []
+    caBundleFile: null
+```
+
+The dev command accepts exact numeric loopback origins and ordinary owner-only
+input files, copies the token, trusted keys and optional CA bundle into its
+private state, and generates the corresponding `evidenceProviders` runtime
+bindings. It does not relax package activation: provider IDs must match the
+compiled action requirements, and the runtime still resolves and validates
+every configured trust input before serving. Obtain the token after the shared
+issuer is ready, then start the action-bearing BREG borrower with this binding.
+
 After a seed, example scenario, or API write triggers an event, inspect receipts:
 
 ```sh
@@ -256,6 +278,40 @@ different bytes, links or public permissions are refused. Without these options,
 credentials remain under `.breg/dev/credentials/<client-id>/`. Choose output paths
 only for the dedicated source client when configuring Evidence. Evidence's caller
 credential and BReg's operator credential retain separate authority.
+
+## Apply-time Evidence in development
+
+A registry with Evidence guards needs the exact provider bindings declared by
+its package. Put the binding in `dev-clients.yaml` before first start:
+
+```yaml
+evidenceProviders:
+  qualification:
+    baseUrl: http://127.0.0.1:8095
+    trustBindingId: reviewed-local-provider
+    trustedJwksFile: /absolute/private/evidence-signing-jwks.json
+    privateKeyJwt:
+      tokenEndpoint: http://127.0.0.1:8091/oauth2/token
+      assertionAudience: http://127.0.0.1:8091
+      clientId: qualification-reader
+      privateKeyFile: /absolute/private/qualification-client.jwk
+      resource: urn:example:evidence
+      scopes: [evidence:invoke]
+```
+
+The provider URL and token endpoint use numeric loopback HTTP. Provision the
+client at the issuer with precisely that resource and scope. The session copies
+owner-only key and JWKS files to its private state; it gives the runtime secret
+references. The ordinary BREG credential provider refreshes expired service
+tokens. `tokenFile` is an alternative for a pre-issued token and cannot be
+combined with `privateKeyJwt`. An optional `caBundleFile` and `revokedKeyIds`
+retain their ordinary relying-party meanings.
+
+The same bindings apply to the disposable schema-test rehearsal and the local
+runtime. A journey that applies a guarded request needs a reachable configured
+Evidence provider and synthetic source facts. The development command does not
+skip guards or replace runtime activation checks. Edited provider bindings on a
+retained session follow the normal source-change refusal and recovery rules.
 
 ## Compose one local issuer
 

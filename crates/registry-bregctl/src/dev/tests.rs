@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 use super::*;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 
 pub(super) fn fixture() -> (tempfile::TempDir, State, Clients, BTreeMap<String, Vec<u8>>) {
     let temporary = tempfile::tempdir().expect("temporary");
@@ -2456,6 +2457,228 @@ fn an_imported_assertion_key_needs_a_usable_key_identifier() {
             .is_some_and(|kid| !kid.trim().is_empty()),
         "an imported key reaches registration carrying its identifier: {public}"
     );
+}
+
+#[test]
+fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
+    let (_temp, state, mut clients, files) = fixture();
+    let root = state.root();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: Some(token),
+            private_key_jwt: None,
+            trusted_jwks_file: jwks,
+            revoked_key_ids: vec![],
+            ca_bundle_file: None,
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    initialize(&root, &state, &clients, &files).unwrap();
+    let runtime: Value =
+        serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
+    let provider = &runtime["evidenceProviders"]["qualification"];
+    assert_eq!(provider["baseUrl"], "http://127.0.0.1:18093");
+    assert_eq!(provider["trustBindingId"], "exact-local-trust-v1");
+    assert_eq!(
+        provider["tokenRef"],
+        "secret:file/evidence-token-qualification"
+    );
+    assert_eq!(
+        provider["trustedJwksRef"],
+        "secret:file/evidence-jwks-qualification"
+    );
+    assert_eq!(
+        fs::read(root.join("secrets/evidence-token-qualification")).unwrap(),
+        b"synthetic-provider-token"
+    );
+    // Port zero parses and is not the scheme default, so the clients file is
+    // what must refuse it. A provider bound to it starts a session in which
+    // every Evidence request targets an unusable port.
+    for base_url in [
+        "https://evidence.example.org",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1",
+        // The Evidence client refuses a base URL carrying credentials, so a
+        // session started from one fails at its first request rather than at
+        // this declaration.
+        "http://reader@127.0.0.1:18093",
+        "http://reader:secret@127.0.0.1:18093",
+    ] {
+        clients
+            .evidence_providers
+            .get_mut("qualification")
+            .unwrap()
+            .base_url = base_url.into();
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("exact loopback origins"),
+            "{base_url}: {refusal}"
+        );
+    }
+}
+
+#[test]
+fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
+    // The map key names a provider the registry project declares, and the
+    // governed Evidence identifier grammar admits an underscore. A key this
+    // file refuses is a declared provider a dev session can never bind.
+    let (_temp, state, mut clients, _files) = fixture();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    let provider = config::LocalEvidenceProvider {
+        base_url: "http://127.0.0.1:18093".into(),
+        trust_binding_id: "exact-local-trust-v1".into(),
+        token_file: Some(token),
+        private_key_jwt: None,
+        trusted_jwks_file: jwks,
+        revoked_key_ids: vec![],
+        ca_bundle_file: None,
+    };
+    for id in ["qualification", "trusted_provider", "provider-2"] {
+        clients.evidence_providers.clear();
+        clients
+            .evidence_providers
+            .insert(id.into(), provider.clone());
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+    }
+    // The grammar is closed in the other direction too: it is anchored on a
+    // lowercase letter and admits no other byte.
+    for id in ["2provider", "_provider", "Provider", "provider.two", ""] {
+        clients.evidence_providers.clear();
+        clients
+            .evidence_providers
+            .insert(id.into(), provider.clone());
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("bounded IDs"), "{id}: {refusal}");
+    }
+}
+
+#[test]
+fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
+    let (_temp, state, mut clients, files) = fixture();
+    let key = state.project.join("assertion-key.jwk");
+    let jwks = state.project.join("provider-jwks");
+    config::keypair(&state.project).unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: None,
+            private_key_jwt: Some(config::LocalEvidencePrivateKeyJwt {
+                token_endpoint: "http://127.0.0.1:18091/oauth2/token".into(),
+                client_id: "guard-reader".into(),
+                private_key_file: key.clone(),
+                assertion_audience: "http://127.0.0.1:18091".into(),
+                resource: "urn:example:evidence".into(),
+                scopes: vec!["evidence:invoke".into()],
+            }),
+            trusted_jwks_file: jwks,
+            revoked_key_ids: vec![],
+            ca_bundle_file: None,
+        },
+    );
+    let serialized = serde_json::to_value(&clients).unwrap();
+    config::clients(&serde_json::to_vec(&serialized).unwrap()).unwrap();
+    let oversized_scope_parameter = (0..32)
+        .map(|index| format!("scope-{index:02}-{}", "a".repeat(119)))
+        .collect::<Vec<_>>();
+    for (name, value) in [
+        ("tokenEndpoint", json!("https://elsewhere.example/token")),
+        // The token endpoint carries the same port-zero hole as the provider
+        // origin: it parses, it is not the scheme default, and it leaves every
+        // credential refresh pointed at an unusable port.
+        ("tokenEndpoint", json!("http://127.0.0.1:0/oauth2/token")),
+        ("tokenEndpoint", json!("http://127.0.0.1/oauth2/token")),
+        ("scopes", json!([])),
+        ("scopes", json!(["evidence:invoke", "evidence:invoke"])),
+        ("scopes", json!(oversized_scope_parameter)),
+        ("clientId", json!(" \t")),
+        ("resource", json!("not-a-resource")),
+    ] {
+        let mut rejected = serialized.clone();
+        rejected["evidenceProviders"]["qualification"]["privateKeyJwt"][name] = value;
+        assert!(config::clients(&serde_json::to_vec(&rejected).unwrap()).is_err());
+    }
+    let mut both = serialized;
+    both["evidenceProviders"]["qualification"]["tokenFile"] = json!(key);
+    assert!(config::clients(&serde_json::to_vec(&both).unwrap()).is_err());
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let document: Value =
+        serde_norway::from_slice(&fs::read(state.root().join("runtime-test.yaml")).unwrap())
+            .unwrap();
+    let provider = &document["evidenceProviders"]["qualification"];
+    assert!(provider["tokenRef"].is_null());
+    let credential = &provider["privateKeyJwt"];
+    assert_eq!(
+        credential["privateKeyRef"],
+        "secret:file/evidence-client-key-qualification"
+    );
+    assert_eq!(credential["resource"], "urn:example:evidence");
+    assert_eq!(credential["scopes"], json!(["evidence:invoke"]));
+    assert_eq!(credential["assertionAudience"], "http://127.0.0.1:18091");
+    assert!(!serde_json::to_string(provider)
+        .unwrap()
+        .contains("privateKeyFile"));
+    assert_eq!(
+        fs::read(
+            state
+                .root()
+                .join("secrets/evidence-client-key-qualification")
+        )
+        .unwrap(),
+        fs::read(key).unwrap()
+    );
+    assert!(!state
+        .root()
+        .join("secrets/evidence-token-qualification")
+        .exists());
+}
+
+#[test]
+fn local_evidence_provider_revocations_match_the_verifiers_bound() {
+    let (_temp, state, mut clients, _files) = fixture();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    let revoked_key_ids = (0..=33)
+        .map(|index| URL_SAFE_NO_PAD.encode([index as u8; 32]))
+        .collect::<Vec<_>>();
+    clients.evidence_providers.insert(
+        "qualification".into(),
+        config::LocalEvidenceProvider {
+            base_url: "http://127.0.0.1:18093".into(),
+            trust_binding_id: "exact-local-trust-v1".into(),
+            token_file: Some(token),
+            private_key_jwt: None,
+            trusted_jwks_file: jwks,
+            revoked_key_ids: revoked_key_ids[..33].to_vec(),
+            ca_bundle_file: None,
+        },
+    );
+    config::clients(&serde_json::to_vec(&clients).unwrap()).unwrap();
+    clients
+        .evidence_providers
+        .get_mut("qualification")
+        .unwrap()
+        .revoked_key_ids = revoked_key_ids;
+    assert!(config::clients(&serde_json::to_vec(&clients).unwrap()).is_err());
 }
 
 #[test]

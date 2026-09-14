@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use jsonschema::{Draft, JSONSchema};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 use uuid::Uuid;
@@ -130,6 +130,14 @@ pub struct BRegActionInvocationRequest {
 }
 
 impl BRegActionInvocationRequest {
+    /// Validate invocation inputs before acquiring any target conditions.
+    pub fn validate_inputs(
+        action: &BRegImmediateActionBinding,
+        inputs: &Map<String, Value>,
+    ) -> Result<(), BRegImmediateActionError> {
+        validate_inputs(action, inputs, ActionInputUse::Invoke)
+    }
+
     pub fn new(
         action: &BRegImmediateActionBinding,
         inputs: Map<String, Value>,
@@ -193,13 +201,60 @@ impl fmt::Debug for BRegActionInvocationRequest {
     }
 }
 
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ActionRequestBinding {
     source_binding: String,
     registry_revision: String,
     action_identifier: String,
     access_profile: String,
     contract_fingerprint: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ActionRecoveryEvidence {
+    version: u8,
+    binding: ActionRequestBinding,
+    body: String,
+    idempotency_key: String,
+}
+
+/// Inert original invocation evidence for explicit recovery after a lost response.
+/// These bytes contain inputs and target conditions, never a bearer token. Keep
+/// them in application-protected storage and reacquire caller-filtered metadata.
+pub struct BRegPreparedAction(Zeroizing<Vec<u8>>);
+
+impl BRegPreparedAction {
+    pub fn from_slice(bytes: &[u8]) -> Result<Self, BaseRegistryClientError> {
+        if bytes.len() > 16 * 1024 * 1024 {
+            return Err(action_recovery_refusal());
+        }
+        let value = crate::strict_json::from_slice(bytes).map_err(|_| action_recovery_refusal())?;
+        let evidence: ActionRecoveryEvidence =
+            serde_json::from_value(value).map_err(|_| action_recovery_refusal())?;
+        if evidence.version != 1 {
+            return Err(action_recovery_refusal());
+        }
+        Ok(Self(Zeroizing::new(bytes.to_vec())))
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for BRegPreparedAction {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("BRegPreparedAction(<redacted>)")
+    }
+}
+
+fn action_recovery_refusal() -> BaseRegistryClientError {
+    BaseRegistryClientError::invalid_request(
+        "the prepared action does not match the original input, key, or current authority",
+    )
 }
 
 impl ActionRequestBinding {
@@ -281,6 +336,89 @@ impl BRegActionReceipt {
 }
 
 impl BaseRegistryClient {
+    /// Retain the exact invocation and idempotency key before sending. No I/O.
+    pub fn prepare_action(
+        &self,
+        action: &BRegImmediateActionBinding,
+        request: &BRegActionInvocationRequest,
+        key: &BRegIdempotencyKey,
+    ) -> Result<BRegPreparedAction, BaseRegistryClientError> {
+        self.validate_action_request(action, &request.binding)?;
+        let value = ActionRecoveryEvidence {
+            version: 1,
+            binding: request.binding.clone(),
+            body: std::str::from_utf8(&request.body)
+                .map_err(|_| action_recovery_refusal())?
+                .to_owned(),
+            idempotency_key: key.as_str().to_owned(),
+        };
+        let bytes =
+            Zeroizing::new(serde_json::to_vec(&value).map_err(|_| action_recovery_refusal())?);
+        BRegPreparedAction::from_slice(&bytes)
+    }
+
+    /// Restore the original request under fresh caller-filtered metadata. Saved
+    /// target conditions are reused exactly; this never fetches newer conditions
+    /// or sends a mutation. The caller explicitly invokes with the same key.
+    pub fn recover_action(
+        &self,
+        action: &BRegImmediateActionBinding,
+        prepared: &BRegPreparedAction,
+        original_inputs: &Map<String, Value>,
+        original_key: &BRegIdempotencyKey,
+    ) -> Result<BRegActionInvocationRequest, BaseRegistryClientError> {
+        let saved: ActionRecoveryEvidence =
+            serde_json::from_slice(prepared.as_bytes()).map_err(|_| action_recovery_refusal())?;
+        self.validate_action_request(action, &saved.binding)?;
+        if saved.idempotency_key != original_key.as_str() {
+            return Err(action_recovery_refusal());
+        }
+        let value = crate::strict_json::from_slice(saved.body.as_bytes())
+            .map_err(|_| action_recovery_refusal())?;
+        let object = value.as_object().ok_or_else(action_recovery_refusal)?;
+        if object.get("input") != Some(&Value::Object(original_inputs.clone()))
+            || object
+                .keys()
+                .any(|key| !matches!(key.as_str(), "input" | "preconditions"))
+        {
+            return Err(action_recovery_refusal());
+        }
+        let conditions = if action.required_condition_keys().is_empty()
+            && !object.contains_key("preconditions")
+        {
+            None
+        } else {
+            let inputs = action
+                .required_condition_keys()
+                .iter()
+                .map(|key| {
+                    original_inputs
+                        .get(key)
+                        .cloned()
+                        .map(|value| (key.clone(), value))
+                })
+                .collect::<Option<Map<String, Value>>>()
+                .ok_or_else(action_recovery_refusal)?;
+            let request = BRegActionTargetConditionsRequest::new(action, inputs)
+                .map_err(|_| action_recovery_refusal())?;
+            let bytes = serde_json::to_vec(
+                &serde_json::json!({"preconditions": object.get("preconditions")}),
+            )
+            .map_err(|_| action_recovery_refusal())?;
+            Some(
+                decode_conditions(&bytes, action, &request)
+                    .map_err(|_| action_recovery_refusal())?,
+            )
+        };
+        let restored =
+            BRegActionInvocationRequest::new(action, original_inputs.clone(), conditions.as_ref())
+                .map_err(|_| action_recovery_refusal())?;
+        if restored.body.as_slice() != saved.body.as_bytes() {
+            return Err(action_recovery_refusal());
+        }
+        Ok(restored)
+    }
+
     /// Fetch target conditions for the caller's currently selected records.
     /// This performs exactly one exchange and never refreshes a condition.
     pub async fn action_target_conditions(
@@ -849,6 +987,10 @@ mod tests {
     use super::*;
 
     fn action_binding(handler: bool) -> BRegImmediateActionBinding {
+        action_binding_with_conditions(handler, true)
+    }
+
+    fn action_binding_with_conditions(handler: bool, required: bool) -> BRegImmediateActionBinding {
         let input_mode = if handler { "handler" } else { "fixed" };
         let maximum_string_bytes = handler.then_some(json!(16_384)).unwrap_or(Value::Null);
         let optional_nullable = handler;
@@ -879,7 +1021,7 @@ mod tests {
                     }
                 ],
                 "referenceInputs": [{"input":"target","apiName":"targetId","targetEntity":"item"}],
-                "requiredConditionKeys": ["targetId"],
+                "requiredConditionKeys": if required { json!(["targetId"]) } else { json!([]) },
                 "resultEffects": [{"effect":"item","entity":"item","operation":"patch"}],
                 "access": {"selectedProfile":"writer"},
                 "routes": {
@@ -918,6 +1060,105 @@ mod tests {
             serde_json::to_value(&condition).unwrap(),
             json!({"ifMatch": "\"secret-condition-canary\""})
         );
+    }
+
+    #[test]
+    fn prepared_action_preserves_original_conditions_and_refuses_changed_authority_or_input() {
+        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
+            "https://registry.example/".parse().unwrap(),
+        ))
+        .unwrap();
+        let action = action_binding(false);
+        let target = serde_json::json!({"targetId":"00000000-0000-4000-8000-000000000001"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let condition_request =
+            BRegActionTargetConditionsRequest::new(&action, target.clone()).unwrap();
+        let conditions = decode_conditions(
+            br#"{"preconditions":{"targetId":{"ifMatch":"\"original-condition-canary\""}}}"#,
+            &action,
+            &condition_request,
+        )
+        .unwrap();
+        let mut input = target;
+        input.insert("label".to_owned(), serde_json::json!("Input canary"));
+        let request =
+            BRegActionInvocationRequest::new(&action, input.clone(), Some(&conditions)).unwrap();
+        let key = BRegIdempotencyKey::parse("original-action-key").unwrap();
+        let prepared = client.prepare_action(&action, &request, &key).unwrap();
+        let parsed = BRegPreparedAction::from_slice(prepared.as_bytes()).unwrap();
+        assert!(!format!("{parsed:?}").contains("canary"));
+        let recovered = client
+            .recover_action(&action, &parsed, &input, &key)
+            .unwrap();
+        assert_eq!(recovered.body.as_slice(), request.body.as_slice());
+        assert!(client
+            .recover_action(
+                &action,
+                &parsed,
+                &input,
+                &BRegIdempotencyKey::parse("different-key").unwrap()
+            )
+            .is_err());
+        let mut changed_input = input.clone();
+        changed_input.insert(
+            "targetId".to_owned(),
+            serde_json::json!("00000000-0000-4000-8000-000000000002"),
+        );
+        assert!(client
+            .recover_action(&action, &parsed, &changed_input, &key)
+            .is_err());
+        for path in [
+            "/binding/source_binding",
+            "/binding/access_profile",
+            "/binding/registry_revision",
+            "/binding/contract_fingerprint",
+            "/binding/action_identifier",
+        ] {
+            let mut changed: Value = serde_json::from_slice(prepared.as_bytes()).unwrap();
+            *changed.pointer_mut(path).unwrap() = serde_json::json!("changed");
+            let parsed =
+                BRegPreparedAction::from_slice(&serde_json::to_vec(&changed).unwrap()).unwrap();
+            assert!(client
+                .recover_action(&action, &parsed, &input, &key)
+                .is_err());
+        }
+        let mut changed: Value = serde_json::from_slice(prepared.as_bytes()).unwrap();
+        changed["body"] = serde_json::json!("{\"input\":{},\"unexpected\":true}");
+        let parsed =
+            BRegPreparedAction::from_slice(&serde_json::to_vec(&changed).unwrap()).unwrap();
+        assert!(client
+            .recover_action(&action, &parsed, &input, &key)
+            .is_err());
+        assert!(BRegPreparedAction::from_slice(br#"{"version":1,"version":1}"#).is_err());
+    }
+
+    #[test]
+    fn prepared_action_roundtrips_absent_and_explicit_empty_conditions() {
+        let client = BaseRegistryClient::new(crate::BaseRegistryClientConfig::new(
+            "https://registry.example/".parse().unwrap(),
+        ))
+        .unwrap();
+        let action = action_binding_with_conditions(false, false);
+        let inputs = json!({"targetId":"00000000-0000-4000-8000-000000000001"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let conditions_request =
+            BRegActionTargetConditionsRequest::new(&action, Map::new()).unwrap();
+        let empty =
+            decode_conditions(br#"{"preconditions":{}}"#, &action, &conditions_request).unwrap();
+        let key = BRegIdempotencyKey::parse("empty-conditions").unwrap();
+        for conditions in [None, Some(&empty)] {
+            let request =
+                BRegActionInvocationRequest::new(&action, inputs.clone(), conditions).unwrap();
+            let prepared = client.prepare_action(&action, &request, &key).unwrap();
+            let recovered = client
+                .recover_action(&action, &prepared, &inputs, &key)
+                .unwrap();
+            assert_eq!(recovered.body.as_slice(), request.body.as_slice());
+        }
     }
 
     #[test]
