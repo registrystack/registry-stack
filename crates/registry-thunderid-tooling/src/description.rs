@@ -412,6 +412,7 @@ impl IssuerDescription {
             }
         }
         let mut usernames = BTreeSet::new();
+        let mut emails = BTreeSet::new();
         let mut user_ids = BTreeSet::new();
         for user in &self.synthetic_users {
             if !valid_uuid(&user.id)
@@ -424,6 +425,7 @@ impl IssuerDescription {
                 || !usernames.insert(&user.username)
                 || !bounded(&user.email, 128)
                 || !user.email.ends_with(".test")
+                || !emails.insert(&user.email)
                 || !private_file_name(&user.password_file)
                 || user.attributes.len() > 16
                 || user.attributes.iter().any(|(name, value)| {
@@ -483,7 +485,7 @@ impl IssuerDescription {
                         .bytes()
                         .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
                     || first_party_attributes
-                        .insert(name, kind)
+                        .insert(name.as_str(), kind)
                         .is_some_and(|prior| prior != kind)
                 {
                     return refuse(
@@ -694,6 +696,30 @@ impl IssuerDescription {
                 }
             }
         }
+        if self
+            .exchange_issuers
+            .iter()
+            .any(|issuer| issuer.mapping == ExchangeMapping::InstitutionalGrant)
+        {
+            for (name, kind) in [
+                ("evidence_audience", ExchangeAttributeKind::String),
+                ("evidence_tags", ExchangeAttributeKind::StringArray),
+            ] {
+                if self
+                    .machine_clients
+                    .iter()
+                    .filter_map(|client| client.attributes.get(name))
+                    .any(|value| value.is_array() != (kind == ExchangeAttributeKind::StringArray))
+                    || first_party_attributes
+                        .get(name)
+                        .is_some_and(|declared| **declared != kind)
+                {
+                    return refuse(
+                        "institutional requester attributes must match their fixed schema types",
+                    );
+                }
+            }
+        }
         for (name, kind) in first_party_attributes {
             if self
                 .machine_clients
@@ -743,6 +769,101 @@ mod tests {
             assertion_scope: "evidence:invoke".into(),
         });
         description
+    }
+
+    #[test]
+    fn synthetic_users_require_distinct_emails() {
+        let mut description = crate::testing::synthetic_description();
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: "0197aaaa-0000-7000-8000-0000000000e1".into(),
+                client_id: "synthetic-browser".into(),
+                client_secret_file: "secrets/app".into(),
+                origin: "http://127.0.0.1:3000".into(),
+                redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
+                audience: description.resource_servers[0].identifier.clone(),
+                token_attributes: vec!["registry_role".into()],
+            });
+        description.synthetic_users = vec![
+            SyntheticUser {
+                id: "0197aaaa-0000-7000-8000-0000000000e2".into(),
+                username: "staff-one".into(),
+                email: "shared@example.test".into(),
+                password_file: "secrets/first-user".into(),
+                attributes: BTreeMap::new(),
+            },
+            SyntheticUser {
+                id: "0197aaaa-0000-7000-8000-0000000000e3".into(),
+                username: "staff-two".into(),
+                email: "other@example.test".into(),
+                password_file: "secrets/second-user".into(),
+                attributes: BTreeMap::new(),
+            },
+        ];
+        assert!(description.validate().is_ok());
+        description.synthetic_users[1].email = "shared@example.test".into();
+        assert!(matches!(
+            description.validate(),
+            Err(ToolingError::InvalidDescription {
+                reason: "synthetic user identity or attributes are invalid"
+            })
+        ));
+    }
+
+    #[test]
+    fn institutional_requester_attributes_keep_fixed_types() {
+        for (name, valid, invalid) in [
+            (
+                "evidence_audience",
+                serde_json::json!("https://relying.example"),
+                serde_json::json!(["https://relying.example"]),
+            ),
+            (
+                "evidence_tags",
+                serde_json::json!(["reviewer"]),
+                serde_json::json!("reviewer"),
+            ),
+        ] {
+            let mut description = exchange_description();
+            description.schema_attributes.push(name.into());
+            description.machine_clients[0]
+                .attributes
+                .insert(name.into(), valid);
+            assert!(description.validate().is_ok(), "valid {name} refused");
+            description.machine_clients[0]
+                .attributes
+                .insert(name.into(), invalid);
+            assert!(matches!(
+                description.validate(),
+                Err(ToolingError::InvalidDescription {
+                    reason:
+                        "institutional requester attributes must match their fixed schema types"
+                })
+            ));
+        }
+
+        for (name, kind) in [
+            ("evidence_audience", ExchangeAttributeKind::StringArray),
+            ("evidence_tags", ExchangeAttributeKind::String),
+        ] {
+            let mut description = exchange_description();
+            let mut first_party = description.exchange_issuers[0].clone();
+            first_party.id = "0197aaaa-0000-7000-8000-0000000000d2".into();
+            first_party.name = "Another signer".into();
+            first_party.issuer = "https://other.example".into();
+            first_party.jwks_endpoint = "https://other.example/jwks".into();
+            first_party.mapping = ExchangeMapping::FirstParty;
+            first_party.token_attributes.insert(name.into(), kind);
+            description.exchange_issuers.push(first_party);
+            assert!(matches!(
+                description.validate(),
+                Err(ToolingError::InvalidDescription {
+                    reason:
+                        "institutional requester attributes must match their fixed schema types"
+                })
+            ));
+        }
     }
 
     #[test]

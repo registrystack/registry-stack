@@ -405,6 +405,17 @@ pub(super) fn principal(client_id: &str) -> String {
     registry_thunderid_tooling::local::agent_id("casework-local", client_id)
 }
 
+pub(super) fn require_stable_borrowed_principals(policy: &CaseworkProject) -> Result<()> {
+    if policy
+        .access_profiles
+        .iter()
+        .any(|profile| profile.principal_claim == "sub")
+    {
+        bail!("the shared BREG issuer requires explicit stable principal claims; principalClaim sub resolves to the owner's subject, not the Casework local subject");
+    }
+    Ok(())
+}
+
 pub(super) fn hex_lower(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

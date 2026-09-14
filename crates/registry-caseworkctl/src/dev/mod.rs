@@ -675,13 +675,8 @@ fn capture_with_sources(
         bail!("source-backed development requires explicit integrations with source bindings and any task authority in the local clients file");
     } else {
         sources = source_projects(&declared, source_args, retained)?;
-        if !sources.is_empty()
-            && policy
-                .access_profiles
-                .iter()
-                .any(|profile| profile.principal_claim == "sub")
-        {
-            bail!("the shared BREG issuer bridge requires explicit stable principal claims; principalClaim sub is session-qualified");
+        if !sources.is_empty() {
+            config::require_stable_borrowed_principals(&policy)?;
         }
     }
     let bound = config::bind(&clients, &policy)?;
@@ -1233,6 +1228,15 @@ fn start(args: StartArgs) -> Result<Value> {
         && clients.integrations.is_none()
     {
         bail!("--issuer-project needs explicit integrations.resource and source/task bindings in the local clients file");
+    }
+    if requested_issuer.is_some()
+        || existing
+            .as_ref()
+            .is_some_and(|state| state.issuer_project.is_some())
+    {
+        config::require_stable_borrowed_principals(&crate::project::load_and_check_policy(
+            &project,
+        )?)?;
     }
     // The source pin protects the records a session retains. Once `dev stop
     // --remove` has discarded them, changed inputs start a fresh session on

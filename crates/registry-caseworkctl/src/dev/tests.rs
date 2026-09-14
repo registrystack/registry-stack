@@ -585,7 +585,7 @@ fn borrowed_source_mode_is_explicit_pinned_and_refuses_session_qualified_subject
     let refusal = capture_with_sources(&project, &clients, &source, &BTreeMap::new())
         .unwrap_err()
         .to_string();
-    assert!(refusal.contains("session-qualified"), "{refusal}");
+    assert!(refusal.contains("principalClaim sub"), "{refusal}");
 }
 
 #[test]
@@ -2908,6 +2908,9 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
         }))
         .unwrap(),
     );
+    for profile in &mut policy.access_profiles {
+        profile.principal_claim = "registry_principal".to_owned();
+    }
     let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
     let integrations: integrations::Integrations = serde_json::from_value(json!({
         "resource":"urn:casework:source-group",
@@ -2938,10 +2941,47 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
         .unwrap(),
     )
     .unwrap();
+    let inventory = json!({
+        "clients":[{"id":"owner-client","scopes":["records:get"]}],
+        "issuer":{"resources":[{"audience":"urn:casework:source-group",
+            "scopes":["records:get"]}],"clientResources":{}}
+    });
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&inventory).unwrap(),
+    )
+    .unwrap();
     let mut borrowed = session(&project);
     borrowed.issuer_project = Some(owner_project);
-    borrowed.issuer_owner = Some(owner_id);
+    borrowed.issuer_owner = Some(owner_id.clone());
     integrations.validate_session(&borrowed, &policy).unwrap();
+
+    let mut wrong_resource = policy.clone();
+    wrong_resource.task_templates[0].resource = "urn:other:resource".to_owned();
+    let refusal = integrations
+        .validate_session(&borrowed, &wrong_resource)
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("destination resource"), "{refusal}");
+    let mut default_resource = policy.clone();
+    default_resource.task_templates[0].resource = format!("urn:breg:dev:{owner_id}");
+    integrations
+        .validate_session(&borrowed, &default_resource)
+        .unwrap();
+    let mut wrong_scopes = policy.clone();
+    wrong_scopes.task_templates[0].scopes = vec!["records:write".to_owned()];
+    let refusal = integrations
+        .validate_session(&borrowed, &wrong_scopes)
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("destination scopes"), "{refusal}");
+    let mut sub_profile = policy.clone();
+    sub_profile.access_profiles[0].principal_claim = "sub".to_owned();
+    let refusal = integrations
+        .validate_session(&borrowed, &sub_profile)
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("principalClaim sub"), "{refusal}");
 
     let standalone = session(&project);
     assert!(integrations.validate_session(&standalone, &policy).is_err());
@@ -2954,7 +2994,10 @@ fn task_template_subject_follows_the_actual_local_issuer_owner() {
 fn borrowed_browser_admission_requires_exact_owner_resource() {
     let workspace = tempfile::tempdir().unwrap();
     let project = standalone(workspace.path());
-    let policy = crate::project::load_and_check_policy(&project).unwrap();
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    for profile in &mut policy.access_profiles {
+        profile.principal_claim = "registry_principal".to_owned();
+    }
     let owner_temp = tempfile::tempdir().unwrap();
     let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
     fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();

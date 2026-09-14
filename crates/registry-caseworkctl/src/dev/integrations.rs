@@ -1,7 +1,7 @@
 //! Explicit source-backed development inputs. The ordinary standalone session
 //! remains source-free unless this closed integration block is configured.
 use super::{config, private, State};
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use registry_casework_core::CaseworkProject;
 use registry_thunderid_tooling::{description::*, local};
 use serde::{Deserialize, Serialize};
@@ -148,6 +148,9 @@ impl Integrations {
     }
 
     pub fn validate_session(&self, state: &State, policy: &CaseworkProject) -> Result<()> {
+        if state.issuer_project.is_some() {
+            config::require_stable_borrowed_principals(policy)?;
+        }
         let owner_instance = if policy.task_templates.is_empty() {
             None
         } else {
@@ -165,6 +168,56 @@ impl Integrations {
                 })
                 .transpose()?
         };
+        if !policy.task_templates.is_empty() {
+            if let Some(owner_root) = super::borrowed_issuer(state)? {
+                let owner_clients: Value = serde_json::from_slice(&private::read(
+                    &owner_root.join("clients.json"),
+                    super::MAX_BYTES,
+                )?)?;
+                let resources = owner_clients["issuer"]["resources"]
+                    .as_array()
+                    .context("shared issuer owner has no resource inventory")?;
+                let default_resource = format!(
+                    "urn:breg:dev:{}",
+                    state.issuer_owner.as_deref().unwrap_or_default()
+                );
+                for template in &policy.task_templates {
+                    let available = if template.resource == default_resource {
+                        owner_clients["clients"]
+                            .as_array()
+                            .context("shared issuer owner has no client inventory")?
+                            .iter()
+                            .flat_map(|client| client["scopes"].as_array().into_iter().flatten())
+                            .filter_map(Value::as_str)
+                            .collect::<BTreeSet<_>>()
+                    } else {
+                        resources
+                            .iter()
+                            .find(|resource| resource["audience"] == template.resource)
+                            .and_then(|resource| resource["scopes"].as_array())
+                            .with_context(|| {
+                                format!(
+                                    "shared issuer owner has no task destination resource for template {}",
+                                    template.id
+                                )
+                            })?
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<BTreeSet<_>>()
+                    };
+                    if template
+                        .scopes
+                        .iter()
+                        .any(|scope| !available.contains(scope.as_str()))
+                    {
+                        bail!(
+                            "shared issuer owner has no task destination scopes for template {}",
+                            template.id
+                        );
+                    }
+                }
+            }
+        }
         for template in &policy.task_templates {
             let expected = owner_instance
                 .as_deref()

@@ -492,6 +492,27 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
 }
 
 #[test]
+fn borrowed_issuer_refuses_owner_only_declarations_before_preparation() {
+    let (_temp, mut state, clients, files) = fixture();
+    state.issuer_project = Some(state.project.join("missing-owner"));
+    for declaration in [
+        json!({"resources": [{"audience": "urn:example:resource", "scopes": ["example:read"]}]}),
+        json!({"exchangeIssuers": [{"id": "example", "issuer": "urn:example:issuer", "jwksEndpoint": "http://127.0.0.1/jwks", "mapping": "first_party"}]}),
+        json!({"interactiveApplications": [{"id": "example", "clientSecretFile": "/tmp/example", "origin": "http://127.0.0.1:3000", "redirectUris": ["http://127.0.0.1:3000/callback"], "audience": null, "tokenAttributes": []}]}),
+        json!({"syntheticUsers": [{"username": "example", "email": "example@example.test", "passwordFile": "/tmp/example", "attributes": {}}]}),
+        json!({"clientResources": {"example": "urn:example:resource"}}),
+        json!({"exchangeClients": ["example"]}),
+    ] {
+        let mut borrower = clients.clone();
+        borrower.issuer = serde_json::from_value(declaration).unwrap();
+        let error = initialize(&state.root(), &state, &borrower, &files)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("owner-only"), "{error}");
+    }
+}
+
+#[test]
 fn human_teaching_clients_require_the_exact_explicit_fixture_flag() {
     let without_flag = br#"version: 1
 clients:
