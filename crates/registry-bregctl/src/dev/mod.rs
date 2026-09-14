@@ -982,9 +982,7 @@ fn start(args: StartArgs) -> Result<Value> {
     // only this session's issuer before testing whether its port is free.
     stop_issuer(&docker, &state)?;
     borrowed_owner(&state)?;
-    for port in [state.breg_port] {
-        probe(port)?;
-    }
+    probe(state.breg_port)?;
     if state.issuer_project.is_none() {
         probe(state.issuer_port)?;
     }
@@ -1178,9 +1176,7 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     let docker = executable("docker", docker_bin)?;
     stop_issuer(&docker, &state)?;
-    for port in [state.breg_port] {
-        probe(port)?;
-    }
+    probe(state.breg_port)?;
     if state.issuer_project.is_none() {
         probe(state.issuer_port)?;
     }

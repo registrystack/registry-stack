@@ -383,6 +383,21 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         .push("undeclared:permission".into());
     assert!(config::clients(&serde_norway::to_string(&ungranted).unwrap().into_bytes()).is_err());
     config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    let mut wrong_resource_scope = clients.clone();
+    wrong_resource_scope
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .scopes = vec!["registry:generic:operate".into()];
+    let refusal = config::clients(
+        &serde_norway::to_string(&wrong_resource_scope)
+            .unwrap()
+            .into_bytes(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(refusal.contains("resource scopes"), "{refusal}");
     initialize(&state.root(), &state, &clients, &files).unwrap();
     let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
     let portal = &description.exchange_issuers[0];

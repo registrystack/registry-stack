@@ -473,9 +473,11 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 args.docker_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
-                args.target.as_deref(),
-                args.issuer_project.as_deref(),
-                args.resource.as_deref(),
+                DevStartSelection {
+                    target: args.target.as_deref(),
+                    issuer_project: args.issuer_project.as_deref(),
+                    requested_resource: args.resource.as_deref(),
+                },
                 format,
             )
         }
@@ -525,9 +527,11 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 args.docker_bin.as_deref(),
                 args.ready_timeout_seconds,
                 ports,
-                args.target.as_deref(),
-                args.issuer_project.as_deref(),
-                args.resource.as_deref(),
+                DevStartSelection {
+                    target: args.target.as_deref(),
+                    issuer_project: args.issuer_project.as_deref(),
+                    requested_resource: args.resource.as_deref(),
+                },
                 format,
             )
         }
@@ -1370,17 +1374,26 @@ fn valid_local_identifier(value: &str) -> bool {
         })
 }
 
+struct DevStartSelection<'a> {
+    target: Option<&'a Path>,
+    issuer_project: Option<&'a Path>,
+    requested_resource: Option<&'a str>,
+}
+
 fn start_detached(
     project: &Path,
     evidence_override: Option<&Path>,
     docker_override: Option<&Path>,
     ready_timeout_seconds: u64,
     ports: LocalServicePorts,
-    target: Option<&Path>,
-    issuer_project: Option<&Path>,
-    requested_resource: Option<&str>,
+    selection: DevStartSelection<'_>,
     format: OutputFormat,
 ) -> Result<ExitCode> {
+    let DevStartSelection {
+        target,
+        issuer_project,
+        requested_resource,
+    } = selection;
     let project = canonical_project(project)?;
     let generated_root = ensure_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
@@ -3429,8 +3442,12 @@ requirements:
             owner: "01234567-89ab-4def-8123-456789abcdef".into(),
             port: 8091,
         };
-        verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[client.clone()])
-            .unwrap();
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&client),
+        )
+        .unwrap();
         let mut altered = client.clone();
         altered
             .claims

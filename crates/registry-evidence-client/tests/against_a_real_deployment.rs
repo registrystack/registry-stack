@@ -2069,6 +2069,8 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
                 vec![TASK_BOOTSTRAP_SCOPE.to_owned()],
             )],
             assigned_agents: vec![TASK_CLIENT_AGENT_ID.to_owned()],
+            assigned_users: vec![],
+            assigned_applications: vec![],
         });
         description.machine_clients.push(MachineClient {
             agent_id: TASK_CLIENT_AGENT_ID.to_owned(),
@@ -2096,6 +2098,8 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
             issuer: authority_issuer.to_owned(),
             jwks_endpoint: format!("{authority_issuer}/jwks"),
             mapping: registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
+            clients: vec![],
+            token_attributes: BTreeMap::new(),
         });
         key
     });

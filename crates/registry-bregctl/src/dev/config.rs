@@ -358,8 +358,15 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         }
     }
     for (client, resource) in &clients.issuer.client_resources {
-        if !ids.contains(client) || !resource_ids.contains(resource) {
-            bail!("issuer client resource bindings need a declared client and audience");
+        if !ids.contains(client)
+            || !resource_ids.contains(resource)
+            || !clients
+                .clients
+                .iter()
+                .find(|entry| &entry.id == client)
+                .is_some_and(|entry| grant_scopes(&clients, Some(resource), &entry.scopes))
+        {
+            bail!("issuer client resource bindings need a declared client, audience, and resource scopes");
         }
     }
     let mut exchange_clients = BTreeSet::new();
