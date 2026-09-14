@@ -618,6 +618,29 @@ impl ExchangeAuthorization {
         }
         Ok(())
     }
+
+    /// The held token, when it is still one this provider may hand out.
+    ///
+    /// The refresh margin is the room to obtain a replacement before a token
+    /// dies in flight. A provider that is not renewable has no replacement to
+    /// reach for: it holds the one token its one exchange produced. Withholding
+    /// that token over the closing seconds of a short issuer lifetime does not
+    /// protect the request, it is the only thing that fails it. So the margin
+    /// applies where a refresh is available, and elsewhere the token serves
+    /// until it actually expires.
+    async fn held_token(&self, now: Instant) -> Option<BearerToken> {
+        let margin = if self.renewable {
+            REFRESH_MARGIN
+        } else {
+            Duration::ZERO
+        };
+        self.cached
+            .read()
+            .await
+            .as_ref()
+            .filter(|entry| entry.expires_at.saturating_duration_since(now) > margin)
+            .map(|entry| entry.token.clone())
+    }
 }
 
 #[async_trait]
@@ -627,26 +650,12 @@ impl TokenProvider for ExchangeAuthorization {
             return Err(TokenError::Unavailable);
         }
         let now = Instant::now();
-        if let Some(token) = self
-            .cached
-            .read()
-            .await
-            .as_ref()
-            .filter(|entry| entry.expires_at.saturating_duration_since(now) > REFRESH_MARGIN)
-            .map(|entry| entry.token.clone())
-        {
+        if let Some(token) = self.held_token(now).await {
             return Ok(token);
         }
         let mut attempted = self.refresh_lock.lock().await;
         let now = Instant::now();
-        if let Some(token) = self
-            .cached
-            .read()
-            .await
-            .as_ref()
-            .filter(|entry| entry.expires_at.saturating_duration_since(now) > REFRESH_MARGIN)
-            .map(|entry| entry.token.clone())
-        {
+        if let Some(token) = self.held_token(now).await {
             return Ok(token);
         }
         if !self.renewable && *attempted {
@@ -958,6 +967,30 @@ mod tests {
         .unwrap();
         let held = first.bearer_token().await.unwrap();
         let again = first.bearer_token().await.unwrap();
+        assert_eq!(
+            held.authorization_header_value(),
+            again.authorization_header_value()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn short_issuer_lifetime_still_serves_the_second_request_of_one_operation() {
+        // A published-contracts operation asks this provider twice: once for
+        // the definitions and once for the assertion. An issuer is entitled to
+        // state a lifetime shorter than the refresh margin, and a first-party
+        // provider has no second exchange to reach for. The token it holds has
+        // to answer both requests for as long as it is actually valid.
+        let server = MockServer::start().await;
+        endpoint(&server, Some(3)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        let held = provider.bearer_token().await.unwrap();
+        let again = provider.bearer_token().await.unwrap();
         assert_eq!(
             held.authorization_header_value(),
             again.authorization_header_value()
