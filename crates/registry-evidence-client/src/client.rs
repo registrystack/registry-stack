@@ -18,7 +18,8 @@ use registry_evidence_verifier::{
     EVIDENCE_REQUEST_BATCH_MEDIA_TYPE, EVIDENCE_REQUEST_BATCH_SCHEMA_V1,
 };
 use registry_platform_httputil::{
-    read_bounded, retry_after_seconds, validate_response_headers, FetchUrlPolicy,
+    read_bounded, retry_after_seconds, validate_response_headers, ExchangeAuthorization,
+    FetchUrlPolicy,
 };
 use reqwest::{
     header::{
@@ -76,6 +77,11 @@ const JWKS_PATH: &str = ".well-known/evidence/jwks.json";
 const JSON_MEDIA_TYPE: &str = "application/json";
 const JWKS_MEDIA_TYPE: &str = "application/jwk-set+json";
 
+/// The RFC 6749 grant a key-holding profile's token request names.
+const CLIENT_CREDENTIALS_GRANT_TYPE: &str = "client_credentials";
+/// The RFC 8693 grant an exchange-backed profile's token request names.
+const TOKEN_EXCHANGE_GRANT_TYPE: &str = "urn:ietf:params:oauth:grant-type:token-exchange";
+
 /// Longest `Retry-After` wait this client reports as actionable.
 ///
 /// The problem contract permits a wait only for bounded transient failures, and
@@ -114,8 +120,25 @@ impl std::fmt::Debug for EvidenceClient {
 
 struct ProgressiveClientState {
     profile: EvidenceClientProfile,
-    private_key: PrivateJwk,
+    authorization: ProgressiveAuthorization,
     cache: Mutex<Option<CachedServiceSnapshot>>,
+}
+
+enum ProgressiveAuthorization {
+    PrivateKey(Box<PrivateJwk>),
+    Exchange(Arc<ExchangeAuthorization>),
+}
+
+impl ProgressiveAuthorization {
+    /// The OAuth grant this authorization's token request names. A service's
+    /// authorization server has to advertise the grant that will be used
+    /// against it, not the one the other stance would have used.
+    fn required_grant_type(&self) -> &'static str {
+        match self {
+            Self::PrivateKey(_) => CLIENT_CREDENTIALS_GRANT_TYPE,
+            Self::Exchange(_) => TOKEN_EXCHANGE_GRANT_TYPE,
+        }
+    }
 }
 
 struct CachedServiceSnapshot {
@@ -277,7 +300,44 @@ impl EvidenceClient {
         profile: EvidenceClientProfile,
         private_key: PrivateJwk,
     ) -> Result<Self, EvidenceClientError> {
+        Self::build_from_profile(
+            profile,
+            ProgressiveAuthorization::PrivateKey(Box::new(private_key)),
+        )
+    }
+
+    /// Build a progressive client whose staff credential comes from one
+    /// immutable, context-bound exchange. The profile still owns service
+    /// trust, definition expectations, and the exact OAuth resource/scopes.
+    /// Discovery must confirm the exchange target before any token is used.
+    pub fn from_profile_with_authorization(
+        profile: EvidenceClientProfile,
+        authorization: ExchangeAuthorization,
+    ) -> Result<Self, EvidenceClientError> {
+        let policy = metadata_fetch_policy(&profile.trust);
+        Self::build_from_profile(
+            profile,
+            ProgressiveAuthorization::Exchange(Arc::new(
+                authorization.with_fetch_url_policy(policy),
+            )),
+        )
+    }
+
+    fn build_from_profile(
+        profile: EvidenceClientProfile,
+        authorization: ProgressiveAuthorization,
+    ) -> Result<Self, EvidenceClientError> {
         profile.validate()?;
+        if matches!(&authorization, ProgressiveAuthorization::Exchange(_))
+            && !profile
+                .oauth
+                .as_ref()
+                .is_some_and(|oauth| oauth.resource.is_some() && oauth.scopes.is_some())
+        {
+            return Err(EvidenceClientError::configuration(
+                "an exchange-backed profile must pin OAuth resource and scopes",
+            ));
+        }
         let base_url = Url::parse(&profile.base_url).map_err(|_| {
             EvidenceClientError::configuration("the client profile is invalid or unavailable")
         })?;
@@ -289,7 +349,7 @@ impl EvidenceClient {
             http,
             progressive: Some(Arc::new(ProgressiveClientState {
                 profile,
-                private_key,
+                authorization,
                 cache: Mutex::new(None),
             })),
         })
@@ -306,6 +366,16 @@ impl EvidenceClient {
         private_key: PrivateJwk,
     ) -> Result<Self, EvidenceClientError> {
         Self::from_profile_with_key(EvidenceClientProfile::from_file(path)?, private_key)
+    }
+
+    pub fn from_profile_path_with_authorization(
+        path: impl AsRef<std::path::Path>,
+        authorization: ExchangeAuthorization,
+    ) -> Result<Self, EvidenceClientError> {
+        Self::from_profile_with_authorization(
+            EvidenceClientProfile::from_file(path)?,
+            authorization,
+        )
     }
 
     /// Invalidate cached public metadata and acquire a fresh closed snapshot.
@@ -575,12 +645,48 @@ impl EvidenceClient {
                 &fetch_policy,
             )
             .await?;
-        if !authorization_server_metadata_is_compatible(&authorization.value, announced_issuer) {
+        if !authorization_server_metadata_is_compatible(
+            &authorization.value,
+            announced_issuer,
+            state.authorization.required_grant_type(),
+        ) {
             return Err(metadata_protocol_failure());
         }
         let token_endpoint = Url::parse(&authorization.value.token_endpoint)
             .map_err(|_| metadata_protocol_failure())?;
         validate_metadata_url(&token_endpoint, &state.profile.trust)?;
+        if let ProgressiveAuthorization::Exchange(exchange) = &state.authorization {
+            let oauth = state.profile.oauth.as_ref().ok_or_else(|| {
+                EvidenceClientError::configuration(
+                    "an exchange-backed profile must pin OAuth resource and scopes",
+                )
+            })?;
+            let resource = oauth.resource.as_deref().ok_or_else(|| {
+                EvidenceClientError::configuration(
+                    "an exchange-backed profile must pin OAuth resource and scopes",
+                )
+            })?;
+            let scopes = oauth.scopes.as_deref().ok_or_else(|| {
+                EvidenceClientError::configuration(
+                    "an exchange-backed profile must pin OAuth resource and scopes",
+                )
+            })?;
+            // The discovered token endpoint is compared as the URL it was
+            // parsed into, so an issuer that publishes a default port or an
+            // uppercase host still names the endpoint the profile configured.
+            if !exchange.matches_discovered_binding(
+                &state.profile.client_id,
+                &token_endpoint,
+                &authorization.value.issuer,
+                oauth.client_assertion_audience.as_deref(),
+                resource,
+                scopes,
+            ) {
+                return Err(EvidenceClientError::configuration(
+                    "the exchange authorization does not match the client profile and discovered issuer",
+                ));
+            }
+        }
         let expected_jwks = self.endpoint(JWKS_PATH)?;
         let jwks_url =
             Url::parse(&protected.value.jwks_uri).map_err(|_| metadata_protocol_failure())?;
@@ -622,29 +728,33 @@ impl EvidenceClient {
         }) {
             Arc::clone(&snapshot.token_provider)
         } else {
-            let mut config = PrivateKeyJwtConfig::new(
-                token_endpoint,
-                state.profile.client_id.clone(),
-                state.private_key.clone(),
-            )
-            .with_fetch_url_policy(fetch_policy);
-            if let Some(oauth) = &state.profile.oauth {
-                // The assertion audience, the resource indicator, and the
-                // requested scopes are the deployment's fixed configuration.
-                // None of them is derived from the catalog, and the discovery
-                // token endpoint is never silently substituted for a stated
-                // assertion audience.
-                if let Some(audience) = &oauth.client_assertion_audience {
-                    config = config.with_audience(audience.clone());
+            match &state.authorization {
+                ProgressiveAuthorization::PrivateKey(private_key) => {
+                    let mut config = PrivateKeyJwtConfig::new(
+                        token_endpoint,
+                        state.profile.client_id.clone(),
+                        private_key.as_ref().clone(),
+                    )
+                    .with_fetch_url_policy(fetch_policy);
+                    if let Some(oauth) = &state.profile.oauth {
+                        // Profile-owned request parameters never come from
+                        // the catalog or an untrusted caller request.
+                        if let Some(audience) = &oauth.client_assertion_audience {
+                            config = config.with_audience(audience.clone());
+                        }
+                        if let Some(resource) = &oauth.resource {
+                            config = config.with_resource(resource.clone());
+                        }
+                        if let Some(scopes) = &oauth.scopes {
+                            config = config.with_scopes(scopes.iter().cloned());
+                        }
+                    }
+                    Arc::new(PrivateKeyJwt::new(config)?) as Arc<dyn TokenProvider>
                 }
-                if let Some(resource) = &oauth.resource {
-                    config = config.with_resource(resource.clone());
-                }
-                if let Some(scopes) = &oauth.scopes {
-                    config = config.with_scopes(scopes.iter().cloned());
+                ProgressiveAuthorization::Exchange(exchange) => {
+                    Arc::clone(exchange) as Arc<dyn TokenProvider>
                 }
             }
-            Arc::new(PrivateKeyJwt::new(config)?) as Arc<dyn TokenProvider>
         };
         let cache_seconds = protected
             .cache_seconds
@@ -1481,12 +1591,13 @@ fn metadata_fetch_policy(trust: &TrustProfile) -> FetchUrlPolicy {
 fn authorization_server_metadata_is_compatible(
     metadata: &AuthorizationServerMetadata,
     announced_issuer: &str,
+    required_grant_type: &str,
 ) -> bool {
     metadata.issuer == announced_issuer
         && metadata
             .grant_types_supported
             .iter()
-            .any(|value| value == "client_credentials")
+            .any(|value| value == required_grant_type)
         && metadata
             .token_endpoint_auth_methods_supported
             .iter()
@@ -3485,17 +3596,25 @@ mod tests {
         }
     }
 
-    #[test]
-    fn authorization_server_issuer_must_match_the_announced_string_exactly() {
-        let metadata = AuthorizationServerMetadata {
+    fn authorization_server_metadata(grant_types: &[&str]) -> AuthorizationServerMetadata {
+        AuthorizationServerMetadata {
             issuer: "https://issuer.example.org/tenant".to_owned(),
             token_endpoint: "https://tokens.example.net/oauth/token".to_owned(),
-            grant_types_supported: vec!["client_credentials".to_owned()],
+            grant_types_supported: grant_types
+                .iter()
+                .map(|value| (*value).to_owned())
+                .collect(),
             token_endpoint_auth_methods_supported: vec!["private_key_jwt".to_owned()],
-        };
+        }
+    }
+
+    #[test]
+    fn authorization_server_issuer_must_match_the_announced_string_exactly() {
+        let metadata = authorization_server_metadata(&[CLIENT_CREDENTIALS_GRANT_TYPE]);
         assert!(authorization_server_metadata_is_compatible(
             &metadata,
-            "https://issuer.example.org/tenant"
+            "https://issuer.example.org/tenant",
+            CLIENT_CREDENTIALS_GRANT_TYPE,
         ));
         for mismatch in [
             "https://issuer.example.org/tenant/",
@@ -3503,10 +3622,60 @@ mod tests {
             "https://issuer.example.org:443/tenant",
         ] {
             assert!(
-                !authorization_server_metadata_is_compatible(&metadata, mismatch),
+                !authorization_server_metadata_is_compatible(
+                    &metadata,
+                    mismatch,
+                    CLIENT_CREDENTIALS_GRANT_TYPE,
+                ),
                 "{mismatch} was treated as the exact issuer"
             );
         }
+    }
+
+    /// A key-holding profile asks for `client_credentials` and an
+    /// exchange-backed one asks for the RFC 8693 token exchange. An
+    /// authorization server states which grants it offers, and either grant
+    /// may be the only one it offers, so the grant a profile is about to use
+    /// is the only one worth finding in that statement.
+    #[test]
+    fn authorization_server_must_advertise_the_grant_the_profile_will_use() {
+        const ISSUER: &str = "https://issuer.example.org/tenant";
+        for (advertised, required, compatible) in [
+            (
+                CLIENT_CREDENTIALS_GRANT_TYPE,
+                CLIENT_CREDENTIALS_GRANT_TYPE,
+                true,
+            ),
+            (
+                CLIENT_CREDENTIALS_GRANT_TYPE,
+                TOKEN_EXCHANGE_GRANT_TYPE,
+                false,
+            ),
+            (TOKEN_EXCHANGE_GRANT_TYPE, TOKEN_EXCHANGE_GRANT_TYPE, true),
+            (
+                TOKEN_EXCHANGE_GRANT_TYPE,
+                CLIENT_CREDENTIALS_GRANT_TYPE,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                authorization_server_metadata_is_compatible(
+                    &authorization_server_metadata(&[advertised]),
+                    ISSUER,
+                    required,
+                ),
+                compatible,
+                "an issuer offering only {advertised} was misjudged for {required}"
+            );
+        }
+        assert!(authorization_server_metadata_is_compatible(
+            &authorization_server_metadata(&[
+                CLIENT_CREDENTIALS_GRANT_TYPE,
+                TOKEN_EXCHANGE_GRANT_TYPE
+            ]),
+            ISSUER,
+            TOKEN_EXCHANGE_GRANT_TYPE,
+        ));
     }
 
     #[test]

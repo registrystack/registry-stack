@@ -31,6 +31,7 @@ use pyo3::{
     IntoPyObjectExt,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -819,12 +820,42 @@ fn token_provider_from_json(value: &Value) -> Result<Arc<dyn TokenProvider>, Con
 /// auto-extracts Python `bytes` to `Vec<u8>`, so `src/lib.rs` passes it here
 /// as a genuine Rust value rather than folding it into `trusted_jwks` or
 /// `token`'s `serde_json::Value`.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn config_from_parts(
     base_url: &str,
     trusted_jwks: &Value,
     revoked_key_ids: Vec<String>,
     token: &Value,
+    request_timeout_seconds: Option<f64>,
+    connect_timeout_seconds: Option<f64>,
+    user_agent: Option<String>,
+    trusted_root_certificates: Option<Vec<u8>>,
+    max_response_bytes: Option<u64>,
+    max_metadata_bytes: Option<u64>,
+) -> Result<EvidenceClientConfig, ConfigError> {
+    config_from_parts_with_authorization(
+        base_url,
+        trusted_jwks,
+        revoked_key_ids,
+        token,
+        None,
+        request_timeout_seconds,
+        connect_timeout_seconds,
+        user_agent,
+        trusted_root_certificates,
+        max_response_bytes,
+        max_metadata_bytes,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn config_from_parts_with_authorization(
+    base_url: &str,
+    trusted_jwks: &Value,
+    revoked_key_ids: Vec<String>,
+    token: &Value,
+    authorization: Option<&Value>,
     request_timeout_seconds: Option<f64>,
     connect_timeout_seconds: Option<f64>,
     user_agent: Option<String>,
@@ -841,7 +872,16 @@ pub fn config_from_parts(
             )))
         })?;
 
-    let token_provider = token_provider_from_json(token)?;
+    let token_provider: Arc<dyn TokenProvider> = if let Some(authorization) = authorization {
+        if !token.is_null() {
+            return Err(ConfigError::Shape(ConversionError::new(
+                "configure exactly one of `token` or `authorization`",
+            )));
+        }
+        Arc::new(exchange_from_authorization_json(authorization)?)
+    } else {
+        token_provider_from_json(token)?
+    };
 
     let mut config =
         EvidenceClientConfig::new(base_url, token_provider, trusted_jwks, revoked_key_ids);
@@ -870,6 +910,23 @@ pub fn config_from_parts(
     }
 
     Ok(config)
+}
+
+pub fn exchange_from_authorization_json(
+    authorization: &Value,
+) -> Result<ExchangeAuthorization, ConfigError> {
+    let object = as_object(authorization, "`authorization`").map_err(ConfigError::Shape)?;
+    if object.len() != 1 {
+        return Err(ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        )));
+    }
+    let exchange = object.get("exchange").ok_or_else(|| {
+        ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        ))
+    })?;
+    exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
 
 /// The verified payload crosses to Python through this, never through
@@ -1677,6 +1734,58 @@ mod tests {
             Some(2048),
         )
         .expect("the configuration is well-shaped");
+    }
+
+    #[test]
+    fn config_from_parts_accepts_exchange_and_rejects_ambiguous_credentials() {
+        let authorization = serde_json::json!({"exchange": {
+            "client": {
+                "token_endpoint": "https://issuer.example/token",
+                "client_id": "test-client",
+                "client_key": generated_private_jwk_json(),
+                "resource": "urn:registry:evidence",
+                "scopes": ["evidence:invoke"]
+            },
+            "context": {
+                "issuer": "https://issuer.example",
+                "subject": "staff-1",
+                "audience": "urn:registry:evidence",
+                "generation": "verified-1",
+                "deadline_seconds": Utc::now().timestamp() + 3600
+            },
+            "first_party": {"key": generated_private_jwk_json(), "attributes": {"registry_actor_kind": "human"}}
+        }});
+        let token = Value::Null;
+        config_from_parts_with_authorization(
+            "https://evidence.example/",
+            &serde_json::json!({"keys": []}),
+            Vec::new(),
+            &token,
+            Some(&authorization),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("the verified exchange shape converts offline");
+        assert!(matches!(
+            config_from_parts_with_authorization(
+                "https://evidence.example/",
+                &serde_json::json!({"keys": []}),
+                Vec::new(),
+                &Value::String("ambiguous".into()),
+                Some(&authorization),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ),
+            Err(ConfigError::Shape(_))
+        ));
     }
 
     /// The scopes the binding reads are a list of strings, and a value of any

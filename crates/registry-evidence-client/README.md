@@ -74,6 +74,15 @@ async fn accept(
 
 ## Security Notes
 
+Profile-driven procedures can use `EvidenceClient::from_profile_with_authorization`
+with a context-bound `ExchangeAuthorization`. The profile must pin `oauth.resource`
+and `oauth.scopes`; its `clientId` and optional assertion audience, plus the
+discovered issuer and token endpoint, must match the exchange provider before
+any credential is acquired. The profile still governs service trust, selected
+definition expectations, and the retained verification context. Its
+`privateKey` reference is not loaded on this exchange path; the provider owns
+its client and assertion keys.
+
 - The published key set is discovery, not a trust anchor. Verification always
   uses the key set pinned at construction. Nothing here fetches keys at
   verification time, because a key set taken from the same origin as the

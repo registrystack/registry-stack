@@ -118,12 +118,91 @@ export type EvidenceTokenConfig =
   | { static: string }
   | { privateKeyJwt: PrivateKeyJwtConfig }
 
+/** A verified actor/grant generation with a bounded authorization lifetime. */
+export interface EvidenceExchangeContext {
+  issuer: string
+  subject: string
+  audience: string
+  generation: string
+  deadlineSeconds: number
+  grantId?: string
+}
+
+/**
+ * The client half of an exchange authorization.
+ *
+ * This is not a `PrivateKeyJwtConfig`, even though the two describe the same
+ * kind of client: an exchange is pinned to one resource and scope set, so both
+ * are required here, and the object is read by the shared exchange
+ * configuration parser rather than by the binding's own reader, so its timeout
+ * members are the full-word ones that parser accepts. State at most one of
+ * `requestTimeoutMilliseconds` and `requestTimeoutSeconds`, and at most one of
+ * `connectTimeoutMilliseconds` and `connectTimeoutSeconds`; naming both of a
+ * pair is refused.
+ */
+export interface EvidenceExchangeClientConfig {
+  tokenEndpoint: string
+  clientId: string
+  /** The client's private key, as a JWK. */
+  clientKey: Readonly<Record<string, unknown>>
+  /**
+   * The audience of the client assertion, when the authorization server
+   * expects something other than its own token endpoint.
+   */
+  audience?: string
+  /**
+   * The RFC 8707 resource indicator the token is requested for: the resource
+   * server's registered identifier, not a URL to fetch.
+   */
+  resource: string
+  /**
+   * The scopes requested for the token, sent as one space-delimited `scope`
+   * parameter. A requested scope may narrow the client's registered
+   * permission set; it can never widen it.
+   */
+  scopes: ReadonlyArray<string>
+  assertionLifetimeSeconds?: number
+  refreshMarginSeconds?: number
+  requestTimeoutMilliseconds?: number
+  requestTimeoutSeconds?: number
+  connectTimeoutMilliseconds?: number
+  connectTimeoutSeconds?: number
+  userAgent?: string
+  /** Additional trust roots for the token endpoint, as a PEM bundle. */
+  trustedRootCertificates?: string
+}
+
+/** The owning authority a remote-sourced exchange obtains assertions from. */
+export interface EvidenceExchangeRemoteSourceConfig {
+  endpoint: string
+  bootstrap: EvidenceExchangeClientConfig
+  bootstrapResource: string
+  bootstrapScope: string
+  requestTimeoutMilliseconds?: number
+  requestTimeoutSeconds?: number
+  connectTimeoutMilliseconds?: number
+  connectTimeoutSeconds?: number
+  userAgent?: string
+  /** Additional trust roots for the authority, as a PEM bundle. */
+  trustedRootCertificates?: string
+}
+
+export type EvidenceExchangeAuthorizationConfig = {
+  client: EvidenceExchangeClientConfig
+  context: EvidenceExchangeContext
+} & (
+  | { firstParty: { key: Readonly<Record<string, unknown>>, attributes: Readonly<Record<string, unknown>> }, remote?: never }
+  | { firstParty?: never, remote: EvidenceExchangeRemoteSourceConfig }
+)
+
 /** The configuration `new EvidenceClient(...)` reads. */
 export interface EvidenceClientConfig {
   baseUrl: string
   trustedJwks: TrustedJwks
   revokedKeyIds: ReadonlyArray<string>
-  token: EvidenceTokenConfig
+  /** Configure exactly one of `token` or `authorization`. */
+  token?: EvidenceTokenConfig
+  authorization?: { exchange: EvidenceExchangeAuthorizationConfig }
   requestTimeoutMs?: number
   connectTimeoutMs?: number
   userAgent?: string
@@ -154,6 +233,10 @@ export declare class EvidenceClient extends NativeEvidenceClient {
    * the JavaScript wrapper.
    */
   static fromProfile(path: string, privateKeyJwk?: Readonly<Record<string, unknown>>): EvidenceClient
+  static fromProfileWithAuthorization(
+    path: string,
+    authorization: { exchange: EvidenceExchangeAuthorizationConfig },
+  ): EvidenceClient
 }
 
 /**

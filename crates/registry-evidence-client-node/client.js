@@ -216,6 +216,16 @@ class EvidenceClient extends native.EvidenceClient {
       throw normalize(error);
     }
   }
+
+  static fromProfileWithAuthorization(path, authorization) {
+    try {
+      const client = native.EvidenceClient.fromProfileWithAuthorization(path, authorization);
+      Object.setPrototypeOf(client, this.prototype);
+      return client;
+    } catch (error) {
+      throw normalize(error);
+    }
+  }
 }
 
 class SdJwtVcBatchResponse extends native.SdJwtVcBatchResponse {

@@ -18,6 +18,7 @@ use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::{Mutex, RwLock};
+use url::Url;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -32,6 +33,10 @@ const MAX_CONTEXT_TEXT_BYTES: usize = 512;
 const MAX_ATTRIBUTES_BYTES: usize = 4096;
 const MAX_ASSERTION_BYTES: usize = 32 * 1024;
 const MAX_ASSERTION_LIFETIME_SECONDS: i64 = 60;
+/// Longest any exchanged token remains cached, even when its verified outer
+/// context lasts longer or the token issuer states no lifetime.
+const MAX_EXCHANGE_CACHE_SECONDS: u64 =
+    super::private_key_jwt::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS as u64;
 const REFRESH_MARGIN: Duration = Duration::from_secs(5);
 const MAX_REMOTE_ASSERTION_RESPONSE_BYTES: u64 = 40 * 1024;
 
@@ -107,11 +112,12 @@ impl ExchangeContext {
         deadline: i64,
         grant_id: Option<String>,
     ) -> Result<Self, TokenError> {
+        let now = now_seconds()?;
         if ![&issuer, &subject, &audience, &generation]
             .into_iter()
             .all(|value| valid_text(value))
             || grant_id.as_ref().is_some_and(|value| !valid_text(value))
-            || deadline <= now_seconds()?
+            || deadline <= now
         {
             return Err(TokenError::Invalid {
                 reason: "the verified exchange context is incomplete or expired",
@@ -426,6 +432,44 @@ pub struct ExchangeAuthorization {
 }
 
 impl ExchangeAuthorization {
+    /// Apply DNS-pinned fetch rules before this provider joins a
+    /// discovery-driven client. Any token obtained under the prior policy is
+    /// discarded, so a previously used provider cannot bypass the new rules.
+    #[must_use]
+    pub fn with_fetch_url_policy(mut self, policy: crate::FetchUrlPolicy) -> Self {
+        self.exchange.set_fetch_url_policy(policy);
+        self.cached = RwLock::new(None);
+        // Discarding that token also returns the one exchange a non-renewable
+        // context allows. This method consumes the provider, so the client
+        // built from what it returns still performs at most one exchange, and
+        // it performs that one under the policy just applied.
+        self.refresh_lock = Mutex::new(false);
+        self
+    }
+
+    /// Compare the immutable exchange target and requested authority with a
+    /// profile and the service's freshly checked authorization metadata.
+    /// No token is acquired while making this comparison.
+    #[must_use]
+    pub fn matches_discovered_binding(
+        &self,
+        client_id: &str,
+        token_endpoint: &Url,
+        issuer: &str,
+        assertion_audience: Option<&str>,
+        resource: &str,
+        scopes: &[String],
+    ) -> bool {
+        self.context.audience == issuer
+            && self.exchange.matches_discovered_binding(
+                client_id,
+                token_endpoint,
+                assertion_audience,
+                resource,
+                scopes,
+            )
+    }
+
     pub fn first_party(
         exchange: PrivateKeyJwt,
         context: ExchangeContext,
@@ -584,6 +628,29 @@ impl ExchangeAuthorization {
         }
         Ok(())
     }
+
+    /// The held token, when it is still one this provider may hand out.
+    ///
+    /// The refresh margin is the room to obtain a replacement before a token
+    /// dies in flight. A provider that is not renewable has no replacement to
+    /// reach for: it holds the one token its one exchange produced. Withholding
+    /// that token over the closing seconds of a short issuer lifetime does not
+    /// protect the request, it is the only thing that fails it. So the margin
+    /// applies where a refresh is available, and elsewhere the token serves
+    /// until it actually expires.
+    async fn held_token(&self, now: Instant) -> Option<BearerToken> {
+        let margin = if self.renewable {
+            REFRESH_MARGIN
+        } else {
+            Duration::ZERO
+        };
+        self.cached
+            .read()
+            .await
+            .as_ref()
+            .filter(|entry| entry.expires_at.saturating_duration_since(now) > margin)
+            .map(|entry| entry.token.clone())
+    }
 }
 
 #[async_trait]
@@ -593,38 +660,45 @@ impl TokenProvider for ExchangeAuthorization {
             return Err(TokenError::Unavailable);
         }
         let now = Instant::now();
-        if let Some(token) = self
-            .cached
-            .read()
-            .await
-            .as_ref()
-            .filter(|entry| entry.expires_at.saturating_duration_since(now) > REFRESH_MARGIN)
-            .map(|entry| entry.token.clone())
-        {
+        if let Some(token) = self.held_token(now).await {
             return Ok(token);
         }
         let mut attempted = self.refresh_lock.lock().await;
         let now = Instant::now();
-        if let Some(token) = self
-            .cached
-            .read()
-            .await
-            .as_ref()
-            .filter(|entry| entry.expires_at.saturating_duration_since(now) > REFRESH_MARGIN)
-            .map(|entry| entry.token.clone())
-        {
+        if let Some(token) = self.held_token(now).await {
             return Ok(token);
         }
         if !self.renewable && *attempted {
             return Err(TokenError::Unavailable);
         }
         // First-party verification is a snapshot of host-owned source facts.
-        // A failed or uncacheable exchange must also require a new snapshot.
+        // A failed exchange must also require a new snapshot.
         *attempted = true;
         let wall_now = now_seconds()?;
         if wall_now >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
+        // The verified context deadline bounds every token this provider hands
+        // out. A non-renewable, first-party exchange also uses it as the bound
+        // for a token whose issuer states no lifetime, so one verified context
+        // can serve the several requests an operation makes. A renewable remote
+        // source must instead fetch a fresh assertion on the next request: with
+        // no issuer lifetime there is no safe refresh instant, and retaining the
+        // token until the outer context deadline would bypass the authority's
+        // current grant check. The outer context may legitimately last longer
+        // than the token-cache ceiling, so calculate its remaining lifetime in
+        // checked form and clamp only the cache deadline.
+        let context_remaining = self
+            .context
+            .deadline
+            .checked_sub(wall_now)
+            .and_then(|seconds| u64::try_from(seconds).ok())
+            .ok_or(TokenError::Unavailable)?;
+        let context_cache_deadline = now
+            .checked_add(Duration::from_secs(
+                context_remaining.min(MAX_EXCHANGE_CACHE_SECONDS),
+            ))
+            .ok_or(TokenError::Unavailable)?;
         let assertion = self.source.assertion(&self.context).await?;
         // The authority may issue this assertion after waiting on HTTP or its
         // current grant check. Compare iat to the time of receipt, not the time
@@ -634,10 +708,18 @@ impl TokenProvider for ExchangeAuthorization {
         if now_seconds()? >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
-        let deadline = acquired.expires_at.map(|issued| {
-            issued.min(now + Duration::from_secs((self.context.deadline - wall_now) as u64))
-        });
-        if let Some(expires_at) = deadline {
+        // An issuer that states a lifetime is believed about it, including
+        // when it states one that has already run out: `PrivateKeyJwt` reports
+        // that as no deadline at all, and a credential the issuer calls spent
+        // is used once and dropped. The context deadline answers an issuer's
+        // silence, never an issuer's own accounting.
+        let expires_at = match acquired.expires_at {
+            Some(issued) => Some(issued.min(context_cache_deadline)),
+            None if acquired.lifetime_stated => None,
+            None if self.renewable => None,
+            None => Some(context_cache_deadline),
+        };
+        if let Some(expires_at) = expires_at {
             *self.cached.write().await = Some(CachedExchange {
                 token: acquired.token.clone(),
                 expires_at,
@@ -718,11 +800,147 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    async fn discovered_binding_requires_every_profile_and_issuer_pin() {
+        let server = MockServer::start().await;
+        let token_endpoint = Url::parse(&format!("{}/token", server.uri())).unwrap();
+        let authorization = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:registry:evidence", &["evidence:invoke"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["evidence:invoke"]),
+        )
+        .unwrap();
+        let matches = |client_id: &str,
+                       endpoint: &Url,
+                       issuer: &str,
+                       audience: Option<&str>,
+                       resource: &str,
+                       scopes: &[String]| {
+            authorization
+                .matches_discovered_binding(client_id, endpoint, issuer, audience, resource, scopes)
+        };
+        let scopes = vec!["evidence:invoke".to_owned()];
+        let other_endpoint = Url::parse("https://other.example/token").unwrap();
+        assert!(matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &scopes,
+        ));
+        assert!(!matches(
+            "other-client",
+            &token_endpoint,
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &other_endpoint,
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://other.example",
+            None,
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            Some("https://other.example/token"),
+            "urn:registry:evidence",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            None,
+            "urn:registry:other",
+            &scopes
+        ));
+        assert!(!matches(
+            "portal-client",
+            &token_endpoint,
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &["other:scope".to_owned()]
+        ));
+    }
+
+    #[tokio::test]
+    async fn discovered_binding_reads_the_token_endpoint_as_a_url() {
+        // A published token endpoint is a URL, not a byte string. An issuer may
+        // state a default port or an uppercase host and mean the endpoint the
+        // profile configured, so the comparison is made between URLs. Refusing
+        // the spelling would refuse a correctly configured deployment.
+        let configured = Url::parse("https://issuer.example:443/token").unwrap();
+        let authorization = ExchangeAuthorization::first_party(
+            PrivateKeyJwt::new(
+                super::super::private_key_jwt::PrivateKeyJwtConfig::new(
+                    configured,
+                    "portal-client",
+                    key(),
+                )
+                .with_resource("urn:registry:evidence")
+                .with_scopes(["evidence:invoke"]),
+            )
+            .unwrap(),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["evidence:invoke"]),
+        )
+        .unwrap();
+        let scopes = vec!["evidence:invoke".to_owned()];
+        for spelling in [
+            "https://issuer.example/token",
+            "https://issuer.example:443/token",
+            "https://ISSUER.example/token",
+        ] {
+            assert!(
+                authorization.matches_discovered_binding(
+                    "portal-client",
+                    &Url::parse(spelling).unwrap(),
+                    "https://issuer.example",
+                    None,
+                    "urn:registry:evidence",
+                    &scopes,
+                ),
+                "{spelling} was refused as a different token endpoint"
+            );
+        }
+        assert!(!authorization.matches_discovered_binding(
+            "portal-client",
+            &Url::parse("https://issuer.example/other").unwrap(),
+            "https://issuer.example",
+            None,
+            "urn:registry:evidence",
+            &scopes,
+        ));
+    }
+
     async fn endpoint(server: &MockServer, expires_in: Option<i64>) {
+        endpoint_stating(server, expires_in.map(|value| json!(value))).await;
+    }
+
+    /// Mount a token endpoint whose `expires_in` member is absent, present and
+    /// JSON null, or present and a number. The three are distinct statements
+    /// about a credential's lifetime, so a test needs to make each of them.
+    async fn endpoint_stating(server: &MockServer, expires_in: Option<serde_json::Value>) {
         let mut body = json!({"access_token":"issued-credential", "token_type":"Bearer",
             "issued_token_type":"urn:ietf:params:oauth:token-type:access_token", "scope":"records:read"});
         if let Some(value) = expires_in {
-            body["expires_in"] = json!(value);
+            body["expires_in"] = value;
         }
         Mock::given(method("POST"))
             .and(path("/token"))
@@ -774,7 +992,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_issuer_lifetime_requires_fresh_host_context_after_first_exchange() {
+    async fn no_issuer_lifetime_is_bounded_by_the_verified_context_deadline() {
+        // RFC 6749 section 5.1 makes `expires_in` optional, so an issuer that
+        // states no lifetime is a legitimate deployment, not a broken one. A
+        // caller performs more than one request inside one verified context,
+        // so the token has to survive between them. The verified context
+        // deadline is the bound this provider already refuses past, and it is
+        // the one such a token is held to.
         let server = MockServer::start().await;
         endpoint(&server, None).await;
         let first = ExchangeAuthorization::first_party(
@@ -783,12 +1007,183 @@ mod tests {
             source(&["records:read"]),
         )
         .unwrap();
-        first.bearer_token().await.unwrap();
+        let held = first.bearer_token().await.unwrap();
+        let again = first.bearer_token().await.unwrap();
+        assert_eq!(
+            held.authorization_header_value(),
+            again.authorization_header_value()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn short_issuer_lifetime_still_serves_the_second_request_of_one_operation() {
+        // A published-contracts operation asks this provider twice: once for
+        // the definitions and once for the assertion. An issuer is entitled to
+        // state a lifetime shorter than the refresh margin, and a first-party
+        // provider has no second exchange to reach for. The token it holds has
+        // to answer both requests for as long as it is actually valid.
+        let server = MockServer::start().await;
+        endpoint(&server, Some(3)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        let held = provider.bearer_token().await.unwrap();
+        let again = provider.bearer_token().await.unwrap();
+        assert_eq!(
+            held.authorization_header_value(),
+            again.authorization_header_value()
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stated_lifetime_already_elapsed_is_never_cached() {
+        // `expires_in: 0` states that the credential is spent, and
+        // `PrivateKeyJwt` maps that to the same absent deadline it uses for an
+        // omitted lifetime. The two are not the same here: the verified context
+        // deadline answers an issuer's silence, never an issuer saying the
+        // token has already run out.
+        for expires_in in [0, -1] {
+            let server = MockServer::start().await;
+            endpoint(&server, Some(expires_in)).await;
+            let provider = ExchangeAuthorization::first_party(
+                exchange(&server, "urn:records", &["records:read"]),
+                context("person-1", now_seconds().unwrap() + 120),
+                source(&["records:read"]),
+            )
+            .unwrap();
+            provider.bearer_token().await.unwrap();
+            assert!(
+                matches!(provider.bearer_token().await, Err(TokenError::Unavailable)),
+                "expires_in {expires_in} was cached"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_null_lifetime_is_an_issuer_speaking_not_an_issuer_silent() {
+        // `"expires_in": null` is malformed against RFC 6749 section 5.1 and
+        // common all the same. The member is present, so the issuer did speak
+        // about this credential's lifetime, and what it said names no usable
+        // one. That is the issuer's own accounting, not the silence the
+        // verified context deadline answers, so the credential is used once
+        // and dropped.
+        let server = MockServer::start().await;
+        endpoint_stating(&server, Some(serde_json::Value::Null)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
         assert!(matches!(
-            first.bearer_token().await,
+            provider.bearer_token().await,
             Err(TokenError::Unavailable)
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn discovered_binding_reads_scopes_as_the_set_they_are() {
+        // RFC 6749 section 3.3 makes the scope parameter a set carried as a
+        // space-delimited list, and both sides of this comparison refuse a
+        // repeated value where they are built. A profile naming the same
+        // scopes in another order than the provider was configured with names
+        // the same request, so refusing that spelling would refuse a correctly
+        // configured deployment.
+        let server = MockServer::start().await;
+        let token_endpoint = Url::parse(&format!("{}/token", server.uri())).unwrap();
+        let authorization = ExchangeAuthorization::first_party(
+            exchange(
+                &server,
+                "urn:registry:evidence",
+                &["records:read", "evidence:invoke"],
+            ),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read", "evidence:invoke"]),
+        )
+        .unwrap();
+        let matches = |scopes: &[String]| {
+            authorization.matches_discovered_binding(
+                "portal-client",
+                &token_endpoint,
+                "https://issuer.example",
+                None,
+                "urn:registry:evidence",
+                scopes,
+            )
+        };
+        assert!(matches(&[
+            "records:read".to_owned(),
+            "evidence:invoke".to_owned(),
+        ]));
+        assert!(matches(&[
+            "evidence:invoke".to_owned(),
+            "records:read".to_owned(),
+        ]));
+        assert!(!matches(&["records:read".to_owned()]));
+        assert!(!matches(&[
+            "evidence:invoke".to_owned(),
+            "records:read".to_owned(),
+            "other:scope".to_owned(),
+        ]));
+    }
+
+    #[tokio::test]
+    async fn a_context_deadline_beyond_the_cache_ceiling_is_accepted_safely() {
+        // The outer verified authorization and an access-token cache have
+        // different lifetimes. Casework grants may outlive the one-day cache
+        // ceiling, and even an extreme valid deadline must not overflow the
+        // monotonic cache calculation or extend the cached token past a day.
+        let server = MockServer::start().await;
+        endpoint(&server, None).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", i64::MAX),
+            source(&["records:read"]),
+        )
+        .unwrap();
+
+        provider.bearer_token().await.unwrap();
+        let remaining = provider
+            .cached
+            .read()
+            .await
+            .as_ref()
+            .unwrap()
+            .expires_at
+            .saturating_duration_since(Instant::now());
+        assert!(remaining <= Duration::from_secs(MAX_EXCHANGE_CACHE_SECONDS));
+        provider.bearer_token().await.unwrap();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_new_fetch_policy_rearms_the_one_exchange_it_discards() {
+        // Applying the client's DNS-pinned rules discards any token obtained
+        // under the previous ones. A discarded token must not also consume the
+        // single exchange a first-party context allows, or the client built
+        // from this provider could never obtain one under the rules it just
+        // applied.
+        let server = MockServer::start().await;
+        endpoint(&server, Some(300)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        let provider = provider.with_fetch_url_policy(crate::FetchUrlPolicy::dev());
+        provider.bearer_token().await.unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -924,6 +1319,37 @@ mod tests {
             Err(TokenError::Unavailable)
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn lifetime_less_grant_token_requires_fresh_authority_check() {
+        // A remote authority source is renewable specifically so every refresh
+        // can re-check whether the grant remains active. Without an issuer
+        // lifetime there is no safe refresh instant, so the next request must
+        // obtain a fresh assertion instead of keeping the token until the
+        // immutable outer context deadline.
+        let server = MockServer::start().await;
+        endpoint(&server, None).await;
+        let grant = ExchangeContext::grant(
+            "https://casework.example",
+            "agent-1",
+            "https://issuer.example",
+            "grant-generation-1",
+            now_seconds().unwrap() + 120,
+            "grant-one",
+        )
+        .unwrap();
+        let provider = ExchangeAuthorization::from_authority(
+            exchange(&server, "urn:records", &["records:read"]),
+            grant,
+            Arc::new(GrantAuthority),
+        )
+        .unwrap();
+
+        provider.bearer_token().await.unwrap();
+        provider.bearer_token().await.unwrap();
+
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[async_trait]

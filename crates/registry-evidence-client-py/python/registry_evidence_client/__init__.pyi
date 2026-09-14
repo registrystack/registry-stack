@@ -369,18 +369,24 @@ class EvidenceClient:
         base_url: str,
         trusted_jwks: Any,
         revoked_key_ids: Sequence[str],
-        token: Any,
+        token: Any = ...,
         request_timeout_seconds: Optional[float] = ...,
         connect_timeout_seconds: Optional[float] = ...,
         user_agent: Optional[str] = ...,
         trusted_root_certificates: Optional[bytes] = ...,
         max_response_bytes: Optional[int] = ...,
         max_metadata_bytes: Optional[int] = ...,
+        authorization: Optional[Mapping[str, Any]] = ...,
     ) -> None: ...
     @staticmethod
     def from_profile(
         profile_path: str,
         private_key_jwk: Optional[Mapping[str, Any]] = ...,
+    ) -> "EvidenceClient": ...
+    @staticmethod
+    def from_profile_with_authorization(
+        profile_path: str,
+        authorization: Mapping[str, Any],
     ) -> "EvidenceClient": ...
     def refresh_metadata(self) -> None: ...
     def request(

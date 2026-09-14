@@ -18,6 +18,7 @@ use registry_evidence_client::{
     SubjectBindingReceipt, SubjectExpectations, SubjectRequest, TokenError, TokenProvider,
 };
 use registry_platform_crypto::PrivateJwk;
+use registry_platform_httputil::{exchange_authorization_from_json, ExchangeAuthorization};
 use serde_json::{Map, Value};
 use url::Url;
 
@@ -681,6 +682,14 @@ fn private_key_jwt_provider_from_json(value: &Value) -> Result<PrivateKeyJwt, Co
 fn token_provider_from_json(
     object: &Map<String, Value>,
 ) -> Result<Arc<dyn TokenProvider>, ConfigError> {
+    if let Some(authorization) = object.get("authorization") {
+        if object.contains_key("token") {
+            return Err(ConfigError::Shape(ConversionError::new(
+                "configure exactly one of `token` or `authorization`",
+            )));
+        }
+        return Ok(Arc::new(exchange_from_authorization_json(authorization)?));
+    }
     let token = object
         .get("token")
         .ok_or_else(|| ConversionError::new("`token` must be present"))
@@ -711,6 +720,23 @@ fn token_provider_from_json(
     Err(ConfigError::Shape(ConversionError::new(
         "`token` must carry exactly one of `static` or `privateKeyJwt`",
     )))
+}
+
+pub fn exchange_from_authorization_json(
+    authorization: &Value,
+) -> Result<ExchangeAuthorization, ConfigError> {
+    let object = as_object(authorization, "`authorization`").map_err(ConfigError::Shape)?;
+    if object.len() != 1 {
+        return Err(ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        )));
+    }
+    let exchange = object.get("exchange").ok_or_else(|| {
+        ConfigError::Shape(ConversionError::new(
+            "`authorization` must carry exactly one `exchange`",
+        ))
+    })?;
+    exchange_authorization_from_json(exchange).map_err(ConfigError::from)
 }
 
 /// Build the configuration [`registry_evidence_client::EvidenceClient::new`]
@@ -1522,6 +1548,39 @@ mod tests {
             },
         });
         config_from_json(&config_json).expect("the config converts");
+    }
+
+    #[test]
+    fn an_exchange_authorization_converts_and_cannot_share_a_token() {
+        let key = generated_client_key_json("exchange-key");
+        let mut config = serde_json::json!({
+            "baseUrl": "https://evidence.example.org",
+            "trustedJwks": one_key_jwks_json(),
+            "revokedKeyIds": [],
+            "authorization": {"exchange": {
+                "client": {
+                    "tokenEndpoint": "https://issuer.example.org/token",
+                    "clientId": "example-client",
+                    "clientKey": key,
+                    "resource": "urn:registry:evidence",
+                    "scopes": ["evidence:invoke"]
+                },
+                "context": {
+                    "issuer": "https://issuer.example.org",
+                    "subject": "staff-1",
+                    "audience": "urn:registry:evidence",
+                    "generation": "verified-1",
+                    "deadlineSeconds": Utc::now().timestamp() + 3600
+                },
+                "firstParty": {"key": generated_client_key_json("assertion-key"), "attributes": {"registry_actor_kind": "human"}}
+            }}
+        });
+        config_from_json(&config).expect("the verified exchange shape converts offline");
+        config["token"] = serde_json::json!({"static":"ambiguous"});
+        assert!(matches!(
+            config_from_json(&config),
+            Err(ConfigError::Shape(_))
+        ));
     }
 
     /// The client key an adopter holds is the one `evidencectl` generated for

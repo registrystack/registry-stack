@@ -51,6 +51,9 @@ use registry_evidence_client::{
     EVIDENCE_DEFINITIONS_SCHEMA_V1,
 };
 use registry_platform_crypto::{sign, verify, PrivateJwk, PublicJwk};
+use registry_platform_httputil::{
+    ExchangeAuthorization, ExchangeContext, FirstPartyAssertionSource,
+};
 use registry_thunderid_tooling::{
     container::Session,
     description::{
@@ -837,6 +840,131 @@ async fn a_local_profile_completes_first_use_then_matches_the_opaque_receipt() {
         reviewed_error,
         EvidenceClientError::Verification(VerificationError::Policy)
     );
+}
+
+#[tokio::test]
+async fn a_pinned_progressive_profile_exchanges_staff_context_before_verified_evidence() {
+    let issuer = start_token_issuer().await;
+    let deployment = start_trusting(resolved_source_answer(), Some(&issuer.origin)).await;
+    let candidate = serde_json::to_value(
+        deployment
+            .client_using(issuer.provider())
+            .discover()
+            .await
+            .expect("the fixture publishes its reviewed candidate"),
+    )
+    .unwrap();
+    let definition = &candidate["definitions"][0];
+    let profile = registry_evidence_client::EvidenceClientProfile::from_slice(
+        &serde_json::to_vec(&json!({
+            "schema": "registry.evidence-client-profile/v1",
+            "baseUrl": deployment.base_url.as_str().trim_end_matches('/'),
+            "clientId": CLIENT_ID,
+            "privateKey": {"source":"environment", "variable":"UNUSED_EXCHANGE_PROFILE_KEY"},
+            "trust": {"type":"local-loopback-discovery"},
+            "contracts": {"type":"published"},
+            "oauth": {"resource":TOKEN_AUDIENCE, "scopes":["evidence:invoke"]},
+            "expected": {"definitions": {"adult-status": {
+                "configurationRevision":definition["configurationRevision"],
+                "evidenceType":definition["evidenceType"],
+                "purpose":definition["purpose"],
+                "assuranceProfile":candidate["assuranceProfile"],
+                "responseFormat":"signed-jws"
+            }}}
+        }))
+        .unwrap(),
+    )
+    .expect("the profile pins the selected definition");
+    let exchange = |resource: &str| {
+        let provider = PrivateKeyJwt::new(
+            PrivateKeyJwtConfig::new(
+                issuer.token_endpoint.clone(),
+                CLIENT_ID,
+                issuer.client_key.clone(),
+            )
+            .with_resource(resource)
+            .with_scopes(["evidence:invoke"]),
+        )
+        .unwrap();
+        let context = ExchangeContext::first_party(
+            "https://portal.example",
+            "person-1",
+            &issuer.origin,
+            "verified-1",
+            Utc::now().timestamp() + 120,
+        )
+        .unwrap();
+        let attributes =
+            json!({"registry_actor_kind":"human", "identity":{"person_reference":"person-1"}})
+                .as_object()
+                .unwrap()
+                .clone();
+        let source = FirstPartyAssertionSource::new(
+            issuer.client_key.clone(),
+            attributes,
+            vec!["evidence:invoke".into()],
+        )
+        .unwrap();
+        ExchangeAuthorization::first_party(provider, context, source).unwrap()
+    };
+    let request = || {
+        AudienceScopedRequest::new(
+            "adult-status",
+            BTreeMap::from([
+                (
+                    "given_name".to_owned(),
+                    SelectorValue::from("synthetic-reader"),
+                ),
+                (
+                    "family_name".to_owned(),
+                    SelectorValue::from("synthetic-reader"),
+                ),
+                ("birth_date".to_owned(), SelectorValue::from("2000-01-01")),
+            ]),
+        )
+    };
+    let before = issuer.issued_credential_count();
+    let mut unpinned = profile.clone();
+    unpinned.oauth = None;
+    assert!(matches!(
+        EvidenceClient::from_profile_with_authorization(unpinned, exchange(TOKEN_AUDIENCE)),
+        Err(EvidenceClientError::Configuration { .. })
+    ));
+    assert_eq!(issuer.issued_credential_count(), before);
+    let mismatched = EvidenceClient::from_profile_with_authorization(
+        profile.clone(),
+        exchange("urn:registry:other"),
+    )
+    .expect("the mismatch is checked against discovery, not guessed at construction");
+    assert!(matches!(
+        mismatched.request(request()).await,
+        Err(EvidenceClientError::Configuration { .. })
+    ));
+    assert_eq!(
+        issuer.issued_credential_count(),
+        before,
+        "a mismatched resource must fail before token acquisition"
+    );
+
+    let client = EvidenceClient::from_profile_with_authorization(profile, exchange(TOKEN_AUDIENCE))
+        .expect("the exchange-backed profile constructs");
+    let verified = client
+        .request(request())
+        .await
+        .expect("one exchanged credential carries a verified progressive request");
+    let VerifiedAudienceScopedEvidence::Assertion(verified) = verified else {
+        panic!("the profile pinned a signed JWS response");
+    };
+    assert_eq!(verified.value().unwrap(), &PublicValue::Boolean(true));
+    let replay = verified
+        .retained_verification()
+        .verify_as_of(verified.assertion_bytes(), Utc::now())
+        .expect("the exact signed bytes verify offline with their retained context");
+    assert_eq!(
+        replay.evidence().request_nonce,
+        verified.evidence().request_nonce
+    );
+    assert_eq!(issuer.issued_credential_count(), before + 1);
 }
 
 /// A credential is acquired once and reused while it has life left. Two whole
@@ -1632,7 +1760,9 @@ impl ClientCredentialsResponder {
         let form = url::form_urlencoded::parse(&request.body)
             .into_owned()
             .collect::<HashMap<_, _>>();
-        if form.get("grant_type").map(String::as_str) != Some("client_credentials")
+        let exchange = form.get("grant_type").map(String::as_str)
+            == Some("urn:ietf:params:oauth:grant-type:token-exchange");
+        if !exchange && form.get("grant_type").map(String::as_str) != Some("client_credentials")
             || form.get("client_assertion_type").map(String::as_str)
                 != Some("urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
             || !matches!(
@@ -1645,6 +1775,34 @@ impl ClientCredentialsResponder {
             )
         {
             return false;
+        }
+        if exchange {
+            let Some(subject) = form.get("subject_token") else {
+                return false;
+            };
+            let Some(payload) = subject.split('.').nth(1) else {
+                return false;
+            };
+            let Ok(claims): Result<Value, _> = URL_SAFE_NO_PAD
+                .decode(payload)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .ok_or(())
+            else {
+                return false;
+            };
+            if claims["iss"] != "https://portal.example"
+                || claims["sub"] != "person-1"
+                || claims["aud"] != self.origin
+                || claims["scope"] != "evidence:invoke"
+                || claims["registry_actor_kind"] != "human"
+                || form.get("subject_token_type").map(String::as_str)
+                    != Some("urn:ietf:params:oauth:token-type:jwt")
+                || form.get("requested_token_type").map(String::as_str)
+                    != Some("urn:ietf:params:oauth:token-type:access_token")
+            {
+                return false;
+            }
         }
         let Some(assertion) = form.get("client_assertion") else {
             return false;
@@ -1737,12 +1895,20 @@ impl wiremock::Respond for ClientCredentialsResponder {
         if !self.assertion_is_valid(request) {
             return Self::invalid_client();
         }
+        let exchange = url::form_urlencoded::parse(&request.body).any(|(key, value)| {
+            key == "grant_type" && value == "urn:ietf:params:oauth:grant-type:token-exchange"
+        });
         self.issued.fetch_add(1, Ordering::SeqCst);
-        ResponseTemplate::new(200).set_body_json(json!({
+        let mut body = json!({
             "access_token":self.access_token(),
             "token_type":"Bearer",
             "expires_in":ISSUED_TOKEN_LIFETIME_SECONDS,
-        }))
+        });
+        if exchange {
+            body["scope"] = json!("evidence:invoke");
+            body["issued_token_type"] = json!("urn:ietf:params:oauth:token-type:access_token");
+        }
+        ResponseTemplate::new(200).set_body_json(body)
     }
 }
 
@@ -1765,7 +1931,7 @@ async fn start_token_issuer() -> TokenIssuer {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "issuer":origin,
             "token_endpoint":token_endpoint.as_str(),
-            "grant_types_supported":["client_credentials"],
+            "grant_types_supported":["client_credentials", "urn:ietf:params:oauth:grant-type:token-exchange"],
             "token_endpoint_auth_methods_supported":["private_key_jwt"],
         })))
         .mount(&server)

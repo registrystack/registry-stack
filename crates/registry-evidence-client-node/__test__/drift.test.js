@@ -40,7 +40,7 @@ const ASYNC_METHODS = [
   'requestAndVerifyBatch',
 ];
 
-const STATIC_METHODS = ['fromProfile'];
+const STATIC_METHODS = ['fromProfile', 'fromProfileWithAuthorization'];
 
 function ownMethodNames(prototype) {
   return Object.getOwnPropertyNames(prototype)
@@ -83,6 +83,27 @@ function configurationKeysRead(functionName) {
     keys.add(match[1] ?? match[2]);
   }
   return [...keys].sort();
+}
+
+// The exchange configuration members `client.d.ts` names by hand are read by
+// `exchange_config.rs` in `registry-platform-httputil`, not by `src/convert.rs`:
+// the binding hands that object through unchanged. That parser is
+// `deny_unknown_fields` over `rename_all = "camelCase"`, so a member the stub
+// declares but the parser does not accept type-checks and then fails at run
+// time as a malformed configuration, and a member the parser accepts but the
+// stub omits is unreachable for a TypeScript caller. The struct's own fields
+// are the list.
+function exchangeParserFields(structName) {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'registry-platform-httputil', 'src', 'client', 'exchange_config.rs'),
+    'utf8',
+  );
+  const start = source.indexOf(`struct ${structName} {`);
+  assert.notEqual(start, -1, `${structName} is missing from exchange_config.rs`);
+  const body = source.slice(start, source.indexOf('\n}\n', start));
+  return [...body.matchAll(/^    (\w+): /gm)]
+    .map((match) => match[1].replace(/_(\w)/g, (_, letter) => letter.toUpperCase()))
+    .sort();
 }
 
 test('every native EvidenceClient method is accounted for as sync or async', () => {
@@ -198,13 +219,13 @@ test('the handwritten request-batch input types preserve the common and item fie
 test('the handwritten client configuration names exactly the keys the binding reads', () => {
   // `token` is read by `token_provider_from_json`, which `config_from_json`
   // delegates to, so it is added here rather than found in that body.
-  const read = [...configurationKeysRead('config_from_json'), 'token'].sort();
+  const read = [...configurationKeysRead('config_from_json'), 'token', 'authorization'].sort();
   assert.deepEqual(interfaceFields('EvidenceClientConfig').sort(), read);
 });
 
 test('the handwritten token configuration covers exactly the sources the binding accepts', () => {
   const sources = configurationKeysRead('token_provider_from_json').filter(
-    (key) => key !== 'token',
+    (key) => !['token', 'authorization', 'exchange'].includes(key),
   );
   const declaration = clientDeclaration();
   const start = declaration.indexOf('export type EvidenceTokenConfig =');
@@ -267,4 +288,25 @@ test('client.d.ts declares no EvidenceClientError field client.js never sets', (
       `client.d.ts declares '${field}' but client.js's EvidenceClientError never sets it`,
     );
   }
+});
+
+test('the handwritten exchange client configuration names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeClientConfig').sort(),
+    exchangeParserFields('KeyClient'),
+  );
+});
+
+test('the handwritten remote assertion source names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeRemoteSourceConfig').sort(),
+    exchangeParserFields('Remote'),
+  );
+});
+
+test('the handwritten exchange context names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeContext').sort(),
+    exchangeParserFields('Context'),
+  );
 });

@@ -53,6 +53,14 @@ const result = await profileClient.request({ requirement: 'status-check', select
 const replayed = verifyRetainedAsOf(result.retainedVerification, result.assertion, decisionMillis);
 const current = verifyRetained(result.retainedVerification, result.assertion);
 
+// A staff procedure can use the same pinned profile with a context-bound
+// exchange. The profile must state oauth.resource and oauth.scopes; its
+// clientId and the discovered issuer/token endpoint must match this provider.
+const staffClient = EvidenceClient.fromProfileWithAuthorization('client.json', {
+  exchange: { client: exchangeClient, context: verifiedStaffContext,
+    firstParty: { key: assertionKey, attributes: { registry_actor_kind: 'human' } } },
+});
+
 const batchSpec = {
   requirement,
   purpose,
@@ -201,9 +209,11 @@ workspace-wide forbid would reject outright.
   `revokedKeyIds` contains current service-key RFC 7638 thumbprints and
   overrides a matching key even when it remains in `trustedJwks` or in an
   older prepared request's policy.
-- Exactly two token providers are supported: `token: { static: "..." }` and
-  `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, ... } }`. A
-  caller-supplied custom token provider is out of scope for this binding.
+- Configure one credential path: `token: { static: "..." }`,
+  `token: { privateKeyJwt: { tokenEndpoint, clientId, clientKey, ... } }`, or
+  `authorization: { exchange: { client, context, firstParty } }` (with `remote`
+  instead of `firstParty` for a grant authority). The shared exchange parser
+  validates the bounded context and credential binding before a token request.
 - Holder-bound issuance is supported: `prepare` accepts public `holderKeys`,
   and `SdJwtVcBatchResponse` parses the ordered credential envelope returned
   for them. The binding stops at issuance. It exposes no traceId for a

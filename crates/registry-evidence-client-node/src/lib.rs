@@ -53,8 +53,9 @@ use registry_evidence_client::{
 
 use convert::{
     audience_scoped_request_from_json, batch_spec_from_json, config_from_json,
-    datetime_from_unix_millis, evidence_to_json, map_client_error, map_config_error,
-    map_conversion_error, spec_from_json, subject_expectations_to_json,
+    datetime_from_unix_millis, evidence_to_json, exchange_from_authorization_json,
+    map_client_error, map_config_error, map_conversion_error, spec_from_json,
+    subject_expectations_to_json,
 };
 
 /// Every mapped failure (see `convert::map_client_error` and friends) carries
@@ -672,6 +673,31 @@ impl EvidenceClient {
                 inner: Arc::new(client),
             })
         })
+    }
+
+    /// Build a profile-driven client with a context-bound staff exchange.
+    /// The profile's discovered authority and pinned OAuth request parameters
+    /// must match the immutable provider before the first token is acquired.
+    #[napi(factory, ts_args_type = "path: string, authorization: any")]
+    pub fn from_profile_with_authorization(
+        path: String,
+        authorization: serde_json::Value,
+    ) -> Result<Self> {
+        catch_panic(
+            "constructing the client from a profile and exchange",
+            || {
+                let exchange = exchange_from_authorization_json(&authorization)
+                    .map_err(|error| to_napi_error(map_config_error(&error)))?;
+                let client = RealEvidenceClient::from_profile_path_with_authorization(
+                    PathBuf::from(path),
+                    exchange,
+                )
+                .map_err(|error| to_napi_error(map_client_error(&error)))?;
+                Ok(Self {
+                    inner: Arc::new(client),
+                })
+            },
+        )
     }
 
     /// Close the expectations for one request and generate its nonce. No I/O
