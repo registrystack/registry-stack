@@ -112,6 +112,15 @@ pub struct ArrivalOffering {
     pub horizon_days: u32,
 }
 
+/// One authored reminder offset: a notification intent becomes due this many
+/// minutes before the displayed start of an appointment on the offering.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReminderOffsetPolicy {
+    pub minutes_before: u32,
+    pub because: String,
+}
+
 /// One bookable thing a deployment offers.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -128,6 +137,11 @@ pub struct OfferingPolicy {
     pub arrival: Option<ArrivalOffering>,
     /// How late before the displayed start a booking may still be cancelled.
     pub cancellation_cutoff_minutes: u32,
+    /// Authored reminder offsets for this offering. The runtime mints one
+    /// revision-bound intent per offset whose due time is still ahead when
+    /// the appointment commits; message transport stays external (INT-02).
+    #[serde(default)]
+    pub reminders: Vec<ReminderOffsetPolicy>,
     /// The caller attribute an active-booking duplicate check keys on, when
     /// the service defines one. Phone numbers and email addresses are never
     /// valid duplicate keys.
@@ -580,6 +594,32 @@ impl SchedulingPolicy {
 
         if let Some(key) = &offering.duplicate_active_key {
             check_identifier(key, &format!("{path}.duplicateActiveKey"), findings);
+        }
+        check_collection_bound(&offering.reminders, &format!("{path}.reminders"), findings);
+        let mut reminder_offsets: Vec<u32> = Vec::new();
+        for (offset_index, reminder) in offering.reminders.iter().enumerate() {
+            let reminder_path = format!("{path}.reminders[{offset_index}]");
+            if reminder.minutes_before == 0 {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{reminder_path}.minutesBefore"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            }
+            // Two offsets at the same distance would mint two intents due at
+            // the same instant for one appointment: one reminder per moment.
+            if reminder_offsets.contains(&reminder.minutes_before) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{reminder_path}.minutesBefore"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            } else {
+                reminder_offsets.push(reminder.minutes_before);
+            }
+            check_because(
+                &reminder.because,
+                &format!("{reminder_path}.because"),
+                findings,
+            );
         }
         for capability in &offering.requires_capabilities {
             if !valid_identifier(capability) {
@@ -1158,6 +1198,43 @@ holdPolicy:
         );
     }
 
+    /// Authored reminder offsets are part of the reviewed policy: a zero
+    /// offset, a blank because, and two offsets at the same distance are all
+    /// findings, and a well-formed schedule passes the check untouched.
+    #[test]
+    fn reminder_offsets_are_validated_like_every_authored_choice() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings[0].reminders = vec![
+            ReminderOffsetPolicy {
+                minutes_before: 0,
+                because: "   ".to_owned(),
+            },
+            ReminderOffsetPolicy {
+                minutes_before: 1440,
+                because: "One reminder the day before a counter update.".to_owned(),
+            },
+            ReminderOffsetPolicy {
+                minutes_before: 1440,
+                because: "A second reminder at the same distance.".to_owned(),
+            },
+        ];
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered.contains(&"offerings[0].reminders[0].minutesBefore: invalid-bound".to_owned())
+        );
+        assert!(rendered.contains(&"offerings[0].reminders[0].because: invalid-because".to_owned()));
+        assert!(rendered
+            .contains(&"offerings[0].reminders[2].minutesBefore: duplicate-identifier".to_owned()));
+
+        policy.offerings[0].reminders.truncate(2);
+        policy.offerings[0].reminders[0] = ReminderOffsetPolicy {
+            minutes_before: 60,
+            because: "One reminder an hour before.".to_owned(),
+        };
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+    }
+
     #[test]
     fn subquota_slices_may_not_overdraw_the_window() {
         let mut policy = household_window_policy();
@@ -1207,6 +1284,7 @@ holdPolicy:
             }),
             arrival: None,
             cancellation_cutoff_minutes: 60,
+            reminders: Vec::new(),
             duplicate_active_key: None,
             requires_capabilities: Vec::new(),
             prerequisites: Vec::new(),
