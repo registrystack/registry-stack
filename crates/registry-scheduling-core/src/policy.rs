@@ -1,0 +1,1492 @@
+// SPDX-License-Identifier: Apache-2.0
+
+//! The authored scheduling policy: services, offerings, opening patterns,
+//! holiday sets, published arrival windows, and the hold policy, with the
+//! validators a publication gate runs.
+//!
+//! The policy is layer one of the configuration model. It declares what a
+//! deployment publishes and why; locations, resource pools, and dated
+//! exceptions are runtime records the policy references by identifier but
+//! never embeds, so the same published policy governs every environment that
+//! resolves those identifiers.
+
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::diagnostics::{PolicyCheckReason, SchedulingDiagnostic};
+use crate::naming::SCHEDULING_POLICY_API_VERSION;
+use crate::naming::SCHEDULING_POLICY_KIND;
+use crate::units::{check_because, RequiredUnitsPolicy};
+
+/// The maximum number of entries one policy collection may carry.
+pub const MAXIMUM_COLLECTION_ENTRIES: usize = 256;
+
+/// The maximum bytes of a human-facing label.
+pub const MAXIMUM_LABEL_BYTES: usize = 128;
+
+/// One weekday of an opening pattern.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyWeekday {
+    Mon,
+    Tue,
+    Wed,
+    Thu,
+    Fri,
+    Sat,
+    Sun,
+}
+
+impl PolicyWeekday {
+    #[must_use]
+    pub const fn to_chrono(self) -> chrono::Weekday {
+        match self {
+            Self::Mon => chrono::Weekday::Mon,
+            Self::Tue => chrono::Weekday::Tue,
+            Self::Wed => chrono::Weekday::Wed,
+            Self::Thu => chrono::Weekday::Thu,
+            Self::Fri => chrono::Weekday::Fri,
+            Self::Sat => chrono::Weekday::Sat,
+            Self::Sun => chrono::Weekday::Sun,
+        }
+    }
+}
+
+/// The identity of the deployment the policy governs.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PolicyIdentity {
+    pub id: String,
+    pub version: u64,
+}
+
+/// A service a deployment schedules.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServicePolicy {
+    pub id: String,
+    pub label: String,
+}
+
+/// How an offering delivers its service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SchedulingMode {
+    ExactTime,
+    ArrivalWindow,
+}
+
+/// The exact-time block of an offering: appointment length, protections, and
+/// the interchangeable pool that backs it.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ExactTimeOffering {
+    pub duration_minutes: u32,
+    /// Setup time occupied before the displayed start.
+    pub buffer_before_minutes: u32,
+    /// Cleanup time occupied after the displayed end.
+    pub buffer_after_minutes: u32,
+    /// The earliest lead time a caller may book at.
+    pub lead_time_minutes: u32,
+    /// How far ahead booking is open.
+    pub horizon_days: u32,
+    /// The pool of interchangeable members backing this offering. A pool is
+    /// its members, never an independent counter.
+    pub pool: String,
+    /// The grid displayed starts must land on.
+    pub start_increment_minutes: u32,
+    /// The largest party the offering serves.
+    pub max_recipients: u32,
+}
+
+/// The arrival-window block of an offering.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ArrivalOffering {
+    /// The published window this offering serves arrivals in.
+    pub window: String,
+    /// The earliest lead time a caller may book the window at.
+    pub lead_time_minutes: u32,
+    /// How far ahead of the window's start booking is open.
+    pub horizon_days: u32,
+}
+
+/// One bookable thing a deployment offers.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OfferingPolicy {
+    pub id: String,
+    pub service: String,
+    pub label: String,
+    pub mode: SchedulingMode,
+    pub location: String,
+    pub because: String,
+    /// Present exactly when `mode` is `exact-time`.
+    pub exact_time: Option<ExactTimeOffering>,
+    /// Present exactly when `mode` is `arrival-window`.
+    pub arrival: Option<ArrivalOffering>,
+    /// How late before the displayed start a booking may still be cancelled.
+    pub cancellation_cutoff_minutes: u32,
+    /// The caller attribute an active-booking duplicate check keys on, when
+    /// the service defines one. Phone numbers and email addresses are never
+    /// valid duplicate keys.
+    pub duplicate_active_key: Option<String>,
+    /// Capabilities every backing member must have for this offering.
+    pub requires_capabilities: Vec<String>,
+    /// Prerequisite references a requesting party must hold.
+    pub prerequisites: Vec<String>,
+}
+
+/// A bounded weekly opening pattern over local wall-clock time. The timezone
+/// comes from the location record the pattern references.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OpeningPatternPolicy {
+    pub id: String,
+    pub location: String,
+    pub holiday_set: String,
+    pub weekdays: Vec<PolicyWeekday>,
+    pub start_time: String,
+    pub end_time: String,
+    pub effective_from: String,
+    pub effective_until: String,
+    pub because: String,
+}
+
+/// A named, revisioned set of holiday dates.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HolidaySetPolicy {
+    pub id: String,
+    pub revision: u64,
+    pub because: String,
+    pub dates: Vec<String>,
+}
+
+/// The authenticated channel a subquota reserves capacity for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Channel {
+    Public,
+    Assisted,
+    Urgent,
+    WalkIn,
+}
+
+impl Channel {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Assisted => "assisted",
+            Self::Urgent => "urgent",
+            Self::WalkIn => "walk-in",
+        }
+    }
+}
+
+/// A non-overlapping reserved slice of a window's published capacity.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowSubquota {
+    pub id: String,
+    pub channel: Channel,
+    pub units: u32,
+    pub because: String,
+}
+
+/// What happens to a window's leftover capacity when the window closes. The
+/// policy must say; there is no default and no borrowing from the next
+/// window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum LeftoverCapacityPolicy {
+    /// Leftover units lapse with the window.
+    ExpiresUnused,
+    /// Leftover units become available to the walk-in channel.
+    BecomesWalkIn,
+}
+
+/// The staffing block a window's supply is carved from, when the window is
+/// backed by the same concrete resources an exact-time pool sells.
+///
+/// `reserved_members` is the partition: how many pool members the window's
+/// supply is attributed to. A window that names a pool without a partition
+/// claims the whole block, so any exact-time offering on the same pool is
+/// selling the same staffing twice and is rejected at publication.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowStaffing {
+    pub pool: String,
+    pub reserved_members: Option<u32>,
+    pub because: String,
+}
+
+/// A published arrival window with its capacity.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PublishedWindow {
+    pub id: String,
+    pub revision: u64,
+    pub offering: String,
+    pub location: String,
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+    /// Published capacity in the unit basis the units policy defines.
+    pub units: u32,
+    pub units_policy: RequiredUnitsPolicy,
+    pub subquotas: Vec<WindowSubquota>,
+    pub leftover: LeftoverCapacityPolicy,
+    pub staffing: Option<WindowStaffing>,
+    pub because: String,
+}
+
+/// The hold policy every offering inherits.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HoldPolicy {
+    pub ttl_minutes: u32,
+    pub max_per_caller: u32,
+    pub because: String,
+}
+
+/// A declared lifecycle hook. This version has no hook engine, so a declared
+/// hook always fails the policy check: refusing what cannot run beats
+/// accepting what would silently not run.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HookPolicy {
+    pub id: String,
+    /// Must be the one reserved scheduling hook ABI.
+    pub abi: String,
+    pub because: String,
+}
+
+/// The authored scheduling policy package.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SchedulingPolicy {
+    pub api_version: String,
+    pub kind: String,
+    pub scheduling: PolicyIdentity,
+    pub services: Vec<ServicePolicy>,
+    pub offerings: Vec<OfferingPolicy>,
+    pub holiday_sets: Vec<HolidaySetPolicy>,
+    pub openings: Vec<OpeningPatternPolicy>,
+    pub windows: Vec<PublishedWindow>,
+    pub hold_policy: HoldPolicy,
+    #[serde(default)]
+    pub hooks: Vec<HookPolicy>,
+}
+
+/// Parse a policy from its authored YAML, with the failing path preserved.
+pub fn parse_policy_yaml(
+    text: &str,
+) -> Result<SchedulingPolicy, serde_path_to_error::Error<serde_norway::Error>> {
+    let deserializer = serde_norway::Deserializer::from_str(text);
+    serde_path_to_error::deserialize(deserializer)
+}
+
+impl SchedulingPolicy {
+    #[must_use]
+    pub fn offering(&self, id: &str) -> Option<&OfferingPolicy> {
+        self.offerings.iter().find(|offering| offering.id == id)
+    }
+
+    #[must_use]
+    pub fn window(&self, id: &str) -> Option<&PublishedWindow> {
+        self.windows.iter().find(|window| window.id == id)
+    }
+
+    #[must_use]
+    pub fn holiday_set(&self, id: &str) -> Option<&HolidaySetPolicy> {
+        self.holiday_sets.iter().find(|set| set.id == id)
+    }
+
+    /// The canonical digest of this policy package: `sha256:` followed by 64
+    /// hex digits over the canonical JSON of the envelope and policy. The
+    /// same policy always digests identically; any authored change does not.
+    pub fn policy_digest(&self) -> String {
+        let envelope = serde_json::json!({
+            "schema": SCHEDULING_POLICY_API_VERSION,
+            "policy": self,
+        });
+        let canonical = registry_platform_canonical_json::canonicalize_json(&envelope)
+            .expect("a policy envelope always canonicalizes");
+        let digest = Sha256::digest(&canonical);
+        format!("sha256:{}", hex(&digest))
+    }
+
+    /// Check the whole policy. Every finding names the path that failed.
+    pub fn check(&self) -> Vec<SchedulingDiagnostic> {
+        let mut findings = Vec::new();
+        if self.api_version != SCHEDULING_POLICY_API_VERSION {
+            findings.push(SchedulingDiagnostic::new(
+                "apiVersion",
+                PolicyCheckReason::UnsupportedApiVersion,
+            ));
+        }
+        if self.kind != SCHEDULING_POLICY_KIND {
+            findings.push(SchedulingDiagnostic::new(
+                "kind",
+                PolicyCheckReason::UnsupportedKind,
+            ));
+        }
+        if !valid_identifier(&self.scheduling.id) {
+            findings.push(SchedulingDiagnostic::new(
+                "scheduling.id",
+                PolicyCheckReason::InvalidIdentifier,
+            ));
+        }
+        if self.scheduling.version == 0 {
+            findings.push(SchedulingDiagnostic::new(
+                "scheduling.version",
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+
+        check_collection_non_empty(&self.services, "services", &mut findings);
+        check_collection_non_empty(&self.offerings, "offerings", &mut findings);
+        check_collection_non_empty(&self.holiday_sets, "holidaySets", &mut findings);
+        check_collection_non_empty(&self.openings, "openings", &mut findings);
+        check_collection_bound(&self.services, "services", &mut findings);
+        check_collection_bound(&self.offerings, "offerings", &mut findings);
+        check_collection_bound(&self.holiday_sets, "holidaySets", &mut findings);
+        check_collection_bound(&self.openings, "openings", &mut findings);
+        check_collection_bound(&self.windows, "windows", &mut findings);
+
+        let mut service_ids = Vec::new();
+        for (index, service) in self.services.iter().enumerate() {
+            let path = format!("services[{index}]");
+            if !valid_identifier(&service.id) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.id"),
+                    PolicyCheckReason::InvalidIdentifier,
+                ));
+            }
+            if service.label.trim().is_empty() || service.label.len() > MAXIMUM_LABEL_BYTES {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.label"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            }
+            push_unique(&mut service_ids, &service.id, &path, &mut findings);
+        }
+
+        for (index, set) in self.holiday_sets.iter().enumerate() {
+            let path = format!("holidaySets[{index}]");
+            // A holiday set with no dates is complete: it observes none.
+            if set.revision == 0 {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.revision"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            }
+            check_because(&set.because, &format!("{path}.because"), &mut findings);
+            check_identifier(&set.id, &format!("{path}.id"), &mut findings);
+            for (date_index, date) in set.dates.iter().enumerate() {
+                if !valid_iso_date(date) {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.dates[{date_index}]"),
+                        PolicyCheckReason::InvalidBound,
+                    ));
+                }
+            }
+            self.check_unique_id(&set.id, &path, "holidaySets", &mut findings);
+        }
+
+        for (index, opening) in self.openings.iter().enumerate() {
+            let path = format!("openings[{index}]");
+            check_identifier(&opening.id, &format!("{path}.id"), &mut findings);
+            check_identifier(
+                &opening.location,
+                &format!("{path}.location"),
+                &mut findings,
+            );
+            if self.holiday_set(&opening.holiday_set).is_none() {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.holidaySet"),
+                    PolicyCheckReason::UnknownHolidaySet,
+                ));
+            }
+            check_collection_non_empty(
+                &opening.weekdays,
+                &format!("{path}.weekdays"),
+                &mut findings,
+            );
+            if !valid_hh_mm(&opening.start_time) || !valid_hh_mm(&opening.end_time) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.startTime"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            } else if opening.start_time >= opening.end_time {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.endTime"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            }
+            if !valid_iso_date(&opening.effective_from)
+                || !valid_iso_date(&opening.effective_until)
+                || opening.effective_from > opening.effective_until
+            {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.effectiveUntil"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            }
+            check_because(&opening.because, &format!("{path}.because"), &mut findings);
+            self.check_unique_id(&opening.id, &path, "openings", &mut findings);
+        }
+
+        for (index, offering) in self.offerings.iter().enumerate() {
+            self.check_offering(offering, index, &mut findings);
+        }
+
+        for (index, window) in self.windows.iter().enumerate() {
+            self.check_window(window, index, &mut findings);
+        }
+
+        check_because(
+            &self.hold_policy.because,
+            "holdPolicy.because",
+            &mut findings,
+        );
+        if self.hold_policy.ttl_minutes == 0 || self.hold_policy.max_per_caller == 0 {
+            findings.push(SchedulingDiagnostic::new(
+                "holdPolicy",
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+
+        if !self.hooks.is_empty() {
+            findings.push(SchedulingDiagnostic::new(
+                "hooks",
+                PolicyCheckReason::HooksUnsupported,
+            ));
+        }
+        for (index, hook) in self.hooks.iter().enumerate() {
+            let path = format!("hooks[{index}]");
+            if hook.abi != crate::naming::SCHEDULING_HOOK_ABI {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.abi"),
+                    PolicyCheckReason::UnsupportedHookAbi,
+                ));
+            }
+            check_identifier(&hook.id, &format!("{path}.id"), &mut findings);
+            check_because(&hook.because, &format!("{path}.because"), &mut findings);
+        }
+
+        findings
+    }
+
+    fn check_offering(
+        &self,
+        offering: &OfferingPolicy,
+        index: usize,
+        findings: &mut Vec<SchedulingDiagnostic>,
+    ) {
+        let path = format!("offerings[{index}]");
+        check_identifier(&offering.id, &format!("{path}.id"), findings);
+        check_identifier(&offering.service, &format!("{path}.service"), findings);
+        if !service_ids_contains(self, &offering.service) {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.service"),
+                PolicyCheckReason::UnknownService,
+            ));
+        }
+        check_identifier(&offering.location, &format!("{path}.location"), findings);
+        if offering.label.trim().is_empty() || offering.label.len() > MAXIMUM_LABEL_BYTES {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.label"),
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+        check_because(&offering.because, &format!("{path}.because"), findings);
+        self.check_unique_id(&offering.id, &path, "offerings", findings);
+
+        let (block, block_reason_path) = match offering.mode {
+            SchedulingMode::ExactTime => (offering.exact_time.is_some(), "exactTime"),
+            SchedulingMode::ArrivalWindow => (offering.arrival.is_some(), "arrival"),
+        };
+        if !block {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.{block_reason_path}"),
+                PolicyCheckReason::MissingModeField,
+            ));
+        }
+        match offering.mode {
+            SchedulingMode::ExactTime => {
+                if offering.arrival.is_some() {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.arrival"),
+                        PolicyCheckReason::WrongModeField,
+                    ));
+                }
+                if let Some(exact) = &offering.exact_time {
+                    let block_path = format!("{path}.exactTime");
+                    if exact.duration_minutes == 0
+                        || exact.lead_time_minutes == 0
+                        || exact.horizon_days == 0
+                        || exact.start_increment_minutes == 0
+                        || exact.max_recipients == 0
+                    {
+                        findings.push(SchedulingDiagnostic::new(
+                            block_path.clone(),
+                            PolicyCheckReason::InvalidBound,
+                        ));
+                    }
+                    check_identifier(&exact.pool, &format!("{block_path}.pool"), findings);
+                    let horizon_minutes = u64::from(exact.horizon_days) * 24 * 60;
+                    if u64::from(exact.lead_time_minutes) > horizon_minutes {
+                        findings.push(SchedulingDiagnostic::new(
+                            format!("{block_path}.leadTimeMinutes"),
+                            PolicyCheckReason::InvalidBound,
+                        ));
+                    }
+                }
+            }
+            SchedulingMode::ArrivalWindow => {
+                if offering.exact_time.is_some() {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.exactTime"),
+                        PolicyCheckReason::WrongModeField,
+                    ));
+                }
+                if let Some(arrival) = &offering.arrival {
+                    let block_path = format!("{path}.arrival");
+                    if self.window(&arrival.window).is_none() {
+                        findings.push(SchedulingDiagnostic::new(
+                            format!("{block_path}.window"),
+                            PolicyCheckReason::UnknownWindow,
+                        ));
+                    }
+                    if arrival.lead_time_minutes == 0 || arrival.horizon_days == 0 {
+                        findings.push(SchedulingDiagnostic::new(
+                            block_path.clone(),
+                            PolicyCheckReason::InvalidBound,
+                        ));
+                    }
+                    let horizon_minutes = u64::from(arrival.horizon_days) * 24 * 60;
+                    if u64::from(arrival.lead_time_minutes) > horizon_minutes {
+                        findings.push(SchedulingDiagnostic::new(
+                            format!("{block_path}.leadTimeMinutes"),
+                            PolicyCheckReason::InvalidBound,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(key) = &offering.duplicate_active_key {
+            check_identifier(key, &format!("{path}.duplicateActiveKey"), findings);
+        }
+        for capability in &offering.requires_capabilities {
+            if !valid_identifier(capability) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.requiresCapabilities"),
+                    PolicyCheckReason::InvalidIdentifier,
+                ));
+            }
+        }
+        for prerequisite in &offering.prerequisites {
+            if !valid_reference(prerequisite) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.prerequisites"),
+                    PolicyCheckReason::InvalidIdentifier,
+                ));
+            }
+        }
+    }
+
+    fn check_window(
+        &self,
+        window: &PublishedWindow,
+        index: usize,
+        findings: &mut Vec<SchedulingDiagnostic>,
+    ) {
+        let path = format!("windows[{index}]");
+        check_identifier(&window.id, &format!("{path}.id"), findings);
+        if window.revision == 0 {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.revision"),
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+        check_because(&window.because, &format!("{path}.because"), findings);
+        self.check_unique_id(&window.id, &path, "windows", findings);
+        if window.units == 0 {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.units"),
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+        if window.end <= window.start {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.end"),
+                PolicyCheckReason::InvalidBound,
+            ));
+        }
+        findings.extend(window.units_policy.check(&format!("{path}.unitsPolicy")));
+
+        match self.offering(&window.offering) {
+            None => findings.push(SchedulingDiagnostic::new(
+                format!("{path}.offering"),
+                PolicyCheckReason::UnknownOffering,
+            )),
+            Some(offering) => {
+                if offering.mode != SchedulingMode::ArrivalWindow
+                    || offering
+                        .arrival
+                        .as_ref()
+                        .is_none_or(|arrival| arrival.window != window.id)
+                    || offering.location != window.location
+                {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.offering"),
+                        PolicyCheckReason::WrongModeField,
+                    ));
+                }
+            }
+        }
+
+        let mut channels = Vec::new();
+        let mut subquota_units = 0_u32;
+        for (subquota_index, subquota) in window.subquotas.iter().enumerate() {
+            let subquota_path = format!("{path}.subquotas[{subquota_index}]");
+            check_identifier(&subquota.id, &format!("{subquota_path}.id"), findings);
+            check_because(
+                &subquota.because,
+                &format!("{subquota_path}.because"),
+                findings,
+            );
+            if subquota.units == 0 {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{subquota_path}.units"),
+                    PolicyCheckReason::InvalidBound,
+                ));
+            } else {
+                subquota_units = subquota_units.saturating_add(subquota.units);
+            }
+            if channels.contains(&subquota.channel) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{subquota_path}.channel"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
+            channels.push(subquota.channel);
+        }
+        if subquota_units > window.units {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.subquotas"),
+                PolicyCheckReason::SubquotaOverdrawn,
+            ));
+        }
+
+        if let Some(staffing) = &window.staffing {
+            check_identifier(&staffing.pool, &format!("{path}.staffing.pool"), findings);
+            check_because(
+                &staffing.because,
+                &format!("{path}.staffing.because"),
+                findings,
+            );
+            // An unpartitioned staffing claim owns the whole pool block, so
+            // any exact-time offering on the same pool would be selling the
+            // same staffing twice.
+            if staffing.reserved_members.is_none() {
+                let shared = self.offerings.iter().any(|offering| {
+                    offering
+                        .exact_time
+                        .as_ref()
+                        .is_some_and(|exact| exact.pool == staffing.pool)
+                });
+                let doubly_claimed = self.windows.iter().any(|other| {
+                    other.id != window.id
+                        && other.staffing.as_ref().is_some_and(|other_staffing| {
+                            other_staffing.pool == staffing.pool
+                                && other_staffing.reserved_members.is_none()
+                                && other.start < window.end
+                                && window.start < other.end
+                        })
+                });
+                if shared || doubly_claimed {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.staffing.reservedMembers"),
+                        PolicyCheckReason::SharedSupplyUnpartitioned,
+                    ));
+                }
+            }
+        }
+    }
+
+    fn check_unique_id(
+        &self,
+        id: &str,
+        path: &str,
+        collection: &str,
+        findings: &mut Vec<SchedulingDiagnostic>,
+    ) {
+        let duplicate = match collection {
+            "offerings" => {
+                self.offerings
+                    .iter()
+                    .filter(|offering| offering.id == id)
+                    .count()
+                    > 1
+            }
+            "windows" => self.windows.iter().filter(|window| window.id == id).count() > 1,
+            "openings" => {
+                self.openings
+                    .iter()
+                    .filter(|opening| opening.id == id)
+                    .count()
+                    > 1
+            }
+            "holidaySets" => self.holiday_sets.iter().filter(|set| set.id == id).count() > 1,
+            _ => false,
+        };
+        if duplicate {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.id"),
+                PolicyCheckReason::DuplicateIdentifier,
+            ));
+        }
+    }
+}
+
+/// One window, or one channel slice of a window, whose proposed capacity fell
+/// below what is already committed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CapacityReduction {
+    pub window: String,
+    /// The channel whose subquota the reduction strands, or `None` when the
+    /// deficit is the window total's.
+    pub channel: Option<Channel>,
+    pub committed_units: u32,
+    pub proposed_units: u32,
+}
+
+/// Assess a proposed publication against the commitments already standing in
+/// a ledger snapshot.
+///
+/// A normal capacity reduction that would leave confirmed bookings and live
+/// holds above the proposed capacity is rejected: it comes back here as a
+/// finding with the deficit, never as a successful validation. Both levels of
+/// published capacity are assessed: the window total, and each channel
+/// subquota, which is its own committed slice a proposal may strand even when
+/// the total is unchanged. An emergency reduction is a different operation
+/// entirely, recorded as an incident with its affected bookings, and does not
+/// pass through this assessment.
+pub fn assess_publication_impact(
+    current: &SchedulingPolicy,
+    proposed: &SchedulingPolicy,
+    snapshot: &crate::model::LedgerSnapshot,
+    now: DateTime<Utc>,
+) -> Vec<CapacityReduction> {
+    let mut reductions = Vec::new();
+    for window in &current.windows {
+        let proposed_window = proposed.window(&window.id);
+        let proposed_units = proposed_window.map_or(0, |proposed| proposed.units);
+        let committed = snapshot.window_units_allocated(&window.id, None, None, now);
+        if proposed_units < window.units && committed > proposed_units {
+            reductions.push(CapacityReduction {
+                window: window.id.clone(),
+                channel: None,
+                committed_units: committed,
+                proposed_units,
+            });
+        }
+        // A subquota dropped from the proposal proposes zero for its channel.
+        for subquota in &window.subquotas {
+            let proposed_subquota = proposed_window
+                .and_then(|proposed| {
+                    proposed
+                        .subquotas
+                        .iter()
+                        .find(|candidate| candidate.channel == subquota.channel)
+                })
+                .map_or(0, |candidate| candidate.units);
+            if proposed_subquota >= subquota.units {
+                continue;
+            }
+            let committed_channel = snapshot.window_units_allocated(
+                &window.id,
+                Some(subquota.channel.as_str()),
+                None,
+                now,
+            );
+            if committed_channel > proposed_subquota {
+                reductions.push(CapacityReduction {
+                    window: window.id.clone(),
+                    channel: Some(subquota.channel),
+                    committed_units: committed_channel,
+                    proposed_units: proposed_subquota,
+                });
+            }
+        }
+    }
+    reductions
+}
+
+fn service_ids_contains(policy: &SchedulingPolicy, id: &str) -> bool {
+    policy.services.iter().any(|service| service.id == id)
+}
+
+fn push_unique(
+    seen: &mut Vec<String>,
+    id: &str,
+    path: &str,
+    findings: &mut Vec<SchedulingDiagnostic>,
+) {
+    if seen.iter().any(|known| known == id) {
+        findings.push(SchedulingDiagnostic::new(
+            format!("{path}.id"),
+            PolicyCheckReason::DuplicateIdentifier,
+        ));
+    } else {
+        seen.push(id.to_owned());
+    }
+}
+
+fn check_collection_non_empty<T>(
+    collection: &[T],
+    path: &str,
+    findings: &mut Vec<SchedulingDiagnostic>,
+) {
+    if collection.is_empty() {
+        findings.push(SchedulingDiagnostic::new(
+            path,
+            PolicyCheckReason::EmptyCollection,
+        ));
+    }
+}
+
+fn check_collection_bound<T>(
+    collection: &[T],
+    path: &str,
+    findings: &mut Vec<SchedulingDiagnostic>,
+) {
+    if collection.len() > MAXIMUM_COLLECTION_ENTRIES {
+        findings.push(SchedulingDiagnostic::new(
+            path,
+            PolicyCheckReason::InvalidBound,
+        ));
+    }
+}
+
+fn check_identifier(id: &str, path: &str, findings: &mut Vec<SchedulingDiagnostic>) {
+    if !valid_identifier(id) {
+        findings.push(SchedulingDiagnostic::new(
+            path,
+            PolicyCheckReason::InvalidIdentifier,
+        ));
+    }
+}
+
+/// The identifier grammar shared by every policy id: non-empty, at most 64
+/// bytes, starting with a lowercase letter and continuing with lowercase
+/// letters, digits, and hyphens.
+#[must_use]
+pub fn valid_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && bytes.len() <= 64
+        && matches!(bytes.first(), Some(b'a'..=b'z'))
+        && bytes[1..]
+            .iter()
+            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'-'))
+}
+
+/// A reference an offering may require a party to hold: a stable scoped
+/// identifier such as `case:1234` or `urn:...`.
+#[must_use]
+pub fn valid_reference(value: &str) -> bool {
+    !value.trim().is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+}
+
+fn valid_hh_mm(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 5
+        && bytes[2] == b':'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 2 || byte.is_ascii_digit())
+        && value[..2].parse::<u32>().is_ok_and(|hour| hour < 24)
+        && value[3..].parse::<u32>().is_ok_and(|minute| minute < 60)
+}
+
+fn valid_iso_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 10
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| index == 4 || index == 7 || byte.is_ascii_digit())
+        && chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok()
+}
+
+fn hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut rendered = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        rendered.push(HEX[(byte >> 4) as usize] as char);
+        rendered.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    rendered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{LedgerClaim, LedgerKind, PartyCounts};
+    use chrono::TimeZone as _;
+
+    fn utc(hour: u32, minute: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 10, 5, hour, minute, 0).unwrap()
+    }
+
+    pub fn minimal_exact_time_policy() -> SchedulingPolicy {
+        let yaml = r#"
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: registry-updates
+  version: 1
+services:
+  - id: registry-update
+    label: Registry record update
+offerings:
+  - id: registry-update-30
+    service: registry-update
+    label: 30-minute counter update
+    mode: exact-time
+    location: north-counter
+    because: A 30-minute update at an interchangeable station.
+    exactTime:
+      durationMinutes: 30
+      bufferBeforeMinutes: 5
+      bufferAfterMinutes: 5
+      leadTimeMinutes: 120
+      horizonDays: 60
+      pool: update-stations
+      startIncrementMinutes: 30
+      maxRecipients: 1
+    cancellationCutoffMinutes: 240
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+    dates: ["2026-12-25"]
+openings:
+  - id: counter-hours
+    location: north-counter
+    holidaySet: office-holidays
+    weekdays: [mon, tue, wed, thu, fri]
+    startTime: "09:00"
+    endTime: "12:30"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: Counter opening hours reviewed by the office manager.
+windows: []
+holdPolicy:
+  ttlMinutes: 5
+  maxPerCaller: 3
+  because: Holds are short because counter capacity is scarce.
+"#;
+        serde_norway::from_str(yaml).expect("the minimal policy parses")
+    }
+
+    pub fn household_window_policy() -> SchedulingPolicy {
+        let yaml = r#"
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: household-days
+  version: 3
+services:
+  - id: household-day
+    label: Household registration day
+offerings:
+  - id: household-morning
+    service: household-day
+    label: Morning household block
+    mode: arrival-window
+    location: civic-hall
+    because: Households arrive in a served morning block.
+    arrival:
+      window: household-morning-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+    dates: []
+openings:
+  - id: hall-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "08:00"
+    endTime: "12:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall opens on Saturday mornings.
+windows:
+  - id: household-morning-window
+    revision: 2
+    offering: household-morning
+    location: civic-hall
+    start: 2026-10-10T08:00:00Z
+    end: 2026-10-10T10:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: perRecipient
+      perRecipient: 1
+      because: Each recipient consumes one serving slot.
+    subquotas:
+      - id: public-quota
+        channel: public
+        units: 2
+        because: Most households book the public channel.
+      - id: assisted-quota
+        channel: assisted
+        units: 1
+        because: Assisted bookings hold a protected unit.
+    leftover: becomes-walk-in
+    because: The Saturday morning household block, sized for two officers.
+holdPolicy:
+  ttlMinutes: 10
+  maxPerCaller: 2
+  because: Households need a few minutes to gather documents.
+"#;
+        serde_norway::from_str(yaml).expect("the household policy parses")
+    }
+
+    #[test]
+    fn the_minimal_policies_carry_no_findings() {
+        assert!(
+            minimal_exact_time_policy().check().is_empty(),
+            "{:?}",
+            minimal_exact_time_policy().check()
+        );
+        assert!(
+            household_window_policy().check().is_empty(),
+            "{:?}",
+            household_window_policy().check()
+        );
+    }
+
+    #[test]
+    fn the_policy_digest_is_stable_and_moves_with_content() {
+        let policy = minimal_exact_time_policy();
+        assert_eq!(policy.policy_digest(), policy.clone().policy_digest());
+        assert!(policy.policy_digest().starts_with("sha256:"));
+        assert_eq!(policy.policy_digest().len(), 71);
+
+        let edited = SchedulingPolicy {
+            hold_policy: HoldPolicy {
+                ttl_minutes: 6,
+                ..policy.hold_policy.clone()
+            },
+            ..policy.clone()
+        };
+        assert_ne!(policy.policy_digest(), edited.policy_digest());
+    }
+
+    #[test]
+    fn envelope_and_identity_findings_are_path_addressed() {
+        let mut policy = minimal_exact_time_policy();
+        policy.api_version = "registry.registrystack.org/other/v1".to_owned();
+        policy.kind = "Other".to_owned();
+        policy.scheduling.version = 0;
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"apiVersion: unsupported-api-version".to_owned()));
+        assert!(rendered.contains(&"kind: unsupported-kind".to_owned()));
+        assert!(rendered.contains(&"scheduling.version: invalid-bound".to_owned()));
+    }
+
+    #[test]
+    fn mode_fields_must_match_the_declared_mode() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings[0].exact_time = None;
+        policy.offerings[0].arrival = Some(ArrivalOffering {
+            window: "no-such-window".to_owned(),
+            lead_time_minutes: 60,
+            horizon_days: 45,
+        });
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"offerings[0].exactTime: missing-mode-field".to_owned()));
+        // The stray arrival block is refused as a whole; its window reference
+        // is not validated because the block must be removed, not repaired.
+        assert!(rendered.contains(&"offerings[0].arrival: wrong-mode-field".to_owned()));
+    }
+
+    #[test]
+    fn references_into_missing_collections_are_named() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings[0].service = "no-such-service".to_owned();
+        policy.openings[0].holiday_set = "no-such-holidays".to_owned();
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"offerings[0].service: unknown-service".to_owned()));
+        assert!(rendered.contains(&"openings[0].holidaySet: unknown-holiday-set".to_owned()));
+    }
+
+    #[test]
+    fn duplicate_ids_across_one_collection_are_rejected() {
+        let mut policy = minimal_exact_time_policy();
+        policy.offerings.push(policy.offerings[0].clone());
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert_eq!(
+            rendered
+                .iter()
+                .filter(|f| f.ends_with("duplicate-identifier"))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn subquota_slices_may_not_overdraw_the_window() {
+        let mut policy = household_window_policy();
+        policy.windows[0].subquotas[0].units = 3;
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"windows[0].subquotas: subquota-overdrawn".to_owned()));
+    }
+
+    #[test]
+    fn one_channel_may_not_hold_two_slices_of_one_window() {
+        let mut policy = household_window_policy();
+        policy.windows[0].subquotas[1].channel = Channel::Public;
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered.contains(&"windows[0].subquotas[1].channel: duplicate-identifier".to_owned())
+        );
+    }
+
+    /// AT-22, static half: an unpartitioned staffing claim over a pool that an
+    /// exact-time offering also sells is rejected at publication.
+    #[test]
+    fn an_unpartitioned_shared_staffing_block_is_rejected() {
+        let mut policy = household_window_policy();
+        policy.windows[0].staffing = Some(WindowStaffing {
+            pool: "officer-pool".to_owned(),
+            reserved_members: None,
+            because: "The morning block is staffed by the duty officers.".to_owned(),
+        });
+        policy.offerings.push(OfferingPolicy {
+            id: "urgent-five".to_owned(),
+            service: "household-day".to_owned(),
+            label: "Urgent five-minute slot".to_owned(),
+            mode: SchedulingMode::ExactTime,
+            location: "civic-hall".to_owned(),
+            because: "Urgent matters get exact five-minute slots.".to_owned(),
+            exact_time: Some(ExactTimeOffering {
+                duration_minutes: 5,
+                buffer_before_minutes: 0,
+                buffer_after_minutes: 0,
+                lead_time_minutes: 30,
+                horizon_days: 14,
+                pool: "officer-pool".to_owned(),
+                start_increment_minutes: 5,
+                max_recipients: 1,
+            }),
+            arrival: None,
+            cancellation_cutoff_minutes: 60,
+            duplicate_active_key: None,
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        });
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(
+            &"windows[0].staffing.reservedMembers: shared-supply-unpartitioned".to_owned()
+        ));
+
+        // An attributable partition makes the share explicit and passes.
+        policy.windows[0].staffing = Some(WindowStaffing {
+            pool: "officer-pool".to_owned(),
+            reserved_members: Some(2),
+            because: "Two of the four duty officers staff the block.".to_owned(),
+        });
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+    }
+
+    #[test]
+    fn two_overlapping_whole_pool_claims_are_double_counting() {
+        let mut policy = household_window_policy();
+        policy.windows[0].staffing = Some(WindowStaffing {
+            pool: "officer-pool".to_owned(),
+            reserved_members: None,
+            because: "The morning block is staffed by the duty officers.".to_owned(),
+        });
+        policy.windows.push(PublishedWindow {
+            id: "household-noon-window".to_owned(),
+            revision: 1,
+            offering: "household-morning".to_owned(),
+            location: "civic-hall".to_owned(),
+            start: Utc.with_ymd_and_hms(2026, 10, 10, 9, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2026, 10, 10, 11, 30, 0).unwrap(),
+            units: 2,
+            units_policy: RequiredUnitsPolicy::Fixed {
+                units: 1,
+                because: "One unit per party.".to_owned(),
+            },
+            subquotas: Vec::new(),
+            leftover: LeftoverCapacityPolicy::ExpiresUnused,
+            staffing: Some(WindowStaffing {
+                pool: "officer-pool".to_owned(),
+                reserved_members: None,
+                because: "The noon block claims the same officers.".to_owned(),
+            }),
+            because: "A second block in the same hall.".to_owned(),
+        });
+        // The second window's offering linkage is wrong on purpose in this
+        // fixture; only the supply finding is asserted here.
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered
+            .iter()
+            .any(|f| f.ends_with("shared-supply-unpartitioned")));
+
+        // Disjoint windows may each claim the whole pool.
+        let disjoint = PublishedWindow {
+            start: Utc.with_ymd_and_hms(2026, 10, 10, 13, 0, 0).unwrap(),
+            end: Utc.with_ymd_and_hms(2026, 10, 10, 15, 0, 0).unwrap(),
+            ..policy.windows[1].clone()
+        };
+        policy.windows[1] = disjoint;
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(!rendered
+            .iter()
+            .any(|f| f.ends_with("shared-supply-unpartitioned")));
+    }
+
+    /// AT-10, pure half: a normal reduction below standing commitments is
+    /// rejected with the deficit, while a reduction that keeps commitments
+    /// covered passes.
+    #[test]
+    fn a_reduction_below_standing_commitments_is_rejected_with_its_deficit() {
+        let current = household_window_policy();
+        let now = utc(6, 0);
+        let claim = LedgerClaim {
+            id: "claim-1".to_owned(),
+            supply_id: "household-morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: Some("public".to_owned()),
+            start: utc(8, 0),
+            end: utc(10, 0),
+            units: 2,
+            duplicate_key: None,
+            expires_at: None,
+        };
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![claim],
+        };
+
+        let mut reduced = current.clone();
+        reduced.windows[0].units = 1;
+        assert_eq!(
+            assess_publication_impact(&current, &reduced, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: None,
+                committed_units: 2,
+                proposed_units: 1,
+            }]
+        );
+
+        // Dropping the window entirely reduces both the total and the public
+        // slice to zero; the total reduction is reported first.
+        let mut removed = current.clone();
+        removed.windows.clear();
+        let reductions = assess_publication_impact(&current, &removed, &snapshot, now);
+        assert_eq!(reductions[0].proposed_units, 0);
+        assert_eq!(reductions[0].channel, None);
+
+        // A reduction that still covers commitments, and an increase, pass.
+        let mut adequate = current.clone();
+        adequate.windows[0].units = 2;
+        assert!(assess_publication_impact(&current, &adequate, &snapshot, now).is_empty());
+        let mut increased = current.clone();
+        increased.windows[0].units = 9;
+        assert!(assess_publication_impact(&current, &increased, &snapshot, now).is_empty());
+    }
+
+    /// AT-10, channel half: a subquota reduced below its channel's standing
+    /// commitments is rejected even when the window total is unchanged, and a
+    /// dropped subquota proposes zero for its channel.
+    #[test]
+    fn a_subquota_reduction_strands_its_channel_even_at_an_unchanged_total() {
+        let current = household_window_policy();
+        let now = utc(6, 0);
+        let claim = LedgerClaim {
+            id: "claim-1".to_owned(),
+            supply_id: "household-morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: Some("public".to_owned()),
+            start: utc(8, 0),
+            end: utc(10, 0),
+            units: 2,
+            duplicate_key: None,
+            expires_at: None,
+        };
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![claim],
+        };
+
+        // The total stays at 3 while the public slice shrinks below the 2
+        // units that channel already holds.
+        let mut narrowed = current.clone();
+        narrowed.windows[0].subquotas[0].units = 1;
+        assert_eq!(
+            assess_publication_impact(&current, &narrowed, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: Some(Channel::Public),
+                committed_units: 2,
+                proposed_units: 1,
+            }]
+        );
+
+        // Dropping the subquota entirely is a reduction of that channel to
+        // zero; only the channel strand is reported, the total still covers.
+        let mut dropped = current.clone();
+        dropped.windows[0].subquotas.remove(0);
+        assert_eq!(
+            assess_publication_impact(&current, &dropped, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: Some(Channel::Public),
+                committed_units: 2,
+                proposed_units: 0,
+            }]
+        );
+
+        // A channel nothing has committed against never strands, and an
+        // unchanged slice passes.
+        let mut assisted_dropped = current.clone();
+        assisted_dropped.windows[0].subquotas.remove(1);
+        assert!(assess_publication_impact(&current, &assisted_dropped, &snapshot, now).is_empty());
+        let mut widened = current.clone();
+        widened.windows[0].subquotas[0].units = 2;
+        assert!(assess_publication_impact(&current, &widened, &snapshot, now).is_empty());
+    }
+
+    #[test]
+    fn declared_hooks_are_refused_because_nothing_can_run_them() {
+        let mut policy = minimal_exact_time_policy();
+        policy.hooks = vec![HookPolicy {
+            id: "on-hold".to_owned(),
+            abi: crate::naming::SCHEDULING_HOOK_ABI.to_owned(),
+            because: "A future notification hook.".to_owned(),
+        }];
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"hooks: hooks-unsupported".to_owned()));
+
+        policy.hooks[0].abi = "vendor.hook/v9".to_owned();
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"hooks[0].abi: unsupported-hook-abi".to_owned()));
+    }
+
+    #[test]
+    fn identifiers_dates_and_times_follow_their_grammars() {
+        assert!(valid_identifier("north-counter-2"));
+        assert!(!valid_identifier("North"));
+        assert!(!valid_identifier("north counter"));
+        assert!(!valid_identifier(""));
+        assert!(!valid_identifier(&"x".repeat(65)));
+        assert!(valid_hh_mm("09:00"));
+        assert!(!valid_hh_mm("9:00"));
+        assert!(!valid_hh_mm("24:00"));
+        assert!(valid_iso_date("2026-10-05"));
+        assert!(!valid_iso_date("2026-10-5"));
+        assert!(!valid_iso_date("2026-02-30"));
+    }
+
+    #[test]
+    fn weekdays_and_channels_serialize_in_their_published_spelling() {
+        assert_eq!(
+            serde_norway::to_string(&PolicyWeekday::Wed).unwrap(),
+            "wed\n"
+        );
+        assert_eq!(
+            serde_norway::from_str::<PolicyWeekday>("wed").unwrap(),
+            PolicyWeekday::Wed
+        );
+        assert_eq!(Channel::WalkIn.as_str(), "walk-in");
+        assert_eq!(
+            serde_norway::from_str::<Channel>("walk-in").unwrap(),
+            Channel::WalkIn
+        );
+        assert_eq!(PolicyWeekday::Sun.to_chrono(), chrono::Weekday::Sun);
+    }
+
+    #[test]
+    fn party_counts_still_parse_from_the_policy_surface() {
+        let party = PartyCounts {
+            recipients: 2,
+            attendees: 3,
+        };
+        assert_eq!(
+            serde_json::to_value(party).unwrap(),
+            serde_json::json!({"recipients": 2, "attendees": 3})
+        );
+    }
+
+    #[test]
+    fn unknown_policy_fields_are_refused() {
+        let yaml = r#"
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: broken
+  version: 1
+services: []
+offerings: []
+holidaySets: []
+openings: []
+windows: []
+holdPolicy:
+  ttlMinutes: 5
+  maxPerCaller: 3
+  because: Holds are short.
+surprise: true
+"#;
+        assert!(parse_policy_yaml(yaml).is_err());
+    }
+
+    #[test]
+    fn collection_bounds_are_enforced() {
+        let mut policy = minimal_exact_time_policy();
+        policy.services = (0..MAXIMUM_COLLECTION_ENTRIES + 1)
+            .map(|index| ServicePolicy {
+                id: format!("service-{index}"),
+                label: "Filler service".to_owned(),
+            })
+            .collect();
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"services: invalid-bound".to_owned()));
+
+        let at_bound = minimal_exact_time_policy();
+        assert!(at_bound.check().is_empty());
+    }
+}

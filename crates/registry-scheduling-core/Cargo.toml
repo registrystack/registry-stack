@@ -1,0 +1,23 @@
+[package]
+name = "registry-scheduling-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Source-neutral model, policy types, and pure admission evaluators for Registry Scheduling."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+registry-platform-calendar.workspace = true
+registry-platform-canonical-json.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
