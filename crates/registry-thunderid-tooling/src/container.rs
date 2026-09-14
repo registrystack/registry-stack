@@ -17,6 +17,10 @@ use crate::ToolingError;
 pub const SESSION_LABEL: &str = "registry.stack.thunderid.session";
 /// The persistent identity label: present only on this session's resources.
 pub const SESSION_ID_LABEL: &str = "registry.stack.thunderid.session-id";
+/// The state root label. One project can keep sessions in several state roots
+/// (worktrees, retained copies); each owns only the container serving its own
+/// retained database.
+pub const SESSION_STATE_LABEL: &str = "registry.stack.thunderid.state-root";
 
 const IMAGE_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
 
@@ -231,10 +235,45 @@ impl Session<'_> {
 
     pub fn container_name(&self) -> String {
         format!(
-            "thunderid-{}-{}",
+            "thunderid-{}-{}-{}",
             self.label,
-            &self.id[..12.min(self.id.len())]
+            &self.id[..12.min(self.id.len())],
+            &self.state_identity()[..12]
         )
+    }
+
+    /// A digest of the canonical state root, so a symlinked path names the
+    /// same session and another state root of the same project does not.
+    /// A root that does not exist yet resolves through its nearest existing
+    /// ancestor, so it names the session it becomes once created.
+    pub fn state_identity(&self) -> String {
+        use sha2::{Digest, Sha256};
+        let mut existing = self.state_root;
+        let mut missing = Vec::new();
+        let root = loop {
+            let probe = if existing.as_os_str().is_empty() {
+                Path::new(".")
+            } else {
+                existing
+            };
+            if let Ok(canonical) = std::fs::canonicalize(probe) {
+                break missing
+                    .iter()
+                    .rev()
+                    .fold(canonical, |path: PathBuf, part| path.join(part));
+            }
+            match (existing.parent(), existing.file_name()) {
+                (Some(parent), Some(part)) => {
+                    missing.push(part);
+                    existing = parent;
+                }
+                _ => break self.state_root.to_path_buf(),
+            }
+        };
+        Sha256::digest(root.as_os_str().as_encoded_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
     }
 
     /// Find only the container carrying this session's two labels and exact
@@ -254,6 +293,8 @@ impl Session<'_> {
                 format!("label={SESSION_LABEL}={}", self.label),
                 "--filter".into(),
                 format!("label={SESSION_ID_LABEL}={}", self.id),
+                "--filter".into(),
+                format!("label={SESSION_STATE_LABEL}={}", self.state_identity()),
                 "--filter".into(),
                 format!("name=^/{}$", self.container_name()),
             ],
@@ -309,6 +350,8 @@ impl Session<'_> {
             format!("{SESSION_LABEL}={}", self.label),
             "--label".into(),
             format!("{SESSION_ID_LABEL}={}", self.id),
+            "--label".into(),
+            format!("{SESSION_STATE_LABEL}={}", self.state_identity()),
             "--publish".into(),
             format!("127.0.0.1:{}:8090", self.port),
         ];
@@ -631,6 +674,67 @@ mod tests {
         session.stop(&mut runner).unwrap();
         assert_eq!(runner.commands[1], ["rm", "-f", &id]);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sessions_of_one_project_in_different_state_roots_never_claim_each_others_container() {
+        let parent = std::env::temp_dir().join(format!(
+            "thunderid-state-identity-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        let first_root = parent.join("first");
+        let second_root = parent.join("second");
+        for root in [&first_root, &second_root] {
+            std::fs::create_dir_all(root).unwrap();
+        }
+        let session = |root| Session {
+            label: "owned-test",
+            id: "0197aaaa-0000-7000-8000-0000000000a1",
+            port: 18091,
+            state_root: root,
+            image: "pinned-test-image",
+        };
+        let first = session(&first_root);
+        let second = session(&second_root);
+        assert_ne!(first.container_name(), second.container_name());
+
+        // The same state root reached through a symlink is the same session.
+        let alias = parent.join("alias");
+        std::os::unix::fs::symlink(&first_root, &alias).unwrap();
+        assert_eq!(session(&alias).container_name(), first.container_name());
+
+        // A state root that does not exist yet names the session it will
+        // become, even when an ancestor is a symlink.
+        let pending = alias.join("pending");
+        let direct = first_root.join("pending");
+        let before = session(&pending).container_name();
+        std::fs::create_dir_all(&pending).unwrap();
+        assert_eq!(session(&pending).container_name(), before);
+        assert_eq!(session(&direct).container_name(), before);
+
+        for session in [&first, &second] {
+            session
+                .save_state(&SessionState {
+                    setup_complete: true,
+                    ..SessionState::default()
+                })
+                .unwrap();
+            let mut runner = Runner::default();
+            session.start(&mut runner).unwrap();
+            let state_label = format!("{SESSION_STATE_LABEL}={}", session.state_identity());
+            assert!(runner.commands[0].contains(&format!("label={state_label}")));
+            assert!(runner.commands[0].contains(&format!("name=^/{}$", session.container_name())));
+            assert_eq!(runner.commands[1][0], "run");
+            assert!(runner.commands[1]
+                .windows(2)
+                .any(|pair| pair == ["--label", &state_label]));
+            assert!(runner.commands[1]
+                .windows(2)
+                .any(|pair| pair == ["--name", &session.container_name()]));
+        }
+        assert_ne!(first.state_identity(), second.state_identity());
+        std::fs::remove_dir_all(parent).unwrap();
     }
 
     #[test]
