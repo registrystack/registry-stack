@@ -103,10 +103,10 @@ pub struct ClientAddArgs {
     #[arg(
         long,
         conflicts_with = "grant_bootstrap_scope",
-        requires = "first_party_issuer"
+        requires_all = ["first_party_bootstrap_resource", "first_party_issuer"]
     )]
     first_party_bootstrap_scope: Option<String>,
-    /// Resource for the first-party bootstrap credential.
+    /// Exact resource for the first-party bootstrap credential.
     #[arg(long, requires = "first_party_bootstrap_scope")]
     first_party_bootstrap_resource: Option<String>,
     /// Exact trusted issuer of the signed first-party context.
