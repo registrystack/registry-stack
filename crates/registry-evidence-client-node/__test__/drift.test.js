@@ -85,6 +85,27 @@ function configurationKeysRead(functionName) {
   return [...keys].sort();
 }
 
+// The exchange configuration members `client.d.ts` names by hand are read by
+// `exchange_config.rs` in `registry-platform-httputil`, not by `src/convert.rs`:
+// the binding hands that object through unchanged. That parser is
+// `deny_unknown_fields` over `rename_all = "camelCase"`, so a member the stub
+// declares but the parser does not accept type-checks and then fails at run
+// time as a malformed configuration, and a member the parser accepts but the
+// stub omits is unreachable for a TypeScript caller. The struct's own fields
+// are the list.
+function exchangeParserFields(structName) {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'registry-platform-httputil', 'src', 'client', 'exchange_config.rs'),
+    'utf8',
+  );
+  const start = source.indexOf(`struct ${structName} {`);
+  assert.notEqual(start, -1, `${structName} is missing from exchange_config.rs`);
+  const body = source.slice(start, source.indexOf('\n}\n', start));
+  return [...body.matchAll(/^    (\w+): /gm)]
+    .map((match) => match[1].replace(/_(\w)/g, (_, letter) => letter.toUpperCase()))
+    .sort();
+}
+
 test('every native EvidenceClient method is accounted for as sync or async', () => {
   const actual = ownMethodNames(native.EvidenceClient.prototype).sort();
   const expected = [...SYNC_METHODS, ...ASYNC_METHODS].sort();
@@ -268,3 +289,25 @@ test('client.d.ts declares no EvidenceClientError field client.js never sets', (
     );
   }
 });
+
+test('the handwritten exchange client configuration names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeClientConfig').sort(),
+    exchangeParserFields('KeyClient'),
+  );
+});
+
+test('the handwritten remote assertion source names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeRemoteSourceConfig').sort(),
+    exchangeParserFields('Remote'),
+  );
+});
+
+test('the handwritten exchange context names exactly the keys the parser accepts', () => {
+  assert.deepEqual(
+    interfaceFields('EvidenceExchangeContext').sort(),
+    exchangeParserFields('Context'),
+  );
+});
+

@@ -128,9 +128,63 @@ export interface EvidenceExchangeContext {
   grantId?: string
 }
 
-export interface EvidenceExchangeClientConfig extends PrivateKeyJwtConfig {
+/**
+ * The client half of an exchange authorization.
+ *
+ * This is not a `PrivateKeyJwtConfig`, even though the two describe the same
+ * kind of client: an exchange is pinned to one resource and scope set, so both
+ * are required here, and the object is read by the shared exchange
+ * configuration parser rather than by the binding's own reader, so its timeout
+ * members are the full-word ones that parser accepts. State at most one of
+ * `requestTimeoutMilliseconds` and `requestTimeoutSeconds`, and at most one of
+ * `connectTimeoutMilliseconds` and `connectTimeoutSeconds`; naming both of a
+ * pair is refused.
+ */
+export interface EvidenceExchangeClientConfig {
+  tokenEndpoint: string
+  clientId: string
+  /** The client's private key, as a JWK. */
+  clientKey: Readonly<Record<string, unknown>>
+  /**
+   * The audience of the client assertion, when the authorization server
+   * expects something other than its own token endpoint.
+   */
+  audience?: string
+  /**
+   * The RFC 8707 resource indicator the token is requested for: the resource
+   * server's registered identifier, not a URL to fetch.
+   */
   resource: string
+  /**
+   * The scopes requested for the token, sent as one space-delimited `scope`
+   * parameter. A requested scope may narrow the client's registered
+   * permission set; it can never widen it.
+   */
   scopes: ReadonlyArray<string>
+  assertionLifetimeSeconds?: number
+  refreshMarginSeconds?: number
+  requestTimeoutMilliseconds?: number
+  requestTimeoutSeconds?: number
+  connectTimeoutMilliseconds?: number
+  connectTimeoutSeconds?: number
+  userAgent?: string
+  /** Additional trust roots for the token endpoint, as a PEM bundle. */
+  trustedRootCertificates?: string
+}
+
+/** The owning authority a remote-sourced exchange obtains assertions from. */
+export interface EvidenceExchangeRemoteSourceConfig {
+  endpoint: string
+  bootstrap: EvidenceExchangeClientConfig
+  bootstrapResource: string
+  bootstrapScope: string
+  requestTimeoutMilliseconds?: number
+  requestTimeoutSeconds?: number
+  connectTimeoutMilliseconds?: number
+  connectTimeoutSeconds?: number
+  userAgent?: string
+  /** Additional trust roots for the authority, as a PEM bundle. */
+  trustedRootCertificates?: string
 }
 
 export type EvidenceExchangeAuthorizationConfig = {
@@ -138,16 +192,7 @@ export type EvidenceExchangeAuthorizationConfig = {
   context: EvidenceExchangeContext
 } & (
   | { firstParty: { key: Readonly<Record<string, unknown>>, attributes: Readonly<Record<string, unknown>> }, remote?: never }
-  | { firstParty?: never, remote: {
-      endpoint: string
-      bootstrap: EvidenceExchangeClientConfig
-      bootstrapResource: string
-      bootstrapScope: string
-      requestTimeoutMilliseconds?: number
-      connectTimeoutMilliseconds?: number
-      userAgent?: string
-      trustedRootCertificates?: string
-    } }
+  | { firstParty?: never, remote: EvidenceExchangeRemoteSourceConfig }
 )
 
 /** The configuration `new EvidenceClient(...)` reads. */
