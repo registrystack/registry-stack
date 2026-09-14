@@ -2327,11 +2327,11 @@ impl BRegImmediateActionBinding {
         self.maximum_input_string_bytes
     }
     #[must_use]
-    pub(crate) fn required_condition_keys(&self) -> &BTreeSet<String> {
+    pub fn required_condition_keys(&self) -> &BTreeSet<String> {
         &self.required_condition_keys
     }
     #[must_use]
-    pub(crate) fn result_effects(&self) -> &BTreeMap<String, String> {
+    pub fn result_effects(&self) -> &BTreeMap<String, String> {
         &self.result_effects
     }
     #[must_use]
@@ -2339,7 +2339,7 @@ impl BRegImmediateActionBinding {
         &self.inputs
     }
     #[must_use]
-    pub(crate) fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
+    pub fn reference_inputs(&self) -> &[BRegImmediateActionReferenceInputDescriptor] {
         &self.reference_inputs
     }
     #[must_use]

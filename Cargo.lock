@@ -3493,6 +3493,7 @@ dependencies = [
  "rcgen",
  "registry-breg",
  "registry-breg-client",
+ "registry-evidence-verifier",
  "registry-linkml",
  "registry-manifest-core",
  "registry-platform-buildinfo",

@@ -35,6 +35,7 @@ registry-thunderid-tooling.workspace = true
 registry-platform-buildinfo.workspace = true
 registry-breg = { workspace = true, features = ["runtime", "tooling"] }
 registry-breg-client.workspace = true
+registry-evidence-verifier.workspace = true
 registry-linkml.workspace = true
 registry-manifest-core.workspace = true
 reqwest.workspace = true

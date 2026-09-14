@@ -211,6 +211,15 @@ does not retain the descriptive review preview; use a current authorized read
 for display. The runtime remains responsible for current authorization,
 preconditions, and exact idempotency replay.
 
+For immediate actions, Rust callers use `prepare_action` before the first
+`invoke_action`, then retain `BRegPreparedAction` bytes in the same protected
+attempt. After reacquiring metadata under the same principal and profile,
+`recover_action` requires the original inputs and idempotency key and restores
+the exact opaque target-condition tokens and invocation bytes. It performs no
+network exchange and never acquires replacement conditions. `invoke_action`
+remains the explicit send, including after recovery. The saved bytes contain
+input values and must be treated as private application state.
+
 These APIs do not authenticate saved evidence or bind a token provider to a
 principal. The application must protect its state and bind attempts to its exact
 inputs, selected client/profile, governed package, and database generation.
