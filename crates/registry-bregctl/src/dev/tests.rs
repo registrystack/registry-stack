@@ -2497,12 +2497,27 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
         fs::read(root.join("secrets/evidence-token-qualification")).unwrap(),
         b"synthetic-provider-token"
     );
-    clients
-        .evidence_providers
-        .get_mut("qualification")
-        .unwrap()
-        .base_url = "https://evidence.example.org".into();
-    assert!(config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).is_err());
+    // Port zero parses and is not the scheme default, so the clients file is
+    // what must refuse it. A provider bound to it starts a session in which
+    // every Evidence request targets an unusable port.
+    for base_url in [
+        "https://evidence.example.org",
+        "http://127.0.0.1:0",
+        "http://127.0.0.1",
+    ] {
+        clients
+            .evidence_providers
+            .get_mut("qualification")
+            .unwrap()
+            .base_url = base_url.into();
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("exact loopback origins"),
+            "{base_url}: {refusal}"
+        );
+    }
 }
 
 #[test]
@@ -2535,6 +2550,11 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
     config::clients(&serde_json::to_vec(&serialized).unwrap()).unwrap();
     for (name, value) in [
         ("tokenEndpoint", json!("https://elsewhere.example/token")),
+        // The token endpoint carries the same port-zero hole as the provider
+        // origin: it parses, it is not the scheme default, and it leaves every
+        // credential refresh pointed at an unusable port.
+        ("tokenEndpoint", json!("http://127.0.0.1:0/oauth2/token")),
+        ("tokenEndpoint", json!("http://127.0.0.1/oauth2/token")),
         ("scopes", json!([])),
         ("scopes", json!(["evidence:invoke", "evidence:invoke"])),
         ("resource", json!("not-a-resource")),

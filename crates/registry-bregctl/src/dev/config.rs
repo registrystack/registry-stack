@@ -366,7 +366,10 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             || provider.revoked_key_ids.len() > 128
             || origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
-            || origin.port().is_none()
+            // Port zero parses and is not the scheme default, so it is named
+            // here beside the absent port. A provider bound to it starts a
+            // session in which every Evidence request targets an unusable port.
+            || origin.port().is_none_or(|port| port == 0)
             || origin.path() != "/"
             || origin.query().is_some()
             || origin.fragment().is_some()
@@ -387,7 +390,9 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
                 .context("local Evidence tokenEndpoint must be an exact loopback HTTP URL")?;
             if endpoint.scheme() != "http"
                 || endpoint.host_str() != Some("127.0.0.1")
-                || endpoint.port().is_none()
+                // Port zero leaves every credential refresh pointed at an
+                // unusable port, the same way it does for the provider origin.
+                || endpoint.port().is_none_or(|port| port == 0)
                 || !endpoint.username().is_empty()
                 || endpoint.password().is_some()
                 || endpoint.query().is_some()
