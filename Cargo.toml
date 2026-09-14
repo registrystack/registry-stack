@@ -55,6 +55,7 @@ members = [
     "crates/registry-linkml",
     "crates/registry-scheduling-core",
     "crates/registry-schedulingctl",
+    "crates/registry-scheduling-client",
 ]
 exclude = [
     "products/platform/fuzz",
