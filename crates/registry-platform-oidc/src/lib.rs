@@ -9,10 +9,10 @@ mod authorization_claims;
 
 pub use authorization_claims::{
     actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
-    GrantBounds, GrantClaims, GrantContextError, MatchedClientError,
+    GrantBounds, GrantClaims, GrantContextError, MatchedClientError, ASSERTION_ISSUER_CLAIM,
 };
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -807,6 +807,15 @@ pub struct TokenVerifierConfig {
     pub scope_separator: char,
     pub scope_map: Option<HashMap<String, Vec<String>>>,
     pub allowed_clients: Vec<String>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier.
+    ///
+    /// An empty map applies no assertion-issuer rule. Once populated, a token
+    /// carrying [`ASSERTION_ISSUER_CLAIM`] is accepted only from a listed
+    /// client and only for one of that client's listed authorities, so a
+    /// client exchanging another authority's assertion is refused. Tokens that
+    /// were not obtained by exchange carry no such claim and are unaffected.
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
     /// Issuer key identifiers that must be rejected even when the key remains
     /// published or cached. Empty preserves the normal JWKS selection policy.
     pub denied_kids: HashSet<String>,
@@ -842,6 +851,7 @@ impl TokenVerifierConfig {
             scope_separator: ' ',
             scope_map: None,
             allowed_clients: Vec::new(),
+            assertion_issuers: BTreeMap::new(),
             denied_kids: HashSet::new(),
             max_token_lifetime: None,
             leeway: Duration::ZERO,
@@ -877,6 +887,15 @@ impl TokenVerifierConfig {
     }
 
     #[must_use]
+    /// Restrict which assertion authority each client may exchange from.
+    pub fn with_assertion_issuers(
+        mut self,
+        assertion_issuers: BTreeMap<String, Vec<String>>,
+    ) -> Self {
+        self.assertion_issuers = assertion_issuers;
+        self
+    }
+
     pub fn with_allowed_clients(mut self, allowed_clients: Vec<String>) -> Self {
         self.allowed_clients = allowed_clients;
         self
@@ -1015,6 +1034,7 @@ pub struct TokenVerifier {
     config: TokenVerifierConfig,
     fetcher: Arc<JwksFetcher>,
     allowed_clients: HashSet<String>,
+    assertion_issuers: BTreeMap<String, BTreeSet<String>>,
     allowed_access_typ: HashSet<String>,
     allowed_id_typ: HashSet<String>,
     allowed_userinfo_typ: HashSet<String>,
@@ -1025,6 +1045,11 @@ impl TokenVerifier {
     pub fn new(config: TokenVerifierConfig, fetcher: Arc<JwksFetcher>) -> Self {
         assert_algorithm_family_is_not_mixed(&config.allowed_algorithms);
         let allowed_clients = config.allowed_clients.iter().cloned().collect();
+        let assertion_issuers = config
+            .assertion_issuers
+            .iter()
+            .map(|(client, issuers)| (client.clone(), issuers.iter().cloned().collect()))
+            .collect();
         let allowed_access_typ = normalize_typ_set(&config.allowed_typ);
         let allowed_id_typ = normalize_typ_set(&config.allowed_id_typ);
         let allowed_userinfo_typ = normalize_typ_set(&config.allowed_userinfo_typ);
@@ -1032,6 +1057,7 @@ impl TokenVerifier {
             config,
             fetcher,
             allowed_clients,
+            assertion_issuers,
             allowed_access_typ,
             allowed_id_typ,
             allowed_userinfo_typ,
@@ -1085,6 +1111,7 @@ impl TokenVerifier {
         let data = decode::<Claims>(token, &key, &validation)
             .map_err(|err| map_jwt_error(err, &self.config.issuer, token))?;
         self.enforce_max_token_lifetime(&data.claims)?;
+        self.enforce_assertion_issuer(&data.claims)?;
         let matched_client = if enforce_client {
             self.match_client(&data.claims)?
         } else {
@@ -1247,6 +1274,37 @@ impl TokenVerifier {
             return self.config.audiences.clone();
         }
         self.allowed_clients.iter().cloned().collect()
+    }
+
+    /// Bind an exchanged token to the assertion authority its client may use.
+    ///
+    /// The claim is present only on tokens the issuer minted from a verified
+    /// subject token, so an ordinary client-credentials token passes untouched
+    /// and a client that exchanged the wrong authority's assertion is refused
+    /// even when the issuer itself applies no per-client connection rule.
+    fn enforce_assertion_issuer(&self, claims: &Claims) -> Result<(), OidcError> {
+        if self.assertion_issuers.is_empty() {
+            return Ok(());
+        }
+        let Some(presented) = claims.extra.get(ASSERTION_ISSUER_CLAIM) else {
+            return Ok(());
+        };
+        let Some(presented) = presented.as_str() else {
+            return Err(OidcError::AssertionIssuerNotAllowed);
+        };
+        let client = claims
+            .azp
+            .as_deref()
+            .or(claims.client_id.as_deref())
+            .ok_or(OidcError::AssertionIssuerNotAllowed)?;
+        if self
+            .assertion_issuers
+            .get(client)
+            .is_some_and(|issuers| issuers.contains(presented))
+        {
+            return Ok(());
+        }
+        Err(OidcError::AssertionIssuerNotAllowed)
     }
 
     fn match_client(&self, claims: &Claims) -> Result<Option<String>, OidcError> {
@@ -1523,6 +1581,8 @@ pub enum OidcError {
     InvalidToken,
     #[error("client is not allowed")]
     ClientNotAllowed,
+    #[error("client may not exchange this assertion authority")]
+    AssertionIssuerNotAllowed,
     #[error("issuer must not be empty when an endpoint override is configured")]
     MissingIssuer,
     #[error("OIDC discovery and JWKS endpoint overrides are mutually exclusive")]
@@ -1817,6 +1877,7 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients,
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -1924,6 +1985,7 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -1951,6 +2013,7 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: vec!["client-a".to_string()],
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2000,6 +2063,156 @@ mod tests {
         );
     }
 
+    fn assertion_issuer_verifier(assertion_issuers: BTreeMap<String, Vec<String>>) -> TokenVerifier {
+        let fetcher = Arc::new(JwksFetcher::new(
+            "http://127.0.0.1/jwks".to_string(),
+            JwksFetcherConfig::defaults(),
+        ));
+        TokenVerifier::new(
+            TokenVerifierConfig {
+                issuer: "https://issuer.example".to_string(),
+                audiences: vec!["aud".to_string()],
+                allowed_algorithms: vec![Algorithm::EdDSA],
+                allowed_typ: vec!["at+jwt".to_string()],
+                allowed_id_typ: vec!["JWT".to_string(), "id_token".to_string()],
+                allowed_userinfo_typ: vec!["JWT".to_string()],
+                userinfo_requires_exp: true,
+                scope_claim: "scope".to_string(),
+                scope_separator: ' ',
+                scope_map: None,
+                allowed_clients: vec!["portal-exchange".to_string(), "task-agent".to_string()],
+                assertion_issuers,
+                denied_kids: HashSet::new(),
+                max_token_lifetime: None,
+                leeway: Duration::from_secs(60),
+            },
+            fetcher,
+        )
+    }
+
+    fn exchanged_claims(client: &str, assertion_issuer: Option<&str>) -> Claims {
+        let mut extra = Map::new();
+        if let Some(issuer) = assertion_issuer {
+            extra.insert(ASSERTION_ISSUER_CLAIM.to_string(), json!(issuer));
+        }
+        Claims {
+            sub: Some("agent-one".to_string()),
+            iss: Some("https://issuer.example".to_string()),
+            aud: None,
+            exp: None,
+            iat: None,
+            nbf: None,
+            azp: Some(client.to_string()),
+            client_id: None,
+            extra,
+        }
+    }
+
+    fn seed_demo_assertion_issuers() -> BTreeMap<String, Vec<String>> {
+        BTreeMap::from([
+            (
+                "portal-exchange".to_string(),
+                vec!["http://127.0.0.1:4494".to_string()],
+            ),
+            (
+                "task-agent".to_string(),
+                vec!["https://casework.example.test".to_string()],
+            ),
+        ])
+    }
+
+    #[test]
+    fn unconfigured_assertion_issuers_accept_any_exchanged_token() {
+        let verifier = assertion_issuer_verifier(BTreeMap::new());
+        let claims = exchanged_claims("portal-exchange", Some("https://casework.example.test"));
+        assert!(verifier.enforce_assertion_issuer(&claims).is_ok());
+    }
+
+    #[test]
+    fn each_client_exchanges_only_its_own_assertion_authority() {
+        let verifier = assertion_issuer_verifier(seed_demo_assertion_issuers());
+        for (client, issuer) in [
+            ("portal-exchange", "http://127.0.0.1:4494"),
+            ("task-agent", "https://casework.example.test"),
+        ] {
+            assert!(
+                verifier
+                    .enforce_assertion_issuer(&exchanged_claims(client, Some(issuer)))
+                    .is_ok(),
+                "{client} exchanges its own authority"
+            );
+        }
+        for (client, issuer) in [
+            ("portal-exchange", "https://casework.example.test"),
+            ("task-agent", "http://127.0.0.1:4494"),
+        ] {
+            assert!(
+                matches!(
+                    verifier.enforce_assertion_issuer(&exchanged_claims(client, Some(issuer))),
+                    Err(OidcError::AssertionIssuerNotAllowed)
+                ),
+                "{client} is refused the crossed authority"
+            );
+        }
+    }
+
+    #[test]
+    fn standing_client_credentials_tokens_carry_no_assertion_issuer() {
+        let verifier = assertion_issuer_verifier(seed_demo_assertion_issuers());
+        assert!(verifier
+            .enforce_assertion_issuer(&exchanged_claims("task-agent", None))
+            .is_ok());
+        assert!(verifier
+            .enforce_assertion_issuer(&exchanged_claims("unlisted-client", None))
+            .is_ok());
+    }
+
+    #[test]
+    fn unlisted_or_unidentified_clients_may_present_no_exchanged_token() {
+        let verifier = assertion_issuer_verifier(seed_demo_assertion_issuers());
+        assert!(matches!(
+            verifier.enforce_assertion_issuer(&exchanged_claims(
+                "unlisted-client",
+                Some("http://127.0.0.1:4494")
+            )),
+            Err(OidcError::AssertionIssuerNotAllowed)
+        ));
+        let anonymous = Claims {
+            azp: None,
+            client_id: None,
+            ..exchanged_claims("portal-exchange", Some("http://127.0.0.1:4494"))
+        };
+        assert!(matches!(
+            verifier.enforce_assertion_issuer(&anonymous),
+            Err(OidcError::AssertionIssuerNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn a_non_string_assertion_issuer_claim_is_refused() {
+        let verifier = assertion_issuer_verifier(seed_demo_assertion_issuers());
+        let mut claims = exchanged_claims("portal-exchange", None);
+        claims.extra.insert(
+            ASSERTION_ISSUER_CLAIM.to_string(),
+            json!(["http://127.0.0.1:4494"]),
+        );
+        assert!(matches!(
+            verifier.enforce_assertion_issuer(&claims),
+            Err(OidcError::AssertionIssuerNotAllowed)
+        ));
+    }
+
+    #[test]
+    fn client_id_identifies_the_exchanging_client_without_azp() {
+        let verifier = assertion_issuer_verifier(seed_demo_assertion_issuers());
+        let claims = Claims {
+            azp: None,
+            client_id: Some("portal-exchange".to_string()),
+            ..exchanged_claims("portal-exchange", Some("http://127.0.0.1:4494"))
+        };
+        assert!(verifier.enforce_assertion_issuer(&claims).is_ok());
+    }
+
     #[test]
     fn reserved_client_id_scope_claim_can_be_mapped() {
         let fetcher = Arc::new(JwksFetcher::new(
@@ -2022,6 +2235,7 @@ mod tests {
                     vec!["social_protection_registry:rows".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2067,6 +2281,7 @@ mod tests {
                     vec!["social_protection_registry:rows".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2175,6 +2390,7 @@ mod tests {
                         vec!["social_protection_registry:rows".to_string()],
                     )])),
                     allowed_clients: Vec::new(),
+                    assertion_issuers: BTreeMap::new(),
                     denied_kids: HashSet::new(),
                     max_token_lifetime: None,
                     leeway: Duration::from_secs(60),
@@ -2211,6 +2427,7 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2257,6 +2474,7 @@ mod tests {
                     vec!["registry:writer".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2308,6 +2526,7 @@ mod tests {
                     vec!["registry:admin".to_string()],
                 )])),
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),
@@ -2401,6 +2620,7 @@ mod tests {
                 scope_separator: ' ',
                 scope_map: None,
                 allowed_clients: Vec::new(),
+                assertion_issuers: BTreeMap::new(),
                 denied_kids: HashSet::new(),
                 max_token_lifetime: None,
                 leeway: Duration::from_secs(60),

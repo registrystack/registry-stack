@@ -21,6 +21,7 @@ base64.workspace = true
 getrandom.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
 reqwest.workspace = true
 rustix.workspace = true
 tokio.workspace = true

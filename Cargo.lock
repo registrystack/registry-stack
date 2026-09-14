@@ -4509,6 +4509,7 @@ dependencies = [
  "registry-platform-authcommon",
  "registry-platform-crypto",
  "registry-platform-httputil",
+ "registry-platform-oidc",
  "reqwest",
  "rustix 1.1.4",
  "serde",
