@@ -93,6 +93,26 @@ pub struct WindowDocument {
     pub units: u32,
 }
 
+/// One backing resource in the resource listing: a concrete pool member,
+/// because a pool is its members, never an independent counter.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ResourceDocument {
+    pub resource_id: String,
+    pub pool: String,
+    pub capabilities: Vec<String>,
+    pub available: bool,
+}
+
+/// One location in the location listing, with the IANA timezone identifier
+/// its published openings expand in.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LocationDocument {
+    pub location_id: String,
+    pub timezone: String,
+}
+
 /// One availability answer entry. Exact-time offerings answer in grid slots;
 /// arrival-window offerings answer in windows.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -128,7 +148,9 @@ pub struct PageDocument<T> {
     pub next_cursor: Option<String>,
 }
 
-/// A minted hold, the answer to `POST /v1/holds`.
+/// A minted hold, the answer to `POST /v1/holds`. The hold request body is
+/// the same admission request shape a direct create carries: a hold is an
+/// admission ask that reserves instead of committing.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HoldDocument {
