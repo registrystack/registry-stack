@@ -187,6 +187,33 @@ fn binding_debug_and_scalar_validation_preserve_privacy_and_exact_subjects() {
     }
 }
 
+#[test]
+fn a_scheduling_grant_is_refused_by_the_breg_binding() {
+    // The grant union is closed, so a scheduling grant parses as a grant but
+    // carries no BREG permissions; the binding refuses it before any
+    // authorization decision or store access runs.
+    let scheduling = serde_json::json!({
+        "grantId": Uuid::new_v4().to_string(),
+        "sourceIssuer": "https://casework.test",
+        "principal": "agent",
+        "client": "agent-client",
+        "resource": "urn:breg:test",
+        "purpose": "review",
+        "bounds": {
+            "type": "scheduling",
+            "permissions": [{
+                "service": "urn:service:intake",
+                "location": "north",
+                "actions": ["book"]
+            }]
+        },
+        "subjects": {"subject_reference": "synthetic-subject", "active": true},
+        "expiresAt": chrono::Utc::now().timestamp() + 900
+    });
+    let grant: TaskGrantBinding = serde_json::from_value(scheduling).unwrap();
+    assert_eq!(grant.validate(), Err(TaskGrantError::Refused));
+}
+
 #[cfg(feature = "postgres-test")]
 #[test]
 fn write_idempotency_separates_grants_without_changing_read_authority() {
