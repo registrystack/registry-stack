@@ -10,10 +10,11 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
+use registry_scheduling::config::{verify_policy_package, PolicyPackageManifest};
 use registry_scheduling_core::{
     parse_fixture_yaml, parse_policy_yaml, CaseStatus, SchedulingDiagnostic, SchedulingFixture,
-    SchedulingPolicy, AUTHORED_POLICY_FILE,
+    SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
 };
 use serde_json::{json, Value};
 
@@ -194,6 +195,59 @@ pub(super) fn explain(project: &Path) -> Result<Value> {
     }))
 }
 
+/// Write the verified package manifest beside the authored policy. The
+/// manifest is the deployment identity the runtime verifies at startup, so
+/// repackaging after an edit is a deliberate act: an existing manifest is
+/// never silently replaced, and the written manifest is proven to verify
+/// against the exact policy text before the command reports success.
+pub(super) fn package(project: &Path) -> Result<Value> {
+    let project =
+        fs::canonicalize(project).context("resolving the Scheduling authoring project")?;
+    let policy_text = read_authoring_input(&project.join(AUTHORED_POLICY_FILE))?;
+    let policy = parse_policy_yaml(&policy_text)
+        .map_err(|error| anyhow!("parsing {AUTHORED_POLICY_FILE} failed at {}", error.path()))?;
+    let findings = policy.check();
+    if !findings.is_empty() {
+        bail!(
+            "the authored policy reports {} finding(s); run schedulingctl check and fix them before packaging",
+            findings.len()
+        );
+    }
+    let manifest = PolicyPackageManifest::build(&policy_text)
+        .context("building the Scheduling policy package identity")?;
+    let manifest_path = project.join(SCHEDULING_PACKAGE_MANIFEST_FILE);
+    if manifest_path.exists() {
+        bail!(
+            "{} already exists; remove it deliberately before repackaging",
+            manifest_path.display()
+        );
+    }
+    let mut bytes =
+        serde_json::to_vec_pretty(&manifest).context("encoding the package manifest")?;
+    bytes.push(b'\n');
+    fs::write(&manifest_path, bytes)
+        .with_context(|| format!("writing {}", manifest_path.display()))?;
+    let verified = verify_policy_package(&project.join(AUTHORED_POLICY_FILE), &policy_text)
+        .with_context(|| format!("verifying the written {}", manifest_path.display()))?;
+    match verified {
+        Some(digest) if digest == manifest.policy_digest => {}
+        _ => bail!("the written package manifest does not verify against the authored policy"),
+    }
+    Ok(json!({
+        "ok": true,
+        "command": "package",
+        "project": project,
+        "manifest": manifest_path,
+        "policyDigest": policy.policy_digest(),
+        "packageDigest": manifest.policy_digest,
+        "files": manifest.files,
+        "runtimeConfigurationIncluded": false,
+        "secretsIncluded": false,
+        "networkAccess": false,
+        "databaseAccess": false,
+    }))
+}
+
 fn run_fixture(project: &Path, policy: &SchedulingPolicy, path: &Path) -> Result<Value> {
     let relative: PathBuf = path.strip_prefix(project).unwrap_or(path).to_owned();
     let fixture = load_fixture(path)?;
@@ -236,7 +290,7 @@ fn load_fixture(path: &Path) -> Result<SchedulingFixture> {
     parse_fixture_yaml(&bytes).with_context(|| format!("parsing fixture {}", path.display()))
 }
 
-fn read_authoring_input(path: &Path) -> Result<String> {
+pub(super) fn read_authoring_input(path: &Path) -> Result<String> {
     let bytes = fs::read(path).with_context(|| format!("reading {}", path.display()))?;
     if bytes.len() > MAXIMUM_INPUT_BYTES {
         bail!("{} exceeds the one MiB authoring limit", path.display());
