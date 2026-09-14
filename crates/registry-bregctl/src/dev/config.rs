@@ -452,6 +452,13 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if key.len() < 32 {
             bail!("local event destination {id} needs at least 32 HMAC key bytes");
         }
+        // The runtime resolves this key through the shared file secret
+        // provider, which refuses any value carrying a NUL byte. A randomly
+        // generated key holds one often enough to matter, so it is refused
+        // where the operator named the file rather than at a failed start.
+        if key.contains(&0) {
+            bail!("local event destination {id} needs NUL-free HMAC key bytes");
+        }
     }
     let mut seeds = BTreeSet::new();
     for seed in &clients.seed {
