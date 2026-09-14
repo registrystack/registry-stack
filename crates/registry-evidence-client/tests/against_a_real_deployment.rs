@@ -92,6 +92,11 @@ const TASK_CLIENT_AGENT_ID: &str = "0197aaaa-0000-7000-8000-0000000000a1";
 const TASK_CLIENT_ROLE_ID: &str = "0197aaaa-0000-7000-8000-0000000000c1";
 const TASK_AUTHORITY_RESOURCE_ID: &str = "0197aaaa-0000-7000-8000-0000000000b1";
 const TASK_AUTHORITY_ISSUER_ID: &str = "0197aaaa-0000-7000-8000-0000000000d1";
+/// A second assertion authority the same exchange client is also registered
+/// against at the authorization server. Stock ThunderID 1.0.1 has no per-client
+/// issuer restriction, so the client may exchange either authority's assertion;
+/// the resource server's own pairing is what separates them.
+const UNPAIRED_AUTHORITY_ISSUER_ID: &str = "0197aaaa-0000-7000-8000-0000000000d2";
 const TASK_BOOTSTRAP_RESOURCE: &str = "urn:registry:evidence:fixture:task-authority";
 const TASK_BOOTSTRAP_SCOPE: &str = "grants:assert";
 
@@ -1315,6 +1320,7 @@ async fn start_trusting_with_request_burst_and_jwks(
         external_jwks_uri,
         request_burst,
         None,
+        None,
     )
     .await
 }
@@ -1325,6 +1331,21 @@ async fn start_task_grant_deployment(
     authority: &SyntheticAssertionAuthority,
     request_burst: u32,
 ) -> Deployment {
+    start_task_grant_deployment_pairing(source_answer, issuer, authority, request_burst, None).await
+}
+
+/// The same task-grant deployment, optionally naming the one assertion
+/// authority the exchange client's tokens may have been minted from.
+///
+/// The pairing is an authentication rule over every request this deployment
+/// answers, separate from the requirement's own source-issuer rule.
+async fn start_task_grant_deployment_pairing(
+    source_answer: Value,
+    issuer: &StockTokenIssuer,
+    authority: &SyntheticAssertionAuthority,
+    request_burst: u32,
+    paired_authority: Option<&str>,
+) -> Deployment {
     let jwks_uri = issuer.jwks_uri();
     start_trusting_with_request_burst_jwks_and_task_authority(
         source_answer,
@@ -1332,6 +1353,7 @@ async fn start_task_grant_deployment(
         Some(&jwks_uri),
         request_burst,
         Some(authority.issuer()),
+        paired_authority,
     )
     .await
 }
@@ -1342,6 +1364,7 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     external_jwks_uri: Option<&str>,
     request_burst: u32,
     task_authority: Option<&str>,
+    paired_authority: Option<&str>,
 ) -> Deployment {
     let source = start_mock_server().await;
     let auth_key = generate_key(AUTH_KEY_ID);
@@ -1404,6 +1427,9 @@ async fn start_trusting_with_request_burst_jwks_and_task_authority(
     );
     if let Some(task_authority) = task_authority {
         rewrite_for_task_grant_profile(&bundle_root, task_authority);
+    }
+    if let Some(paired_authority) = paired_authority {
+        rewrite_for_assertion_issuer_pairing(&bundle_root, paired_authority);
     }
     rewrite_request_burst(&bundle_root, request_burst);
     fs::remove_file(
@@ -1775,6 +1801,7 @@ async fn start_token_issuer() -> TokenIssuer {
 /// production authority implementation and is never presented as Casework.
 struct SyntheticAssertionAuthority {
     issuer: String,
+    key_id: String,
     signing_key: PrivateJwk,
     active: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
@@ -1783,6 +1810,13 @@ struct SyntheticAssertionAuthority {
 
 impl SyntheticAssertionAuthority {
     fn start() -> Self {
+        Self::start_signing_with("synthetic-evidence-authority-key")
+    }
+
+    /// A second authority needs its own key identifier, because the
+    /// authorization server resolves every registered connection's keys into
+    /// one cache and two distinct signers must stay distinguishable in it.
+    fn start_signing_with(key_id: &str) -> Self {
         let listener =
             TcpListener::bind(("0.0.0.0", 0)).expect("the synthetic authority JWKS listener binds");
         let port = listener
@@ -1793,7 +1827,7 @@ impl SyntheticAssertionAuthority {
             .set_nonblocking(true)
             .expect("the synthetic authority listener is nonblocking");
         let issuer = format!("http://host.docker.internal:{port}/authority");
-        let signing_key = generate_es256_key("synthetic-evidence-authority-key");
+        let signing_key = generate_es256_key(key_id);
         let public_jwks = json!({"keys":[signing_key.public()]}).to_string();
         let active = Arc::new(AtomicBool::new(true));
         let stop = Arc::new(AtomicBool::new(false));
@@ -1825,6 +1859,7 @@ impl SyntheticAssertionAuthority {
         });
         Self {
             issuer,
+            key_id: key_id.to_owned(),
             signing_key,
             active,
             stop,
@@ -1874,7 +1909,7 @@ impl SyntheticAssertionAuthority {
         });
         let header = json!({
             "alg": "ES256",
-            "kid": "synthetic-evidence-authority-key",
+            "kid": self.key_id,
             "typ": "JWT"
         });
         let input = format!(
@@ -2004,6 +2039,28 @@ fn start_stock_token_issuer() -> StockTokenIssuer {
 }
 
 fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> StockTokenIssuer {
+    let authority_issuers: Vec<&str> = authority_issuer.into_iter().collect();
+    start_stock_token_issuer_with_authorities(&authority_issuers)
+}
+
+/// The connections this fixture may register, in the order the authorities are
+/// supplied. Both carry institutional grant mapping, so the authorization
+/// server lets the one registered exchange client present an assertion from
+/// either of them and the pairing is left to the resource server.
+const AUTHORITY_CONNECTIONS: [(&str, &str); 2] = [
+    (TASK_AUTHORITY_ISSUER_ID, "Synthetic assertion authority"),
+    (
+        UNPAIRED_AUTHORITY_ISSUER_ID,
+        "Unpaired synthetic assertion authority",
+    ),
+];
+
+fn start_stock_token_issuer_with_authorities(authority_issuers: &[&str]) -> StockTokenIssuer {
+    assert!(
+        authority_issuers.len() <= AUTHORITY_CONNECTIONS.len(),
+        "this fixture registers at most {} assertion authorities",
+        AUTHORITY_CONNECTIONS.len()
+    );
     let reservation = TcpListener::bind("127.0.0.1:0").expect("reserve stock issuer port");
     let port = reservation
         .local_addr()
@@ -2041,7 +2098,7 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
         }],
     )
     .expect("the stock issuer description is valid");
-    let task_client_key = authority_issuer.map(|authority_issuer| {
+    let task_client_key = (!authority_issuers.is_empty()).then(|| {
         let key = generate_es256_key(TASK_CLIENT_KEY_ID);
         description.resource_servers.push(ResourceServer {
             id: TASK_AUTHORITY_RESOURCE_ID.to_owned(),
@@ -2092,15 +2149,22 @@ fn start_stock_token_issuer_with_authority(authority_issuer: Option<&str>) -> St
                 assertion_scope: TASK_BOOTSTRAP_SCOPE.to_owned(),
             }),
         });
-        description.exchange_issuers.push(ExchangeIssuer {
-            id: TASK_AUTHORITY_ISSUER_ID.to_owned(),
-            name: "Synthetic assertion authority".to_owned(),
-            issuer: authority_issuer.to_owned(),
-            jwks_endpoint: format!("{authority_issuer}/jwks"),
-            mapping: registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
-            clients: vec![],
-            token_attributes: BTreeMap::new(),
-        });
+        for (authority_issuer, (id, name)) in authority_issuers.iter().zip(AUTHORITY_CONNECTIONS) {
+            description.exchange_issuers.push(ExchangeIssuer {
+                id: id.to_owned(),
+                name: name.to_owned(),
+                issuer: (*authority_issuer).to_owned(),
+                jwks_endpoint: format!("{authority_issuer}/jwks"),
+                mapping:
+                    registry_thunderid_tooling::description::ExchangeMapping::InstitutionalGrant,
+                // Institutional grant mapping projects no first-party claims,
+                // so a connection names no clients here. Which authority each
+                // client may present is a resource-server rule, not one this
+                // description can carry.
+                clients: vec![],
+                token_attributes: BTreeMap::new(),
+            });
+        }
         key
     });
     description
@@ -2451,6 +2515,148 @@ async fn stock_issuer_task_grants_are_subject_bound_at_the_evidence_boundary() {
     );
 }
 
+/// Stock-issuer acceptance for the per-client assertion-authority rule.
+///
+/// One registered exchange client is registered against two assertion
+/// authorities, which is the topology stock ThunderID 1.0.1 offers: any client
+/// holding the exchange grant may present any trusted authority's assertion,
+/// and no per-client issuer restriction exists to say otherwise. The
+/// authorization server mints both tokens here, so the whole difference in
+/// outcome is the resource server's own pairing, applied at its authentication
+/// boundary before any requirement is consulted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "exact gate: starts the pinned stock issuer and real Evidence runtime"]
+async fn an_exchanged_token_carries_the_authority_its_client_is_paired_with() {
+    let paired = SyntheticAssertionAuthority::start();
+    let unpaired =
+        SyntheticAssertionAuthority::start_signing_with("unpaired-evidence-authority-key");
+    let registered = [paired.issuer().to_owned(), unpaired.issuer().to_owned()];
+    let issuer = tokio::task::spawn_blocking(move || {
+        start_stock_token_issuer_with_authorities(&[&registered[0], &registered[1]])
+    })
+    .await
+    .expect("the stock task issuer startup task completes");
+
+    let expires_at = unix_seconds() + 120;
+    let exchange = issuer.task_provider();
+    let identity = grant_identity("Amina", "Diallo", "2000-01-01");
+    let paired_assertion = paired
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000011",
+            "institutional-agent",
+            identity.clone(),
+            expires_at,
+        )
+        .expect("the paired authority's task remains approved");
+    let unpaired_assertion = unpaired
+        .assertion(
+            &issuer.origin,
+            "01980000-0000-7000-8000-000000000012",
+            "institutional-agent",
+            identity,
+            expires_at,
+        )
+        .expect("the unpaired authority's task remains approved");
+    let (paired_token, crossed_token) = tokio::join!(
+        exchange.exchange(&paired_assertion),
+        exchange.exchange(&unpaired_assertion),
+    );
+    let paired_token = bearer_text(&paired_token.expect("the paired authority's grant exchanges"));
+    // The crossed exchange is the upstream gap this pairing exists for. One
+    // client, two registered authorities, and the authorization server signs
+    // whichever assertion it is handed.
+    let crossed_token = bearer_text(
+        &crossed_token.expect("stock token exchange accepts any registered authority's assertion"),
+    );
+    assert_eq!(
+        jwt_payload(&paired_token)["registry_assertion_issuer"],
+        paired.issuer(),
+        "the exchanged token records the authority that signed its assertion"
+    );
+    assert_eq!(
+        jwt_payload(&crossed_token)["registry_assertion_issuer"],
+        unpaired.issuer(),
+        "the crossed token records the authority it was actually minted from"
+    );
+    assert_eq!(
+        jwt_payload(&crossed_token)["client_id"],
+        TASK_CLIENT_ID,
+        "the crossed token is the registered client's own, vouched for in full"
+    );
+
+    let bound = start_task_grant_deployment_pairing(
+        resolved_source_answer(),
+        &issuer,
+        &paired,
+        10,
+        Some(paired.issuer()),
+    )
+    .await;
+    let unbound = start_task_grant_deployment(resolved_source_answer(), &issuer, &paired, 10).await;
+
+    let paired_client = bound.client(&paired_token);
+    let definitions = paired_client
+        .discover()
+        .await
+        .expect("the paired grant discovers its bounded definition");
+    let paired_request = paired_client
+        .prepare(grant_spec(
+            &definitions,
+            SubjectExpectations::AcceptFirstUse,
+        ))
+        .expect("the paired request prepares");
+    paired_client
+        .request_and_verify(&paired_request)
+        .await
+        .expect("the paired authority's grant answers");
+
+    // Without the pairing the crossed token is an ordinary admitted credential:
+    // the trusted issuer signed it and its client is allowed, so it
+    // authenticates in full and reaches this deployment's own policy. What
+    // keeps it from an answer there is the requirement's source-issuer rule,
+    // which each requirement carries separately.
+    let unbound_client = unbound.client(&crossed_token);
+    let unbound_definitions = unbound_client
+        .discover()
+        .await
+        .expect("an unpaired deployment authenticates the crossed token");
+    assert!(
+        unbound_definitions.definition(REQUIREMENT).is_none(),
+        "the requirement's own source-issuer rule is what withholds it there"
+    );
+
+    // With the pairing the same token is refused as a credential, so it reaches
+    // no requirement and nothing of this deployment's shape is disclosed to it.
+    let crossed_client = bound.client(&crossed_token);
+    assert_denied(
+        crossed_client.discover().await,
+        401,
+        "auth.invalid_credential",
+    );
+
+    // A token carrying no assertion authority at all is untouched by the rule,
+    // which is what keeps an ordinary client-credentials caller working.
+    let ordinary_token = bearer_text(
+        &issuer
+            .provider()
+            .bearer_token()
+            .await
+            .expect("the ordinary registered service obtains its token"),
+    );
+    assert!(
+        jwt_payload(&ordinary_token)
+            .get("registry_assertion_issuer")
+            .is_none(),
+        "a client-credentials token names no assertion authority"
+    );
+    bound
+        .client(&ordinary_token)
+        .discover()
+        .await
+        .expect("the pairing leaves a token that claims no authority alone");
+}
+
 fn bearer_text(token: &BearerToken) -> String {
     token
         .authorization_header_value()
@@ -2676,6 +2882,29 @@ fn rewrite_for_task_grant_profile(bundle_root: &Path, authority_issuer: &str) {
         1,
     );
     fs::write(&configuration_path, document).expect("the task-grant configuration is written");
+    regenerate_discovery_description(bundle_root);
+}
+
+/// Pair the registered exchange client with exactly one assertion authority.
+///
+/// The authorization server registers the client against every connection it
+/// knows and restricts none of them per client, so this is the only place the
+/// pairing is stated. It is read at the authentication boundary, before any
+/// requirement, and says nothing about a token that carries no assertion
+/// authority at all.
+fn rewrite_for_assertion_issuer_pairing(bundle_root: &Path, paired_authority: &str) {
+    let configuration_path = bundle_root.join("evidence.yaml");
+    let mut document =
+        fs::read_to_string(&configuration_path).expect("the staged configuration is readable");
+    replace_exact(
+        &mut document,
+        &format!("  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n"),
+        &format!(
+            "  allowedClients: [{CLIENT_ID}, {TASK_CLIENT_ID}]\n  assertionIssuers:\n    {TASK_CLIENT_ID}:\n      - \"{paired_authority}\"\n"
+        ),
+        1,
+    );
+    fs::write(&configuration_path, document).expect("the paired configuration is written");
     regenerate_discovery_description(bundle_root);
 }
 

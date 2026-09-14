@@ -65,6 +65,10 @@ pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
 const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
+const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
+const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
+const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
+const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -433,6 +437,11 @@ impl std::fmt::Debug for DatabaseConfig {
 pub struct OidcConfig {
     #[serde(default)]
     pub allowed_clients: Vec<String>,
+    /// Assertion authorities each client may exchange a subject token from,
+    /// keyed by client identifier. An empty map applies no rule; see
+    /// [`registry_platform_oidc::TokenVerifierConfig::assertion_issuers`].
+    #[serde(default)]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
     pub issuer: String,
     pub audience: String,
     #[serde(default)]
@@ -600,6 +609,7 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
+        self.validate_assertion_issuers()?;
         if let Some(authority) = &self.task_authority {
             if !registry_platform_httputil::valid_resource_uri(&authority.issuer)
                 || !registry_platform_httputil::valid_resource_uri(&authority.exchange_audience)
@@ -699,6 +709,36 @@ impl RuntimeConfig {
         Ok(())
     }
 
+    /// Refuse an assertion-issuer map with too many clients, an oversized
+    /// client key or issuer string, too many issuers listed for one client, or
+    /// a repeated issuer within one client's list. This runs at configuration
+    /// load, before any verifier is built, so an operator sees the refusal
+    /// without the runtime ever starting.
+    fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
+        let assertion_issuers = &self.authentication.oidc.assertion_issuers;
+        if assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        for (client, issuers) in assertion_issuers {
+            if client.is_empty()
+                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
+                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            let mut seen = BTreeSet::new();
+            for issuer in issuers {
+                if issuer.is_empty()
+                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
+                    || !seen.insert(issuer)
+                {
+                    return Err(RuntimeConfigError::InvalidOidc);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Refuse a bound source whose timeouts or reconciliation interval fall
     /// outside the adapter's accepted range. This runs at configuration load,
     /// before secrets are resolved or any adapter is built, so an operator
@@ -750,7 +790,8 @@ impl RuntimeConfig {
             vec!["at+jwt".to_owned(), "JWT".to_owned()],
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone());
+        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone());
         Ok((verifier, std::sync::Arc::new(fetcher)))
     }
 }
@@ -1044,6 +1085,218 @@ sources:
             }
         );
         assert_eq!(oidc.scope_claim, "registry_scopes");
+    }
+
+    /// Build a runtime configuration with a static JWKS source (so building the
+    /// verifier never performs a real discovery fetch) and return the verifier
+    /// configuration it produces, optionally with an authored assertionIssuers
+    /// value.
+    #[cfg(unix)]
+    async fn built_verifier(assertion_issuers: Option<serde_json::Value>) -> TokenVerifierConfig {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let secrets_root = root.path().join("secrets");
+        std::fs::create_dir(&secrets_root).unwrap();
+        std::fs::write(
+            secrets_root.join("jwks.json"),
+            br#"{"keys":[{"kty":"RSA","kid":"one","n":"AQAB","e":"AQAB"}]}"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            secrets_root.join("jwks.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["jwksSource"] =
+            serde_json::json!({"kind": "static", "documentRef": "secret:file/jwks.json"});
+        if let Some(assertion_issuers) = assertion_issuers {
+            document["authentication"]["oidc"]["assertionIssuers"] = assertion_issuers;
+        }
+        let operator = root.path().join("operator.yaml");
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+
+        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
+        let secrets = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            &secrets_root,
+        )
+        .unwrap();
+        config
+            .oidc_verifier(&secrets)
+            .await
+            .expect("the verifier is built")
+            .0
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn assertion_issuers_defaults_to_an_empty_map_leaving_the_verifier_with_no_rule() {
+        let verifier = built_verifier(None).await;
+        assert!(verifier.assertion_issuers.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_configured_assertion_issuers_map_reaches_the_built_verifier() {
+        let verifier = built_verifier(Some(serde_json::json!({
+            "task-agent": ["https://exchange.example.test"]
+        })))
+        .await;
+        let mut expected = BTreeMap::new();
+        expected.insert(
+            "task-agent".to_owned(),
+            vec!["https://exchange.example.test".to_owned()],
+        );
+        assert_eq!(verifier.assertion_issuers, expected);
+    }
+
+    #[test]
+    fn a_duplicate_issuer_within_one_clients_assertion_issuer_list_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "task-agent": [
+                "https://exchange.example.test",
+                "https://exchange.example.test"
+            ]
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn an_empty_assertion_issuer_string_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "task-agent": [""]
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn an_empty_assertion_issuer_client_key_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "": ["https://exchange.example.test"]
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn an_over_long_assertion_issuer_client_key_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        let client = "a".repeat(MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1);
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            client: ["https://exchange.example.test"]
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn an_over_long_assertion_issuer_value_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        let issuer = format!(
+            "https://{}.example.test",
+            "a".repeat(MAXIMUM_ASSERTION_ISSUER_BYTES)
+        );
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "task-agent": [issuer]
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn too_many_assertion_issuer_clients_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        let mut assertion_issuers = serde_json::Map::new();
+        for index in 0..=MAXIMUM_ASSERTION_ISSUER_CLIENTS {
+            assertion_issuers.insert(
+                format!("task-agent-{index}"),
+                serde_json::json!(["https://exchange.example.test"]),
+            );
+        }
+        document["authentication"]["oidc"]["assertionIssuers"] =
+            serde_json::Value::Object(assertion_issuers);
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
+    }
+
+    #[test]
+    fn too_many_issuers_for_one_assertion_issuer_client_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let operator = root.path().join("runtime.yaml");
+        let mut document = operator_value(&package, "development-loopback");
+        let issuers: Vec<String> = (0..=MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+            .map(|index| format!("https://exchange-{index}.example.test"))
+            .collect();
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "task-agent": issuers
+        });
+        std::fs::write(&operator, serde_norway::to_string(&document).unwrap()).unwrap();
+        assert!(matches!(
+            RuntimeConfig::load(&operator),
+            Err(RuntimeConfigError::InvalidOidc)
+        ));
     }
 
     #[test]

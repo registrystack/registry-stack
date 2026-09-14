@@ -270,7 +270,8 @@ fn is_key_source_failure(error: &OidcError) -> bool {
         | OidcError::AudienceMismatch
         | OidcError::SignatureInvalid
         | OidcError::InvalidToken
-        | OidcError::ClientNotAllowed => false,
+        | OidcError::ClientNotAllowed
+        | OidcError::AssertionIssuerNotAllowed => false,
         _ => false,
     }
 }

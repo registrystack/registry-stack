@@ -290,6 +290,12 @@ impl Integrations {
                 "http://host.docker.internal:{}/oauth2/jwks",
                 authority.jwks_port
             );
+            let paired = self
+                .service_clients
+                .iter()
+                .filter(|client| client.task_exchange)
+                .map(|client| client.id.as_str())
+                .collect::<BTreeSet<_>>();
             let registered = owner_clients["issuer"]["exchangeIssuers"]
                 .as_array()
                 .is_some_and(|entries| {
@@ -297,6 +303,15 @@ impl Integrations {
                         entry["issuer"] == authority.issuer
                             && entry["jwksEndpoint"] == expected_jwks
                             && entry["mapping"] == "institutional_grant"
+                            // The owner derives each exchange client's allowed
+                            // assertion authority from the connection it is
+                            // paired with, so a task client paired with one of
+                            // the owner's other connections would reach its
+                            // resource servers as that authority's.
+                            && entry["clients"].as_array().is_some_and(|ids| {
+                                ids.iter().filter_map(Value::as_str).collect::<BTreeSet<_>>()
+                                    == paired
+                            })
                     })
                 });
             if !registered {
@@ -471,6 +486,19 @@ impl Integrations {
                 .collect::<Vec<_>>());
         }
         if let Some(authority) = &self.task_authority {
+            // A task exchange client may present only this authority's
+            // assertion. The borrowed issuer trusts every authority registered
+            // by its owner, so naming the pairing here is what refuses a token
+            // minted from one of the others.
+            let assertion_issuers = self
+                .service_clients
+                .iter()
+                .filter(|client| client.task_exchange)
+                .map(|client| (client.id.clone(), vec![authority.issuer.clone()]))
+                .collect::<BTreeMap<_, _>>();
+            if !assertion_issuers.is_empty() {
+                value["authentication"]["oidc"]["assertionIssuers"] = json!(assertion_issuers);
+            }
             value["taskAuthority"] = json!({"issuer":authority.issuer,
                 "exchangeAudience":state.issuer_origin(),"signingKeyRef":"secret:file/task-authority-signing-key",
                 "statusClients":authority.status_clients});

@@ -2063,7 +2063,9 @@ mod tests {
         );
     }
 
-    fn assertion_issuer_verifier(assertion_issuers: BTreeMap<String, Vec<String>>) -> TokenVerifier {
+    fn assertion_issuer_verifier(
+        assertion_issuers: BTreeMap<String, Vec<String>>,
+    ) -> TokenVerifier {
         let fetcher = Arc::new(JwksFetcher::new(
             "http://127.0.0.1/jwks".to_string(),
             JwksFetcherConfig::defaults(),

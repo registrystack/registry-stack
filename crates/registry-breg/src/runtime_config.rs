@@ -1166,6 +1166,7 @@ pub struct OidcVerifierConfig {
     scope_separator: char,
     allowed_clients: Vec<String>,
     denied_kids: Vec<String>,
+    assertion_issuers: BTreeMap<String, Vec<String>>,
     max_token_lifetime: Duration,
     leeway: Duration,
     jwks_cache: JwksCacheConfig,
@@ -1191,6 +1192,19 @@ impl OidcVerifierConfig {
         if allowed_unique.len() != raw.allowed_clients.len() {
             return Err(RuntimeConfigError::InvalidOidc);
         }
+        // Duplicate assertion-issuer client keys are already refused before this
+        // point: `reject_governed_members` parses the whole document into a
+        // generic value first, and that parse rejects any duplicate YAML mapping
+        // key anywhere in the document, including here.
+        let assertion_issuer_clients = raw.assertion_issuers.keys().cloned().collect::<Vec<_>>();
+        validate_bounded_list(&assertion_issuer_clients)?;
+        for issuers in raw.assertion_issuers.values() {
+            validate_bounded_list(issuers)?;
+            let issuer_unique = issuers.iter().collect::<HashSet<_>>();
+            if issuer_unique.len() != issuers.len() {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+        }
         let max_token_lifetime = seconds_bounded(raw.max_token_lifetime_seconds, 1, 7200)?;
         let leeway = oidc_leeway(raw.leeway_milliseconds)?;
         Ok(Self {
@@ -1202,6 +1216,7 @@ impl OidcVerifierConfig {
             scope_separator: raw.scope_separator,
             allowed_clients: raw.allowed_clients,
             denied_kids: raw.denied_kids,
+            assertion_issuers: raw.assertion_issuers,
             max_token_lifetime,
             leeway,
             jwks_cache: JwksCacheConfig::from_raw(raw.jwks_cache)?,
@@ -1244,6 +1259,7 @@ impl OidcVerifierConfig {
         .with_scope_separator(self.scope_separator)
         .with_allowed_clients(self.allowed_clients.clone())
         .with_denied_kids(self.denied_kids.iter().cloned().collect())
+        .with_assertion_issuers(self.assertion_issuers.clone())
         .with_max_token_lifetime(Some(self.max_token_lifetime))
         .with_leeway(self.leeway)
     }
@@ -1295,6 +1311,10 @@ impl fmt::Debug for OidcVerifierConfig {
             .field("scope_separator", &"<redacted>")
             .field("allowed_clients_count", &self.allowed_clients.len())
             .field("denied_kids_count", &self.denied_kids.len())
+            .field(
+                "assertion_issuers_client_count",
+                &self.assertion_issuers.len(),
+            )
             .field("max_token_lifetime", &self.max_token_lifetime)
             .field("leeway", &self.leeway)
             .field("jwks_cache", &self.jwks_cache)
@@ -2006,6 +2026,8 @@ struct RawOidcVerifierConfig {
     allowed_clients: Vec<String>,
     #[serde(default)]
     denied_kids: Vec<String>,
+    #[serde(default)]
+    assertion_issuers: BTreeMap<String, Vec<String>>,
     max_token_lifetime_seconds: u64,
     leeway_milliseconds: u64,
     /// Optional JWKS fetch and cache tuning. Defaults to bounded cache behavior.
@@ -2302,6 +2324,7 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
         "/$defs/RawOidcVerifierConfig/properties/allowedClients",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
         "/$defs/RawOidcVerifierConfig/properties/jwksSource",
+        "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
     ] {
         remove_schema_default(&mut schema, pointer);
     }
@@ -2603,6 +2626,7 @@ fn install_schema_constraints(schema: &mut Value) {
     for pointer in [
         "/$defs/RawOidcVerifierConfig/properties/allowedClients",
         "/$defs/RawOidcVerifierConfig/properties/deniedKids",
+        "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/additionalProperties",
     ] {
         install_schema_array_constraints(schema, pointer, MAX_LIST_ITEMS, true);
         if let Some(items) = schema
@@ -2618,6 +2642,17 @@ fn install_schema_constraints(schema: &mut Value) {
                 LIST_VALUE_SCHEMA_PATTERN,
             );
         }
+    }
+    install_schema_property_names(
+        schema,
+        "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
+        LIST_VALUE_SCHEMA_PATTERN,
+    );
+    if let Some(member) = schema
+        .pointer_mut("/$defs/RawOidcVerifierConfig/properties/assertionIssuers")
+        .and_then(Value::as_object_mut)
+    {
+        member.insert("maxProperties".to_owned(), Value::from(MAX_LIST_ITEMS));
     }
     install_schema_array_constraints(
         schema,

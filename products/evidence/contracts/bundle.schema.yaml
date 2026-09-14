@@ -607,6 +607,34 @@ $defs:
           type: string
           minLength: 1
           maxLength: 128
+      assertionIssuers:
+        description: >-
+          Per-client assertion-authority admission for a token that carries the
+          platform verifier's `registry_assertion_issuer` claim, keyed by the
+          client identifier the token's `client_id`/`azp` names and naming the
+          issuers that client may present the claim as. Omitting the key
+          applies no rule, so every exchanged token is admitted regardless of
+          the claim. A token that carries no such claim is never affected by
+          this admission.
+        type: object
+        minProperties: 1
+        maxProperties: 32
+        propertyNames:
+          minLength: 1
+          maxLength: 128
+        additionalProperties:
+          description: >-
+            The issuers one client may present the `registry_assertion_issuer`
+            claim as.
+          type: array
+          minItems: 1
+          maxItems: 8
+          uniqueItems: true
+          items:
+            description: One issuer URL the client may present the claim as.
+            type: string
+            minLength: 1
+            maxLength: 512
       requiredScopes:
         description: >-
           Scopes every inbound token must carry, read from the verified token's scope set

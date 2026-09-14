@@ -277,6 +277,7 @@ issuer:
       issuer: https://casework.example.test
       jwksEndpoint: http://host.docker.internal:8094/oauth2/jwks
       mapping: institutional_grant
+      clients: [task-agent]
     - id: portal
       issuer: http://127.0.0.1:8095
       jwksEndpoint: http://host.docker.internal:8095/oauth2/jwks
@@ -308,7 +309,12 @@ issuer:
 
 Every referenced client also needs its own ordinary `clients` entry with exact
 scopes and claims. `exchangeClients` must have one bootstrap scope, and the
-external authority must be pre-registered. Local browser applications use
+external authority must be pre-registered. List each exchange client under
+every connection whose authority it may present: the local resource servers
+read that pairing and refuse a token exchanged from any other authority, so a
+client named by no connection is refused before startup. A `first_party`
+connection's `clients` list also selects the claims that connection projects;
+an `institutional_grant` connection projects none. Local browser applications use
 authorization code with PKCE and explicit redirect URIs. Their secrets and
 synthetic passwords are copied into the owner's private issuer state. Explicit
 app and user grants render issuer role assignments for the matching

@@ -1650,6 +1650,18 @@ pub struct AuthenticationConfig {
     /// that gap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_clients: Option<Vec<String>>,
+    /// Per-client assertion-authority admission for a token that carries the
+    /// platform verifier's `registry_assertion_issuer` claim, keyed by the
+    /// client (matched against the token's `azp`, falling back to
+    /// `client_id`, the same way `allowed_clients` is matched) and naming the
+    /// issuers that client may present the claim as. Absent applies no rule,
+    /// so every exchanged token is admitted regardless of the claim; present
+    /// admits a claim-bearing token only when its client is a listed key and
+    /// its claim value is one of that client's listed issuers. A token that
+    /// carries no such claim, an ordinary client-credentials token, is never
+    /// affected by this admission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assertion_issuers: Option<BTreeMap<String, Vec<String>>>,
     /// Scopes every inbound token must carry, checked against the verified
     /// token's scope set after signature verification and before any authority
     /// claim is read. Absent keeps the no-scope-gate behavior; present
@@ -1717,6 +1729,13 @@ impl AuthenticationConfig {
         // mis-authored key rather than a deliberate posture.
         if let Some(clients) = &self.allowed_clients {
             validate_unique_strings(clients, 1, 32, 1, 128, "authentication allowedClients")?;
+        }
+        if let Some(assertion_issuers) = &self.assertion_issuers {
+            let clients: Vec<String> = assertion_issuers.keys().cloned().collect();
+            validate_unique_strings(&clients, 1, 32, 1, 128, "authentication assertionIssuers")?;
+            for issuers in assertion_issuers.values() {
+                validate_unique_strings(issuers, 1, 8, 1, 512, "authentication assertionIssuers")?;
+            }
         }
         if let Some(scopes) = &self.required_scopes {
             validate_unique_strings(scopes, 1, 32, 1, 256, "authentication requiredScopes")?;
@@ -6107,6 +6126,78 @@ mod tests {
             assert!(
                 candidate.validate().is_err(),
                 "accepted requiredScopes {scopes:?}"
+            );
+        }
+    }
+
+    /// `assertionIssuers` is optional, but a present map must be a nonempty,
+    /// bounded, unique set of client keys, each naming a nonempty, bounded,
+    /// unique list of issuer strings.
+    #[test]
+    fn assertion_issuers_are_optional_but_present_means_nonempty_and_bounded() {
+        let mut config = EvidenceConfig::parse_yaml(include_bytes!(
+            "../../../products/evidence/fixtures/acceptance/adult-status/evidence.yaml"
+        ))
+        .expect("strict fixture validates");
+        config
+            .validate()
+            .expect("absent assertionIssuers keeps the existing behavior");
+
+        config.authentication.assertion_issuers = Some(BTreeMap::from([
+            (
+                "evidence-task-agent".to_owned(),
+                vec!["https://identity.invalid".to_owned()],
+            ),
+            (
+                "portal-exchange".to_owned(),
+                vec![
+                    "https://casework.invalid".to_owned(),
+                    "https://portal.invalid".to_owned(),
+                ],
+            ),
+        ]));
+        config
+            .validate()
+            .expect("stated assertionIssuers validates");
+
+        for clients in [
+            BTreeMap::new(),
+            BTreeMap::from([("".to_owned(), vec!["https://issuer.invalid".to_owned()])]),
+            BTreeMap::from([("a".repeat(129), vec!["https://issuer.invalid".to_owned()])]),
+            (0..33)
+                .map(|index| {
+                    (
+                        format!("client-{index}"),
+                        vec!["https://issuer.invalid".to_owned()],
+                    )
+                })
+                .collect(),
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.assertion_issuers = Some(clients.clone());
+            assert!(
+                candidate.validate().is_err(),
+                "accepted assertionIssuers {clients:?}"
+            );
+        }
+        for issuers in [
+            Vec::new(),
+            vec!["".to_owned()],
+            vec!["a".repeat(513)],
+            vec!["https://issuer.invalid".to_owned(); 9],
+            vec![
+                "https://issuer.invalid".to_owned(),
+                "https://issuer.invalid".to_owned(),
+            ],
+        ] {
+            let mut candidate = config.clone();
+            candidate.authentication.assertion_issuers = Some(BTreeMap::from([(
+                "evidence-task-agent".to_owned(),
+                issuers.clone(),
+            )]));
+            assert!(
+                candidate.validate().is_err(),
+                "accepted assertionIssuers issuer list {issuers:?}"
             );
         }
     }

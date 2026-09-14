@@ -680,6 +680,7 @@ mod tests {
             "/$defs/RawOidcVerifierConfig/properties/allowedClients/default",
             "/$defs/RawOidcVerifierConfig/properties/deniedKids/default",
             "/$defs/RawOidcVerifierConfig/properties/jwksSource/default",
+            "/$defs/RawOidcVerifierConfig/properties/assertionIssuers/default",
         ] {
             assert_eq!(value.pointer(pointer), None, "{pointer}");
         }
@@ -798,6 +799,15 @@ mod tests {
             |instance| {
                 instance["authentication"]["oidc"]["allowedClients"] =
                     serde_json::json!(["client-a", "client-a"]);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
+            "OIDC assertion issuer list uniqueness",
+            |instance| {
+                instance["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+                    "registry-client": ["https://issuer.example", "https://issuer.example"]
+                });
             },
         );
         assert_schema_rejects_parser_refused_runtime(

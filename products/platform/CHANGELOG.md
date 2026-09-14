@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add `registry_assertion_issuer`, derived by the exchange issuer from the
+  verified subject-token issuer and reserved against configurable claim names
+  and signer-declared attributes alike. A resource server may declare the
+  assertion authorities each client is allowed to present, and refuses a token
+  naming any other. An unconfigured server applies no rule, and a token that
+  was not obtained by token exchange carries no such claim and is unaffected.
+
 ## v0.31.0 - 2026-09-13
 
 - Add the closed contextual task-grant claim contract used by Casework,

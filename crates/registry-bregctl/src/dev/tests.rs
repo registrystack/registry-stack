@@ -459,6 +459,14 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         .unwrap();
     assert!(allowed.iter().any(|id| id == "portal"));
     assert!(!allowed.iter().any(|id| id == "evidence-portal"));
+    // The owner publishes the per-client assertion authority rule its resource
+    // servers enforce, derived from the connections each client is registered
+    // against. Every declared exchange client is registered against at least
+    // one connection, so each one reaches this map.
+    assert_eq!(
+        runtime["authentication"]["oidc"]["assertionIssuers"],
+        json!({"source": ["https://casework.example.test"]})
+    );
     config::check_borrowed_browser_clients(
         &clients,
         &["portal".into()],
@@ -488,6 +496,82 @@ fn owner_issuer_pre_registers_shared_resources_exchange_and_browser_identity() {
         )
         .unwrap(),
         private::read(&input.join("assertion-key.jwk"), MAX_BYTES).unwrap()
+    );
+}
+
+fn pair_exchange_client(mut clients: Clients, mapping: config::IssuerConnectionMapping) -> Clients {
+    clients
+        .issuer
+        .exchange_issuers
+        .push(config::IssuerConnection {
+            id: "casework".into(),
+            issuer: "https://casework.example.test".into(),
+            jwks_endpoint: "https://casework.example.test/oauth2/jwks".into(),
+            mapping,
+            clients: vec!["source".into()],
+            token_attributes: BTreeMap::new(),
+        });
+    clients.issuer.exchange_clients.push("source".into());
+    clients
+}
+
+#[test]
+fn exchange_clients_and_connections_name_each_other() {
+    // The resource server's per-client assertion-issuer rule is derived from
+    // these connection client lists alone, and an empty derived map is no rule
+    // at all. A topology where the two lists disagree is refused here, so the
+    // rule cannot be switched off by an omission no reader would notice.
+    let (_temp, _state, base, _files) = fixture();
+    for mapping in [
+        config::IssuerConnectionMapping::InstitutionalGrant,
+        config::IssuerConnectionMapping::FirstParty,
+    ] {
+        let clients = pair_exchange_client(base.clone(), mapping);
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+        let mut unregistered = clients.clone();
+        unregistered.issuer.exchange_issuers[0].clients.clear();
+        let refusal =
+            config::clients(&serde_norway::to_string(&unregistered).unwrap().into_bytes())
+                .unwrap_err()
+                .to_string();
+        assert!(
+            refusal.contains("registering exchange connection"),
+            "{refusal}"
+        );
+        let mut undeclared = clients.clone();
+        undeclared.issuer.exchange_issuers[0]
+            .clients
+            .push("unlisted".into());
+        let refusal = config::clients(&serde_norway::to_string(&undeclared).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("declared exchange clients"), "{refusal}");
+    }
+}
+
+#[test]
+fn an_institutional_grant_connection_pairs_clients_without_projecting_their_claims() {
+    // A described connection lists clients to select the first-party claims it
+    // projects, so an institutional grant connection describes none. The same
+    // declared pairing still decides which assertion authority that client may
+    // present, which is a rule the resource server applies and the issuer does
+    // not.
+    let (_temp, state, clients, files) = fixture();
+    let clients =
+        pair_exchange_client(clients, config::IssuerConnectionMapping::InstitutionalGrant);
+    let clients =
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let description = config::issuer_description(&state, &clients, &state.root()).unwrap();
+    assert!(description.exchange_issuers[0].clients.is_empty());
+    description.validate().unwrap();
+    let runtime: Value = serde_norway::from_slice(
+        &private::read(&state.root().join("runtime-test.yaml"), MAX_BYTES).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime["authentication"]["oidc"]["assertionIssuers"],
+        json!({"source": ["https://casework.example.test"]})
     );
 }
 
@@ -2150,6 +2234,38 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
         serde_norway::from_slice(&fs::read(root.join("runtime-test.yaml")).unwrap()).unwrap();
     assert_eq!(runtime["eventDestinations"], bindings);
     assert!(config::external_event_destinations(&compiled, &BTreeMap::new()).is_err());
+}
+
+#[test]
+fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
+    let (_project_temp, project) = write_init_project();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let mut clients = config::clients(&bytes).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = project.join("event-key");
+    private::create(&key, b"synthetic-local-event-key-for-test").unwrap();
+    clients.event_destinations.insert(
+        "openfn".into(),
+        config::LocalEventDestination {
+            origin: "http://127.0.0.1:18888".into(),
+            path: "/inbox/registry".into(),
+            hmac_key_file: key,
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    // Port zero parses and is not the scheme default, so the clients file is
+    // what must refuse it. The origin otherwise reaches the runtime and fails
+    // there, naming the destination policy rather than this declaration.
+    for origin in ["http://127.0.0.1:0", "http://127.0.0.1"] {
+        clients.event_destinations.get_mut("openfn").unwrap().origin = origin.into();
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("exact loopback origins"),
+            "{origin}: {refusal}"
+        );
+    }
 }
 
 #[test]

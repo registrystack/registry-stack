@@ -842,7 +842,10 @@ mod tests {
             grant_id: ASSERTION_ISSUER_CLAIM.to_owned(),
             ..ClaimNames::default()
         };
-        assert_eq!(assertion_provenance.validate(), Err(ClaimError::InvalidNames));
+        assert_eq!(
+            assertion_provenance.validate(),
+            Err(ClaimError::InvalidNames)
+        );
     }
 
     #[test]
