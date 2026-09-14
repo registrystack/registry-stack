@@ -189,6 +189,10 @@ enum CompileProfile {
         audience: String,
         active_public_jwk_file: String,
         active_public_jwk: Vec<u8>,
+        /// The machine clients the compiled bundle admits by name. Empty
+        /// leaves admission to the issuer, which is what a session owning its
+        /// own issuer wants.
+        allowed_clients: Vec<String>,
     },
     Production(Value),
 }
@@ -260,6 +264,7 @@ pub(crate) fn compile_local_project_with_ports(
         evidence_bin,
         ports,
         LOCAL_AUDIENCE,
+        &[],
     )
 }
 
@@ -269,6 +274,7 @@ pub(crate) fn compile_local_project_with_ports_and_resource(
     evidence_bin: &Path,
     ports: LocalServicePorts,
     audience: &str,
+    allowed_clients: &[String],
 ) -> Result<CompiledProject> {
     compile_local_project_with_target_inputs_and_resource(
         project_root,
@@ -278,6 +284,7 @@ pub(crate) fn compile_local_project_with_ports_and_resource(
         json!({}),
         json!({"systemRoots": true, "trustProfiles": {}}),
         audience,
+        allowed_clients,
     )
 }
 
@@ -298,9 +305,11 @@ pub(crate) fn compile_local_project_with_target_inputs(
         source_connections,
         outbound_tls,
         LOCAL_AUDIENCE,
+        &[],
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn compile_local_project_with_target_inputs_and_resource(
     project_root: &Path,
     staging_root: &Path,
@@ -309,6 +318,7 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
     source_connections: Value,
     outbound_tls: Value,
     audience: &str,
+    allowed_clients: &[String],
 ) -> Result<CompiledProject> {
     LocalServicePorts::new(ports.evidence, ports.issuer)?;
     if !valid_local_audience(audience) {
@@ -330,6 +340,7 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
             audience: audience.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
+            allowed_clients: allowed_clients.to_vec(),
         },
         source_connections,
     )?;
@@ -489,6 +500,7 @@ pub(crate) fn compile_check_project(
             audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file: OFFLINE_CHECK_PUBLIC_JWK_FILE.to_owned(),
             active_public_jwk: OFFLINE_CHECK_PUBLIC_JWK.as_bytes().to_vec(),
+            allowed_clients: Vec::new(),
         },
         json!({}),
     )?;
@@ -541,6 +553,7 @@ pub(crate) fn compile_fixture_project_with_connections(
             audience: LOCAL_AUDIENCE.to_owned(),
             active_public_jwk_file,
             active_public_jwk,
+            allowed_clients: Vec::new(),
         },
         source_connections,
     )?;
@@ -1549,6 +1562,7 @@ fn compile_plan_with_connections(
             audience,
             active_public_jwk_file,
             active_public_jwk,
+            allowed_clients,
         } => {
             let mut bundle = render_local_bundle(
                 &questions,
@@ -1556,6 +1570,7 @@ fn compile_plan_with_connections(
                 ports,
                 &active_public_jwk_file,
                 &audience,
+                &allowed_clients,
             )?;
             if source_connections
                 .as_object()
@@ -3450,6 +3465,7 @@ pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
         LocalServicePorts::new(8080, 8081)?,
         &key,
         LOCAL_AUDIENCE,
+        &[],
     )?;
     let object = governance
         .as_object_mut()
@@ -3466,6 +3482,7 @@ fn render_local_bundle(
     ports: LocalServicePorts,
     active_public_jwk_file: &str,
     audience: &str,
+    allowed_clients: &[String],
 ) -> Result<Value> {
     let issuer_origin = ports.issuer_origin();
     let selector_profiles = questions
@@ -3511,7 +3528,7 @@ fn render_local_bundle(
         .into_iter()
         .map(QuestionResponseFormat::as_str)
         .collect::<Vec<_>>();
-    Ok(json!({
+    let mut bundle = json!({
         "version": 1,
         "assuranceProfile": "local",
         "service": {
@@ -3571,7 +3588,11 @@ fn render_local_bundle(
         "sources": sources,
         "authorityProfiles": authority_profiles,
         "requirements": requirements,
-    }))
+    });
+    if !allowed_clients.is_empty() {
+        bundle["authentication"]["allowedClients"] = json!(allowed_clients);
+    }
+    Ok(bundle)
 }
 
 /// Gather the grants of the questions one generated profile covers, refusing
@@ -4680,6 +4701,7 @@ properties:
                 &fixture.evidence,
                 LocalServicePorts::default(),
                 audience,
+                &[],
             )
             .unwrap();
             assert_eq!(compiled.local_audience, audience);
@@ -4689,6 +4711,52 @@ properties:
             .unwrap();
             assert_eq!(bundle["authentication"]["audiences"], json!([audience]));
         }
+    }
+
+    #[test]
+    fn a_local_bundle_admits_only_the_machine_clients_the_session_states() {
+        // A session sharing another product's issuer cannot leave admission to
+        // that issuer: it holds clients this Evidence project never activated.
+        // The bundle names the clients it admits, so the boundary is stated
+        // where Evidence enforces it rather than inferred from the issuer.
+        let own_issuer = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        compile_local_project_with_ports_and_resource(
+            &own_issuer.project,
+            &own_issuer.staging,
+            &own_issuer.evidence,
+            LocalServicePorts::default(),
+            LOCAL_AUDIENCE,
+            &[],
+        )
+        .unwrap();
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(own_issuer.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            bundle["authentication"].get("allowedClients").is_none(),
+            "a session that renders its own issuer states no client list: {}",
+            bundle["authentication"]
+        );
+
+        let shared_issuer = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        compile_local_project_with_ports_and_resource(
+            &shared_issuer.project,
+            &shared_issuer.staging,
+            &shared_issuer.evidence,
+            LocalServicePorts::default(),
+            LOCAL_AUDIENCE,
+            &["age-checker".to_owned(), "records-reader".to_owned()],
+        )
+        .unwrap();
+        let bundle: Value = serde_norway::from_slice(
+            &fs::read(shared_issuer.staging.join("bundle/evidence.yaml")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            bundle["authentication"]["allowedClients"],
+            json!(["age-checker", "records-reader"])
+        );
     }
 
     #[test]
@@ -6187,6 +6255,7 @@ fn prepare(selectors, context) {
                 audience: LOCAL_AUDIENCE.to_owned(),
                 active_public_jwk_file: "public-keys/test.jwk".to_owned(),
                 active_public_jwk: vec![],
+                allowed_clients: Vec::new(),
             },
         )
         .unwrap();

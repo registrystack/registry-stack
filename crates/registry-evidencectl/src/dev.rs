@@ -58,6 +58,10 @@ const RETAINED_STOPPED_SESSION: &str = "dev-stopped-before-restart";
 const PRIVATE_DIR_MODE: u32 = 0o700;
 const PRIVATE_FILE_MODE: u32 = 0o600;
 const MAX_STATE_BYTES: u64 = 4 * 1024 * 1024;
+/// The bundle's own bound on `authentication.allowedClients`, named here so a
+/// session borrowing a shared issuer is refused where the operator can act
+/// rather than by the Evidence binary checking the compiled result.
+const MAX_ADMITTED_CLIENTS: usize = 32;
 const MAX_HTTP_BODY_BYTES: u64 = 64 * 1024;
 const DEFAULT_READY_TIMEOUT_SECONDS: u64 = 120;
 const SHUTDOWN_TIMEOUT_SECONDS: u64 = 35;
@@ -664,7 +668,20 @@ fn verify_borrowed_registrations(
     owner: &BorrowedIssuer,
     audience: &str,
     clients: &[registry_thunderid_tooling::local::TypedLocalClient],
+    admitted: &[String],
 ) -> Result<()> {
+    // The compiled bundle admits exactly these client identifiers, and the
+    // shared issuer holds clients this Evidence project never activated. A
+    // registration set that no longer matches the compiled list is refused
+    // rather than started against a boundary the bundle does not carry.
+    if clients.len() != admitted.len()
+        || clients
+            .iter()
+            .zip(admitted)
+            .any(|(client, id)| &client.client_id != id)
+    {
+        bail!("the active Evidence clients changed while the local bundle was compiled");
+    }
     let root = owner.project.join(".breg/dev");
     let inventory = read_owner_json(&root.join("clients.json"), MAX_STATE_BYTES)?;
     if !inventory["issuer"]["resources"]
@@ -1787,9 +1804,23 @@ fn prepare_and_start(
         docker_override,
         "EVIDENCECTL_TEST_DOCKER_BIN",
     )?)?;
-    let compiled = {
+    let (compiled, admitted_clients) = {
         let _project_lock = crate::source_import::ProjectLock::acquire(project)?;
-        match target {
+        // A session that owns its issuer registers only its own clients, so it
+        // leaves admission to that issuer. A session borrowing a shared issuer
+        // reads the clients it is about to register while it still holds the
+        // project lock, and states them in the bundle it compiles.
+        let admitted_clients = match owner {
+            Some(_) => {
+                let admitted = access::active_client_ids(project)?;
+                if admitted.len() > MAX_ADMITTED_CLIENTS {
+                    bail!("a session borrowing a shared issuer names its clients in the bundle, which admits at most {MAX_ADMITTED_CLIENTS}");
+                }
+                admitted
+            }
+            None => Vec::new(),
+        };
+        let compiled = match target {
             Some(target) => {
                 let (connections, outbound_tls) = crate::build::local_dev_target_inputs(target)?;
                 let compiled = compile_local_project_with_target_inputs_and_resource(
@@ -1800,6 +1831,7 @@ fn prepare_and_start(
                     connections,
                     outbound_tls,
                     resource,
+                    &admitted_clients,
                 )?;
                 if format == OutputFormat::Human {
                     println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
@@ -1812,8 +1844,10 @@ fn prepare_and_start(
                 &evidence_bin,
                 ports,
                 resource,
+                &admitted_clients,
             )?,
-        }
+        };
+        (compiled, admitted_clients)
     };
     let evidence_origin = local_origin(ports.evidence);
     let issuer_origin = local_origin(ports.issuer);
@@ -1892,7 +1926,12 @@ fn prepare_and_start(
     let issuer_session_id = hex::encode(random);
     let issuer_label = format!("evidence-dev-{}", &issuer_session_id[..12]);
     if let Some(owner) = owner {
-        verify_borrowed_registrations(owner, &compiled.local_audience, &issuer_clients)?;
+        verify_borrowed_registrations(
+            owner,
+            &compiled.local_audience,
+            &issuer_clients,
+            &admitted_clients,
+        )?;
     } else {
         let description = registry_thunderid_tooling::local::typed_local_description(
             registry_thunderid_tooling::description::SessionIdentity {
@@ -3476,24 +3515,53 @@ requirements:
             owner: "01234567-89ab-4def-8123-456789abcdef".into(),
             port: 8091,
         };
+        let admitted = vec!["evidence-client".to_owned()];
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             std::slice::from_ref(&client),
+            &admitted,
         )
         .unwrap();
+        // The compiled bundle admits these clients by name, so a registration
+        // set that no longer matches that list is refused rather than started
+        // against a boundary the bundle does not carry.
+        for drifted in [
+            Vec::new(),
+            vec!["evidence-client".to_owned(), "other-client".to_owned()],
+            vec!["other-client".to_owned()],
+        ] {
+            assert!(
+                verify_borrowed_registrations(
+                    &owner,
+                    LOCAL_ACCESS_TOKEN_AUDIENCE,
+                    std::slice::from_ref(&client),
+                    &drifted
+                )
+                .is_err(),
+                "{drifted:?} was admitted against a bundle naming {admitted:?}"
+            );
+        }
         let mut altered = client.clone();
         altered
             .claims
             .insert("evidence_audience".into(), json!("urn:evidence:other"));
-        assert!(
-            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[altered]).is_err()
-        );
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &[altered],
+            &admitted
+        )
+        .is_err());
         let mut altered = client.clone();
         altered.public_jwks = json!({"keys":[{"kty":"EC","kid":"different"}]}).to_string();
-        assert!(
-            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[altered]).is_err()
-        );
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &[altered],
+            &admitted
+        )
+        .is_err());
         // An exchange client may present any authority the shared issuer
         // trusts, and this bundle carries no per-client pairing to refuse the
         // others. A client registered as both is refused here rather than
@@ -3503,7 +3571,8 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
-            std::slice::from_ref(&client)
+            std::slice::from_ref(&client),
+            &admitted
         )
         .is_err());
         inventory["issuer"]["exchangeClients"] = json!([]);
@@ -3512,13 +3581,18 @@ requirements:
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             std::slice::from_ref(&client),
+            &admitted,
         )
         .unwrap();
         inventory["clients"][0]["allowBregAccess"] = json!(true);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
-        assert!(
-            verify_borrowed_registrations(&owner, LOCAL_ACCESS_TOKEN_AUDIENCE, &[client]).is_err()
-        );
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &[client],
+            &admitted
+        )
+        .is_err());
     }
 
     #[test]

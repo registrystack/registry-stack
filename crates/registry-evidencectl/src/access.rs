@@ -353,6 +353,23 @@ pub(crate) fn resolve_ready_client(
     })
 }
 
+/// The exact client identifiers an active editable project registers, read
+/// without a compiled generation. A local session needs them before it
+/// compiles, to state in the bundle which clients that bundle admits.
+pub(crate) fn active_client_ids(project: &Path) -> Result<Vec<String>> {
+    let project = canonical_project(project)?;
+    let policies = load_policy_documents_if_present(&project)?;
+    let mut ids = Vec::new();
+    for document in load_client_documents_if_present(&project)?.values() {
+        validate_client_policies(&document.policies, &policies)?;
+        if document.status == ClientStatus::Revoked {
+            continue;
+        }
+        ids.push(document.client_id.clone());
+    }
+    Ok(ids)
+}
+
 /// Load active editable clients as exact local issuer registrations.
 pub(crate) fn load_active_clients(
     project: &Path,
