@@ -1942,7 +1942,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "daa620a23140dc55105ae5abd679a8b59d6aa73bb905b782899f846a3aefe5c4"
+        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
@@ -1960,7 +1960,7 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "daa620a23140dc55105ae5abd679a8b59d6aa73bb905b782899f846a3aefe5c4"
+        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
@@ -1978,11 +1978,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "daa620a23140dc55105ae5abd679a8b59d6aa73bb905b782899f846a3aefe5c4"
+        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "a808ed25e54a580b85a7091b7759722e998f01582f3cd6d8299578f90764c931",
+        "sha256": "c8dea520a3fba1ff24ce82e08f94d525e43ffb87f7e8bfd8494cc2fbac03ba2c",
         "mediaType": "application/schema+json"
       }
     },
@@ -1996,11 +1996,11 @@
       "description": "Registry Casework runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-casework/src/schema.rs",
-        "sha256": "1b98253897a283b29ee9f62f59f62c6781a245b658d833ab8833f54b0d5adfd6"
+        "sha256": "e7694b4e5247f8fa7f49f05a65811e740eaa4c960f41d967508bba29e5c437d9"
       },
       "artifact": {
         "path": "products/casework/generated/runtime/runtime.schema.json",
-        "sha256": "fcde850f9d1b85e5f40287649e77e6028bb6b0211499dbe0a875a2ac51a09a01",
+        "sha256": "74e4d14089f07c1422424fe26515b3391092e17f1baf394ce3a4e4e8606ae197",
         "mediaType": "application/schema+json"
       }
     },

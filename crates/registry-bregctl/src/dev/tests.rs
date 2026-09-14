@@ -2301,6 +2301,133 @@ fn local_event_destinations_refuse_an_origin_without_a_usable_port() {
 }
 
 #[test]
+fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
+    let (_project_temp, project) = write_init_project();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let mut clients = config::clients(&bytes).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = project.join("event-key");
+    private::create(&key, b"synthetic-local-event-key-for-test").unwrap();
+    clients.event_destinations.insert(
+        "openfn".into(),
+        config::LocalEventDestination {
+            origin: "http://127.0.0.1:18888".into(),
+            path: "/inbox/registry".into(),
+            hmac_key_file: key,
+        },
+    );
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+    // The runtime's own destination policy refuses userinfo in an origin, and
+    // builds its delivery target through a path validator that refuses dot
+    // segments, percent escapes, empty segments and non-ASCII bytes. The
+    // clients file is what must refuse both, so preflight and startup agree on
+    // one answer instead of the declaration surfacing as a failed start.
+    for origin in [
+        "http://operator@127.0.0.1:18888",
+        "http://operator:placeholder@127.0.0.1:18888",
+    ] {
+        clients.event_destinations.get_mut("openfn").unwrap().origin = origin.into();
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("exact loopback origins"),
+            "{origin}: {refusal}"
+        );
+    }
+    clients.event_destinations.get_mut("openfn").unwrap().origin = "http://127.0.0.1:18888".into();
+    for path in [
+        "/inbox/../registry",
+        "/inbox/./registry",
+        "/inbox/%2e%2e/registry",
+        "/inbox//registry",
+        "/inbox/na\u{ef}ve",
+    ] {
+        clients.event_destinations.get_mut("openfn").unwrap().path = path.into();
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.contains("exact loopback origins"),
+            "{path}: {refusal}"
+        );
+    }
+    clients.event_destinations.get_mut("openfn").unwrap().path = "/inbox/registry".into();
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+}
+
+#[test]
+fn an_imported_assertion_key_needs_a_usable_key_identifier() {
+    // Every token one of these clients obtains is a private_key_jwt assertion,
+    // whose header names the key it was signed with. A key carrying no usable
+    // identifier imports and registers cleanly and then fails at the first
+    // token request, so it is refused where the operator named the file.
+    for kid in [
+        Value::Null,
+        json!(""),
+        json!("   "),
+        json!(7),
+        json!("k".repeat(257)),
+    ] {
+        let (_temp, state, mut clients, files) = fixture();
+        let input = state.project.join("imported-key");
+        private::directory(&input).unwrap();
+        config::keypair(&input).unwrap();
+        let mut key: Value = serde_json::from_slice(
+            &private::read(&input.join("assertion-key.jwk"), MAX_BYTES).unwrap(),
+        )
+        .unwrap();
+        if kid.is_null() {
+            key.as_object_mut().unwrap().remove("kid");
+        } else {
+            key["kid"] = kid.clone();
+        }
+        let replaced = input.join("unusable-kid.jwk");
+        private::create(&replaced, &serde_json::to_vec(&key).unwrap()).unwrap();
+        clients
+            .clients
+            .iter_mut()
+            .find(|client| client.id == "source")
+            .unwrap()
+            .assertion_key_input_file = Some(replaced);
+        let refusal = format!(
+            "{:#}",
+            initialize(&state.root(), &state, &clients, &files).unwrap_err()
+        );
+        assert!(
+            refusal.contains("bounded, non-blank kid"),
+            "{kid}: {refusal}"
+        );
+    }
+
+    let (_temp, state, mut clients, files) = fixture();
+    let input = state.project.join("imported-key");
+    private::directory(&input).unwrap();
+    config::keypair(&input).unwrap();
+    clients
+        .clients
+        .iter_mut()
+        .find(|client| client.id == "source")
+        .unwrap()
+        .assertion_key_input_file = Some(input.join("assertion-key.jwk"));
+    initialize(&state.root(), &state, &clients, &files).unwrap();
+    let public: Value = serde_json::from_slice(
+        &private::read(
+            &state.root().join("credentials/source/public.jwk"),
+            MAX_BYTES,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        public["kid"]
+            .as_str()
+            .is_some_and(|kid| !kid.trim().is_empty()),
+        "an imported key reaches registration carrying its identifier: {public}"
+    );
+}
+
+#[test]
 fn old_event_free_sessions_keep_working_without_receiver_state() {
     let (_temp, state, clients, files) = fixture();
     initialize(&state.root(), &state, &clients, &files).unwrap();

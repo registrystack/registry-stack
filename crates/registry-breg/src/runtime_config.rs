@@ -2648,6 +2648,16 @@ fn install_schema_constraints(schema: &mut Value) {
         "/$defs/RawOidcVerifierConfig/properties/assertionIssuers",
         LIST_VALUE_SCHEMA_PATTERN,
     );
+    // `OidcVerifierConfig::from_raw` passes these client keys through
+    // `validate_bounded_list`, so the published schema carries that length
+    // bound too rather than accepting a document the runtime refuses at
+    // startup.
+    if let Some(names) = schema
+        .pointer_mut("/$defs/RawOidcVerifierConfig/properties/assertionIssuers/propertyNames")
+        .and_then(Value::as_object_mut)
+    {
+        install_string_constraints_in_object(names, 1, MAX_LIST_VALUE_BYTES, "");
+    }
     if let Some(member) = schema
         .pointer_mut("/$defs/RawOidcVerifierConfig/properties/assertionIssuers")
         .and_then(Value::as_object_mut)

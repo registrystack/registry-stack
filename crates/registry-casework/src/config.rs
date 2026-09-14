@@ -65,10 +65,10 @@ pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
 const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
-const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
-const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
-const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
-const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
+pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
