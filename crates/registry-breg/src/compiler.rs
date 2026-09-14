@@ -155,6 +155,7 @@ pub fn compile_project_with_assets(
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
     crate::membership::compile(&mut entities);
     crate::change_request::compile_change_requests(
+        project,
         &action_sources
             .values()
             .filter_map(|action| {

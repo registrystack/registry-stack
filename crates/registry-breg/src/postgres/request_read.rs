@@ -509,8 +509,19 @@ pub(super) async fn attachment_version_is_authorized(
             continue;
         }
         if attachment_targets_are_authorized(
-            registry, expected, claims, entity, record_id, &actor, &proposal, &targets, action,
-        )? {
+            transaction,
+            registry,
+            expected,
+            claims,
+            entity,
+            record_id,
+            &actor,
+            &proposal,
+            &targets,
+            action,
+        )
+        .await?
+        {
             return Ok(true);
         }
     }
@@ -518,7 +529,8 @@ pub(super) async fn attachment_version_is_authorized(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn attachment_targets_are_authorized(
+async fn attachment_targets_are_authorized(
+    transaction: &Transaction<'_>,
     registry: &CompiledRegistry,
     expected: &ExpectedRegistryIdentity,
     claims: &ClaimContext,
@@ -593,6 +605,88 @@ fn attachment_targets_are_authorized(
         .is_err()
         {
             return Ok(false);
+        }
+    }
+    if action.operation() == Operation::ApplyRequest {
+        if let Some(frozen) = proposal.application_preconditions() {
+            frozen
+                .validate()
+                .map_err(|_| ReadServiceError::Unavailable)?;
+            for guard in &frozen.targets {
+                let guard_id = parse_uuid(guard.record_id.as_str())?;
+                let Some(authority) = action
+                    .target_authority()
+                    .iter()
+                    .find(|authority| authority.target_entity_id() == guard.entity_id)
+                else {
+                    return Ok(false);
+                };
+                let Some(row) = transaction
+                    .query_opt(
+                        "SELECT snapshot FROM registry_internal.registry_revisions WHERE entity_id=$1 AND record_id=$2 AND record_revision=$3 AND erased_at IS NULL",
+                        &[&guard.entity_id, &guard_id, &guard.expected_revision],
+                    )
+                    .await
+                    .map_err(|_| ReadServiceError::Unavailable)?
+                else {
+                    return Ok(false);
+                };
+                let Some(bytes): Option<Vec<u8>> =
+                    row.try_get(0).map_err(|_| ReadServiceError::Unavailable)?
+                else {
+                    return Ok(false);
+                };
+                let snapshot = registry_platform_canonical_json::parse_json_strict(&bytes)
+                    .map_err(|_| ReadServiceError::Unavailable)?;
+                if registry_platform_canonical_json::canonicalize_json(&snapshot)
+                    .map_err(|_| ReadServiceError::Unavailable)?
+                    != bytes
+                {
+                    return Err(ReadServiceError::Unavailable);
+                }
+                let snapshot = snapshot.as_object().ok_or(ReadServiceError::Unavailable)?;
+                if guard
+                    .values
+                    .iter()
+                    .any(|(field, value)| snapshot.get(field) != Some(value))
+                {
+                    return Ok(false);
+                }
+                let binding = ChangeRequestTargetBinding {
+                    request_entity_id: entity.id.clone(),
+                    request_id: record_id,
+                    proposal_version: i64::from(proposal.version().get()),
+                    actor_reference: actor.to_owned(),
+                    contract_fingerprint: proposal.contract_fingerprint().as_str().to_owned(),
+                    effect_digest: proposal.effect_digest().as_str().to_owned(),
+                    active_package_revision: expected.package_revision.clone(),
+                    effect_id: guard.id.clone(),
+                    target_entity_id: guard.entity_id.clone(),
+                    target_record_id: guard_id,
+                    operation: Operation::Patch,
+                    fields: guard.values.keys().cloned().collect(),
+                    expected_revision: Some(guard.expected_revision),
+                };
+                let target_entity = registry
+                    .entities()
+                    .get(&guard.entity_id)
+                    .ok_or(ReadServiceError::Unavailable)?;
+                if ChangeRequestTargetContext::authorize_retained_attachment_rows(
+                    registry,
+                    claims,
+                    None,
+                    row_boundaries(authority)?,
+                    binding,
+                    target_entity,
+                    Some(snapshot),
+                    snapshot,
+                    guard_id,
+                )
+                .is_err()
+                {
+                    return Ok(false);
+                }
+            }
         }
     }
     Ok(true)

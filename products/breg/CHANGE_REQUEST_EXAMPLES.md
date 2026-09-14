@@ -14,6 +14,69 @@ Both examples set `changeRequest.retention.mode: operator_erase`. That mode does
 not create a TTL or scheduler. It means retained request detail can be erased
 only through the explicit operator retention command path.
 
+## Governed application preconditions
+
+A reviewed request can require frozen request facts, current stored target
+facts, and signed Evidence immediately before manual application. Preconditions
+are closed, scalar, AND-only configuration. They are not available with
+`automatic` or `planner` application because remote acquisition cannot be
+hidden inside those transitions.
+
+```yaml
+changeRequest:
+  application:
+    mode: manual
+    preconditions:
+      request:
+        - {field: valid-from, currentDate: on_or_before}
+        - {field: valid-through, currentDate: on_or_after}
+      targets:
+        - id: lot
+          entity: lots
+          fromField: lot-reference
+          requires:
+            - {field: owner-reference, equalsFromRequestField: owner-reference}
+            - {field: active, equals: true}
+      evidence:
+        - id: release-check
+          provider: laboratory
+          requirement: urn:example:seed-release:v1
+          subjects:
+            subject:
+              profile: lot-release-v1
+              selectors:
+                lot-reference: {source: request_field, field: lot-reference}
+                owner-reference: {source: target_field, target: lot, field: owner-reference}
+          requires:
+            - {output: report-reference, equalsFromRequestField: report-reference}
+            - {output: germination-basis-points, atLeast: 9000}
+            - {output: purity-basis-points, atLeast: 9800}
+          maximumObservationAgeSeconds: 300
+```
+
+`subjects[].selectors` must bind exactly every field of the selected reviewed
+Evidence selector profile. A binding reads either a required request field or
+a required stored field on a declared guard target. Derived fields, arbitrary
+JSON, cross-target equality, OR, scripts, and caller-supplied evaluation dates
+are not admitted. Numeric bounds are inclusive and limited to `int64`.
+
+Submission freezes the request values, target record identities, revisions,
+and minimized target fields into proposal v3. Apply rechecks authority,
+proposal and contract digests, the UTC validity date, current target revisions
+and fields, Evidence identity, freshness, and output predicates. The database
+preflight is closed before Evidence I/O. Final target effects, request receipt,
+audit, outbox, and protected Evidence linkage commit atomically. Retrying the
+identical idempotency key recovers the receipt without another acquisition.
+
+When the proposal was submitted under an institutional task grant, fresh status
+for that original grant is required before requesting Evidence and again before
+committing application. An applying agent’s current grant is checked too.
+Revocation or unavailable task authority cannot cause a new guard disclosure;
+revocation during acquisition still prevents application. Completed receipt
+recovery does not disclose Evidence again and remains subject to current read
+authority. Attachment-read permissions stay separate from the effect and guard
+targets required for lifecycle actions.
+
 ## Rhai planner adopter comparison
 
 `acceptance/person-name-change-rhai` is the compact synthetic counterpart for
@@ -438,9 +501,11 @@ existing verified claim boundaries apply; profiles are never combined. The
 explicit request permission activates admission and does not grant target writes.
 
 The compiler requires complete coverage of fixed existing native-reference
-effects, readable reference fields, manual application, and targets that are
-not request entities and do not use membership boundaries. Dynamic planners,
-new target creation and batch intake are outside this capability. Admission
+effects and application guard targets, readable reference fields, manual
+application, and targets that are not request entities and do not use
+membership boundaries. Reserved-create effects are permitted but are not
+submitter targets and cannot widen the admission authority. Dynamic planners
+and batch intake are outside this capability. Admission
 runs for create, draft edits/retargeting, submission, revision/rebase and exact
 replay in the operation transaction. Missing target authority safely refuses
 with `412 precondition.failed`; missing claim authority conceals the surface.

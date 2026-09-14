@@ -52,6 +52,7 @@ fn plan(script: &str, mode: CompiledChangeRequestApplicationMode) -> CompiledCha
             mode,
             allowed_dispositions,
             queue_reasons,
+            preconditions: Default::default(),
         },
         planner: Some(CompiledChangeRequestPlanner {
             kind: CompiledChangeRequestPlannerKind::Rhai,

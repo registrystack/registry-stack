@@ -5,7 +5,7 @@
 mod action;
 pub(crate) use action::erase_expired_action_evidence;
 mod request;
-pub(crate) use request::request_action_etag;
+pub(crate) use request::{request_action_etag, RequestEvidencePreflight};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

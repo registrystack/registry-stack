@@ -37,6 +37,7 @@ impl Session {
         invocation.extend([self.project.to_str().unwrap(), "--docker-bin", docker]);
         self.ctl(&invocation)
     }
+    #[track_caller]
     fn report(&self, output: std::process::Output) -> Value {
         if !output.status.success() {
             write(
@@ -51,15 +52,19 @@ impl Session {
         );
         serde_json::from_slice(&output.stdout).expect("native JSON report")
     }
+    #[track_caller]
     fn success(&self, args: &[&str]) -> Value {
         self.report(self.ctl(args))
     }
+    #[track_caller]
     fn start(&self) -> Value {
         self.report(self.dev(&[]))
     }
+    #[track_caller]
     fn stop(&self) {
         self.report(self.dev(&["stop"]));
     }
+    #[track_caller]
     fn remove(&self) {
         self.report(self.dev(&["stop", "--remove"]));
     }

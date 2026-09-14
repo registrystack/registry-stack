@@ -152,6 +152,45 @@ impl ActionEvidenceEvaluator {
             _ => unavailable(),
         }
     }
+
+    pub async fn acquire_preconditions(
+        &self,
+        requests: Vec<(
+            crate::action_evidence_contracts::CompiledEvidenceCapability,
+            crate::action_evidence_client::EvidenceSubjects,
+        )>,
+        deadline: Instant,
+    ) -> Result<Vec<VerifiedAcquisition>, MutationError> {
+        let permit =
+            tokio::time::timeout_at(deadline.into(), self.capacity.clone().acquire_owned())
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .map_err(|_| MutationError::Unavailable)?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancel_on_drop = CancelOnDrop(cancelled.clone());
+        let _permit = permit;
+        let mut acquisitions = Vec::new();
+        let mut retained_bytes = 0usize;
+        for (capability, subjects) in requests {
+            let acquisition = self
+                .client
+                .resolve(&capability, &subjects, deadline, cancelled.clone())
+                .await
+                .map_err(MutationError::from)?;
+            retained_bytes = retained_bytes
+                .checked_add(
+                    acquisition
+                        .retained_bytes_for("registry.breg.request-application-evidence-use/v1")
+                        .map_err(MutationError::from)?,
+                )
+                .ok_or(MutationError::Unavailable)?;
+            if retained_bytes > MAXIMUM_RETAINED_EVIDENCE_BYTES {
+                return Err(MutationError::ActionEvidenceFailure { capability: None });
+            }
+            acquisitions.push(acquisition);
+        }
+        Ok(acquisitions)
+    }
 }
 
 impl From<crate::action_evidence_client::EvidenceAcquisitionFailure> for MutationError {

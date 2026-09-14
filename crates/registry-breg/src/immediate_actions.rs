@@ -651,24 +651,42 @@ fn compile_requirements(
             ));
             continue;
         };
-        if matches!(
-            field.field_type,
-            FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
-        ) || requirement.equals.is_array()
-            || requirement.equals.is_object()
-            || if requirement.equals.is_null() {
-                field.required
-            } else {
-                !crate::data::validate_field_value(
-                    crate::data::FieldValue::Json(&requirement.equals),
-                    &field.field_type,
-                )
-            }
+        let choices = usize::from(requirement.equals.is_some())
+            + usize::from(requirement.equals_input.is_some());
+        let literal_invalid = requirement.equals.as_ref().is_some_and(|equals| {
+            equals.is_array()
+                || equals.is_object()
+                || if equals.is_null() {
+                    field.required
+                } else {
+                    !crate::data::validate_field_value(
+                        crate::data::FieldValue::Json(equals),
+                        &field.field_type,
+                    )
+                }
+        });
+        let input_invalid = requirement.equals_input.as_ref().is_some_and(|input_id| {
+            inputs.get(input_id.as_str()).is_none_or(|expected| {
+                !expected.required
+                    || matches!(
+                        expected.field_type,
+                        FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+                    )
+                    || !compatible_field_types(&expected.field_type, &field.field_type)
+            })
+        });
+        if choices != 1
+            || matches!(
+                field.field_type,
+                FieldTypeSource::Structured { .. } | FieldTypeSource::Crs84Point { .. }
+            )
+            || literal_invalid
+            || input_invalid
         {
             errors.push(Diagnostic::error(
                 "action.requires.value_invalid",
-                "actions[].requires[].equals",
-                "an action requirement must use a scalar value valid for its target field",
+                "actions[].requires[]",
+                "an action requirement must declare exactly one compatible scalar literal or action input",
             ));
             continue;
         }
@@ -677,6 +695,7 @@ fn compile_requirements(
             entity_id: target.clone(),
             field: requirement.field.clone(),
             equals: requirement.equals.clone(),
+            equals_input: requirement.equals_input.clone(),
         });
     }
     compiled.sort_by(|left, right| (&left.input, &left.field).cmp(&(&right.input, &right.field)));
@@ -1952,7 +1971,27 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
 }
 
 fn compatible_field_types(source: &FieldTypeSource, target: &FieldTypeSource) -> bool {
-    source == target
+    if source == target {
+        return true;
+    }
+    match (source, target) {
+        (
+            FieldTypeSource::VocabularyCode {
+                vocabulary: source_vocabulary,
+                values: source_values,
+            },
+            FieldTypeSource::VocabularyCode {
+                vocabulary: target_vocabulary,
+                values: target_values,
+            },
+        ) => {
+            source_vocabulary == target_vocabulary
+                && source_values
+                    .iter()
+                    .all(|value| target_values.contains(value))
+        }
+        _ => false,
+    }
 }
 
 fn effect_id(effect: &ActionEffectSource, index: usize) -> String {

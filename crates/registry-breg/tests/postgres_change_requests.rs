@@ -2,6 +2,9 @@
 
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/action_evidence_provider.rs"]
+#[allow(dead_code)]
+mod action_evidence_provider;
 #[path = "support/client_http.rs"]
 #[allow(dead_code)]
 mod client_http;
@@ -21,18 +24,20 @@ use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
 use axum::middleware::Next;
 use postgres_harness::TestDatabase;
+use registry_breg as breg;
+use registry_breg::action_evidence::ActionEvidenceEvaluator;
 use registry_breg::api::{
     router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
     VerifiedRequestClaims,
 };
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::parse_project_json;
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::mutation::MutationFaultPoint;
 use registry_breg::postgres::{
-    initialize_compiled_registry_state_for_test, install_compiled_schema,
-    PostgresRecordMutationService, PostgresRecordReadService, PostgresRevisionReadService,
-    RegistryLockKey, RegistryStateTestIdentity,
+    begin_record_transaction, initialize_compiled_registry_state_for_test, install_compiled_schema,
+    ClaimContext, PostgresRecordMutationService, PostgresRecordReadService,
+    PostgresRevisionReadService, RegistryLockKey, RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
@@ -50,6 +55,8 @@ use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
+use action_evidence_provider::EvidenceProvider;
+
 const PACKAGE_ID: &str = "change-request-http-registry";
 const INSTANCE_ID: &str = "change-request-http-instance";
 const DATABASE_ID: &str = "change-request-http-database";
@@ -62,9 +69,776 @@ const REVIEWER: &str = "reviewer-principal";
 const APPLIER: &str = "applier-principal";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reviewed_application_guard_rejects_changed_target_without_partial_effects() {
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    source["entities"][2]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"placement-guard", "entity":"asset-placement", "fromField":"placement",
+            "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
+        }]}
+    });
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, "guarded-change-request", false).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity,
+        "guarded-change-request",
+        None,
+    );
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    run_action(
+        &app,
+        &request.id,
+        "correction-requests",
+        "reviewer",
+        claims("reviewer", REVIEWER, Some("review")),
+        "guard-review",
+        "approve_request",
+        Some("review"),
+        |_| json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    run_action(
+        &app,
+        &request.id,
+        "correction-requests",
+        "final-reviewer",
+        claims("final-reviewer", "independent-reviewer", Some("final")),
+        "guard-final-review",
+        "approve_request",
+        Some("final"),
+        |_| json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    let placement = &registry.entities()["asset-placement"];
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{} SET record_revision = record_revision + 1 WHERE record_id = $1",
+                quote_sql_identifier(&placement.physical_table)
+            ),
+            &[&database
+                .admin
+                .query_one(
+                    "SELECT target_record_id FROM registry_internal.registry_request_targets WHERE request_entity_id='correction-request' AND request_id=$1 AND proposal_version=1 AND target_entity_id='asset-placement'",
+                    &[&Uuid::parse_str(&request.id).unwrap()],
+                )
+                .await
+                .unwrap()
+                .get::<_, Uuid>(0)],
+        )
+        .await
+        .unwrap();
+    let applier = claims("applier", APPLIER, Some("apply"));
+    let before = get_record(
+        &app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier.clone(),
+    )
+    .await;
+    let apply = action(&before.body, "apply_request", None);
+    let response = send_action(
+        &app,
+        &apply,
+        "guard-apply",
+        applier,
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        response.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        response.body
+    );
+    assert_eq!(
+        database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_request_applications",
+                &[],
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_receipt() {
+    let provider = EvidenceProvider::start().await;
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(two_stage_project()).unwrap();
+    // This guard has no mutation effect or ordinary UPDATE privilege. It must
+    // still be lockable during apply without becoming writable.
+    source["accessProfiles"][4]["permissions"][0]["applyTargets"]
+        .as_array_mut().unwrap().push(json!({
+            "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"guard_tenant_claim","operator":"equals"}]
+        }));
+    source["evidenceProviders"] = json!([{
+        "id":"farmer-registry",
+        "contracts":"evidence/farmer-contracts.json",
+        "subjectResolution":"trusted-provider-exact-selector"
+    }]);
+    source["entities"][2]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
+            "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
+        }],"evidence":[{
+            "id":"farmer-status",
+            "provider":"farmer-registry",
+            "requirement":"urn:example:farmer:status-v1",
+            "subjects":{"farmer":{
+                "profile":"farmer-number-v1",
+                "selectors":{"farmer-number":{
+                    "source":"request_field", "field":"tenant"
+                },"placement-site":{
+                    "source":"target_field", "target":"site-guard", "field":"name"
+                }}
+            }},
+            "requires":[{"output":"active", "equals":true}],
+            "maximumObservationAgeSeconds":60
+        }]}
+    });
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let contracts = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+        "../../products/breg/acceptance/farmer-landholding-evidence/evidence/farmer-contracts.json",
+    ))
+    .unwrap();
+    let mut contracts: Value = serde_json::from_slice(&contracts).unwrap();
+    contracts["definitions"][0]["subjects"][0]["selector"]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(
+            json!({"type":"string", "name":"placement-site", "minimumBytes":3, "maximumBytes":77}),
+        );
+    let registry = Arc::new(
+        compile_project_with_assets(
+            &project,
+            &[],
+            &[ModuleAssetSource {
+                module: None,
+                path: "evidence/farmer-contracts.json".into(),
+                bytes: serde_json::to_vec(&contracts).unwrap(),
+            }],
+            CompileProfile::Authoring,
+        )
+        .unwrap(),
+    );
+    let identity = install_registry(&database, &registry, "evidence-change-request", false).await;
+    let evaluator = Arc::new(ActionEvidenceEvaluator::new(provider.client()));
+    let (fault_service, pool) = change_request_service_with_evidence_options(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "evidence-change-request",
+        Some(MutationFaultPoint::AfterCommitBeforeResponseRelease),
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        Some(evaluator.clone()),
+    );
+    let fault_app = router(fault_service);
+    let (replay_service, _) = change_request_service_with_evidence_options(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "evidence-change-request",
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+        None,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+        Some(evaluator),
+    );
+    let replay_app = router(replay_service);
+    let (request, digest) = submit_two_stage_correction(&replay_app).await;
+    run_action(
+        &replay_app,
+        &request.id,
+        "correction-requests",
+        "reviewer",
+        claims("reviewer", REVIEWER, Some("review")),
+        "evidence-review",
+        "approve_request",
+        Some("review"),
+        |_| json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    run_action(
+        &replay_app,
+        &request.id,
+        "correction-requests",
+        "final-reviewer",
+        claims(
+            "final-reviewer",
+            "evidence-independent-reviewer",
+            Some("final"),
+        ),
+        "evidence-final-review",
+        "approve_request",
+        Some("final"),
+        |_| json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    let target = &registry.entities()["asset-site"];
+    let table = quote_sql_identifier(&target.physical_table);
+    let name_column = quote_sql_identifier(&target.fields["name"].physical_name);
+    let guard_row = database
+        .admin
+        .query_one(
+            &format!("SELECT record_id, record_revision FROM registry_data.{table} WHERE {name_column} = $1"),
+            &[&"two-new"],
+        )
+        .await
+        .unwrap();
+    let guard_id: Uuid = guard_row.get(0);
+    let guard_revision: i64 = guard_row.get(1);
+    let guard_plan = registry.entities()["correction-request"]
+        .change_request
+        .as_ref()
+        .unwrap();
+    let guard_context = json!({
+        "version":1,"phase":{"kind":"application"},
+        "requestEntityId":"correction-request","requestId":request.id,
+        "proposalVersion":1,"actorReference":"synthetic-guard-lock-actor",
+        "contractFingerprint":guard_plan.contract_fingerprint,
+        "effectDigest":digest,"activePackageRevision":PACKAGE_REVISION,
+        "selectedAccessProfile":"applier","principal":APPLIER,"purpose":"apply",
+        "effectId":"site-guard","targetEntityId":"asset-site",
+        "targetRecordId":guard_id.to_string(),"operation":"patch",
+        "fields":["name","tenant"],"expectedRevision":guard_revision,
+        "targetRowBoundaries":[{"field":"tenant","operator":"equals","values":[TENANT]}]
+    });
+    let applier_context = ClaimContext::for_compiled(
+        &registry,
+        "correction-request",
+        Some(APPLIER.to_owned()),
+        "applier",
+        Some("apply".to_owned()),
+        vec![RowBoundaryContext::Equals {
+            field: "tenant".to_owned(),
+            value: TENANT.to_owned(),
+        }],
+    )
+    .unwrap();
+    let guard_pool = database.runtime_config.build_pool().unwrap();
+    let mut guard_client = guard_pool.get_for_test().await.unwrap();
+    let guard_transaction = begin_record_transaction(
+        &mut guard_client,
+        RegistryLockKey::derive("evidence-change-request").unwrap(),
+        Duration::from_secs(1),
+        &identity,
+        &applier_context,
+    )
+    .await
+    .unwrap();
+    let mut wrong_digest_context = guard_context.clone();
+    wrong_digest_context["effectDigest"] =
+        json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    guard_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.change_request_target_context', $1, true)",
+            &[&wrong_digest_context.to_string()],
+        )
+        .await
+        .unwrap();
+    let wrong_digest_row = guard_transaction
+        .transaction_for_test()
+        .query_opt(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        wrong_digest_row.is_none(),
+        "a different proposal digest cannot read or lock the guard"
+    );
+    let other_guard_id: Uuid = database
+        .admin
+        .query_one(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id <> $1 LIMIT 1"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    for (key, value, queried_id) in [
+        (
+            "targetRecordId",
+            json!(other_guard_id.to_string()),
+            other_guard_id,
+        ),
+        ("expectedRevision", json!(guard_revision + 1), guard_id),
+    ] {
+        let mut forged = guard_context.clone();
+        forged[key] = value;
+        guard_transaction
+            .transaction_for_test()
+            .execute(
+                "SELECT set_config('registry.change_request_target_context', $1, true)",
+                &[&forged.to_string()],
+            )
+            .await
+            .unwrap();
+        let row = guard_transaction
+            .transaction_for_test()
+            .query_opt(
+                &format!(
+                    "SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"
+                ),
+                &[&queried_id],
+            )
+            .await
+            .unwrap();
+        assert!(
+            row.is_none(),
+            "forged {key} cannot read or lock a guard row"
+        );
+    }
+    guard_transaction
+        .transaction_for_test()
+        .execute(
+            "SELECT set_config('registry.change_request_target_context', $1, true)",
+            &[&guard_context.to_string()],
+        )
+        .await
+        .unwrap();
+    let locked = guard_transaction
+        .transaction_for_test()
+        .query_opt(
+            &format!("SELECT record_id FROM registry_data.{table} WHERE record_id = $1 FOR UPDATE"),
+            &[&guard_id],
+        )
+        .await
+        .unwrap();
+    assert!(
+        locked.is_some(),
+        "exact guard context can lock its target row"
+    );
+    let unauthorized_write = guard_transaction
+        .transaction_for_test()
+        .execute(
+            &format!("UPDATE registry_data.{table} SET record_revision = record_revision + 1 WHERE record_id = $1"),
+            &[&guard_id],
+        )
+        .await;
+    assert_eq!(
+        unauthorized_write.unwrap_err().code(),
+        Some(&tokio_postgres::error::SqlState::INSUFFICIENT_PRIVILEGE),
+        "read-only guard lock context cannot write its target row"
+    );
+    guard_transaction.rollback().await.unwrap();
+    let applier_claims = |guard_tenant: &str| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            APPLIER,
+            BTreeSet::new(),
+            Some("apply".to_owned()),
+            BTreeMap::from([
+                (
+                    "tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(TENANT).unwrap(),
+                ),
+                (
+                    "guard_tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(guard_tenant).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap()
+    };
+    let applier = applier_claims(TENANT);
+    let before = get_record(
+        &replay_app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier.clone(),
+    )
+    .await;
+    let apply = action(&before.body, "apply_request", None);
+    let wrong_guard_before = get_record(
+        &replay_app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier_claims("tenant-b"),
+    )
+    .await;
+    let wrong_guard_apply = action(&wrong_guard_before.body, "apply_request", None);
+    // Each fresh acquisition must pass both cryptographic verification and the
+    // frozen application policy. None of these failures may leave a partial
+    // application, retained Evidence use, result, or idempotency receipt.
+    for mode in ["nonce", "expired", "inactive", "unavailable"] {
+        provider.mode(mode);
+        let failed = send_action(
+            &replay_app,
+            &apply,
+            &format!("guard-refusal-{mode}"),
+            applier.clone(),
+            json!({"proposalVersion":1,"effectDigest":digest}),
+        )
+        .await;
+        assert!(!failed.status.is_success(), "{mode} must not apply");
+        let counts = database
+            .admin
+            .query_one(
+                "SELECT (SELECT count(*) FROM registry_internal.registry_request_applications),
+                    (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
+                    (SELECT count(*) FROM registry_internal.registry_request_results)",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            [counts.get::<_, i64>(0), counts.get(1), counts.get(2)],
+            [0, 0, 0]
+        );
+    }
+    provider.mode("");
+    let expected_calls = provider.calls() + 1;
+    provider.pause();
+    let invocation = send_action(
+        &fault_app,
+        &apply,
+        "evidence-ambiguous-apply",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    );
+    let inspect = async {
+        provider.wait_for_calls(expected_calls).await;
+        assert_eq!(pool.status().available, pool.status().size);
+        let active: i64 = database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1 AND xact_start IS NOT NULL",
+                &[&database.runtime_role.as_str()],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert_eq!(
+            active, 0,
+            "remote Evidence I/O holds no runtime transaction"
+        );
+        provider.resume();
+    };
+    let (ambiguous, ()) = tokio::join!(invocation, inspect);
+    assert_eq!(ambiguous.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(provider.calls(), expected_calls);
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+               (SELECT count(*) FROM registry_internal.registry_request_applications),
+               (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
+               (SELECT count(*) FROM registry_internal.registry_request_results)",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!([row.get::<_, i64>(0), row.get(1), row.get(2)], [1, 1, 1]);
+    let replay = send_action(
+        &replay_app,
+        &apply,
+        "evidence-ambiguous-apply",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(replay.status, StatusCode::OK, "{}", replay.body);
+    assert_eq!(replay.body["request"]["application"]["proposalVersion"], 1);
+    assert_eq!(
+        provider.calls(),
+        expected_calls,
+        "receipt replay performs no acquisition"
+    );
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+               (SELECT count(*) FROM registry_internal.registry_request_applications),
+               (SELECT count(*) FROM registry_internal.registry_request_evidence_uses),
+               (SELECT count(*) FROM registry_internal.registry_request_results)",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!([row.get::<_, i64>(0), row.get(1), row.get(2)], [1, 1, 1]);
+    provider.mode("unavailable");
+    let idempotency_before_guard_refusal = idempotency_result_count(&database).await;
+    let refused_same_key_guard = send_action(
+        &replay_app,
+        &wrong_guard_apply,
+        "evidence-ambiguous-apply",
+        applier_claims("tenant-b"),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_same_key_guard.status,
+        StatusCode::CONFLICT,
+        "a changed guard claim cannot reuse the original receipt key: {}",
+        refused_same_key_guard.body
+    );
+    assert_eq!(refused_same_key_guard.body["code"], "idempotency.conflict");
+    let refused_guard = send_action(
+        &replay_app,
+        &wrong_guard_apply,
+        "evidence-ambiguous-apply-wrong-guard",
+        applier_claims("tenant-b"),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_guard.status,
+        StatusCode::PRECONDITION_FAILED,
+        "an excluded guard row cannot release the application receipt: {}",
+        refused_guard.body
+    );
+    assert_eq!(provider.calls(), expected_calls);
+    assert_eq!(
+        idempotency_result_count(&database).await,
+        idempotency_before_guard_refusal,
+        "guard refusal cannot bind a recovery key"
+    );
+    let different_key = send_action(
+        &replay_app,
+        &apply,
+        "evidence-ambiguous-apply-different-key",
+        applier.clone(),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        different_key.status,
+        StatusCode::OK,
+        "{}",
+        different_key.body
+    );
+    assert_eq!(
+        different_key.body["request"]["application"],
+        replay.body["request"]["application"]
+    );
+    assert_eq!(different_key.body["revision"], replay.body["revision"]);
+    assert_eq!(
+        provider.calls(),
+        expected_calls,
+        "recovery performs no Evidence acquisition"
+    );
+    let row = database
+        .admin
+        .query_one(
+            "SELECT
+               (SELECT count(*) FROM registry_internal.registry_request_applications),
+               (SELECT count(*) FROM registry_internal.registry_request_evidence_uses)",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!([row.get::<_, i64>(0), row.get(1)], [1, 1]);
+    let idempotency_before_refusal = idempotency_result_count(&database).await;
+    let bogus_precondition = RequestAction {
+        href: apply.href.clone(),
+        if_match: tampered_if_match(&apply.if_match),
+        proposal_version: apply.proposal_version,
+        effect_digest: apply.effect_digest.clone(),
+        review: Value::Null,
+    };
+    let refused = send_action(
+        &replay_app,
+        &bogus_precondition,
+        "evidence-ambiguous-apply-bogus-precondition",
+        applier,
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused.status,
+        StatusCode::PRECONDITION_FAILED,
+        "{}",
+        refused.body
+    );
+    assert_eq!(provider.calls(), expected_calls);
+    assert_eq!(
+        idempotency_result_count(&database).await,
+        idempotency_before_refusal
+    );
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_attachment_downloads_bind_owner_projection_version_and_terminal_audit() {
     attachment_download_journey(registry_breg::attachment_storage::AttachmentStorage::Database)
         .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn retained_attachment_apply_access_checks_frozen_guard_row_boundaries() {
+    let database = TestDatabase::create(8).await;
+    let mut source = serde_json::to_value(attachment_project()).unwrap();
+    source["entities"][2]["changeRequest"]["application"] = json!({
+        "mode":"manual",
+        "preconditions":{"targets":[{
+            "id":"site-guard", "entity":"asset-site", "fromField":"proposed-site",
+            "requires":[{"field":"tenant", "equalsFromRequestField":"tenant"}]
+        }]}
+    });
+    let applier = source["accessProfiles"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|profile| profile["id"] == "applier")
+        .unwrap();
+    applier["permissions"][0]["applyTargets"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "entity":"asset-site",
+            "rowBoundaries":[{"field":"tenant","claim":"guard_tenant_claim","operator":"equals"}]
+        }));
+    let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+    let registry = Arc::new(compile_project(&project, &[], CompileProfile::Authoring).unwrap());
+    let identity = install_registry(&database, &registry, PACKAGE_ID, false).await;
+    let app = router(change_request_service_with_attachment_storage(
+        &database,
+        registry,
+        identity,
+        PACKAGE_ID,
+        None,
+        None,
+        registry_breg::attachment_storage::AttachmentStorage::Database,
+    ));
+    let steward = claims("steward", "guard-attachment-steward", None);
+    let submitter = claims("submitter", SUBMITTER, None);
+    let old_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "guard-attachment-old-site",
+        json!({"tenant":TENANT,"name":"old"}),
+    )
+    .await;
+    let new_site = create_record(
+        &app,
+        "/v1/records/sites?accessProfile=steward",
+        steward.clone(),
+        "guard-attachment-new-site",
+        json!({"tenant":TENANT,"name":"new"}),
+    )
+    .await;
+    let placement = create_record(
+        &app,
+        "/v1/records/placements?accessProfile=steward",
+        steward,
+        "guard-attachment-placement",
+        json!({"tenant":TENANT,"site":old_site.id}),
+    )
+    .await;
+    let draft = create_record(&app, "/v1/records/correction-requests?accessProfile=submitter", submitter.clone(),
+        "guard-attachment-request", json!({"tenant":TENANT,"placement":placement.id,"proposedSite":new_site.id,"reason":"guard attachment"})).await;
+    let record_uri = format!(
+        "/v1/records/correction-requests/{}?accessProfile=submitter",
+        draft.id
+    );
+    let before = get_record(&app, &record_uri, submitter.clone()).await;
+    let upload_uri = format!(
+        "/v1/records/correction-requests/{}/attachments/evidence?accessProfile=submitter",
+        draft.id
+    );
+    let uploaded = send(
+        &app,
+        Method::PATCH,
+        &upload_uri,
+        Some(submitter.clone()),
+        &[
+            ("content-type", "application/octet-stream"),
+            ("idempotency-key", "guard-attachment-upload"),
+            ("if-match", &before.etag),
+        ],
+        b"guard attachment".to_vec(),
+    )
+    .await;
+    assert_eq!(uploaded.status(), StatusCode::OK);
+    run_action(
+        &app,
+        &draft.id,
+        "correction-requests",
+        "submitter",
+        submitter,
+        "guard-attachment-submit",
+        "submit_request",
+        None,
+        |_| json!({}),
+    )
+    .await;
+
+    let uri = format!("/v1/records/correction-requests/{}/attachments/evidence?proposalVersion=1&accessProfile=applier", draft.id);
+    let applier_claims = |guard_tenant: &str| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            APPLIER,
+            BTreeSet::new(),
+            Some("apply".to_owned()),
+            BTreeMap::from([
+                (
+                    "tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(TENANT).unwrap(),
+                ),
+                (
+                    "guard_tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(guard_tenant).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(applier_claims("tenant-b")),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "an excluded guard row cannot authorize attachment disclosure"
+    );
+    assert_eq!(
+        send(
+            &app,
+            Method::GET,
+            &uri,
+            Some(applier_claims(TENANT)),
+            &[],
+            vec![]
+        )
+        .await
+        .status(),
+        StatusCode::OK,
+        "the frozen guard row satisfies the current apply grant"
+    );
+    database.cleanup().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -5466,6 +6240,34 @@ fn change_request_service_with_attachment_verification(
     pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
     verification: registry_breg::attachment_verification::AttachmentVerification,
 ) -> Arc<HttpService> {
+    change_request_service_with_evidence_options(
+        database,
+        registry,
+        identity,
+        package_id,
+        fault,
+        read_fault,
+        storage,
+        pause,
+        verification,
+        None,
+    )
+    .0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn change_request_service_with_evidence_options(
+    database: &TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    package_id: &str,
+    fault: Option<MutationFaultPoint>,
+    read_fault: Option<registry_breg::postgres::ReadFaultPoint>,
+    storage: registry_breg::attachment_storage::AttachmentStorage,
+    pause: Option<(Arc<tokio::sync::Notify>, Arc<tokio::sync::Notify>)>,
+    verification: registry_breg::attachment_verification::AttachmentVerification,
+    evidence: Option<Arc<ActionEvidenceEvaluator>>,
+) -> (Arc<HttpService>, registry_breg::postgres::RuntimePool) {
     let pool = database.runtime_config.build_pool().expect("pool builds");
     let lock_key = RegistryLockKey::derive(package_id).expect("lock key derives");
     let audit = AuditProfile::production_from_secret_bytes(vec![0x9a; 32].into())
@@ -5503,7 +6305,7 @@ fn change_request_service_with_attachment_verification(
         audit.clone(),
     ));
     let mutations = PostgresRecordMutationService::new(
-        pool,
+        pool.clone(),
         registry.clone(),
         identity.clone(),
         lock_key,
@@ -5513,12 +6315,16 @@ fn change_request_service_with_attachment_verification(
     let mutations = mutations
         .with_attachment_storage(storage)
         .with_attachment_verification(verification);
+    let mutations = match evidence {
+        Some(evidence) => mutations.with_evidence_evaluator(evidence),
+        None => mutations,
+    };
     let mutations = match fault {
         Some(fault) => mutations.with_fault_for_test(fault),
         None => mutations,
     };
     let mutations = Arc::new(mutations);
-    Arc::new(
+    let service = Arc::new(
         HttpService::new(
             registry,
             ReadRuntimeIdentity {
@@ -5531,7 +6337,8 @@ fn change_request_service_with_attachment_verification(
         )
         .with_postgres_revisions(revisions)
         .with_postgres_mutations(mutations),
-    )
+    );
+    (service, pool)
 }
 
 #[derive(Clone)]

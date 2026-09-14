@@ -36,26 +36,18 @@ pub fn activate(
     secrets: &SecretResolver,
 ) -> Result<Option<Arc<ActionEvidenceEvaluator>>, crate::runtime_config::RuntimeConfigError> {
     use crate::runtime_config::RuntimeConfigError as Error;
-    let required: BTreeSet<_> = registry
-        .actions()
-        .actions
-        .iter()
-        .flat_map(|action| {
-            action
-                .evidence
-                .iter()
-                .map(|capability| capability.provider.clone())
-        })
-        .collect();
+    let required = required_provider_ids(registry);
+    let has_required_evidence = !required.is_empty();
     if required != bindings.keys().cloned().collect() {
         return Err(Error::InvalidBinding);
     }
-    if !registry.actions().actions.iter().any(|action| {
+    let immediate_v2 = registry.actions().actions.iter().any(|action| {
         action
             .handler
             .as_ref()
             .is_some_and(|handler| handler.abi == "registry.action-handler/v2")
-    }) {
+    });
+    if !immediate_v2 && !has_required_evidence {
         return Ok(None);
     }
     let mut activated = BTreeMap::new();
@@ -100,6 +92,22 @@ pub fn activate(
     )))))
 }
 
+fn required_provider_ids(registry: &CompiledRegistry) -> BTreeSet<String> {
+    let immediate = registry.actions().actions.iter().flat_map(|action| {
+        action
+            .evidence
+            .iter()
+            .map(|capability| capability.provider.clone())
+    });
+    let reviewed_requests = registry
+        .entities()
+        .values()
+        .filter_map(|entity| entity.change_request.as_ref())
+        .flat_map(|request| request.application.preconditions.evidence.iter())
+        .map(|evidence| evidence.capability.provider.clone());
+    immediate.chain(reviewed_requests).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +115,7 @@ mod tests {
         compiler::{compile_project_with_assets, CompileProfile},
         contract::{parse_project_yaml, ModuleAssetSource},
     };
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn zero_capability_v2_activates_without_secrets_and_extra_bindings_fail_closed() {
@@ -164,5 +173,132 @@ mod tests {
             ),
             Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
         ));
+    }
+    #[test]
+    fn reviewed_request_guards_require_activation_even_without_an_immediate_action() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../products/breg/acceptance/farmer-landholding-evidence");
+        let project =
+            parse_project_yaml(&std::fs::read(root.join("registry.yaml")).unwrap()).unwrap();
+        let mut assets: Vec<_> = project
+            .actions
+            .iter()
+            .filter_map(|action| action.handler.as_ref())
+            .map(|handler| ModuleAssetSource {
+                module: None,
+                path: handler.script.clone(),
+                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+            })
+            .collect();
+        assets.push(ModuleAssetSource {
+            module: None,
+            path: "evidence/farmer-contracts.json".into(),
+            bytes: std::fs::read(root.join("evidence/farmer-contracts.json")).unwrap(),
+        });
+        let compiled =
+            compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring).unwrap();
+        let capability = compiled
+            .actions()
+            .actions
+            .iter()
+            .flat_map(|action| action.evidence.iter())
+            .next()
+            .expect("the fixture has governed Evidence")
+            .clone();
+        let mut document = serde_json::to_value(compiled).unwrap();
+        for action in document["actionInventory"]["actions"]
+            .as_array_mut()
+            .unwrap()
+        {
+            action["evidence"] = serde_json::json!([]);
+            action.as_object_mut().unwrap().remove("handler");
+        }
+        let request = document["entities"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap();
+        request["changeRequest"] = serde_json::json!({
+            "requestEntityId": "synthetic-request",
+            "contractFingerprint": format!("sha256:{}", "0".repeat(64)),
+            "retentionMode": "retain",
+            "reviewMode": "stages",
+            "application": {
+                "mode": "manual", "allowedDispositions": [], "queueReasons": {},
+                "preconditions": {"evidence": [{"capability": capability, "subjects": {}, "requires": []}]}
+            },
+            "effects": [], "stages": [], "actions": [], "reviewPermissions": [],
+            "applyPermissions": [], "presencePermissions": [], "targetEntities": [],
+            "maximumTargets": 1, "maximumFieldMutations": 1, "maximumSnapshotBytes": 1
+        });
+        let compiled: CompiledRegistry = serde_json::from_value(document).unwrap();
+        assert!(compiled
+            .actions()
+            .actions
+            .iter()
+            .all(|action| action.handler.is_none()));
+        assert_eq!(
+            required_provider_ids(&compiled),
+            BTreeSet::from(["farmer-registry".to_owned()])
+        );
+        let secrets = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            "/private/tmp",
+        )
+        .unwrap();
+        assert!(matches!(
+            activate(&compiled, &BTreeMap::new(), &secrets),
+            Err(crate::runtime_config::RuntimeConfigError::InvalidBinding)
+        ));
+        let binding = EvidenceProviderConfig {
+            base_url: "https://evidence.example".into(),
+            trust_binding_id: "reviewed".into(),
+            token_ref: "secret:file/missing".into(),
+            trusted_jwks_ref: "secret:file/missing".into(),
+            revoked_key_ids: vec![],
+            ca_bundle_ref: None,
+        };
+        assert!(matches!(
+            activate(
+                &compiled,
+                &BTreeMap::from([("farmer-registry".into(), binding.clone())]),
+                &secrets
+            ),
+            Err(crate::runtime_config::RuntimeConfigError::Secret)
+        ));
+        let directory = tempfile::tempdir().unwrap();
+        for (name, contents) in [
+            ("token", "synthetic-token".to_owned()),
+            (
+                "jwks",
+                std::fs::read_to_string(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../registry-evidence-client-node/tests/fixtures/jwks.json"),
+                )
+                .unwrap(),
+            ),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, contents).unwrap();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let secrets = SecretResolver::new(
+            [registry_platform_config::SecretProvider::File],
+            directory.path(),
+        )
+        .unwrap();
+        let binding = EvidenceProviderConfig {
+            token_ref: "secret:file/token".into(),
+            trusted_jwks_ref: "secret:file/jwks".into(),
+            ..binding
+        };
+        assert!(activate(
+            &compiled,
+            &BTreeMap::from([("farmer-registry".into(), binding)]),
+            &secrets
+        )
+        .unwrap()
+        .is_some());
     }
 }

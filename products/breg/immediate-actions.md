@@ -233,11 +233,14 @@ at registration time:
 # Inside an action with a required operator reference input used by its effects:
 requires:
   - {input: operator, field: status, equals: active}
+  - {input: operator, field: owner-reference, equalsInput: submitted-owner}
 ```
 
 `input` is the logical action input ID; `field` is a stored field ID on its
 reference target. Each input must be required and already used by the action's
-effects. Requirements use typed scalar equality and are combined with AND.
+effects. Exactly one of `equals` and `equalsInput` is required. `equalsInput`
+names a required action input with the same compiled scalar type as the stored
+target field. Requirements are combined with AND.
 Null is permitted only for an optional target field. Structured values and
 points are not supported. The compiler rejects unknown inputs, fields,
 incompatible values, duplicate checks, and requirements above the existing
