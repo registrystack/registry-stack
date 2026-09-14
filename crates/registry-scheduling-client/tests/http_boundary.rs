@@ -415,8 +415,14 @@ async fn explain_forwards_offering_and_start() {
         .explain(auth(&token), "registry-update-30", start)
         .await
         .expect("explain document");
-    assert_eq!(complete.value.public_code, "capacity.exhausted");
-    assert_eq!(complete.value.detailed_code, "resource.unavailable");
+    assert_eq!(
+        complete.value.public_code.as_deref(),
+        Some("capacity.exhausted")
+    );
+    assert_eq!(
+        complete.value.detailed_code.as_deref(),
+        Some("resource.unavailable")
+    );
 
     let observations = observations.lock().expect("observations");
     assert_eq!(observations.len(), 1);
