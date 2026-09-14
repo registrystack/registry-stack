@@ -862,6 +862,50 @@ mod tests {
         }
     }
 
+    /// `render` selects a client's exchanged-token claim set by looking for a
+    /// first-party connection listing it, and falls back to the grant and
+    /// institutional requester attributes when none does. That single-branch
+    /// selection is sound only because a client cannot be both: an
+    /// institutional grant connection lists no clients at all, and a
+    /// first-party client selects exactly one signer.
+    #[test]
+    fn an_exchange_client_belongs_to_exactly_one_connection() {
+        let mut description = exchange_description();
+        let client = description.machine_clients[0].client_id.clone();
+        description.exchange_issuers[0].clients = vec![client.clone()];
+        assert!(matches!(
+            description.validate(),
+            Err(ToolingError::InvalidDescription {
+                reason: "institutional grant mapping has no first-party claim projection"
+            })
+        ));
+
+        let mut description = exchange_description();
+        let client = description.machine_clients[0].client_id.clone();
+        for (index, id) in [
+            "0197aaaa-0000-7000-8000-0000000000d3",
+            "0197aaaa-0000-7000-8000-0000000000d4",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut signer = description.exchange_issuers[0].clone();
+            signer.id = id.into();
+            signer.name = format!("First-party signer {index}");
+            signer.issuer = format!("https://signer-{index}.example");
+            signer.jwks_endpoint = format!("https://signer-{index}.example/jwks");
+            signer.mapping = ExchangeMapping::FirstParty;
+            signer.clients = vec![client.clone()];
+            description.exchange_issuers.push(signer);
+        }
+        assert!(matches!(
+            description.validate(),
+            Err(ToolingError::InvalidDescription {
+                reason: "each first-party client selects one signer"
+            })
+        ));
+    }
+
     #[test]
     fn institutional_requester_attributes_keep_fixed_types() {
         for (name, valid, invalid) in [
