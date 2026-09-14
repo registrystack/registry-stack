@@ -476,15 +476,18 @@ impl Integrations {
         value: &mut Value,
     ) -> Result<()> {
         value["sources"] = serde_json::to_value(&self.sources)?;
-        if !self.service_clients.is_empty() || !self.browser_clients.is_empty() {
-            value["authentication"]["oidc"]["allowedClients"] = json!(clients
-                .clients
-                .iter()
-                .map(|client| client.id.clone())
-                .chain(self.service_clients.iter().map(|client| client.id.clone()))
-                .chain(self.browser_clients.iter().cloned())
-                .collect::<Vec<_>>());
-        }
+        // A borrowed session's issuer is the shared owner's, which holds every
+        // other local project's clients as well. This list is what keeps them
+        // out of this runtime, and an omitted list applies no admission at
+        // all, so it is stated even when the project adds no clients of its
+        // own beyond the ones it borrows.
+        value["authentication"]["oidc"]["allowedClients"] = json!(clients
+            .clients
+            .iter()
+            .map(|client| client.id.clone())
+            .chain(self.service_clients.iter().map(|client| client.id.clone()))
+            .chain(self.browser_clients.iter().cloned())
+            .collect::<Vec<_>>());
         if let Some(authority) = &self.task_authority {
             // A task exchange client may present only this authority's
             // assertion. The borrowed issuer trusts every authority registered
