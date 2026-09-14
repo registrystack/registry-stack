@@ -11,6 +11,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+pub use registry_platform_oidc::ASSERTION_ISSUER_CLAIM;
+
 use crate::ToolingError;
 
 /// The pinned default agent schema's type name. Upstream v1.0.1 admits only
@@ -197,7 +199,9 @@ pub const GRANT_ATTRIBUTES: &[&str] = &[
 ];
 
 fn protected_attribute(name: &str) -> bool {
-    name.starts_with("registry_grant_") || matches!(name, "identity" | "registry_approver")
+    name.starts_with("registry_grant_")
+        || name == ASSERTION_ISSUER_CLAIM
+        || matches!(name, "identity" | "registry_approver")
 }
 
 /// A standard-authorization client that cannot sign: one explicitly

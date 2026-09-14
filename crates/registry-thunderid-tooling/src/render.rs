@@ -16,7 +16,9 @@ use std::path::Path;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::description::{ExchangeAttributeKind, ExchangeMapping, IssuerDescription};
+use crate::description::{
+    ExchangeAttributeKind, ExchangeMapping, IssuerDescription, ASSERTION_ISSUER_CLAIM,
+};
 use crate::ToolingError;
 
 /// The pinned release's default `agent_type` document for the `default`
@@ -322,6 +324,27 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
     for issuer in &description.exchange_issuers {
         // Fixed user-type resolution selects mappings without consulting any
         // untrusted claim. Exchange never resolves this marker to a local user.
+        //
+        // Every connection projects the verified `iss` into the assertion
+        // issuer claim, so a first-party assertion carries the same provable
+        // provenance an institutional grant does. The signer cannot choose the
+        // value and cannot declare the claim itself: `protected_attribute`
+        // keeps it out of first-party token attributes.
+        let mut attributes = vec![json!({
+            "external_attribute": "iss", "local_attribute": ASSERTION_ISSUER_CLAIM
+        })];
+        attributes.extend(match issuer.mapping {
+            ExchangeMapping::InstitutionalGrant => vec![
+                json!({"external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"}),
+                json!({"external_attribute": "evidence_audience", "local_attribute": "evidence_audience"}),
+                json!({"external_attribute": "evidence_tags", "local_attribute": "evidence_tags"}),
+            ],
+            ExchangeMapping::FirstParty => issuer
+                .token_attributes
+                .keys()
+                .map(|name| json!({"external_attribute": name, "local_attribute": name}))
+                .collect(),
+        });
         let document = json!({
             "resource_type": "connection", "id": issuer.id, "type": "oidc",
             "name": issuer.name, "issuer": issuer.issuer,
@@ -329,16 +352,7 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
             "attributeConfiguration": {
                 "user_type_resolution": {"default": "registry-exchange"},
                 "user_type_attribute_mappings": [{
-                    "user_type": "registry-exchange", "attributes": match issuer.mapping {
-                        ExchangeMapping::InstitutionalGrant => json!([
-                            {"external_attribute": "iss", "local_attribute": "registry_grant_source_issuer"},
-                            {"external_attribute": "evidence_audience", "local_attribute": "evidence_audience"},
-                            {"external_attribute": "evidence_tags", "local_attribute": "evidence_tags"},
-                        ]),
-                        ExchangeMapping::FirstParty => json!(issuer.token_attributes.keys().map(|name| {
-                            json!({"external_attribute": name, "local_attribute": name})
-                        }).collect::<Vec<_>>()),
-                    }
+                    "user_type": "registry-exchange", "attributes": attributes
                 }]
             }
         });
@@ -505,6 +519,10 @@ pub fn render(description: &IssuerDescription) -> Result<RenderedResources, Tool
                     exchange_attributes.push(attribute.clone());
                 }
             }
+            // Provenance travels with every exchanged token this client can
+            // obtain, so a resource server can refuse an assertion authority
+            // this client was never meant to exchange.
+            exchange_attributes.push(ASSERTION_ISSUER_CLAIM.to_owned());
             config["grantTypes"] = json!([
                 "client_credentials",
                 "urn:ietf:params:oauth:grant-type:token-exchange"
@@ -786,13 +804,16 @@ mod tests {
                 "urn:ietf:params:oauth:grant-type:token-exchange"
             ])
         );
+        // An exchange client admits the provenance claim beside the grant and
+        // requester attributes, so a resource server reading its token can tell
+        // which assertion authority signed the subject token it came from.
         assert_eq!(
             config["token"]["accessToken"]["userConfig"]["attributes"],
             json!(GRANT_ATTRIBUTES
                 .iter()
                 .copied()
                 .chain(INSTITUTIONAL_REQUESTER_ATTRIBUTES)
-                .chain(["synthetic_tag"])
+                .chain(["synthetic_tag", ASSERTION_ISSUER_CLAIM])
                 .collect::<Vec<_>>())
         );
         assert_eq!(
@@ -817,6 +838,7 @@ mod tests {
         assert_eq!(
             connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
             json!([
+                {"external_attribute":"iss","local_attribute":ASSERTION_ISSUER_CLAIM},
                 {"external_attribute":"iss","local_attribute":"registry_grant_source_issuer"},
                 {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
                 {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
@@ -872,9 +894,14 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
+        // A first-party connection projects the verified issuer exactly as an
+        // institutional one does, then only the claims the signer declared. The
+        // signer can neither declare the provenance claim itself nor choose its
+        // value, so the mapping is the sole source of it.
         assert_eq!(
             connection["attributeConfiguration"]["user_type_attribute_mappings"][0]["attributes"],
             json!([
+                {"external_attribute":"iss","local_attribute":ASSERTION_ISSUER_CLAIM},
                 {"external_attribute":"evidence_audience","local_attribute":"evidence_audience"},
                 {"external_attribute":"evidence_tags","local_attribute":"evidence_tags"},
                 {"external_attribute":"registry_principal","local_attribute":"registry_principal"},
@@ -895,6 +922,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("evidence_tags")));
+        assert!(attributes
+            .as_array()
+            .unwrap()
+            .contains(&json!(ASSERTION_ISSUER_CLAIM)));
         assert!(!attributes
             .as_array()
             .unwrap()

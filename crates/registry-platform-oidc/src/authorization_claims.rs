@@ -17,6 +17,14 @@ const MAX_PURPOSE_BYTES: usize = 128;
 const MAX_BREG_PERMISSIONS: usize = 64;
 const MAX_BREG_OPERATIONS: usize = 32;
 
+/// Claim naming the assertion authority that signed the exchanged subject token.
+///
+/// The issuer derives the value from the verified `iss` of the subject token,
+/// so a client can neither choose it nor forge it, and no first-party signer
+/// may declare it as one of its own projected attributes. A token that was not
+/// obtained by token exchange does not carry it at all.
+pub const ASSERTION_ISSUER_CLAIM: &str = "registry_assertion_issuer";
+
 const REGISTERED_OR_AUTHENTICATION_CLAIMS: &[&str] = &[
     "iss",
     "sub",
@@ -84,6 +92,9 @@ impl ClaimNames {
             || names
                 .iter()
                 .any(|name| REGISTERED_OR_AUTHENTICATION_CLAIMS.contains(&name.as_str()))
+            || names
+                .iter()
+                .any(|name| name.as_str() == ASSERTION_ISSUER_CLAIM)
             || names.iter().collect::<HashSet<_>>().len() != names.len()
         {
             return Err(ClaimError::InvalidNames);
@@ -826,6 +837,12 @@ mod tests {
             ..ClaimNames::default()
         };
         assert_eq!(shadowing.validate(), Err(ClaimError::InvalidNames));
+
+        let assertion_provenance = ClaimNames {
+            grant_id: ASSERTION_ISSUER_CLAIM.to_owned(),
+            ..ClaimNames::default()
+        };
+        assert_eq!(assertion_provenance.validate(), Err(ClaimError::InvalidNames));
     }
 
     #[test]
