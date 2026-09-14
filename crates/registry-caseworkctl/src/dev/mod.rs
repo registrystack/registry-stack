@@ -169,7 +169,7 @@ struct StartArgs {
     /// Local issuer loopback port on first start (default 8093; retained for restarts).
     #[arg(long, env = "CASEWORKCTL_DEV_ISSUER_PORT")]
     issuer_port: Option<u16>,
-    /// Ready BREG dev project that owns the shared issuer registration.
+    /// Ready Base Registry Engine (BReg) dev project that owns the shared issuer registration.
     #[arg(long, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
     /// PostgreSQL loopback port on first start (default 55433; retained for restarts).
