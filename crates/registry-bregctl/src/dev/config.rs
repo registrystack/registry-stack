@@ -461,6 +461,9 @@ pub(super) fn keypair(root: &Path) -> Result<Value> {
 }
 
 pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<()> {
+    if state.issuer_project.is_some() {
+        validate_borrowed_issuer_composition(&clients.issuer)?;
+    }
     for directory in [
         "credentials",
         "secrets",
@@ -665,6 +668,19 @@ pub(super) fn prepare(root: &Path, state: &State, clients: &Clients) -> Result<(
         &format!("sha256:{}", "1".repeat(64)),
         true,
     )?;
+    Ok(())
+}
+
+fn validate_borrowed_issuer_composition(issuer: &IssuerComposition) -> Result<()> {
+    if !issuer.resources.is_empty()
+        || !issuer.exchange_issuers.is_empty()
+        || !issuer.interactive_applications.is_empty()
+        || !issuer.synthetic_users.is_empty()
+        || !issuer.client_resources.is_empty()
+        || !issuer.exchange_clients.is_empty()
+    {
+        bail!("a borrowed issuer cannot declare owner-only resources, exchange connections, applications, users, or client mappings; declare them on the issuer owner");
+    }
     Ok(())
 }
 
