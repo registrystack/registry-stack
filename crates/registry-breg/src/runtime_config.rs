@@ -2246,6 +2246,18 @@ pub fn runtime_config_schema() -> std::result::Result<Value, serde_json::Error> 
     install_schema_const_property(&mut schema, "apiVersion", RUNTIME_CONFIG_API_VERSION);
     install_schema_const_property(&mut schema, "kind", RUNTIME_CONFIG_KIND);
     install_schema_constraints(&mut schema);
+    if let Some(provider) = schema
+        .pointer_mut("/$defs/EvidenceProviderConfig")
+        .and_then(Value::as_object_mut)
+    {
+        provider.insert(
+            "oneOf".to_owned(),
+            serde_json::json!([
+                {"required": ["tokenRef"], "properties": {"tokenRef": {"type": "string"}}},
+                {"required": ["privateKeyJwt"], "properties": {"privateKeyJwt": {"type": "object"}}}
+            ]),
+        );
+    }
     for definition in [
         "RawAttachmentStorageConfig",
         "RawAttachmentVerificationConfig",
