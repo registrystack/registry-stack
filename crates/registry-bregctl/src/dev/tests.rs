@@ -2547,23 +2547,22 @@ fn local_evidence_provider_refreshing_credentials_preserve_exact_authority() {
     both["evidenceProviders"]["qualification"]["tokenFile"] = json!(key);
     assert!(config::clients(&serde_json::to_vec(&both).unwrap()).is_err());
     initialize(&state.root(), &state, &clients, &files).unwrap();
-    for runtime in ["runtime-test.yaml"] {
-        let document: Value =
-            serde_norway::from_slice(&fs::read(state.root().join(runtime)).unwrap()).unwrap();
-        let provider = &document["evidenceProviders"]["qualification"];
-        assert!(provider["tokenRef"].is_null());
-        let credential = &provider["privateKeyJwt"];
-        assert_eq!(
-            credential["privateKeyRef"],
-            "secret:file/evidence-client-key-qualification"
-        );
-        assert_eq!(credential["resource"], "urn:example:evidence");
-        assert_eq!(credential["scopes"], json!(["evidence:invoke"]));
-        assert_eq!(credential["assertionAudience"], "http://127.0.0.1:18091");
-        assert!(!serde_json::to_string(provider)
-            .unwrap()
-            .contains("privateKeyFile"));
-    }
+    let document: Value =
+        serde_norway::from_slice(&fs::read(state.root().join("runtime-test.yaml")).unwrap())
+            .unwrap();
+    let provider = &document["evidenceProviders"]["qualification"];
+    assert!(provider["tokenRef"].is_null());
+    let credential = &provider["privateKeyJwt"];
+    assert_eq!(
+        credential["privateKeyRef"],
+        "secret:file/evidence-client-key-qualification"
+    );
+    assert_eq!(credential["resource"], "urn:example:evidence");
+    assert_eq!(credential["scopes"], json!(["evidence:invoke"]));
+    assert_eq!(credential["assertionAudience"], "http://127.0.0.1:18091");
+    assert!(!serde_json::to_string(provider)
+        .unwrap()
+        .contains("privateKeyFile"));
     assert_eq!(
         fs::read(
             state
