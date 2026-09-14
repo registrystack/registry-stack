@@ -54,6 +54,7 @@ members = [
     "crates/registry-language-server",
     "crates/registry-linkml",
     "crates/registry-scheduling-core",
+    "crates/registry-scheduling",
     "crates/registry-schedulingctl",
     "crates/registry-scheduling-client",
 ]

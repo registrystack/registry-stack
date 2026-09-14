@@ -12,10 +12,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use registry_platform_calendar::{
-    expand_weekly_openings, local_interval, CalendarEvaluationError, CalendarInterval,
-    HolidaySetRevision, WeeklyOpeningPattern,
-};
+use registry_platform_calendar::CalendarEvaluationError;
 
 use crate::admission::{
     evaluate_exact_time_admission, evaluate_window_admission, ExactTimeContext, WindowContext,
@@ -24,6 +21,9 @@ use crate::model::{AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, Sc
 use crate::naming::{SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND};
 use crate::policy::{SchedulingMode, SchedulingPolicy};
 use crate::problem::ProblemCode;
+use crate::resolve::{
+    covers_span, location_closure_intervals, location_open_intervals, ResolveError,
+};
 
 /// One case's expected outcome.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -374,10 +374,10 @@ fn replay_case(
                 &location.timezone,
                 &exceptions,
             )
-            .map_err(CaseStoppage::Replay)?;
+            .map_err(|error| CaseStoppage::Replay(error.into()))?;
             let closures =
                 location_closure_intervals(&fixture.facts, &offering.location, &location.timezone)
-                    .map_err(CaseStoppage::Replay)?;
+                    .map_err(|error| CaseStoppage::Replay(error.into()))?;
             let context = ExactTimeContext {
                 offering,
                 exact,
@@ -455,98 +455,26 @@ fn record_admission(
     });
 }
 
-fn location_open_intervals(
-    policy: &SchedulingPolicy,
-    location_id: &str,
-    timezone: &str,
-    exceptions: &[registry_platform_calendar::CalendarException<'_>],
-) -> Result<Vec<CalendarInterval>, ReplayError> {
-    let mut all = Vec::new();
-    for opening in policy.openings.iter().filter(|o| o.location == location_id) {
-        // A holiday-set reference the policy does not declare is a policy
-        // check finding; the calendar cannot expand against it, so replay
-        // stops with the opening that carries it instead of panicking.
-        let Some(holiday_set) = policy.holiday_set(&opening.holiday_set) else {
-            return Err(ReplayError::HolidaySetMissing {
-                opening: opening.id.clone(),
-                holiday_set: opening.holiday_set.clone(),
-            });
-        };
-        let weekdays: Vec<chrono::Weekday> =
-            opening.weekdays.iter().map(|day| day.to_chrono()).collect();
-        let pattern = WeeklyOpeningPattern {
-            id: &opening.id,
-            timezone,
-            weekdays: &weekdays,
-            start_time: &opening.start_time,
-            end_time: &opening.end_time,
-            effective_from: &opening.effective_from,
-            effective_until: &opening.effective_until,
-        };
-        let dates: Vec<&str> = holiday_set.dates.iter().map(String::as_str).collect();
-        let revision = HolidaySetRevision {
-            holiday_set: &holiday_set.id,
-            revision: holiday_set.revision,
-            dates: &dates,
-        };
-        all.extend(expand_weekly_openings(&pattern, exceptions, &revision)?);
-    }
-    Ok(all)
-}
-
-/// Whether the union of `intervals` covers the whole span `[start, end)`.
-fn covers_span(
-    intervals: &[CalendarInterval],
-    start: chrono::DateTime<Utc>,
-    end: chrono::DateTime<Utc>,
-) -> bool {
-    let mut overlapping: Vec<CalendarInterval> = intervals
-        .iter()
-        .filter(|interval| interval.start < end && start < interval.end)
-        .copied()
-        .collect();
-    overlapping.sort_by_key(|interval| (interval.start, interval.end));
-
-    let mut covered_until = start;
-    for interval in overlapping {
-        if interval.start > covered_until {
-            return false;
-        }
-        covered_until = covered_until.max(interval.end);
-        if covered_until >= end {
-            return true;
+impl From<ResolveError> for ReplayError {
+    fn from(error: ResolveError) -> Self {
+        match error {
+            ResolveError::HolidaySetMissing {
+                opening,
+                holiday_set,
+            } => Self::HolidaySetMissing {
+                opening,
+                holiday_set,
+            },
+            ResolveError::Calendar(error) => Self::Calendar(error),
         }
     }
-    covered_until >= end
-}
-
-fn location_closure_intervals(
-    facts: &SchedulingFacts,
-    location_id: &str,
-    timezone: &str,
-) -> Result<Vec<CalendarInterval>, ReplayError> {
-    let mut closures = Vec::new();
-    for exception in facts
-        .exceptions
-        .iter()
-        .filter(|exception| exception.location == location_id)
-    {
-        if exception.kind == crate::model::ExceptionRecordKind::Closure {
-            closures.push(local_interval(
-                &exception.date,
-                &exception.start_time,
-                &exception.end_time,
-                timezone,
-            )?);
-        }
-    }
-    Ok(closures)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{LocationRecord, PartyCounts};
+    use registry_platform_calendar::CalendarInterval;
 
     fn exact_time_fixture_yaml() -> &'static str {
         r#"

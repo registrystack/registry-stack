@@ -251,12 +251,18 @@ pub struct AppointmentHistoryEntryDocument {
 pub struct ExplainDocument {
     pub offering: String,
     pub start: DateTime<Utc>,
-    /// The problem code every caller may see.
-    pub public_code: String,
-    /// The problem code only this path may disclose.
-    pub detailed_code: String,
-    /// The refusal in words, as the evaluator states it.
-    pub explanation: String,
+    /// The problem code every caller may see. Absent when the start admits
+    /// as things stand: there is no refusal to explain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_code: Option<String>,
+    /// The problem code only this path may disclose. Absent with
+    /// `public_code`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detailed_code: Option<String>,
+    /// The refusal in words, as the evaluator states it. Absent with
+    /// `public_code`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explanation: Option<String>,
 }
 
 #[cfg(test)]
@@ -417,15 +423,15 @@ mod tests {
 
     /// The explain document carries both projections, so a test can pin that
     /// the detailed code never equals a detailed-only value in the public
-    /// position.
+    /// position, and that an admitted start carries neither.
     #[test]
     fn explain_documents_carry_both_projections() {
         let explain = ExplainDocument {
             offering: "registry-update-30".to_owned(),
             start: utc(5, 2),
-            public_code: "capacity.exhausted".to_owned(),
-            detailed_code: "resource.unavailable".to_owned(),
-            explanation: "every capable member is unavailable".to_owned(),
+            public_code: Some("capacity.exhausted".to_owned()),
+            detailed_code: Some("resource.unavailable".to_owned()),
+            explanation: Some("every capable member is unavailable".to_owned()),
         };
         let json = serde_json::to_value(&explain).unwrap();
         assert_eq!(json["publicCode"], "capacity.exhausted");
@@ -433,6 +439,21 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<ExplainDocument>(json).unwrap(),
             explain
+        );
+
+        let admitted = ExplainDocument {
+            public_code: None,
+            detailed_code: None,
+            explanation: None,
+            ..explain
+        };
+        let json = serde_json::to_value(&admitted).unwrap();
+        assert!(json.get("publicCode").is_none());
+        assert!(json.get("detailedCode").is_none());
+        assert!(json.get("explanation").is_none());
+        assert_eq!(
+            serde_json::from_value::<ExplainDocument>(json).unwrap(),
+            admitted
         );
     }
 

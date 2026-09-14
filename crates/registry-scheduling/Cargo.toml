@@ -1,0 +1,64 @@
+[package]
+name = "registry-scheduling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Scheduling HTTP service and PostgreSQL runtime."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "scheduling"
+path = "src/main.rs"
+
+[features]
+default = []
+postgres-test = []
+schema = ["dep:schemars"]
+
+[lints]
+workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+base64.workspace = true
+chrono = { workspace = true, features = ["serde"] }
+clap.workspace = true
+deadpool-postgres.workspace = true
+futures.workspace = true
+http.workspace = true
+jsonwebtoken.workspace = true
+registry-scheduling-core.workspace = true
+registry-platform-audit.workspace = true
+registry-platform-authcommon.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-platform-calendar.workspace = true
+registry-platform-canonical-json.workspace = true
+registry-platform-config.workspace = true
+registry-platform-crypto.workspace = true
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+registry-platform-httputil.workspace = true
+registry-platform-oidc.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
+schemars = { workspace = true, optional = true }
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile.workspace = true
+tower.workspace = true
+wiremock.workspace = true
