@@ -2357,6 +2357,37 @@ fn local_event_destinations_refuse_userinfo_and_noncanonical_paths() {
 }
 
 #[test]
+fn local_event_destinations_refuse_hmac_key_bytes_the_runtime_cannot_load() {
+    let (_project_temp, project) = write_init_project();
+    let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
+    let mut clients = config::clients(&bytes).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let key = project.join("event-key");
+    // The runtime resolves this key through the shared file secret provider,
+    // which refuses any value carrying a NUL byte. A randomly generated key
+    // holds one about one time in eight, so the clients file is what must
+    // refuse it rather than leaving it to a failed start.
+    let mut material = b"synthetic-local-event-key-for-tes".to_vec();
+    material[8] = 0;
+    private::create(&key, &material).unwrap();
+    clients.event_destinations.insert(
+        "openfn".into(),
+        config::LocalEventDestination {
+            origin: "http://127.0.0.1:18888".into(),
+            path: "/inbox/registry".into(),
+            hmac_key_file: key.clone(),
+        },
+    );
+    let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+        .unwrap_err()
+        .to_string();
+    assert!(refusal.contains("HMAC key bytes"), "{refusal}");
+
+    private::replace(&key, b"synthetic-local-event-key-for-test").unwrap();
+    config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes()).unwrap();
+}
+
+#[test]
 fn an_imported_assertion_key_needs_a_usable_key_identifier() {
     // Every token one of these clients obtains is a private_key_jwt assertion,
     // whose header names the key it was signed with. A key carrying no usable
