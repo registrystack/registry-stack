@@ -75,6 +75,12 @@ async fn build_verifier() -> Result<TokenVerifier, Box<dyn std::error::Error>> {
   present. Once present, every core member, the configured approver claim, and
   both token and grant deadlines are required. Product runtimes still own
   trusted source-issuer mappings and the supported operation vocabulary.
+- Grant bounds are a closed tagged union: `evidence`, `breg`, or `scheduling`.
+  A verifier built before a variant existed rejects the unknown tag as a
+  malformed claim, so a grant minted for one product can never be interpreted
+  by another product's runtime. `SchedulingPermission` values are scoped to
+  one service and location pair, carry at most 64 permissions of 32 actions,
+  and never admit wildcards; their `Debug` output redacts every claim value.
 - Store replay state, authorization decisions, and tenant boundaries in the
   consuming service.
 
