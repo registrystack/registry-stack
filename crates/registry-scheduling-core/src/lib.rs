@@ -27,6 +27,7 @@ mod model;
 mod naming;
 mod policy;
 mod problem;
+mod resolve;
 mod units;
 mod wire;
 
@@ -37,5 +38,6 @@ pub use model::*;
 pub use naming::*;
 pub use policy::*;
 pub use problem::*;
+pub use resolve::*;
 pub use units::*;
 pub use wire::*;
