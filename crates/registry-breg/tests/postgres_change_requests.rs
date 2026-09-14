@@ -183,7 +183,7 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     // still be lockable during apply without becoming writable.
     source["accessProfiles"][4]["permissions"][0]["applyTargets"]
         .as_array_mut().unwrap().push(json!({
-            "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
+            "entity":"asset-site", "rowBoundaries":[{"field":"tenant","claim":"guard_tenant_claim","operator":"equals"}]
         }));
     source["evidenceProviders"] = json!([{
         "id":"farmer-registry",
@@ -443,7 +443,26 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         "read-only guard lock context cannot write its target row"
     );
     guard_transaction.rollback().await.unwrap();
-    let applier = claims("applier", APPLIER, Some("apply"));
+    let applier_claims = |guard_tenant: &str| {
+        VerifiedRequestClaims::authenticated(
+            "registry_principal",
+            APPLIER,
+            BTreeSet::new(),
+            Some("apply".to_owned()),
+            BTreeMap::from([
+                (
+                    "tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(TENANT).unwrap(),
+                ),
+                (
+                    "guard_tenant_claim".to_owned(),
+                    VerifiedClaimValue::direct_string(guard_tenant).unwrap(),
+                ),
+            ]),
+        )
+        .unwrap()
+    };
+    let applier = applier_claims(TENANT);
     let before = get_record(
         &replay_app,
         &format!(
@@ -454,6 +473,16 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
     )
     .await;
     let apply = action(&before.body, "apply_request", None);
+    let wrong_guard_before = get_record(
+        &replay_app,
+        &format!(
+            "/v1/records/correction-requests/{}?accessProfile=applier",
+            request.id
+        ),
+        applier_claims("tenant-b"),
+    )
+    .await;
+    let wrong_guard_apply = action(&wrong_guard_before.body, "apply_request", None);
     // Each fresh acquisition must pass both cryptographic verification and the
     // frozen application policy. None of these failures may leave a partial
     // application, retained Evidence use, result, or idempotency receipt.
@@ -554,6 +583,42 @@ async fn reviewed_evidence_application_releases_postgres_and_replays_the_atomic_
         .unwrap();
     assert_eq!([row.get::<_, i64>(0), row.get(1), row.get(2)], [1, 1, 1]);
     provider.mode("unavailable");
+    let idempotency_before_guard_refusal = idempotency_result_count(&database).await;
+    let refused_same_key_guard = send_action(
+        &replay_app,
+        &wrong_guard_apply,
+        "evidence-ambiguous-apply",
+        applier_claims("tenant-b"),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_same_key_guard.status,
+        StatusCode::CONFLICT,
+        "a changed guard claim cannot reuse the original receipt key: {}",
+        refused_same_key_guard.body
+    );
+    assert_eq!(refused_same_key_guard.body["code"], "idempotency.conflict");
+    let refused_guard = send_action(
+        &replay_app,
+        &wrong_guard_apply,
+        "evidence-ambiguous-apply-wrong-guard",
+        applier_claims("tenant-b"),
+        json!({"proposalVersion":1,"effectDigest":digest}),
+    )
+    .await;
+    assert_eq!(
+        refused_guard.status,
+        StatusCode::PRECONDITION_FAILED,
+        "an excluded guard row cannot release the application receipt: {}",
+        refused_guard.body
+    );
+    assert_eq!(provider.calls(), expected_calls);
+    assert_eq!(
+        idempotency_result_count(&database).await,
+        idempotency_before_guard_refusal,
+        "guard refusal cannot bind a recovery key"
+    );
     let different_key = send_action(
         &replay_app,
         &apply,

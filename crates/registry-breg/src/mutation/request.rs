@@ -1115,6 +1115,18 @@ impl MutationCoordinator {
                     &targets,
                     &actor_reference,
                 )?;
+                // A new idempotency key has no retained authority binding.
+                // Check read-only guards against the current apply grant too.
+                self.authorize_applied_guard_targets(
+                    transaction.transaction(),
+                    registry,
+                    input,
+                    claims,
+                    entity,
+                    &workflow,
+                    &actor_reference,
+                )
+                .await?;
                 let snapshot_reference = request_revision_snapshot_reference(
                     transaction.transaction(),
                     &entity.id,
@@ -2097,6 +2109,108 @@ impl MutationCoordinator {
             return Err(MutationError::PreconditionFailed);
         }
         Ok(contexts)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn authorize_applied_guard_targets(
+        &self,
+        transaction: &Transaction<'_>,
+        registry: &CompiledRegistry,
+        input: &RequestActionInput<'_>,
+        claims: &ClaimContext,
+        entity: &CompiledEntity,
+        workflow: &RequestWorkflow,
+        actor: &str,
+    ) -> Result<(), MutationError> {
+        let plan = entity
+            .change_request
+            .as_ref()
+            .ok_or(MutationError::InvalidRequest)?;
+        let proposal = workflow.current_proposal().ok_or(MutationError::Conflict)?;
+        let Some(frozen) = proposal.application_preconditions() else {
+            return if plan.application.preconditions.is_empty() {
+                Ok(())
+            } else {
+                Err(MutationError::PreconditionFailed)
+            };
+        };
+        frozen
+            .validate()
+            .map_err(|_| MutationError::PreconditionFailed)?;
+        if frozen.contract != plan.application.preconditions {
+            return Err(MutationError::PreconditionFailed);
+        }
+        for guard in &frozen.targets {
+            let compiled = frozen
+                .contract
+                .targets
+                .iter()
+                .find(|candidate| candidate.id == guard.id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let record_id = Uuid::parse_str(guard.record_id.as_str())
+                .map_err(|_| MutationError::PreconditionFailed)?;
+            let authority = input
+                .target_authority
+                .iter()
+                .find(|authority| authority.target_entity_id == guard.entity_id)
+                .ok_or(MutationError::PreconditionFailed)?;
+            let row = transaction
+                .query_opt(
+                    "SELECT snapshot FROM registry_internal.registry_revisions WHERE entity_id=$1 AND record_id=$2 AND record_revision=$3 AND erased_at IS NULL",
+                    &[&guard.entity_id, &record_id, &guard.expected_revision],
+                )
+                .await
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::PreconditionFailed)?;
+            let bytes: Vec<u8> = row
+                .try_get::<_, Option<Vec<u8>>>(0)
+                .map_err(|_| MutationError::Unavailable)?
+                .ok_or(MutationError::PreconditionFailed)?;
+            let snapshot = registry_platform_canonical_json::parse_json_strict(&bytes)
+                .map_err(|_| MutationError::Unavailable)?;
+            if registry_platform_canonical_json::canonicalize_json(&snapshot)
+                .map_err(|_| MutationError::Unavailable)?
+                != bytes
+            {
+                return Err(MutationError::Unavailable);
+            }
+            let snapshot = snapshot.as_object().ok_or(MutationError::Unavailable)?;
+            if guard
+                .values
+                .iter()
+                .any(|(field, value)| snapshot.get(field) != Some(value))
+            {
+                return Err(MutationError::PreconditionFailed);
+            }
+            let binding = guard_target_binding(
+                entity,
+                workflow,
+                plan,
+                compiled,
+                record_id,
+                Some(guard.expected_revision),
+                &self.expected.package_revision,
+                actor,
+            )?;
+            ChangeRequestTargetContext::for_application(
+                registry,
+                claims,
+                request_authority_boundaries(authority)?,
+                binding,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?
+            .authorize_rows(
+                registry
+                    .entities()
+                    .get(&guard.entity_id)
+                    .ok_or(MutationError::InvalidRequest)?,
+                Some(snapshot),
+                snapshot,
+                record_id,
+            )
+            .map_err(|_| MutationError::PreconditionFailed)?;
+        }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
