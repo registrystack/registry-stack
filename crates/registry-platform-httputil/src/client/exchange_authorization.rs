@@ -33,6 +33,16 @@ const MAX_CONTEXT_TEXT_BYTES: usize = 512;
 const MAX_ATTRIBUTES_BYTES: usize = 4096;
 const MAX_ASSERTION_BYTES: usize = 32 * 1024;
 const MAX_ASSERTION_LIFETIME_SECONDS: i64 = 60;
+/// The furthest ahead a verified context may place its deadline.
+///
+/// A context is a snapshot of host-owned source facts, and every token handed
+/// out under it is bounded by that deadline. It therefore carries the ceiling
+/// the token cache already applies: past a day, the host verifies again. The
+/// deadline reaches this crate from adopter configuration, so bounding it here
+/// is what keeps a mistyped or hostile value from naming a verification that
+/// never expires.
+const MAX_CONTEXT_LIFETIME_SECONDS: i64 =
+    super::private_key_jwt::MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS;
 const REFRESH_MARGIN: Duration = Duration::from_secs(5);
 const MAX_REMOTE_ASSERTION_RESPONSE_BYTES: u64 = 40 * 1024;
 
@@ -108,14 +118,16 @@ impl ExchangeContext {
         deadline: i64,
         grant_id: Option<String>,
     ) -> Result<Self, TokenError> {
+        let now = now_seconds()?;
         if ![&issuer, &subject, &audience, &generation]
             .into_iter()
             .all(|value| valid_text(value))
             || grant_id.as_ref().is_some_and(|value| !valid_text(value))
-            || deadline <= now_seconds()?
+            || deadline <= now
+            || deadline - now > MAX_CONTEXT_LIFETIME_SECONDS
         {
             return Err(TokenError::Invalid {
-                reason: "the verified exchange context is incomplete or expired",
+                reason: "the verified exchange context is incomplete, expired, or unbounded",
             });
         }
         Ok(Self {
@@ -434,6 +446,11 @@ impl ExchangeAuthorization {
     pub fn with_fetch_url_policy(mut self, policy: crate::FetchUrlPolicy) -> Self {
         self.exchange.set_fetch_url_policy(policy);
         self.cached = RwLock::new(None);
+        // Discarding that token also returns the one exchange a non-renewable
+        // context allows. This method consumes the provider, so the client
+        // built from what it returns still performs at most one exchange, and
+        // it performs that one under the policy just applied.
+        self.refresh_lock = Mutex::new(false);
         self
     }
 
@@ -668,6 +685,20 @@ impl TokenProvider for ExchangeAuthorization {
         if wall_now >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
+        // The verified context deadline bounds every token this provider hands
+        // out, so it is also the bound for one the issuer stated no lifetime
+        // for. Holding such a token no longer than the context is what lets one
+        // verified context serve the several requests an operation makes,
+        // without any token outliving the facts it was issued against. A
+        // context is bounded to a day when it is built, so this addition has
+        // room; taking it in checked form is what keeps an arithmetic edge from
+        // ever panicking a token acquisition, and it is refused here, before an
+        // exchange is spent on a token that could not be held.
+        let context_deadline = now
+            .checked_add(Duration::from_secs(
+                (self.context.deadline - wall_now) as u64,
+            ))
+            .ok_or(TokenError::Unavailable)?;
         let assertion = self.source.assertion(&self.context).await?;
         // The authority may issue this assertion after waiting on HTTP or its
         // current grant check. Compare iat to the time of receipt, not the time
@@ -677,19 +708,22 @@ impl TokenProvider for ExchangeAuthorization {
         if now_seconds()? >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
-        // The verified context deadline bounds every token this provider hands
-        // out, so it is also the bound for one the issuer stated no lifetime
-        // for. Holding such a token no longer than the context is what lets one
-        // verified context serve the several requests an operation makes,
-        // without any token outliving the facts it was issued against.
-        let context_deadline = now + Duration::from_secs((self.context.deadline - wall_now) as u64);
-        let expires_at = acquired
-            .expires_at
-            .map_or(context_deadline, |issued| issued.min(context_deadline));
-        *self.cached.write().await = Some(CachedExchange {
-            token: acquired.token.clone(),
-            expires_at,
-        });
+        // An issuer that states a lifetime is believed about it, including
+        // when it states one that has already run out: `PrivateKeyJwt` reports
+        // that as no deadline at all, and a credential the issuer calls spent
+        // is used once and dropped. The context deadline answers an issuer's
+        // silence, never an issuer's own accounting.
+        let expires_at = match acquired.expires_at {
+            Some(issued) => Some(issued.min(context_deadline)),
+            None if acquired.lifetime_stated => None,
+            None => Some(context_deadline),
+        };
+        if let Some(expires_at) = expires_at {
+            *self.cached.write().await = Some(CachedExchange {
+                token: acquired.token.clone(),
+                expires_at,
+            });
+        }
         Ok(acquired.token)
     }
 }
@@ -996,6 +1030,82 @@ mod tests {
             again.authorization_header_value()
         );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stated_lifetime_already_elapsed_is_never_cached() {
+        // `expires_in: 0` states that the credential is spent, and
+        // `PrivateKeyJwt` maps that to the same absent deadline it uses for an
+        // omitted lifetime. The two are not the same here: the verified context
+        // deadline answers an issuer's silence, never an issuer saying the
+        // token has already run out.
+        for expires_in in [0, -1] {
+            let server = MockServer::start().await;
+            endpoint(&server, Some(expires_in)).await;
+            let provider = ExchangeAuthorization::first_party(
+                exchange(&server, "urn:records", &["records:read"]),
+                context("person-1", now_seconds().unwrap() + 120),
+                source(&["records:read"]),
+            )
+            .unwrap();
+            provider.bearer_token().await.unwrap();
+            assert!(
+                matches!(provider.bearer_token().await, Err(TokenError::Unavailable)),
+                "expires_in {expires_in} was cached"
+            );
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_context_deadline_reaching_past_a_day_is_refused() {
+        // The deadline arrives from adopter configuration, and a context is a
+        // snapshot of facts the host verified once. One that outlives the day
+        // the token cache allows is refused where it is built, so no exchange
+        // is spent under it and no arithmetic is asked to name the instant it
+        // would expire.
+        let now = now_seconds().unwrap();
+        assert!(ExchangeContext::first_party(
+            "https://authority.example",
+            "person-1",
+            "https://records.example",
+            "generation-1",
+            now + MAX_CONTEXT_LIFETIME_SECONDS,
+        )
+        .is_ok());
+        for deadline in [now + MAX_CONTEXT_LIFETIME_SECONDS + 1, i64::MAX] {
+            assert!(matches!(
+                ExchangeContext::first_party(
+                    "https://authority.example",
+                    "person-1",
+                    "https://records.example",
+                    "generation-1",
+                    deadline,
+                ),
+                Err(TokenError::Invalid { .. })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_new_fetch_policy_rearms_the_one_exchange_it_discards() {
+        // Applying the client's DNS-pinned rules discards any token obtained
+        // under the previous ones. A discarded token must not also consume the
+        // single exchange a first-party context allows, or the client built
+        // from this provider could never obtain one under the rules it just
+        // applied.
+        let server = MockServer::start().await;
+        endpoint(&server, Some(300)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        let provider = provider.with_fetch_url_policy(crate::FetchUrlPolicy::dev());
+        provider.bearer_token().await.unwrap();
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 
     #[tokio::test]

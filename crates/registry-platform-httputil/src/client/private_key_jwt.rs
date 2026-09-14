@@ -899,6 +899,11 @@ impl PrivateKeyJwt {
             // Moved rather than copied, so the credential ends up in the buffer
             // `BearerToken` wipes on drop.
             token: BearerToken::new(issued.access_token)?,
+            // Whether the issuer spoke about this credential's lifetime at all.
+            // Silence and an already-elapsed lifetime both leave `expires_at`
+            // absent, and they do not mean the same thing to a caller that
+            // holds a deadline of its own to fall back on.
+            lifetime_stated: issued.expires_in.is_some(),
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
             // A lifetime longer than this provider will trust is clamped before
@@ -1004,6 +1009,10 @@ impl fmt::Debug for PrivateKeyJwt {
 /// A credential and what may be assumed about how long it lasts.
 pub(super) struct AcquiredToken {
     pub(super) token: BearerToken,
+    /// Whether the issuer stated a lifetime, whatever that lifetime was.
+    /// An absent `expires_at` beside `true` is an issuer saying the credential
+    /// is already spent; beside `false` it is an issuer saying nothing.
+    pub(super) lifetime_stated: bool,
     pub(super) expires_at: Option<Instant>,
 }
 
