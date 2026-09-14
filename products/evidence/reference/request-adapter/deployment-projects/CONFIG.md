@@ -177,6 +177,7 @@ artifact, or alternate evaluator is introduced by the assurance profile.
 | `authentication.maximumTokenLifetimeSeconds` | yes | Positive maximum accepted `exp - iat`, up to 86,400 seconds. Its presence requires `iat`, `exp > iat`, and an interval within the maximum. |
 | `authentication.revokedKeyIds` | yes | Explicit emergency denylist, including an empty list. It is checked before cached JWKS key selection. |
 | `authentication.allowedClients` | no | Explicit machine-client admission, matched against the verified token's `client_id`/`azp` and never `sub`. Omission keeps the issuer-vouched-client behavior. A stated list must be non-empty, unique, and bounded (at most 32 entries of 1..=128 bytes). Audience plus static issuer-governed attributes alone cannot establish that a client was granted this resource's permission, which is what `requiredScopes` closes. |
+| `authentication.assertionIssuers` | no | Per-client assertion-authority admission for a token carrying the platform verifier's `registry_assertion_issuer` claim, keyed by the client the token's `client_id`/`azp` names and naming the issuers that client may present the claim as. Omission applies no rule, so a claim-bearing token is admitted regardless of its value. A stated map must be non-empty and bounded (at most 32 client keys of 1..=128 bytes), and each client's issuer list must be non-empty, unique, and bounded (at most 8 entries of 1..=512 bytes). A token carrying no such claim is never affected by this admission. |
 | `authentication.requiredScopes` | no | Scopes every inbound token must carry, read from the verified token's scope set after signature verification and before any authority claim is read. Omission keeps the no-scope-gate behavior. A stated list must be non-empty, unique RFC 6749 scope-tokens (at most 32 entries of 1..=256 bytes). A missing scope is never inferred from tags, principal, roles, `sub`, or request fields. |
 | `authentication.actorClaim` | no | Optional verified actor claim. Omission does not enable a fallback actor source. |
 
@@ -1516,6 +1517,9 @@ authentication.algorithms
 authentication.algorithms[]
 authentication.allowedClients
 authentication.allowedClients[]
+authentication.assertionIssuers
+authentication.assertionIssuers.*
+authentication.assertionIssuers.*[]
 authentication.audiences
 authentication.audiences[]
 authentication.claims

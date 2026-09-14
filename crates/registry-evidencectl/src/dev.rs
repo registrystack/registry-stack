@@ -2931,6 +2931,27 @@ mod tests {
         assert!(select_resource(None, Some("not-an-absolute-uri")).is_err());
     }
 
+    #[test]
+    fn a_selected_resource_is_one_the_token_request_can_carry() {
+        // A URL parser normalizes these hosts, so each would be accepted here
+        // and then refused when the same bytes became the OAuth resource
+        // parameter, leaving a started session whose every token request fails.
+        for resource in [
+            "https://\u{e9}.example",
+            "https://relying.example/\u{2713}",
+            "https://relying.example/<evidence>",
+        ] {
+            assert!(
+                select_resource(None, Some(resource)).is_err(),
+                "{resource} is refused when it is selected"
+            );
+        }
+        assert_eq!(
+            select_resource(None, Some("https://relying.example/evidence")).unwrap(),
+            "https://relying.example/evidence"
+        );
+    }
+
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
             runtime_path: runtime.to_path_buf(),

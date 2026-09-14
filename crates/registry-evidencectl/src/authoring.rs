@@ -359,9 +359,14 @@ pub(crate) fn compile_local_project_with_target_inputs_and_resource(
 }
 
 pub(crate) fn valid_local_audience(value: &str) -> bool {
+    // `Url::parse` normalizes a host, so it accepts bytes the OAuth resource
+    // parameter refuses. The audience selected here becomes that parameter, so
+    // it is held to the same byte-level grammar the token request applies, and
+    // to this command's own tighter length bound.
     !value.is_empty()
         && value.len() <= 256
         && !value.chars().any(char::is_whitespace)
+        && registry_evidence_client::private_key_jwt::valid_resource_uri(value)
         && url::Url::parse(value).is_ok_and(|url| {
             url.fragment().is_none() && url.username().is_empty() && url.password().is_none()
         })

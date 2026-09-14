@@ -857,6 +857,25 @@
           "type": "array",
           "uniqueItems": true
         },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "pattern": "^[^\\x00-\\x20\\x7F]+$",
+              "type": "string"
+            },
+            "maxItems": 128,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^[^\\x00-\\x20\\x7F]+$",
+            "type": "string"
+          },
+          "type": "object"
+        },
         "audience": {
           "maxLength": 2048,
           "minLength": 1,

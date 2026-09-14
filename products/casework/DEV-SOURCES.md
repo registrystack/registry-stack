@@ -115,6 +115,9 @@ requires explicit `integrations.resource`; it is separate from the older
 `--source-project` compatibility bridge. The owner must pre-register each
 Casework teaching and service client with the same scopes, claims and resource,
 plus the task authority connection and the `taskExchange` bootstrap clients.
+That connection's `clients` list must name exactly those bootstrap clients: the
+owner reads the pairing to record the one assertion authority each of them may
+present, and its resource servers refuse a token exchanged from any other.
 Casework copies those exact client pairs into its private state, keeps its own
 task signing key, and neither starts nor stops the owner's issuer. An owner
 session change or unavailable issuer is refused before restart.

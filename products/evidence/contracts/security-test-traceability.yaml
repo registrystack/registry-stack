@@ -24,6 +24,13 @@ entries:
     tests:
       - {file: crates/registry-evidence/src/config.rs, name: admission_lists_are_optional_but_present_means_nonempty_and_bounded}
       - {file: crates/registry-evidence/src/runtime_tests.rs, name: admission_gates_refuse_unadmitted_clients_and_missing_scopes}
+  - id: sec-assertion-authority-pairing
+    tests:
+      - {file: crates/registry-evidence/src/config.rs, name: assertion_issuers_are_optional_but_present_means_nonempty_and_bounded}
+      - {file: crates/registry-evidence/src/auth.rs, name: absent_assertion_issuers_admits_a_token_carrying_the_claim}
+      - {file: crates/registry-evidence/src/auth.rs, name: a_token_presenting_the_wrong_assertion_authority_is_refused}
+      - {file: crates/registry-evidence/src/auth.rs, name: a_token_presenting_its_own_assertion_authority_is_accepted}
+      - {file: crates/registry-evidence/src/auth.rs, name: a_token_without_the_assertion_issuer_claim_is_unaffected}
   - id: expected-assurance-profile-mismatch
     tests:
       - {file: crates/registry-evidence-verifier/src/verifier.rs, name: authentic_local_assertions_fail_deployable_assurance_expectations}

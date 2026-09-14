@@ -272,6 +272,11 @@ invariants:
     threat: An issuer that returns a correctly signed token for a known resource with zero scopes while still emitting the client's static attributes lets that client reach protected Evidence operations on audience and attributes alone.
     enforcement: Client admission runs in the platform verifier's client_id/azp semantics; the scope gate runs after signature verification and before any authority claim is read, with the same closed refusal a refused client gets.
     negative_test: sec-admission-clients-and-scopes
+  - id: V1-I55
+    rule: When authentication states assertionIssuers, a token carrying the platform verifier's registry_assertion_issuer claim is admitted only when the client it names is a listed key and the claim value is one of that client's listed authorities; an absent map applies no rule, and a token carrying no such claim is never affected by this admission.
+    threat: An authorization server that grants token exchange per client but not per assertion authority lets any exchange-capable client present any authority that server trusts, so a client approved to act on one authority's assertions reaches Evidence carrying another authority's and is indistinguishable from the approved one at the boundary.
+    enforcement: The pairing is applied in the platform verifier beside allowedClients, under the same client_id/azp semantics, so a refusal is a credential refusal taken before any requirement is read or made visible to the caller. A claim-free client-credentials token is admitted either way, so the rule narrows exchanged authority without gating ordinary service callers.
+    negative_test: sec-assertion-authority-pairing
 
 cross_cutting:
   holder_bound_entity_reference_prohibited:

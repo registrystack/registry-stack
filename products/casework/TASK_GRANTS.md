@@ -48,6 +48,13 @@ bootstrap for only the Casework resource and `casework:grants:assert`. Register
 token exchange separately for its exact resource and access scopes. The agent
 uses its own `private_key_jwt` credential for both requests.
 
+Optionally add `assertionIssuers` alongside `allowedClients` to bind a client to
+the assertion authorities its tokens may claim. When a client has an entry
+there, a token presented to Casework that carries `registry_assertion_issuer`
+is accepted only if that value is one of the client's listed authorities; a
+token without the claim, such as the agent's client-credentials bootstrap, is
+unaffected.
+
 `statusClients` maps each resource server's service client to one exact resource
 audience. These clients use `casework:grants:status`. Configure the matching
 BREG [`taskGrantStatus`](../breg/TASK_GRANTS.md) entry for governed writes.

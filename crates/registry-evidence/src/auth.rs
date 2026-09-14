@@ -283,7 +283,8 @@ impl Authenticator {
         .with_max_token_lifetime(Some(Duration::from_secs(
             config.maximum_token_lifetime_seconds,
         )))
-        .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default());
+        .with_allowed_clients(config.allowed_clients.clone().unwrap_or_default())
+        .with_assertion_issuers(config.assertion_issuers.clone().unwrap_or_default());
         let fetcher = Arc::new(JwksFetcher::new_with_fetch_url_policy(
             config.jwks_uri.clone(),
             JwksFetcherConfig::defaults(),
@@ -676,7 +677,8 @@ fn is_key_source_failure(error: &OidcError) -> bool {
         | OidcError::AudienceMismatch
         | OidcError::SignatureInvalid
         | OidcError::InvalidToken
-        | OidcError::ClientNotAllowed => false,
+        | OidcError::ClientNotAllowed
+        | OidcError::AssertionIssuerNotAllowed => false,
         _ => false,
     }
 }
@@ -929,6 +931,7 @@ mod tests {
             OidcError::SignatureInvalid,
             OidcError::InvalidToken,
             OidcError::ClientNotAllowed,
+            OidcError::AssertionIssuerNotAllowed,
             OidcError::IssuerMismatch {
                 expected: "https://issuer.invalid".to_owned(),
                 actual: "https://other.invalid".to_owned(),
@@ -1212,5 +1215,119 @@ mod tests {
             .expect("standing token extracts");
         assert_eq!(context.actor_kind(), ActorKind::Service);
         assert!(matches!(context.grant(), Ok(None)));
+    }
+
+    /// The test-only signing key backing the assertion-issuer verifier below,
+    /// held in memory so verification needs no network JWKS fetch.
+    const ASSERTION_AUTHORITY_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE","x":"axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY","y":"T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU","alg":"ES256","kid":"assertion-authority-test-key"}"#;
+
+    /// Builds a verifier the same way `Authenticator::from_config` builds
+    /// one, chaining `with_allowed_clients` then `with_assertion_issuers`,
+    /// but backed by a static in-memory key set instead of a network fetch.
+    fn assertion_issuer_verifier(
+        assertion_issuers: std::collections::BTreeMap<String, Vec<String>>,
+    ) -> TokenVerifier {
+        let private = registry_platform_crypto::PrivateJwk::parse(ASSERTION_AUTHORITY_PRIVATE_JWK)
+            .expect("assertion-issuer test key parses");
+        let jwks: jsonwebtoken::jwk::JwkSet =
+            serde_json::from_value(serde_json::json!({"keys": [private.public()]}))
+                .expect("static assertion-issuer JWKS parses");
+        let fetcher = Arc::new(JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults()));
+        let verifier_config = TokenVerifierConfig::access_token_profile(
+            "https://issuer.invalid".to_owned(),
+            vec!["evidence-resource".to_owned()],
+            vec![jsonwebtoken::Algorithm::ES256],
+            vec!["at+jwt".to_owned()],
+        )
+        .with_allowed_clients(vec!["portal-exchange".to_owned(), "task-agent".to_owned()])
+        .with_assertion_issuers(assertion_issuers);
+        TokenVerifier::new(verifier_config, fetcher)
+    }
+
+    fn seed_assertion_issuers() -> std::collections::BTreeMap<String, Vec<String>> {
+        std::collections::BTreeMap::from([
+            (
+                "portal-exchange".to_owned(),
+                vec!["https://portal-authority.invalid".to_owned()],
+            ),
+            (
+                "task-agent".to_owned(),
+                vec!["https://casework-authority.invalid".to_owned()],
+            ),
+        ])
+    }
+
+    /// Signs an access token for `client`, presenting `assertion_issuer` as
+    /// the platform verifier's `registry_assertion_issuer` claim when given,
+    /// and carrying no such claim otherwise.
+    fn assertion_issuer_token(client: &str, assertion_issuer: Option<&str>) -> String {
+        let now = chrono::Utc::now().timestamp();
+        let mut claims = serde_json::json!({
+            "iss": "https://issuer.invalid",
+            "aud": "evidence-resource",
+            "sub": "agent-one",
+            "azp": client,
+            "iat": now - 1,
+            "exp": now + 298,
+        });
+        if let Some(issuer) = assertion_issuer {
+            claims
+                .as_object_mut()
+                .expect("claims are an object")
+                .insert(
+                    registry_platform_oidc::ASSERTION_ISSUER_CLAIM.to_owned(),
+                    serde_json::json!(issuer),
+                );
+        }
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({
+                "alg": "ES256",
+                "kid": "assertion-authority-test-key",
+                "typ": "at+jwt"
+            }))
+            .expect("JWT header serializes"),
+        );
+        let payload =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("claims serialize"));
+        let signing_input = format!("{header}.{payload}");
+        let key = registry_platform_crypto::PrivateJwk::parse(ASSERTION_AUTHORITY_PRIVATE_JWK)
+            .expect("assertion-issuer test key parses");
+        let signature = URL_SAFE_NO_PAD.encode(
+            registry_platform_crypto::sign(signing_input.as_bytes(), &key).expect("JWT signs"),
+        );
+        format!("{signing_input}.{signature}")
+    }
+
+    #[tokio::test]
+    async fn absent_assertion_issuers_admits_a_token_carrying_the_claim() {
+        let verifier = assertion_issuer_verifier(std::collections::BTreeMap::new());
+        let token = assertion_issuer_token("portal-exchange", Some("https://anything.invalid"));
+        assert!(verifier.verify(&token).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_token_presenting_the_wrong_assertion_authority_is_refused() {
+        let verifier = assertion_issuer_verifier(seed_assertion_issuers());
+        let token = assertion_issuer_token(
+            "portal-exchange",
+            Some("https://casework-authority.invalid"),
+        );
+        let result = verifier.verify(&token).await;
+        assert!(matches!(result, Err(OidcError::AssertionIssuerNotAllowed)));
+    }
+
+    #[tokio::test]
+    async fn a_token_presenting_its_own_assertion_authority_is_accepted() {
+        let verifier = assertion_issuer_verifier(seed_assertion_issuers());
+        let token =
+            assertion_issuer_token("portal-exchange", Some("https://portal-authority.invalid"));
+        assert!(verifier.verify(&token).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_token_without_the_assertion_issuer_claim_is_unaffected() {
+        let verifier = assertion_issuer_verifier(seed_assertion_issuers());
+        let token = assertion_issuer_token("portal-exchange", None);
+        assert!(verifier.verify(&token).await.is_ok());
     }
 }

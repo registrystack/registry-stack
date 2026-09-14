@@ -73,6 +73,10 @@ pub(super) struct IssuerConnection {
     pub issuer: String,
     pub jwks_endpoint: String,
     pub mapping: IssuerConnectionMapping,
+    /// The exchange clients paired with this connection's authority. A
+    /// resource server refuses every other authority's assertion from them,
+    /// and under first-party mapping these are also the clients whose claims
+    /// this connection projects.
     #[serde(default)]
     pub clients: Vec<String>,
     #[serde(default)]
@@ -329,7 +333,10 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if !identifier(id)
             || origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
-            || origin.port().is_none()
+            // Port zero parses and is not the scheme default, so it reaches
+            // the runtime's own refusal instead of this one unless it is named
+            // here beside the absent port.
+            || origin.port().is_none_or(|port| port == 0)
             || origin.path() != "/"
             || origin.query().is_some()
             || origin.fragment().is_some()
@@ -372,19 +379,32 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     let mut exchange_clients = BTreeSet::new();
     for id in &clients.issuer.exchange_clients {
         if !exchange_clients.insert(id)
-            || clients.issuer.exchange_issuers.is_empty()
+            // A client no connection registers would be exchanged under no
+            // recorded authority, and the derived per-client rule would then
+            // name nothing at all for it.
+            || !clients
+                .issuer
+                .exchange_issuers
+                .iter()
+                .any(|connection| connection.clients.contains(id))
             || !clients
                 .clients
                 .iter()
                 .any(|client| &client.id == id && client.scopes.len() == 1)
         {
-            bail!("exchange clients need one exact bootstrap scope and an exchange issuer");
+            bail!("exchange clients need one exact bootstrap scope and a registering exchange connection");
         }
     }
     let mut connection_ids = BTreeSet::new();
     for connection in &clients.issuer.exchange_issuers {
-        if !identifier(&connection.id) || !connection_ids.insert(&connection.id) {
-            bail!("local exchange connections require distinct bounded IDs");
+        if !identifier(&connection.id)
+            || !connection_ids.insert(&connection.id)
+            || connection
+                .clients
+                .iter()
+                .any(|client| !clients.issuer.exchange_clients.contains(client))
+        {
+            bail!("local exchange connections require distinct bounded IDs and declared exchange clients");
         }
     }
     let mut app_ids = BTreeSet::new();
@@ -838,7 +858,14 @@ pub(super) fn issuer_description(
                 IssuerConnectionMapping::InstitutionalGrant => ExchangeMapping::InstitutionalGrant,
                 IssuerConnectionMapping::FirstParty => ExchangeMapping::FirstParty,
             },
-            clients: issuer.clients.clone(),
+            // A described connection lists clients to select the first-party
+            // claims it projects, and institutional grant mapping projects
+            // none. The declared pairing still reaches the runtime, which is
+            // where it decides the authority each client may present.
+            clients: match issuer.mapping {
+                IssuerConnectionMapping::InstitutionalGrant => Vec::new(),
+                IssuerConnectionMapping::FirstParty => issuer.clients.clone(),
+            },
             token_attributes: issuer.token_attributes.clone(),
         });
     }
@@ -951,6 +978,25 @@ pub(super) fn refresh_issuer_registration(state: &State, clients: &Clients) -> R
     cleanup.context("cannot remove the private issuer rendering stage")
 }
 
+/// Map each exchange client to the assertion authorities it is registered
+/// against, so a resource server refuses a token minted from any other
+/// authority's assertion even though the issuer itself applies no such rule.
+/// Every declared exchange client is registered against at least one
+/// connection, so a declared client always reaches the map and an empty map
+/// means this deployment exchanges nothing.
+fn assertion_issuers(clients: &Clients) -> BTreeMap<String, Vec<String>> {
+    let mut authorities: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for connection in &clients.issuer.exchange_issuers {
+        for client in &connection.clients {
+            let registered = authorities.entry(client.clone()).or_default();
+            if !registered.contains(&connection.issuer) {
+                registered.push(connection.issuer.clone());
+            }
+        }
+    }
+    authorities
+}
+
 pub(super) fn runtime(
     root: &Path,
     state: &State,
@@ -1002,7 +1048,7 @@ pub(super) fn runtime(
             "secretProviders":{"file":{"root":final_root.join("secrets")}},
             "database":{"runtimeUrlRef":format!("secret:file/{prefix}runtime-database-url"),"migrationUrlRef":format!("secret:file/{prefix}migration-database-url"),"pool":{"maxSize":4},"roles":{"migration":MIGRATION_ROLE,"runtime":RUNTIME_ROLE}},
             "package":{"root":final_root.join(if test {"empty-package"}else{"build/package"}),"trustAnchorPath":final_root.join("trust-anchor.json"),"compilerSourceRevision":state.source_revision,"activeRevision":revision,"activeSequence":state.sequence},
-            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
+            "authentication":{"oidc":{"issuer":state.issuer_origin(),"audience":state.audience(),"allowedAlgorithm":"RS256","accessTokenType":"at+jwt","scopeClaim":"scope","scopeSeparator":" ","allowedClients":allowed_clients,"assertionIssuers":assertion_issuers(clients),"deniedKids":[],"maxTokenLifetimeSeconds":300,"leewayMilliseconds":30000,"jwksSource":{"kind":"static","documentRef":"secret:file/issuer-jwks"}},"authorityClaims":{"principal":"registry_principal","purpose":"registry_purpose"}},
             "audit":{"hashKeyRef":"secret:file/audit-key"},"cursor":{"secretRef":"secret:file/cursor-key"},"eventDestinations":destinations
         }),
     )

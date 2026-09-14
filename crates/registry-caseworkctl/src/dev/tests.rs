@@ -2743,6 +2743,13 @@ fn explicit_local_integrations_render_only_governed_authority_and_bind_the_sourc
         "https://casework.local.example"
     );
     assert!(operator["taskAuthority"].get("id").is_none());
+    // A task exchange client may present only the task authority's assertion.
+    // The borrowed issuer trusts other authorities for other clients, so this
+    // is what refuses their assertions here.
+    assert_eq!(
+        operator["authentication"]["oidc"]["assertionIssuers"],
+        json!({"task-agent": ["https://casework.local.example"]})
+    );
     assert_eq!(operator["sources"]["source"]["resource"], state.audience());
     assert_eq!(description.exchange_issuers.len(), 1);
     let mut wrong = integrations.clone();
@@ -3051,6 +3058,85 @@ fn borrowed_browser_admission_requires_exact_owner_resource() {
     let mut wrong = integrations;
     wrong.browser_clients = vec!["evidence-app".into()];
     assert!(wrong.prepare(&root, &state, None, &policy).is_err());
+}
+
+#[test]
+fn a_borrowed_task_authority_connection_pairs_the_task_exchange_clients() {
+    // The owner derives each exchange client's allowed assertion authority
+    // from the connection it is paired with. A task client the owner paired
+    // with one of its other connections would reach the owner's resource
+    // servers as that authority's, so the pairing is read here and not only
+    // the connection itself.
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    for profile in &mut policy.access_profiles {
+        profile.principal_claim = "registry_principal".to_owned();
+    }
+    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&json!({
+            "version":2,"project":owner_project,"owner":owner_id,
+            "status":"ready","issuerPort":8093,"issuerProject":null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let resource = format!("urn:breg:dev:{owner_id}");
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project);
+    state.issuer_owner = Some(owner_id);
+    state.resource = Some(resource.clone());
+    let clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":resource,
+        "serviceClients":[
+            {"id":"task-agent","scopes":["casework:grants:assert"],"taskExchange":true}],
+        "taskAuthority":{"issuer":"https://casework.local.example","jwksPort":8801,
+            "statusClients":{}}
+    }))
+    .unwrap();
+    integrations.validate(&clients, &policy).unwrap();
+    let root = project.join("private");
+    private::directory(&root).unwrap();
+    for name in ["issuer", "secrets", "credentials"] {
+        private::directory(&root.join(name)).unwrap();
+    }
+    let inventory = owner_root.join("clients.json");
+    for paired in [json!([]), json!(["other-agent"]), json!(["task-agent"])] {
+        if inventory.exists() {
+            fs::remove_file(&inventory).unwrap();
+        }
+        private::create(
+            &inventory,
+            &serde_json::to_vec(&json!({"issuer":{"exchangeIssuers":[{
+                "issuer":"https://casework.local.example",
+                "jwksEndpoint":"http://host.docker.internal:8801/oauth2/jwks",
+                "mapping":"institutional_grant","clients":paired
+            }]}}))
+            .unwrap(),
+        )
+        .unwrap();
+        let refusal = integrations
+            .prepare(&root, &state, None, &policy)
+            .unwrap_err()
+            .to_string();
+        // The exact pairing passes this check and stops at the borrowed client
+        // registration the owner has not written, which is the next check.
+        let expected = if paired == json!(["task-agent"]) {
+            "shared issuer owner has no registration for task-agent"
+        } else {
+            "shared issuer owner must pre-register the exact Casework task authority connection"
+        };
+        assert!(refusal.contains(expected), "{paired}: {refusal}");
+    }
 }
 
 struct RegistrySession {

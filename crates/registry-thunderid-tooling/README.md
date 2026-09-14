@@ -44,6 +44,11 @@ different mapping or replace that derived value. `FirstParty` names its exact
 exchange clients and a bounded map of signed `string` or `string-array`
 attributes to project into access tokens. Each such client belongs to one
 declared signer. First-party mapping cannot project grant-provenance fields.
+Whichever mapping a connection uses, it also copies that verified `iss` into
+`registry_assertion_issuer`, so a resource server reading an exchanged token
+can tell which assertion authority signed the subject token it came from. The
+issuer verified that `iss` when it selected the connection, so no exchanging
+client and no signer can choose the value.
 The development container loads identity providers only from declarative
 resources.
 
@@ -54,8 +59,9 @@ assertion lookup permission. Client credentials uses `clientConfig`; exchange
 uses `userConfig`, whose closed allowlist carries the signed task fields,
 including JSON identity selectors, product-specific bounds and numeric expiry.
 Static schemas and client attributes cannot contain `registry_grant_*`,
-`identity`, or `registry_approver`. Ordinary actor-kind and purpose attributes
-remain available for non-grant service profiles.
+`registry_assertion_issuer`, `identity`, or `registry_approver`. Ordinary
+actor-kind and purpose attributes remain available for non-grant service
+profiles.
 
 These declarations transport authority; each resource server still compares
 its authenticated client and configured resource against the immutable grant

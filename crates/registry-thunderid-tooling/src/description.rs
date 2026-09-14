@@ -164,6 +164,11 @@ pub struct ExchangeIssuer {
     /// First-party assertions do not acquire institutional grant provenance.
     pub mapping: ExchangeMapping,
     /// Bootstrap clients that may project this first-party signer's reviewed claims.
+    ///
+    /// Claim projection only: the rendered issuer carries no per-connection
+    /// client restriction, so this list never narrows which connection a
+    /// client may exchange through. A resource server's own
+    /// `registry_assertion_issuer` rule is what holds that pairing.
     pub clients: Vec<String>,
     /// Exact signed claim names and schema types for this first-party issuer.
     pub token_attributes: BTreeMap<String, ExchangeAttributeKind>,
@@ -433,7 +438,12 @@ impl IssuerDescription {
                 || !private_file_name(&user.password_file)
                 || user.attributes.len() > 16
                 || user.attributes.iter().any(|(name, value)| {
+                    // The renderer writes the declared username and email as
+                    // the user's own unique login identity, so an attribute of
+                    // either name would replace the identity validated and
+                    // deduplicated here rather than add one.
                     protected_attribute(name)
+                        || matches!(name.as_str(), "username" | "email")
                         || !bounded(name, 128)
                         || !name
                             .bytes()
@@ -813,6 +823,43 @@ mod tests {
                 reason: "synthetic user identity or attributes are invalid"
             })
         ));
+    }
+
+    #[test]
+    fn synthetic_user_attributes_cannot_replace_login_identity() {
+        let mut description = crate::testing::synthetic_description();
+        description
+            .interactive_applications
+            .push(InteractiveApplication {
+                id: "0197aaaa-0000-7000-8000-0000000000e1".into(),
+                client_id: "synthetic-browser".into(),
+                client_secret_file: "secrets/app".into(),
+                origin: "http://127.0.0.1:3000".into(),
+                redirect_uris: vec!["http://127.0.0.1:3000/auth/callback".into()],
+                audience: description.resource_servers[0].identifier.clone(),
+                token_attributes: vec!["registry_role".into()],
+            });
+        description.synthetic_users = vec![SyntheticUser {
+            id: "0197aaaa-0000-7000-8000-0000000000e2".into(),
+            username: "staff-one".into(),
+            email: "staff-one@example.test".into(),
+            password_file: "secrets/first-user".into(),
+            attributes: BTreeMap::new(),
+        }];
+        assert!(description.validate().is_ok());
+        for name in ["username", "email"] {
+            description.synthetic_users[0].attributes =
+                BTreeMap::from([(name.to_owned(), "replacement".to_owned())]);
+            assert!(
+                matches!(
+                    description.validate(),
+                    Err(ToolingError::InvalidDescription {
+                        reason: "synthetic user identity or attributes are invalid"
+                    })
+                ),
+                "{name} is refused as a synthetic user attribute"
+            );
+        }
     }
 
     #[test]

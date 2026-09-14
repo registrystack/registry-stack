@@ -309,6 +309,7 @@ fn strict_runtime_file_loads_and_constructs_existing_runtime_inputs() {
     );
     assert_eq!(verifier.allowed_clients, vec!["registry-client"]);
     assert!(verifier.denied_kids.contains("denied-kid"));
+    assert!(verifier.assertion_issuers.is_empty());
 
     let discovery = config.authentication().oidc().discovery_config();
     assert!(discovery.jwks_uri_override.is_none());
@@ -968,6 +969,146 @@ fn invalid_bounds_roles_paths_and_oidc_inputs_are_refused() {
         assert_eq!(
             parse_runtime_config_with_env(&raw, env_lookup).expect_err("invalid runtime refused"),
             expected
+        );
+    }
+}
+
+#[test]
+fn assertion_issuers_reach_the_verifier_and_stay_out_of_redacted_debug_output() {
+    let fixture = RuntimeFixture::new();
+    let raw = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    )
+    .replace(
+        "deniedKids: [denied-kid]",
+        concat!(
+            "deniedKids: [denied-kid]\n",
+            "    assertionIssuers:\n",
+            "      registry-client:\n",
+            "        - https://assertion-issuer.example\n",
+        ),
+    );
+
+    let config = parse_runtime_config_with_env(&raw, env_lookup).expect("assertion issuers parse");
+    let oidc = config.authentication().oidc();
+    let verifier = oidc.token_verifier_config();
+    assert_eq!(
+        verifier
+            .assertion_issuers
+            .get("registry-client")
+            .map(Vec::as_slice),
+        Some(["https://assertion-issuer.example".to_owned()].as_slice())
+    );
+
+    let debug = format!("{oidc:?}");
+    assert!(debug.contains("assertion_issuers_client_count: 1"));
+    assert!(!debug.contains("registry-client"));
+    assert!(!debug.contains("https://assertion-issuer.example"));
+}
+
+#[test]
+fn invalid_assertion_issuer_shapes_are_refused() {
+    let fixture = RuntimeFixture::new();
+    let baseline = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let insert = |block: &str| {
+        baseline.replace(
+            "deniedKids: [denied-kid]",
+            &format!("deniedKids: [denied-kid]\n{block}"),
+        )
+    };
+    let too_many_clients = {
+        let mut block = "    assertionIssuers:\n".to_owned();
+        for index in 0..=128 {
+            block.push_str(&format!(
+                "      registry-client-{index}:\n        - https://issuer.example\n"
+            ));
+        }
+        block
+    };
+    let too_many_issuers = {
+        let mut block = "    assertionIssuers:\n      registry-client:\n".to_owned();
+        for index in 0..=128 {
+            block.push_str(&format!("        - https://issuer-{index}.example\n"));
+        }
+        block
+    };
+    for (name, raw, expected) in [
+        (
+            "duplicate client key",
+            insert(concat!(
+                "    assertionIssuers:\n",
+                "      registry-client:\n",
+                "        - https://issuer-a.example\n",
+                "      registry-client:\n",
+                "        - https://issuer-b.example\n",
+            )),
+            RuntimeConfigError::Document,
+        ),
+        (
+            "duplicate issuer inside one client's list",
+            insert(concat!(
+                "    assertionIssuers:\n",
+                "      registry-client:\n",
+                "        - https://issuer-a.example\n",
+                "        - https://issuer-a.example\n",
+            )),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "empty issuer string",
+            insert(concat!(
+                "    assertionIssuers:\n",
+                "      registry-client:\n",
+                "        - \"\"\n",
+            )),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "empty client key",
+            insert(concat!(
+                "    assertionIssuers:\n",
+                "      \"\":\n",
+                "        - https://issuer-a.example\n",
+            )),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "over-long client key",
+            insert(&format!(
+                "    assertionIssuers:\n      {}:\n        - https://issuer-a.example\n",
+                "c".repeat(513)
+            )),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "over-long issuer value",
+            insert(&format!(
+                "    assertionIssuers:\n      registry-client:\n        - https://{}.example\n",
+                "i".repeat(513)
+            )),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "too many client entries",
+            insert(&too_many_clients),
+            RuntimeConfigError::InvalidOidc,
+        ),
+        (
+            "too many issuers for one client",
+            insert(&too_many_issuers),
+            RuntimeConfigError::InvalidOidc,
+        ),
+    ] {
+        assert_eq!(
+            parse_runtime_config_with_env(&raw, env_lookup).expect_err("invalid runtime refused"),
+            expected,
+            "{name}"
         );
     }
 }

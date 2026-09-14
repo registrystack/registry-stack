@@ -34,6 +34,19 @@ BREG access profiles use `permissions` in place of `grants`. Contextual authorit
 uses the declared `registry_*` claim mappings and immutable signed task bounds.
 Review generated schemas and update runtime/client configuration together.
 
+Every token the issuer mints by exchange carries `registry_assertion_issuer`,
+the verified `iss` of the assertion it was minted from. BREG, Casework, and
+Evidence accept an optional `assertionIssuers` map beside `allowedClients`,
+keyed by the client its tokens name and listing the assertion authorities that
+client may present. A client with an entry there is refused a token whose claim
+names any other authority, at the same boundary that reads `allowedClients` and
+before any resource policy. A token that carries no such claim, an ordinary
+client-credentials token included, is unaffected. Stock ThunderID 1.0.1 applies
+no per-client issuer restriction of its own, so a resource server is where the
+pairing is stated. Local development derives the map from the exchange clients
+each connection registers, and `bregctl dev` and `caseworkctl dev` refuse a
+topology whose connections and exchange clients do not name each other.
+
 Casework templates declare the exact agent, client, resource, scopes, purpose,
 subject mapping, bounds, and lifetime. Evidence templates additionally declare
 requester tags and the relying-party audience. Officers review these values
