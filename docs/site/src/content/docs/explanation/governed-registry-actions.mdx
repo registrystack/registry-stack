@@ -89,8 +89,10 @@ requirement URI, the subject role and profile, the output handles the script may
 `maximumObservationAgeSeconds`.
 
 Runtime configuration binds the same provider ID separately from the signed logical contract, under
-its own `evidenceProviders` map with `baseUrl`, `trustBindingId`, `tokenRef`, `trustedJwksRef`,
-`revokedKeyIds`, and an optional `caBundleRef`. The endpoint, token, and trusted JWKS are operator
+its own `evidenceProviders` map with `baseUrl`, `trustBindingId`, `trustedJwksRef`,
+`revokedKeyIds`, and an optional `caBundleRef`. Choose exactly one credential source:
+`tokenRef` for an already-issued token or `privateKeyJwt` for a refreshing OAuth client.
+The endpoint, credential, and trusted JWKS are operator
 bindings that no script can replace. Computed identifiers stay request values: they cannot become
 authenticated claims or grants, and the action permission covers all declared processing, so a caller
 input selecting optional disclosure adds no authority.
@@ -128,6 +130,7 @@ record history: ordinary history erasure does not cover it, and
 operator command that removes it once a window has closed.
 
 {/* Evidence: crates/registry-breg/src/contract.rs, ACTION_HANDLER_ABI_V2;
+    crates/registry-breg/src/action_evidence_config.rs, EvidenceProviderConfig;
     crates/registry-breg/src/action_evidence_contracts.rs, MAX_EVIDENCE_CAPABILITIES;
     crates/registry-breg/src/action_evidence.rs, MAXIMUM_EVIDENCE_EVALUATIONS;
     crates/registry-breg/src/action_evidence_client.rs, ACTION_EVIDENCE_RETENTION_SECONDS;

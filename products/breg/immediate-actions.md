@@ -675,9 +675,34 @@ evidenceProviders:
     revokedKeyIds: []
 ```
 
-`caBundleRef` optionally supplies a private CA bundle through the same secret
-reference mechanism. The token, trusted JWKS and endpoint are operator bindings;
-the script cannot replace them. Review exact selector resolution and first-use
+For a long-running deployment, replace `tokenRef` with an OAuth
+`privateKeyJwt` binding so the provider acquires and refreshes its own access
+token:
+
+```yaml
+evidenceProviders:
+  farmer-registry:
+    baseUrl: https://evidence.example.gov
+    trustBindingId: farmer-provider-reviewed-2026
+    privateKeyJwt:
+      tokenEndpoint: https://issuer.example.gov/oauth2/token
+      clientId: farmer-registry-action-client
+      privateKeyRef: secret:file/farmer-registry-action-key
+      assertionAudience: https://issuer.example.gov
+      resource: https://evidence.example.gov
+      scopes: [evidence.read]
+    trustedJwksRef: secret:env/FARMER_EVIDENCE_JWKS
+    revokedKeyIds: []
+```
+
+Exactly one of `tokenRef` and `privateKeyJwt` is required. `tokenRef` remains
+compatible with existing short-lived or locally managed deployments.
+`assertionAudience`, `resource` and `scopes` are optional fixed token-request
+parameters; they are never taken from a runtime response. `caBundleRef`
+optionally supplies a private CA bundle to both the Evidence and token
+endpoints through the same secret reference mechanism. The credential,
+trusted JWKS and endpoints are operator bindings; the script cannot replace
+them. Review exact selector resolution and first-use
 subject binding with the provider. Two calls describe separate observations.
 Neither signed assertions nor continuity bindings independently prove that a
 provider resolved the correct source record.

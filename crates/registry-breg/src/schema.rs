@@ -883,6 +883,49 @@ mod tests {
 
     #[cfg(feature = "runtime")]
     #[test]
+    fn runtime_schema_requires_exactly_one_evidence_credential() {
+        let schema = compile(&runtime_schema_document());
+        let private_key_jwt = serde_json::json!({
+            "tokenEndpoint": "https://issuer.example/token",
+            "clientId": "action-client",
+            "privateKeyRef": "secret:file/action-key"
+        });
+        for (token, jwt, expected) in [
+            (None, None, false),
+            (Some(Value::Null), Some(Value::Null), false),
+            (Some(serde_json::json!("secret:file/token")), None, true),
+            (None, Some(private_key_jwt.clone()), true),
+            (
+                Some(serde_json::json!("secret:file/token")),
+                Some(Value::Null),
+                true,
+            ),
+            (Some(Value::Null), Some(private_key_jwt.clone()), true),
+            (
+                Some(serde_json::json!("secret:file/token")),
+                Some(private_key_jwt),
+                false,
+            ),
+        ] {
+            let mut provider = serde_json::json!({
+                "baseUrl": "https://evidence.example",
+                "trustBindingId": "reviewed",
+                "trustedJwksRef": "secret:file/evidence-jwks"
+            });
+            if let Some(token) = token {
+                provider["tokenRef"] = token;
+            }
+            if let Some(jwt) = jwt {
+                provider["privateKeyJwt"] = jwt;
+            }
+            let mut instance = runtime_instance();
+            instance["evidenceProviders"] = serde_json::json!({"reviewed": provider});
+            assert_eq!(schema.is_valid(&instance), expected, "{provider}");
+        }
+    }
+
+    #[cfg(feature = "runtime")]
+    #[test]
     fn runtime_schema_reproduces_byte_for_byte() {
         assert_eq!(
             runtime_documents().expect("the Base Registry Engine runtime schema generates"),
