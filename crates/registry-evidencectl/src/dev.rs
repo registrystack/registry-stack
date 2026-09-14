@@ -123,7 +123,7 @@ pub struct DevArgs {
     #[arg(long, global = true)]
     issuer_port: Option<u16>,
 
-    /// Ready BREG dev project that owns the shared issuer and Evidence client registrations.
+    /// Ready Base Registry Engine (BReg) dev project that owns the shared issuer and Evidence client registrations.
     #[arg(long, global = true, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
 

@@ -141,7 +141,7 @@ struct StartArgs {
     /// Local issuer loopback port on first start (default 8091; retained for restarts).
     #[arg(long)]
     issuer_port: Option<u16>,
-    /// Ready BREG dev project that owns the shared local issuer and client registrations.
+    /// Ready Base Registry Engine (BReg) dev project that owns the shared local issuer and client registrations.
     #[arg(long, value_name = "PROJECT")]
     issuer_project: Option<PathBuf>,
     /// Immutable local candidate issuer image ID on first start; retained for restarts.
