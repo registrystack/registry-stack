@@ -204,6 +204,24 @@ pub(super) struct Seed {
     pub data: BTreeMap<String, Value>,
 }
 
+/// The governed identifier grammar of a registry project.
+///
+/// A name that must equal one the project declares, an Evidence provider or a
+/// governed action among them, is held to the project's own grammar rather than
+/// this file's narrower one. The two differ by the underscore, and refusing it
+/// here would make a declared name a dev session can never bind.
+pub(super) fn governed_identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
 pub(super) fn identifier(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 64
@@ -360,12 +378,17 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
     for (id, provider) in &clients.evidence_providers {
         let origin = reqwest::Url::parse(&provider.base_url)
             .context("local Evidence provider baseUrl must be an exact loopback HTTP origin")?;
-        if !identifier(id)
+        if !governed_identifier(id)
             || provider.trust_binding_id.is_empty()
             || provider.trust_binding_id.len() > 128
             || provider.revoked_key_ids.len() > 128
             || origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
+            // The Evidence client refuses a base URL carrying credentials, so
+            // it is named here as well rather than left to surface as a failed
+            // request once the session is already running.
+            || !origin.username().is_empty()
+            || origin.password().is_some()
             // Port zero parses and is not the scheme default, so it is named
             // here beside the absent port. A provider bound to it starts a
             // session in which every Evidence request targets an unusable port.

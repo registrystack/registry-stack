@@ -227,14 +227,17 @@ fn catalogue(project: &Path) -> Result<(Catalogue, Vec<u8>)> {
                 );
             }
             if step.operation == Operation::Invoke {
+                // Both name something the registry project declares, a governed
+                // action and one of its result effects, so both are held to the
+                // project's identifier grammar.
                 if step
                     .action
                     .as_deref()
-                    .is_none_or(|value| !config::identifier(value))
+                    .is_none_or(|value| !config::governed_identifier(value))
                     || step
                         .result
                         .as_deref()
-                        .is_none_or(|value| !config::identifier(value))
+                        .is_none_or(|value| !config::governed_identifier(value))
                 {
                     bail!("invoke steps require an explicit action and disclosed result alias");
                 }
@@ -748,6 +751,18 @@ fn route(metadata: &BRegMetadata, step: &Step) -> Result<String> {
         .context("record route is incompatible with the native client")?;
     Ok(route.into())
 }
+/// Record a step whose effects have committed.
+///
+/// Nothing that can refuse afterwards may leave the attempt holding this step
+/// as pending: the run loop resumes a pending step by replaying its original
+/// idempotency capsule, and a refusal that survives the replay would have no
+/// way past it. A retained step is skipped instead.
+fn retain(attempt: &mut Attempt, step: &Step, directory: &Path, retained: Value) -> Result<()> {
+    attempt.completed.insert(step.id.clone(), retained);
+    attempt.pending = None;
+    attempt.save(directory)
+}
+
 fn selected_steps<'a>(
     scenario: &'a Scenario,
     attempt: &Attempt,
@@ -1001,6 +1016,14 @@ async fn execute(
             };
             let request = client.recover_action(&action, &prepared, &inputs, &key)?;
             let response = client.invoke_action(&action, &request, &key).await?;
+            // The action has run and its effects have committed. A handler
+            // receipt may disclose fewer results than the action declares, so
+            // reading the authored capture out of it can still refuse. Retain
+            // the step first: left pending, that refusal would replay the same
+            // idempotency key on every resume, receive the same receipt, and
+            // refuse again with no way past it.
+            let receipt = serde_json::to_value(&response.value)?;
+            retain(attempt, step, directory, receipt.clone())?;
             let result = response
                 .value
                 .results()
@@ -1016,7 +1039,7 @@ async fn execute(
                     id: result.record_identifier(),
                 },
             );
-            serde_json::to_value(response.value)?
+            receipt
         } else if step.operation == Operation::Create {
             let binding = create_binding(contract, step)?;
             let prepared = if let Some(pending) = &attempt.pending {
@@ -1150,9 +1173,7 @@ async fn execute(
         } else {
             result.clone()
         };
-        attempt.completed.insert(step.id.clone(), retained);
-        attempt.pending = None;
-        attempt.save(directory)?;
+        retain(attempt, step, directory, retained)?;
         results.insert(step.id.clone(), result);
     }
     let next_step = if !attempt.completed.contains_key("submit") {
@@ -1425,6 +1446,35 @@ mod tests {
                 "{field}"
             );
         }
+        // The action and the disclosed result name a governed action and one of
+        // its declared effects, and that grammar admits an underscore. A name
+        // this catalogue refuses is an authored action a scenario could never
+        // invoke.
+        for (action, result) in [
+            ("register_entry", "entry"),
+            ("register-entry", "entry_record"),
+            ("r2", "e2"),
+        ] {
+            let mut named = valid.clone();
+            named["scenarios"][0]["steps"][0]["action"] = json!(action);
+            named["scenarios"][0]["steps"][0]["result"] = json!(result);
+            fs::write(&path, serde_json::to_vec(&named).unwrap()).unwrap();
+            catalogue(&temp.path().canonicalize().unwrap())
+                .unwrap_or_else(|error| panic!("{action}/{result}: {error}"));
+        }
+        // The grammar stays closed in the other direction: anchored on a
+        // lowercase letter, and no other byte.
+        for name in ["2register", "_register", "Register", "register.entry"] {
+            for field in ["action", "result"] {
+                let mut named = valid.clone();
+                named["scenarios"][0]["steps"][0][field] = json!(name);
+                fs::write(&path, serde_json::to_vec(&named).unwrap()).unwrap();
+                assert!(
+                    catalogue(&temp.path().canonicalize().unwrap()).is_err(),
+                    "{field}: {name}"
+                );
+            }
+        }
         let mut invalid = valid;
         invalid["scenarios"][0]["steps"][0]["operation"] = json!("apply");
         fs::write(&path, serde_json::to_vec(&invalid).unwrap()).unwrap();
@@ -1432,6 +1482,37 @@ mod tests {
             catalogue(&temp.path().canonicalize().unwrap()).is_err(),
             "custom population cannot hide review application"
         );
+    }
+
+    #[test]
+    fn a_committed_invocation_is_retained_before_its_receipt_is_read() {
+        // An invocation that commits and then discloses no authored capture is
+        // a refusal, and the mutation behind it has already happened. Retaining
+        // the step is what keeps that refusal from becoming a resume that
+        // replays the same idempotency key, receives the same receipt, and
+        // fails on it again; the run loop skips a step it finds retained.
+        let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(
+            temp.path(),
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )
+        .unwrap();
+        private::directory(temp.path()).unwrap();
+        let step: Step = serde_json::from_value(json!({"id":"register","operation":"invoke",
+            "entity":"entry","client":"writer","accessProfile":"writer","input":"register",
+            "capture":"entry","action":"register-entry","result":"entry"}))
+        .unwrap();
+        let mut value = attempt();
+        value.pending = Some(Pending {
+            step: step.id.clone(),
+            capsule: json!({"exact":"original bytes"}),
+        });
+        retain(&mut value, &step, temp.path(), json!({"receipt":true})).unwrap();
+        assert!(value.pending.is_none());
+        assert_eq!(value.completed[&step.id], json!({"receipt":true}));
+        let reloaded = attempts(temp.path()).unwrap().pop().unwrap();
+        assert!(reloaded.pending.is_none());
+        assert_eq!(reloaded.completed[&step.id], json!({"receipt":true}));
     }
 
     fn copy_tree(from: &Path, to: &Path) {

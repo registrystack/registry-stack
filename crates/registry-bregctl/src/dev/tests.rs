@@ -2504,6 +2504,11 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
         "https://evidence.example.org",
         "http://127.0.0.1:0",
         "http://127.0.0.1",
+        // The Evidence client refuses a base URL carrying credentials, so a
+        // session started from one fails at its first request rather than at
+        // this declaration.
+        "http://reader@127.0.0.1:18093",
+        "http://reader:secret@127.0.0.1:18093",
     ] {
         clients
             .evidence_providers
@@ -2517,6 +2522,47 @@ fn local_evidence_provider_copies_owner_secrets_and_renders_exact_binding() {
             refusal.contains("exact loopback origins"),
             "{base_url}: {refusal}"
         );
+    }
+}
+
+#[test]
+fn local_evidence_provider_ids_follow_the_governed_evidence_grammar() {
+    // The map key names a provider the registry project declares, and the
+    // governed Evidence identifier grammar admits an underscore. A key this
+    // file refuses is a declared provider a dev session can never bind.
+    let (_temp, state, mut clients, _files) = fixture();
+    let token = state.project.join("provider-token");
+    let jwks = state.project.join("provider-jwks");
+    private::create(&token, b"synthetic-provider-token").unwrap();
+    private::create(&jwks, br#"{"keys":[]}"#).unwrap();
+    let provider = config::LocalEvidenceProvider {
+        base_url: "http://127.0.0.1:18093".into(),
+        trust_binding_id: "exact-local-trust-v1".into(),
+        token_file: Some(token),
+        private_key_jwt: None,
+        trusted_jwks_file: jwks,
+        revoked_key_ids: vec![],
+        ca_bundle_file: None,
+    };
+    for id in ["qualification", "trusted_provider", "provider-2"] {
+        clients.evidence_providers.clear();
+        clients
+            .evidence_providers
+            .insert(id.into(), provider.clone());
+        config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_or_else(|error| panic!("{id}: {error}"));
+    }
+    // The grammar is closed in the other direction too: it is anchored on a
+    // lowercase letter and admits no other byte.
+    for id in ["2provider", "_provider", "Provider", "provider.two", ""] {
+        clients.evidence_providers.clear();
+        clients
+            .evidence_providers
+            .insert(id.into(), provider.clone());
+        let refusal = config::clients(&serde_norway::to_string(&clients).unwrap().into_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(refusal.contains("bounded IDs"), "{id}: {refusal}");
     }
 }
 
