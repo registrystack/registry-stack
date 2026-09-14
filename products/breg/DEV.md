@@ -335,6 +335,10 @@ Declare additional issuer resources, exchange connections and clients, browser
 applications, and synthetic users on the owner. A borrower may list only
 `issuer.browserClients` from that issuer inventory; owner-only declarations in
 the borrower's clients file are refused before startup.
+A borrower answers on the owner's BREG audience, so it applies the owner's
+exchange-connection pairings: an exchanged token is refused unless the
+presenting client is registered against the assertion authority that signed it,
+by exactly the connection list the owner declared.
 To use an owner-registered browser app at the borrower's BREG resource, list
 its ID under `issuer.browserClients` in the borrower's clients file. The owner
 must have registered that app for the same audience. The borrower admits only

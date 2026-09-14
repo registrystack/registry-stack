@@ -113,6 +113,10 @@ verifies the owner session, client keys, claims, scopes, and audience before
 starting, uses that issuer's loopback endpoint, and never stops its container.
 An unavailable or replaced owner is refused on restart. The Evidence runtime
 still enforces its own issuer, audience, scope, and authority policy.
+An Evidence client the owner also registered as a token-exchange client is
+refused: an exchange client may present any assertion authority the shared
+issuer trusts, and a local Evidence bundle carries no per-client pairing to
+refuse the others with.
 
 `evidencectl init <dir> --transport sqlite-extract --profile local` needs no
 OpenAPI document. It creates a source-neutral synthetic statement source,

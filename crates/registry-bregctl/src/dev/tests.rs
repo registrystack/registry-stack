@@ -576,6 +576,38 @@ fn an_institutional_grant_connection_pairs_clients_without_projecting_their_clai
 }
 
 #[test]
+fn a_borrowed_runtime_carries_the_owners_assertion_authority_pairing() {
+    // A borrowed session answers on the owner's BREG audience and declares no
+    // connection of its own, so without the owner's pairing it would accept
+    // exactly the tokens the owner's own runtime refuses. The pairing is read
+    // from the owner's retained registration, which is present whether or not
+    // the owner session is currently serving.
+    let (_temp, mut state, base, _files) = fixture();
+    assert!(config::assertion_issuers(&state, &base).unwrap().is_empty());
+
+    let owner_project = state.project.join("issuer-owner");
+    private::directory(&owner_project).unwrap();
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_project.join(".breg/dev")).unwrap();
+    let owner = pair_exchange_client(base.clone(), config::IssuerConnectionMapping::FirstParty);
+    private::create(
+        &owner_project.join(".breg/dev/clients.json"),
+        &serde_json::to_vec(&owner).unwrap(),
+    )
+    .unwrap();
+
+    state.issuer_project = Some(owner_project);
+    assert_eq!(
+        config::assertion_issuers(&state, &base).unwrap(),
+        BTreeMap::from([(
+            "source".to_owned(),
+            vec!["https://casework.example.test".to_owned()]
+        )]),
+        "the borrower applies the owner's pairing rather than its own empty composition"
+    );
+}
+
+#[test]
 fn borrowed_issuer_refuses_owner_only_declarations_before_preparation() {
     let (_temp, mut state, clients, files) = fixture();
     state.issuer_project = Some(state.project.join("missing-owner"));
