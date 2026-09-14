@@ -5,8 +5,9 @@
 //! This crate owns the model an adopter authors and the decisions that model
 //! implies, and nothing else: the policy types with their validators, the
 //! supply ledger and its pure query methods, the admission evaluators, the
-//! offline replay fixtures, the closed problem vocabulary, and the fixed
-//! artifact names. It deliberately contains no source protocol types, no SQL,
+//! offline replay fixtures, the closed problem vocabulary, the HTTP wire
+//! documents, and the fixed artifact names. It deliberately contains no
+//! source protocol types, no SQL,
 //! no I/O, and no clock: every evaluator takes the observed instant as an
 //! explicit parameter, so the runtime inside its capacity transaction, the
 //! explain path, and an offline fixture replay all run the same pure functions
@@ -27,6 +28,7 @@ mod naming;
 mod policy;
 mod problem;
 mod units;
+mod wire;
 
 pub use admission::*;
 pub use diagnostics::*;
@@ -36,3 +38,4 @@ pub use naming::*;
 pub use policy::*;
 pub use problem::*;
 pub use units::*;
+pub use wire::*;
