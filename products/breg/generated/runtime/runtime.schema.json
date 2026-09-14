@@ -871,6 +871,8 @@
           },
           "maxProperties": 128,
           "propertyNames": {
+            "maxLength": 512,
+            "minLength": 1,
             "pattern": "^[^\\x00-\\x20\\x7F]+$",
             "type": "string"
           },

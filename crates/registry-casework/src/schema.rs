@@ -96,6 +96,44 @@ fn install_runtime_constraints(schema: &mut Value) {
             serde_json::json!({"minLength": 1}),
         );
     }
+    set_assertion_issuer_constraints(schema);
+}
+
+/// State the bounds `RuntimeConfig::validate_assertion_issuers` applies, so a
+/// document the published schema accepts is one the runtime starts on rather
+/// than one it refuses after the operator has already written it.
+fn set_assertion_issuer_constraints(schema: &mut Value) {
+    let Some(member) = schema
+        .pointer_mut("/$defs/OidcConfig/properties/assertionIssuers")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    member.insert(
+        "maxProperties".to_owned(),
+        Value::from(crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENTS),
+    );
+    member.insert(
+        "propertyNames".to_owned(),
+        serde_json::json!({
+            "type": "string",
+            "minLength": 1,
+            "maxLength": crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
+        }),
+    );
+    member.insert(
+        "additionalProperties".to_owned(),
+        serde_json::json!({
+            "type": "array",
+            "maxItems": crate::config::MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
+            "uniqueItems": true,
+            "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": crate::config::MAXIMUM_ASSERTION_ISSUER_BYTES,
+            },
+        }),
+    );
 }
 
 fn set_jwks_document_reference_constraints(schema: &mut Value) {
@@ -274,6 +312,72 @@ mod tests {
             document["$defs"]["OidcJwksSource"]["oneOf"][1]["properties"]["documentRef"]["pattern"],
             SECRET_REFERENCE_SCHEMA_PATTERN
         );
+    }
+
+    #[test]
+    fn assertion_issuer_schema_states_the_bounds_the_runtime_enforces() {
+        // The published schema is what an operator's editor reads before the
+        // runtime ever sees the document, so it refuses the same maps
+        // `RuntimeConfig::validate_assertion_issuers` refuses at load, whose own
+        // coverage lives beside it in `config`.
+        let schema = runtime_schema();
+        let with = |issuers: Value| {
+            let mut instance = runtime_instance("secret:file/jwks.json", "file");
+            instance["authentication"]["oidc"]["assertionIssuers"] = issuers;
+            instance
+        };
+        let many_clients = (0..=crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENTS)
+            .map(|index| {
+                (
+                    format!("task-agent-{index}"),
+                    serde_json::json!(["https://exchange.example.test"]),
+                )
+            })
+            .collect::<Map<_, _>>();
+        let many_issuers = (0..=crate::config::MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+            .map(|index| Value::String(format!("https://exchange-{index}.example.test")))
+            .collect::<Vec<_>>();
+        let mut long_client = Map::new();
+        long_client.insert(
+            "a".repeat(crate::config::MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1),
+            serde_json::json!(["https://exchange.example.test"]),
+        );
+        for (label, issuers) in [
+            (
+                "empty client key",
+                serde_json::json!({"": ["https://exchange.example.test"]}),
+            ),
+            ("over-long client key", Value::Object(long_client)),
+            ("too many clients", Value::Object(many_clients)),
+            (
+                "too many issuers for one client",
+                serde_json::json!({"task-agent": many_issuers}),
+            ),
+            ("empty issuer", serde_json::json!({"task-agent": [""]})),
+            (
+                "over-long issuer",
+                serde_json::json!({"task-agent": [format!(
+                    "https://{}.example.test",
+                    "a".repeat(crate::config::MAXIMUM_ASSERTION_ISSUER_BYTES)
+                )]}),
+            ),
+            (
+                "repeated issuer in one client's list",
+                serde_json::json!({"task-agent": [
+                    "https://exchange.example.test",
+                    "https://exchange.example.test"
+                ]}),
+            ),
+        ] {
+            assert!(
+                !schema.is_valid(&with(issuers)),
+                "{label}: the schema accepted a map the runtime refuses"
+            );
+        }
+
+        assert!(schema.is_valid(&with(serde_json::json!({
+            "task-agent": ["https://exchange-a.example.test", "https://exchange-b.example.test"]
+        }))));
     }
 
     #[test]

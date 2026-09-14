@@ -812,6 +812,18 @@ mod tests {
         );
         assert_schema_rejects_parser_refused_runtime(
             &schema,
+            "OIDC assertion issuer client key length",
+            |instance| {
+                let mut clients = serde_json::Map::new();
+                clients.insert(
+                    "c".repeat(513),
+                    serde_json::json!(["https://issuer.example"]),
+                );
+                instance["authentication"]["oidc"]["assertionIssuers"] = Value::Object(clients);
+            },
+        );
+        assert_schema_rejects_parser_refused_runtime(
+            &schema,
             "authority claim excludes registered JWT claims",
             |instance| {
                 instance["authentication"]["authorityClaims"]["principal"] =

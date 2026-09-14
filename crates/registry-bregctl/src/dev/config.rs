@@ -333,6 +333,11 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
         if !identifier(id)
             || origin.scheme() != "http"
             || origin.host_str() != Some("127.0.0.1")
+            // Userinfo in an origin is refused by the runtime's own destination
+            // policy, so it is named here as well rather than left to surface
+            // as a failed start.
+            || !origin.username().is_empty()
+            || origin.password().is_some()
             // Port zero parses and is not the scheme default, so it reaches
             // the runtime's own refusal instead of this one unless it is named
             // here beside the absent port.
@@ -342,9 +347,14 @@ pub(super) fn clients(bytes: &[u8]) -> Result<Clients> {
             || origin.fragment().is_some()
             || destination.path.len() > 256
             || !destination.path.starts_with('/')
-            || destination.path.starts_with("//")
-            || destination.path.contains(['?', '#', '\\'])
-            || destination.path.chars().any(char::is_control)
+            // The runtime builds its delivery target through this same
+            // validator, which refuses dot segments, percent escapes and
+            // non-ASCII bytes. Applying it here keeps preflight and startup
+            // agreed on one answer.
+            || registry_platform_httputil::destination::validate_fixed_destination_path(
+                &destination.path,
+            )
+                .is_err()
         {
             bail!("local event destinations need bounded IDs, exact loopback origins, and absolute paths");
         }
@@ -726,6 +736,16 @@ fn import_keypair(directory: &Path, input: &Path, id: &str) -> Result<()> {
     let key = Zeroizing::new(private::read(input, 16 * 1024)?);
     super::export_client::validate_pair(id.as_bytes(), &key, id)?;
     let private: Value = serde_json::from_slice(&key)?;
+    // Every token this client obtains is a private_key_jwt assertion, whose
+    // header needs a usable key identifier. A key without one imports and
+    // registers cleanly and then fails at the first token request, so it is
+    // refused where the operator named the file.
+    if !private["kid"]
+        .as_str()
+        .is_some_and(|kid| !kid.trim().is_empty() && kid.len() <= 256)
+    {
+        bail!("imported assertion key for {id} needs a bounded, non-blank kid");
+    }
     let public = json!({
         "kty": private["kty"], "crv": private["crv"], "alg": private["alg"],
         "kid": private["kid"], "x": private["x"], "y": private["y"]

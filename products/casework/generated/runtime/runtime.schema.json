@@ -225,12 +225,22 @@
         "assertionIssuers": {
           "additionalProperties": {
             "items": {
+              "maxLength": 512,
+              "minLength": 1,
               "type": "string"
             },
-            "type": "array"
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
           },
           "default": {},
           "description": "Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. An empty map applies no rule; see\n[`registry_platform_oidc::TokenVerifierConfig::assertion_issuers`].",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
           "type": "object"
         },
         "audience": {
