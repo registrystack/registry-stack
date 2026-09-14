@@ -2672,6 +2672,49 @@ fn approved_grant_requires_explicit_connection_and_refuses_policy_fields() {
 }
 
 #[test]
+fn a_borrowed_session_admits_only_the_clients_its_project_declares() {
+    // A borrowed session authenticates against the shared BReg owner's
+    // issuer, which holds every other local project's clients as well. The
+    // admitted-client list is what keeps them out of this Casework runtime,
+    // and an omitted list admits all of them, so it is stated whenever the
+    // project declares integrations rather than only when it adds clients of
+    // its own beyond the ones it borrows.
+    let workspace = tempfile::tempdir().unwrap();
+    let project = standalone(workspace.path());
+    let mut policy = crate::project::load_and_check_policy(&project).unwrap();
+    policy.sources.push(serde_json::from_value(json!({"id":"source","adapter":"breg","description":"source.json","requests":[{"entity":"correction","queue":"decisions"}]})).unwrap());
+    let mut clients = config::clients(STANDALONE_DEV_CLIENTS.as_bytes()).unwrap();
+    let integrations: integrations::Integrations = serde_json::from_value(json!({
+        "resource":"urn:casework:source-group",
+        "sources":{"source":{"baseUrl":"http://127.0.0.1:8800","readerProfile":"reader",
+            "tokenEndpoint":"http://127.0.0.1:8093/oauth2/token","clientAssertionAudience":"http://127.0.0.1:8093",
+            "resource":"urn:casework:source-group","scopes":["records:get"],
+            "clientIdRef":"secret:file/service-reader-id","clientAssertionKeyRef":"secret:file/service-reader-key",
+            "webhookSecretRef":"secret:file/source-webhook","eventSource":"urn:registrystack:registry:source:instance:local"}}
+    })).unwrap();
+    clients.integrations = Some(integrations.clone());
+    integrations.validate(&clients, &policy).unwrap();
+    let mut state = session(&project);
+    state.resource = Some(integrations.resource.clone());
+    let mut operator = config::operator(&state);
+    integrations
+        .operator(&state, &clients, &mut operator)
+        .unwrap();
+    assert_eq!(
+        operator["authentication"]["oidc"]["allowedClients"],
+        json!(clients
+            .clients
+            .iter()
+            .map(|client| client.id.clone())
+            .collect::<Vec<_>>())
+    );
+    assert!(!operator["authentication"]["oidc"]["allowedClients"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
 fn explicit_local_integrations_render_only_governed_authority_and_bind_the_source() {
     let workspace = tempfile::tempdir().unwrap();
     let project = standalone(workspace.path());
@@ -2893,6 +2936,81 @@ fn borrowed_casework_client_requires_exact_owner_claims_scopes_and_resource() {
         false
     )
     .is_err());
+}
+
+#[test]
+fn a_borrowed_client_the_owner_registered_for_exchange_must_declare_it() {
+    // An exchange client may present any assertion authority the shared
+    // issuer trusts, and Casework states its per-client pairing only for the
+    // task exchange clients it declares. A borrowed client the owner
+    // registered for exchange without this project declaring it would be
+    // admitted with no pairing to refuse the other authorities with, so the
+    // two declarations must agree exactly.
+    let project_temp = tempfile::tempdir().unwrap();
+    let project = fs::canonicalize(project_temp.path()).unwrap();
+    fs::set_permissions(&project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_temp = tempfile::tempdir().unwrap();
+    let owner_project = fs::canonicalize(owner_temp.path()).unwrap();
+    fs::set_permissions(&owner_project, fs::Permissions::from_mode(0o700)).unwrap();
+    let owner_root = owner_project.join(".breg/dev");
+    private::directory(&owner_project.join(".breg")).unwrap();
+    private::directory(&owner_root).unwrap();
+    private::directory(&owner_root.join("credentials")).unwrap();
+    let owner_id = uuid::Uuid::new_v4().to_string();
+    private::create(
+        &owner_root.join("state.json"),
+        &serde_json::to_vec(&json!({
+            "version":2,"project":owner_project,"owner":owner_id,
+            "status":"ready","issuerPort":8093,"issuerProject":null
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let resource = format!("urn:breg:dev:{owner_id}");
+    let scopes = vec!["casework:grants:assert".to_owned()];
+    let claims = json!({"registry_actor_kind":"agent"});
+    private::create(
+        &owner_root.join("clients.json"),
+        &serde_json::to_vec(&json!({
+            "clients":[{"id":"task-agent","scopes":scopes,"claims":claims}],
+            "issuer":{"clientResources":{},"exchangeClients":["task-agent"]}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let source = owner_root.join("credentials/task-agent");
+    config::keypair(&source).unwrap();
+    private::create(&source.join("client-id"), b"task-agent").unwrap();
+    let mut state = session(&project);
+    state.issuer_project = Some(owner_project);
+    state.issuer_owner = Some(owner_id);
+    state.resource = Some(resource.clone());
+    private::directory(&project.join("undeclared")).unwrap();
+    let refusal = config::borrow_client(
+        &project.join("undeclared"),
+        &state,
+        "task-agent",
+        &scopes,
+        &claims,
+        &resource,
+        false,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(refusal.contains("exchange client"), "{refusal}");
+
+    let declared = project.join("declared");
+    private::directory(&declared).unwrap();
+    config::borrow_client(
+        &declared,
+        &state,
+        "task-agent",
+        &scopes,
+        &claims,
+        &resource,
+        true,
+    )
+    .unwrap();
 }
 
 #[test]

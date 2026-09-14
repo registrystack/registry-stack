@@ -107,12 +107,21 @@ pub(super) fn borrow_client(
     if registered["scopes"] != json!(scopes)
         || registered["claims"] != *claims
         || owner_resource != resource
-        || (task_exchange
-            && !clients["issuer"]["exchangeClients"]
-                .as_array()
-                .is_some_and(|ids| ids.iter().any(|entry| entry == id)))
     {
         bail!("shared issuer registration differs from Casework client {id}");
+    }
+    // An exchange client may present any assertion authority the shared issuer
+    // trusts, and this session states a pairing only for the task exchange
+    // clients it declares. A client the owner registered for exchange that
+    // this project does not declare would be admitted with no pairing to
+    // refuse the other authorities with, so the two declarations must agree
+    // exactly rather than in one direction only.
+    if clients["issuer"]["exchangeClients"]
+        .as_array()
+        .is_some_and(|ids| ids.iter().any(|entry| entry == id))
+        != task_exchange
+    {
+        bail!("shared issuer owner and Casework disagree on exchange client {id}");
     }
     let source = owner_root.join("credentials").join(id);
     let client_id = Zeroizing::new(private::read(&source.join("client-id"), super::MAX_BYTES)?);
