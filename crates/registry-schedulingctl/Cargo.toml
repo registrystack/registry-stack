@@ -12,13 +12,32 @@ publish = false
 name = "schedulingctl"
 path = "src/main.rs"
 
+[features]
+postgres-test = ["registry-scheduling/postgres-test"]
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
 clap.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-platform-config.workspace = true
+registry-scheduling.workspace = true
 registry-scheduling-core.workspace = true
+serde_norway.workspace = true
+serde_path_to_error.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+uuid.workspace = true
+
+[dev-dependencies]
+registry-scheduling = { workspace = true, features = ["postgres-test"] }
+tokio-postgres.workspace = true
+
+[[test]]
+name = "records_apply_postgres"
+required-features = ["postgres-test"]

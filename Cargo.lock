@@ -6170,11 +6170,20 @@ name = "registry-schedulingctl"
 version = "0.32.0"
 dependencies = [
  "anyhow",
+ "chrono",
+ "chrono-tz",
  "clap",
  "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-scheduling",
  "registry-scheduling-core",
  "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
  "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]

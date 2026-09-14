@@ -1884,7 +1884,8 @@ pub(crate) async fn replace_facts_in_transaction(
         transaction
             .execute(
                 "INSERT INTO scheduling_exceptions(exception_id, location, kind, date, \
-                 start_time, end_time, reopens, authority) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+                 start_time, end_time, reopens, authority) \
+                 VALUES($1,$2,$3,$4::text::date,$5,$6,$7,$8)",
                 &[
                     &exception.id,
                     &exception.location,

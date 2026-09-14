@@ -2,14 +2,19 @@
 
 //! `schedulingctl`, the Registry Scheduling authoring and local operator
 //! tooling: `init` writes a complete starter project, `check` validates the
-//! authored policy offline, `test` replays every fixture offline, and
-//! `explain` publishes what the runtime would serve.
+//! authored policy offline, `test` replays every fixture offline, `explain`
+//! publishes what the runtime would serve, `package` writes the deployment
+//! identity the runtime verifies, and `records apply` performs the one
+//! attributable operator write of a deployment's live environment records.
 
 mod project;
+pub mod records;
 mod templates;
 
 use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use registry_scheduling::config::RuntimeConfigError;
+use registry_scheduling::store::StoreError;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -41,6 +46,10 @@ enum Command {
     Test(ProjectArgs),
     /// Explain the checked policy offline: what the runtime would publish.
     Explain(ProjectArgs),
+    /// Write the verified policy package manifest beside the authored policy.
+    Package(ProjectArgs),
+    /// Apply the live environment records of a deployment.
+    Records(RecordsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -68,6 +77,28 @@ struct ProjectArgs {
     /// Authored scheduling project directory.
     #[arg(value_name = "PROJECT")]
     project: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct RecordsArgs {
+    #[command(subcommand)]
+    command: RecordsCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum RecordsCommand {
+    /// Replace the deployment's environment records in one attributable write.
+    Apply(RecordsApplyArgs),
+}
+
+#[derive(Debug, Args)]
+struct RecordsApplyArgs {
+    /// Runtime configuration document of the deployment to write.
+    #[arg(value_name = "RUNTIME_CONFIG")]
+    config: PathBuf,
+    /// Environment records document: locations, pools, and exceptions.
+    #[arg(value_name = "RECORDS")]
+    records: PathBuf,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -160,6 +191,10 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Check(args) => project::check(&args.project),
         Command::Test(args) => project::test(&args.project),
         Command::Explain(args) => project::explain(&args.project),
+        Command::Package(args) => project::package(&args.project),
+        Command::Records(args) => match args.command {
+            RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
+        },
     }
 }
 
@@ -193,6 +228,42 @@ fn usage_failure(message: String) -> Value {
 
 fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
     let io_failure = error.chain().any(|cause| cause.is::<std::io::Error>());
+    // A runtime configuration that will not load is a defect in an authored
+    // document; a store that cannot be reached is a defect in the deployment
+    // environment. Both name their own artifact instead of hiding behind the
+    // generic authoring refusal.
+    if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<RuntimeConfigError>().is_some())
+    {
+        return (
+            DOMAIN_REFUSAL_EXIT,
+            json!({
+                "severity": "error",
+                "code": "schedulingctl.runtime-configuration.invalid",
+                "artifact": "runtime_configuration",
+                "path": "runtime.yaml",
+                "message": format!("{error:#}"),
+                "suggestedAction": "Correct the runtime configuration the message names, then retry.",
+            }),
+        );
+    }
+    if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<StoreError>().is_some())
+    {
+        return (
+            OPERATIONAL_FAILURE_EXIT,
+            json!({
+                "severity": "error",
+                "code": "schedulingctl.store-unavailable",
+                "artifact": "database",
+                "path": "database",
+                "message": format!("{error:#}"),
+                "suggestedAction": "Restore the Scheduling database or its credentials, then retry.",
+            }),
+        );
+    }
     if io_failure {
         (
             OPERATIONAL_FAILURE_EXIT,
@@ -289,6 +360,10 @@ fn human_lead(report: &Value) -> String {
             "Offline synthetic fixtures passed with incomplete authored inputs.".to_owned()
         }
         ("test", _, _) => "Offline synthetic fixtures passed.".to_owned(),
+        ("package", _, _) => {
+            "Policy package manifest written beside the authored policy.".to_owned()
+        }
+        ("records-apply", _, _) => "Environment records applied.".to_owned(),
         _ => format!("{command} succeeded."),
     }
 }
@@ -390,13 +465,36 @@ mod tests {
         };
         assert_eq!(args.template, "standalone-exact-time");
 
-        for command in ["test", "explain"] {
+        for command in ["test", "explain", "package"] {
             let cli = Cli::try_parse_from(["schedulingctl", command, "/tmp/project"]).unwrap();
             match command {
                 "test" => assert!(matches!(cli.command, Command::Test(_))),
-                _ => assert!(matches!(cli.command, Command::Explain(_))),
+                "explain" => assert!(matches!(cli.command, Command::Explain(_))),
+                _ => assert!(matches!(cli.command, Command::Package(_))),
             }
         }
+
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "records",
+            "apply",
+            "/runtime.yaml",
+            "/records.yaml",
+        ])
+        .unwrap();
+        let Command::Records(RecordsArgs {
+            command: RecordsCommand::Apply(args),
+        }) = cli.command
+        else {
+            panic!("expected records apply")
+        };
+        assert_eq!(args.config, PathBuf::from("/runtime.yaml"));
+        assert_eq!(args.records, PathBuf::from("/records.yaml"));
+
+        assert!(Cli::try_parse_from(["schedulingctl", "records"]).is_err());
+        assert!(
+            Cli::try_parse_from(["schedulingctl", "records", "apply", "/runtime.yaml"]).is_err()
+        );
 
         assert!(Cli::try_parse_from([
             "schedulingctl",
@@ -655,5 +753,151 @@ mod tests {
         let text = String::from_utf8(stdout).unwrap();
         assert!(text.starts_with("Authoring check completed with incomplete inputs."));
         assert!(text.contains("finding scheduling.version: invalid-bound"));
+    }
+
+    #[test]
+    fn package_writes_a_verifiable_manifest_and_refuses_replacement() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(stderr.is_empty());
+        assert_eq!(report["command"], "package");
+        assert!(report["packageDigest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        assert!(report["policyDigest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:"));
+        // The package identity and the policy's own digest are different
+        // documents and must never be conflated.
+        assert_ne!(report["packageDigest"], report["policyDigest"]);
+        assert_eq!(report["files"][0]["path"], "scheduling.yaml");
+        assert_eq!(report["runtimeConfigurationIncluded"], false);
+        assert_eq!(report["secretsIncluded"], false);
+
+        let manifest_path = project.join("scheduling.package.json");
+        assert!(manifest_path.is_file());
+        // The written manifest is exactly the one the runtime's own verifier
+        // accepts against the same policy text.
+        let policy_path = project.join("scheduling.yaml");
+        let policy_text = std::fs::read_to_string(&policy_path).unwrap();
+        let verified =
+            registry_scheduling::config::verify_policy_package(&policy_path, &policy_text)
+                .unwrap()
+                .expect("the written manifest verifies");
+        assert_eq!(verified, report["packageDigest"].as_str().unwrap());
+        // Pretty-printed, newline-terminated: a text document an operator
+        // diffs.
+        let bytes = std::fs::read(&manifest_path).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        // Repackaging is a deliberate act: the existing manifest is refused,
+        // never silently replaced.
+        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains("already exists"), "{message}");
+    }
+
+    #[test]
+    fn package_refuses_incomplete_authoring_and_writes_nothing() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let policy_path = project.join("scheduling.yaml");
+        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
+            "version: 1\n",
+            "version: 0\n",
+            1,
+        );
+        std::fs::write(&policy_path, broken).unwrap();
+        let (exit, report, stderr) = run_json(&["package", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert!(report["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("finding"));
+        assert!(!project.join("scheduling.package.json").exists());
+    }
+
+    #[test]
+    fn runtime_configuration_and_store_failures_map_to_their_own_diagnostics() {
+        let config_error = anyhow::Error::new(RuntimeConfigError::RelativeRuntimePath);
+        let (exit, diagnostic) = classify_failure(&config_error);
+        assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
+        assert_eq!(
+            diagnostic["code"],
+            "schedulingctl.runtime-configuration.invalid"
+        );
+        assert_eq!(diagnostic["artifact"], "runtime_configuration");
+
+        let store_error = anyhow::Error::new(StoreError::Configuration).context("connecting");
+        let (exit, diagnostic) = classify_failure(&store_error);
+        assert_eq!(exit, OPERATIONAL_FAILURE_EXIT);
+        assert_eq!(diagnostic["code"], "schedulingctl.store-unavailable");
+        assert_eq!(diagnostic["artifact"], "database");
+        for field in [
+            "severity",
+            "code",
+            "artifact",
+            "path",
+            "message",
+            "suggestedAction",
+        ] {
+            assert!(diagnostic.get(field).is_some(), "missing {field}");
+        }
+    }
+
+    /// A records document that does not hold together is refused in its own
+    /// terms before any connection is opened: the write path never reaches
+    /// the database with a document the store would reject mid-swap.
+    #[test]
+    fn records_apply_refuses_an_invalid_document_before_touching_a_database() {
+        let (root, project) = initialized("standalone-exact-time");
+        let config_path = root.path().join("runtime.yaml");
+        std::fs::write(
+            &config_path,
+            format!(
+                "apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1\n\
+                 kind: SchedulingRuntimeConfig\n\
+                 package:\n  root: {}\n\
+                 listener:\n  bind: 127.0.0.1:8105\n  tlsTermination: development-loopback\n\
+                 secretProviders:\n  environment: {{}}\n\
+                 authentication:\n  oidc:\n    issuer: https://issuer.example.test\n\
+                 \x20   audience: scheduling-api\n\
+                 database:\n  runtimeUrlRef: secret:env/SCHEDULINGCTL_TEST_DATABASE\n\
+                 \x20 migrationUrlRef: secret:env/SCHEDULINGCTL_TEST_DATABASE\n\
+                 audit:\n  path: {}/audit.jsonl\n\
+                 \x20 hashKeyRef: secret:env/SCHEDULINGCTL_TEST_AUDIT\n\
+                 retention:\n  attemptReceiptDays: 2\n",
+                project.display(),
+                root.path().display()
+            ),
+        )
+        .unwrap();
+        let records_path = root.path().join("records.yaml");
+        std::fs::write(
+            &records_path,
+            "locations:\n  - id: bangkok-counter\n    timezone: Asia/Nowhere\n",
+        )
+        .unwrap();
+        let (exit, report, stderr) = run_json(&[
+            "records",
+            "apply",
+            config_path.to_str().unwrap(),
+            records_path.to_str().unwrap(),
+        ]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(
+            message.contains("unknown timezone Asia/Nowhere"),
+            "{message}"
+        );
     }
 }
