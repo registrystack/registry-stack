@@ -152,6 +152,154 @@ impl ProblemCode {
     pub const fn is_detailed_only(self) -> bool {
         matches!(self, Self::ResourceUnavailable)
     }
+
+    /// The HTTP status this problem answers with. The map lives here, beside
+    /// the vocabulary it belongs to, so the runtime emits and every client
+    /// validates one pinned status per code rather than each re-deriving its
+    /// own.
+    #[must_use]
+    pub const fn http_status(self) -> u16 {
+        match self {
+            Self::CursorInvalid => 400,
+            Self::AuthenticationRefused => 401,
+            Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
+            Self::BookingDuplicateActive
+            | Self::CancellationCutoffPassed
+            | Self::CapacityExhausted
+            | Self::HoldReleased
+            | Self::IdempotencyKeyReused
+            | Self::LocationClosed
+            | Self::ResourceUnavailable => 409,
+            Self::CursorExpired | Self::HoldExpired | Self::IdempotencyExpired => 410,
+            Self::PolicyChanged | Self::PreconditionFailed | Self::RevisionMismatch => 412,
+            Self::CapabilityUnmatched
+            | Self::HorizonOutside
+            | Self::PartyCapacityInadequate
+            | Self::PrerequisiteMissing
+            | Self::ScheduleUnpublished => 422,
+            Self::PreconditionRequired => 428,
+            Self::EligibilityUnavailable | Self::HookUnavailable | Self::ServiceUnavailable => 503,
+        }
+    }
+
+    /// The fixed, value-free problem title. Titles and details carry no
+    /// identifiers, so a problem body never discloses another person's
+    /// booking, a private staff reason, or restricted eligibility
+    /// information.
+    #[must_use]
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::AuthenticationRefused => "Authentication refused",
+            Self::BookingDuplicateActive => "Duplicate active booking",
+            Self::CancellationCutoffPassed => "Cancellation cutoff passed",
+            Self::CapabilityUnmatched => "Capability unmatched",
+            Self::CapacityExhausted => "Capacity exhausted",
+            Self::CursorExpired => "Cursor expired",
+            Self::CursorInvalid => "Cursor invalid",
+            Self::EligibilityUnavailable => "Eligibility unavailable",
+            Self::HoldExpired => "Hold expired",
+            Self::HoldReleased => "Hold released",
+            Self::HookUnavailable => "Hook unavailable",
+            Self::HorizonOutside => "Start outside the booking horizon",
+            Self::IdempotencyExpired => "Idempotency window expired",
+            Self::IdempotencyKeyReused => "Idempotency key reused",
+            Self::LocationClosed => "Location closed",
+            Self::OperationNotAuthorized => "Operation not authorized",
+            Self::PartyCapacityInadequate => "Party capacity inadequate",
+            Self::PolicyChanged => "Policy changed",
+            Self::PreconditionFailed => "Precondition failed",
+            Self::PreconditionRequired => "Precondition required",
+            Self::PrerequisiteMissing => "Prerequisite missing",
+            Self::ProfileNotAuthorized => "Profile not authorized",
+            Self::ResourceUnavailable => "Resource unavailable",
+            Self::RevisionMismatch => "Revision mismatch",
+            Self::ScheduleUnpublished => "Schedule unpublished",
+            Self::ServiceUnavailable => "Scheduling service unavailable",
+        }
+    }
+
+    /// The fixed remediation sentence, value-free like the title.
+    #[must_use]
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::AuthenticationRefused => {
+                "The bearer credential is missing, invalid, or expired. Sign in again."
+            }
+            Self::BookingDuplicateActive => {
+                "An active booking already holds this party's duplicate key. Cancel or complete it before booking again."
+            }
+            Self::CancellationCutoffPassed => {
+                "The cancellation cutoff for this appointment has passed, so it can no longer be cancelled."
+            }
+            Self::CapabilityUnmatched => {
+                "No backing member carries every capability this offering requires."
+            }
+            Self::CapacityExhausted => {
+                "The supply is fully committed for the requested interval. Choose another time."
+            }
+            Self::CursorExpired => {
+                "This cursor has expired. Start again without a cursor and deduplicate entries by id."
+            }
+            Self::CursorInvalid => "The cursor is invalid for this request.",
+            Self::EligibilityUnavailable => {
+                "A required eligibility check could not run. Retry; do not treat this as permission."
+            }
+            Self::HoldExpired => {
+                "The hold expired before confirmation. Its capacity is bookable again; start a new request."
+            }
+            Self::HoldReleased => {
+                "The claim is not an active hold. It may already be confirmed or released."
+            }
+            Self::HookUnavailable => {
+                "A required lifecycle hook could not run, so the request was refused rather than half-applied."
+            }
+            Self::HorizonOutside => {
+                "The requested start is earlier than the lead time allows or further ahead than the horizon allows."
+            }
+            Self::IdempotencyExpired => {
+                "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key."
+            }
+            Self::IdempotencyKeyReused => {
+                "This idempotency key was used for a different request."
+            }
+            Self::LocationClosed => {
+                "A closure covers the requested start. Choose a start outside the closure."
+            }
+            Self::OperationNotAuthorized => {
+                "Your current Scheduling authority does not allow this operation."
+            }
+            Self::PartyCapacityInadequate => {
+                "The party is larger than this offering can ever serve, or its size falls outside the published units."
+            }
+            Self::PolicyChanged => {
+                "The policy revision changed before the request committed. Reload the catalogue and try again with the current revision."
+            }
+            Self::PreconditionFailed => {
+                "The appointment changed since you loaded it. Reload and try again."
+            }
+            Self::PreconditionRequired => {
+                "This mutation requires the revision you loaded, or the duplicate key this offering keys on."
+            }
+            Self::PrerequisiteMissing => {
+                "The party is missing a prerequisite this offering requires."
+            }
+            Self::ProfileNotAuthorized => {
+                "The selected Scheduling profile does not authorize this request."
+            }
+            Self::ResourceUnavailable => {
+                "Every capable member is unavailable for this interval."
+            }
+            Self::RevisionMismatch => {
+                "The window revision changed before the request committed. Reload the catalogue and try again."
+            }
+            Self::ScheduleUnpublished => {
+                "No published schedule serves that start. Choose a start on the published grid."
+            }
+            Self::ServiceUnavailable => {
+                "Scheduling storage is unavailable. Try again after the service recovers."
+            }
+        }
+    }
 }
 
 /// Expand a dotted problem code into its full problem type URI.
@@ -206,6 +354,45 @@ mod tests {
         assert_eq!(
             type_uri(IDEMPOTENCY_KEY_REUSED_PROBLEM),
             format!("{SCHEDULING_PROBLEM_TYPE_BASE}idempotency/key-reused")
+        );
+    }
+
+    /// Every code carries one pinned status from the statuses this product
+    /// answers with, a non-empty title, and a non-empty value-free detail.
+    /// Transport statuses (404, 405, 413, 415) are absent on purpose: those
+    /// are edge rejections under the platform's own problem namespace, never
+    /// domain codes.
+    #[test]
+    fn every_code_pins_a_status_title_and_detail() {
+        let statuses = [400, 401, 403, 409, 410, 412, 422, 428, 503];
+        for code in ProblemCode::ALL {
+            assert!(
+                statuses.contains(&code.http_status()),
+                "{}: {}",
+                code.code(),
+                code.http_status()
+            );
+            assert!(!code.title().is_empty(), "{}", code.code());
+            assert!(!code.detail().is_empty(), "{}", code.code());
+        }
+    }
+
+    /// The statuses the acceptance scenarios reason about: a recoverable
+    /// capacity conflict, a hold that can no longer be confirmed, the two
+    /// idempotency answers, and the two precondition answers.
+    #[test]
+    fn the_pinned_statuses_match_the_acceptance_reasoning() {
+        assert_eq!(ProblemCode::CapacityExhausted.http_status(), 409);
+        assert_eq!(ProblemCode::HoldExpired.http_status(), 410);
+        assert_eq!(ProblemCode::IdempotencyExpired.http_status(), 410);
+        assert_eq!(ProblemCode::IdempotencyKeyReused.http_status(), 409);
+        assert_eq!(ProblemCode::PreconditionFailed.http_status(), 412);
+        assert_eq!(ProblemCode::PreconditionRequired.http_status(), 428);
+        // The detailed-only code shares its public projection's status: the
+        // explain path names the reason, never a different outcome.
+        assert_eq!(
+            ProblemCode::ResourceUnavailable.http_status(),
+            ProblemCode::CapacityExhausted.http_status()
         );
     }
 }
