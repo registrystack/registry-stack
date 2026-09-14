@@ -5668,7 +5668,7 @@ version = "0.32.0"
 
 [[package]]
 name = "registry-platform-calendar"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -6086,6 +6086,33 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "uuid",
+]
+
+[[package]]
+name = "registry-scheduling-core"
+version = "0.32.0"
+dependencies = [
+ "chrono",
+ "registry-platform-calendar",
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "registry-schedulingctl"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "registry-platform-buildinfo",
+ "registry-scheduling-core",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

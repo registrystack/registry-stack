@@ -1,0 +1,24 @@
+[package]
+name = "registry-schedulingctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Registry Scheduling adopter and local operator tooling."
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "schedulingctl"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+registry-platform-buildinfo.workspace = true
+registry-scheduling-core.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
