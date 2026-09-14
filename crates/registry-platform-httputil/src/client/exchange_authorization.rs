@@ -929,10 +929,17 @@ mod tests {
     }
 
     async fn endpoint(server: &MockServer, expires_in: Option<i64>) {
+        endpoint_stating(server, expires_in.map(|value| json!(value))).await;
+    }
+
+    /// Mount a token endpoint whose `expires_in` member is absent, present and
+    /// JSON null, or present and a number. The three are distinct statements
+    /// about a credential's lifetime, so a test needs to make each of them.
+    async fn endpoint_stating(server: &MockServer, expires_in: Option<serde_json::Value>) {
         let mut body = json!({"access_token":"issued-credential", "token_type":"Bearer",
             "issued_token_type":"urn:ietf:params:oauth:token-type:access_token", "scope":"records:read"});
         if let Some(value) = expires_in {
-            body["expires_in"] = json!(value);
+            body["expires_in"] = value;
         }
         Mock::given(method("POST"))
             .and(path("/token"))
@@ -1055,6 +1062,76 @@ mod tests {
             );
             assert_eq!(server.received_requests().await.unwrap().len(), 1);
         }
+    }
+
+    #[tokio::test]
+    async fn a_null_lifetime_is_an_issuer_speaking_not_an_issuer_silent() {
+        // `"expires_in": null` is malformed against RFC 6749 section 5.1 and
+        // common all the same. The member is present, so the issuer did speak
+        // about this credential's lifetime, and what it said names no usable
+        // one. That is the issuer's own accounting, not the silence the
+        // verified context deadline answers, so the credential is used once
+        // and dropped.
+        let server = MockServer::start().await;
+        endpoint_stating(&server, Some(serde_json::Value::Null)).await;
+        let provider = ExchangeAuthorization::first_party(
+            exchange(&server, "urn:records", &["records:read"]),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read"]),
+        )
+        .unwrap();
+        provider.bearer_token().await.unwrap();
+        assert!(matches!(
+            provider.bearer_token().await,
+            Err(TokenError::Unavailable)
+        ));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn discovered_binding_reads_scopes_as_the_set_they_are() {
+        // RFC 6749 section 3.3 makes the scope parameter a set carried as a
+        // space-delimited list, and both sides of this comparison refuse a
+        // repeated value where they are built. A profile naming the same
+        // scopes in another order than the provider was configured with names
+        // the same request, so refusing that spelling would refuse a correctly
+        // configured deployment.
+        let server = MockServer::start().await;
+        let token_endpoint = Url::parse(&format!("{}/token", server.uri())).unwrap();
+        let authorization = ExchangeAuthorization::first_party(
+            exchange(
+                &server,
+                "urn:registry:evidence",
+                &["records:read", "evidence:invoke"],
+            ),
+            context("person-1", now_seconds().unwrap() + 120),
+            source(&["records:read", "evidence:invoke"]),
+        )
+        .unwrap();
+        let matches = |scopes: &[String]| {
+            authorization.matches_discovered_binding(
+                "portal-client",
+                &token_endpoint,
+                "https://issuer.example",
+                None,
+                "urn:registry:evidence",
+                scopes,
+            )
+        };
+        assert!(matches(&[
+            "records:read".to_owned(),
+            "evidence:invoke".to_owned(),
+        ]));
+        assert!(matches(&[
+            "evidence:invoke".to_owned(),
+            "records:read".to_owned(),
+        ]));
+        assert!(!matches(&["records:read".to_owned()]));
+        assert!(!matches(&[
+            "evidence:invoke".to_owned(),
+            "records:read".to_owned(),
+            "other:scope".to_owned(),
+        ]));
     }
 
     #[test]

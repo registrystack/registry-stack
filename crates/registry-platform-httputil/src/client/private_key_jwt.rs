@@ -43,7 +43,7 @@ use registry_platform_authcommon::client_assertion::{
 };
 use registry_platform_crypto::PrivateJwk;
 use reqwest::header::{HeaderMap, ACCEPT, CONTENT_TYPE};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use tokio::sync::{Mutex, RwLock};
 use url::Url;
 use zeroize::Zeroizing;
@@ -478,7 +478,17 @@ impl PrivateKeyJwt {
             && self.token_endpoint == *token_endpoint
             && self.audience == assertion_audience.unwrap_or_else(|| token_endpoint.as_str())
             && self.resource.as_deref() == Some(resource)
-            && self.requested_scopes == scopes
+            // RFC 6749 section 3.3 scopes are a set carried as a
+            // space-delimited list, and both sides refuse a repeated value
+            // where they are built, so equal lengths and equal membership are
+            // equal sets. Comparing the order the caller happened to write
+            // would refuse a profile that names the same request.
+            && self.requested_scopes.len() == scopes.len()
+            && self
+                .requested_scopes
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                == scopes.iter().collect::<std::collections::BTreeSet<_>>()
     }
 
     pub(super) fn set_fetch_url_policy(&mut self, policy: FetchUrlPolicy) {
@@ -900,9 +910,11 @@ impl PrivateKeyJwt {
             // `BearerToken` wipes on drop.
             token: BearerToken::new(issued.access_token)?,
             // Whether the issuer spoke about this credential's lifetime at all.
-            // Silence and an already-elapsed lifetime both leave `expires_at`
-            // absent, and they do not mean the same thing to a caller that
-            // holds a deadline of its own to fall back on.
+            // Silence, an already-elapsed lifetime, and a null one all leave
+            // `expires_at` absent, and silence does not mean what the other two
+            // mean to a caller that holds a deadline of its own to fall back
+            // on. The outer `Option` is member presence, so an issuer that
+            // states `null` has spoken.
             lifetime_stated: issued.expires_in.is_some(),
             // A stated lifetime is what makes caching possible. Without one, or
             // with one already elapsed, the credential is used once and dropped.
@@ -910,6 +922,7 @@ impl PrivateKeyJwt {
             // it ever reaches the cache arithmetic below.
             expires_at: issued
                 .expires_in
+                .flatten()
                 .filter(|seconds| *seconds > 0)
                 .map(|seconds| seconds.min(MAXIMUM_CACHED_TOKEN_LIFETIME_SECONDS))
                 // What reaches this point is within
@@ -1021,9 +1034,28 @@ pub(super) struct AcquiredToken {
 struct IssuedToken {
     access_token: String,
     token_type: String,
-    expires_in: Option<i64>,
+    /// Member presence outside, stated value inside. RFC 6749 section 5.1
+    /// makes this member optional, and an issuer that sends it as JSON null
+    /// has still spoken about the lifetime, so the two cases are kept apart
+    /// rather than collapsed into one absent value.
+    #[serde(default, deserialize_with = "present_value")]
+    expires_in: Option<Option<i64>>,
     scope: Option<String>,
     issued_token_type: Option<String>,
+}
+
+/// Read a member as present, whatever it holds.
+///
+/// Serde reads a JSON null into `Option<T>` as `None`, which is the same value
+/// an absent member produces. This runs only for a member that is there, so the
+/// outer `Option` it wraps the result in reports presence and the inner one
+/// reports what was stated.
+fn present_value<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    T::deserialize(deserializer).map(Some)
 }
 
 /// The error response of RFC 6749 section 5.2.
