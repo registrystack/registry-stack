@@ -9,7 +9,8 @@ mod authorization_claims;
 
 pub use authorization_claims::{
     actor_kind, grant_claims, ActorKind, BregPermission, ClaimError, ClaimMember, ClaimNames,
-    GrantBounds, GrantClaims, GrantContextError, MatchedClientError, ASSERTION_ISSUER_CLAIM,
+    GrantBounds, GrantClaims, GrantContextError, MatchedClientError, SchedulingPermission,
+    ASSERTION_ISSUER_CLAIM,
 };
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};

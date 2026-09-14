@@ -1153,6 +1153,101 @@ mod tests {
     }
 
     #[test]
+    fn scheduling_value_boundaries_and_unknown_fields_are_enforced() {
+        let at_bound = json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"s".repeat(MAX_CLAIM_VALUE_BYTES),
+                "location":"l".repeat(MAX_CLAIM_VALUE_BYTES),
+                "actions":["a".repeat(MAX_PURPOSE_BYTES)]
+            }]
+        });
+        assert_eq!(
+            grant_claims(
+                &claims(complete_grant(at_bound)),
+                &ClaimNames::default(),
+                1_500
+            )
+            .map(|grant| grant.is_some()),
+            Ok(true)
+        );
+
+        for (over_service, over_location, over_action) in [
+            (Some("s".repeat(MAX_CLAIM_VALUE_BYTES + 1)), None, None),
+            (None, Some("l".repeat(MAX_CLAIM_VALUE_BYTES + 1)), None),
+            (None, None, Some("a".repeat(MAX_PURPOSE_BYTES + 1))),
+        ] {
+            let permission = json!({
+                "service": over_service.unwrap_or_else(|| "urn:service:intake".to_owned()),
+                "location": over_location.unwrap_or_else(|| "north".to_owned()),
+                "actions": [over_action.unwrap_or_else(|| "book".to_owned())]
+            });
+            assert_eq!(
+                grant_claims(
+                    &claims(complete_grant(json!({
+                        "type":"scheduling","permissions":[permission]
+                    }))),
+                    &ClaimNames::default(),
+                    1_500
+                ),
+                Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+            );
+        }
+
+        // Unknown members are refused at the union level and inside a
+        // permission value alike.
+        for permission_extra in [
+            json!({"type":"scheduling","permissions":[
+                {"service":"intake","location":"north","actions":["book"],"extra":true}
+            ]}),
+            json!({"type":"scheduling","permissions":[
+                {"service":"intake","location":"north","actions":["book"]}
+            ],"extra":true}),
+        ] {
+            assert_eq!(
+                grant_claims(
+                    &claims(complete_grant(permission_extra)),
+                    &ClaimNames::default(),
+                    1_500
+                ),
+                Err(ClaimError::Malformed(ClaimMember::GrantBounds))
+            );
+        }
+    }
+
+    #[test]
+    fn the_scheduling_tag_round_trips_through_serde() {
+        let bounds = GrantBounds::Scheduling {
+            permissions: vec![SchedulingPermission {
+                service: "urn:service:intake".to_owned(),
+                location: "urn:location:north-counter".to_owned(),
+                actions: vec!["book".to_owned(), "hold.cancel".to_owned()],
+            }],
+        };
+        let wire = serde_json::to_value(&bounds).expect("serializes");
+        assert_eq!(
+            wire,
+            json!({
+                "type":"scheduling",
+                "permissions":[{
+                    "service":"urn:service:intake",
+                    "location":"urn:location:north-counter",
+                    "actions":["book","hold.cancel"]
+                }]
+            })
+        );
+        let parsed = serde_json::from_value::<GrantBounds>(wire.clone()).expect("round trips");
+        assert_eq!(parsed, bounds);
+        // A write-side regression that changed the tag spelling would stop
+        // parsing before any validation runs.
+        assert!(serde_json::from_value::<GrantBounds>(json!({
+            "type":"Scheduling",
+            "permissions":[{"service":"intake","location":"north","actions":["book"]}]
+        }))
+        .is_err());
+    }
+
+    #[test]
     fn context_binding_uses_normalized_verified_client_and_exact_resource() {
         let input = claims(complete_grant(json!({
             "type":"breg",
