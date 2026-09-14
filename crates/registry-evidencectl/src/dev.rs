@@ -671,6 +671,44 @@ fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
     Ok(())
 }
 
+/// The task source authorities an active client requests Evidence under. Its
+/// declared exchange binding must match the task policies that name it: a task
+/// requester holds the policy tag and exchanges institutionally, and any
+/// exchange binding needs a borrowed issuer owner to register it.
+fn client_task_sources(
+    registration: &access::ActiveClientRegistration,
+    policies: &[crate::authoring::CompiledAccessPolicy],
+    borrowed_owner: bool,
+) -> Result<BTreeSet<String>> {
+    let mut task_sources = BTreeSet::new();
+    for policy in policies {
+        if let Some(task) = &policy.task_grant {
+            if task.requester_clients.contains(&registration.client_id) {
+                if !registration.requester_tags.contains(&policy.requester_tag) {
+                    bail!("task grant requester is not assigned its access policy");
+                }
+                task_sources.insert(task.source_issuer.clone());
+            }
+        }
+    }
+    match registration.exchange.as_ref().map(|binding| binding.kind) {
+        Some(access::ActiveClientExchangeKind::InstitutionalGrant) if task_sources.is_empty() => {
+            bail!("institutional exchange needs one active assigned task policy");
+        }
+        Some(access::ActiveClientExchangeKind::FirstParty) if !task_sources.is_empty() => {
+            bail!("task requester cannot use first-party exchange");
+        }
+        None if !task_sources.is_empty() => {
+            bail!("task grant requester needs one declared institutional exchange binding");
+        }
+        _ => {}
+    }
+    if registration.exchange.is_some() && !borrowed_owner {
+        bail!("signed context exchange needs a borrowed issuer owner");
+    }
+    Ok(task_sources)
+}
+
 /// The assertion authorities the issuer owner pairs each admitted client with,
 /// derived the way the owner's own BREG runtime derives its pairing: every
 /// exchange connection names the clients that may present its authority.
@@ -2041,35 +2079,9 @@ fn prepare_and_start(
             bail!("explicit access policies require at least one active client");
         }
         for registration in registrations {
-            let mut task_sources = BTreeSet::new();
-            for policy in &compiled.access_policies {
-                if let Some(task) = &policy.task_grant {
-                    if task.requester_clients.contains(&registration.client_id) {
-                        if !registration.requester_tags.contains(&policy.requester_tag) {
-                            bail!("task grant requester is not assigned its access policy");
-                        }
-                        task_sources.insert(task.source_issuer.clone());
-                    }
-                }
-            }
-            match registration.exchange.as_ref().map(|binding| binding.kind) {
-                Some(access::ActiveClientExchangeKind::InstitutionalGrant)
-                    if task_sources.is_empty() =>
-                {
-                    bail!("institutional exchange needs one active assigned task policy");
-                }
-                Some(access::ActiveClientExchangeKind::FirstParty) if !task_sources.is_empty() => {
-                    bail!("task requester cannot use first-party exchange");
-                }
-                None if !task_sources.is_empty() => {
-                    bail!("task grant requester needs one declared institutional exchange binding");
-                }
-                _ => {}
-            }
+            let task_sources =
+                client_task_sources(&registration, &compiled.access_policies, owner.is_some())?;
             let (claims, scopes) = if let Some(binding) = &registration.exchange {
-                if owner.is_none() {
-                    bail!("signed context exchange needs a borrowed issuer owner");
-                }
                 exchange_bindings.insert(
                     registration.client_id.clone(),
                     (binding.clone(), task_sources),
@@ -4061,5 +4073,120 @@ requirements:
             "local development state is not an active session"
         );
         assert!(diagnostic.contains("must have mode 0700"), "{diagnostic}");
+    }
+
+    #[test]
+    fn client_exchange_binding_must_match_the_task_policies_that_name_it() {
+        let source = "https://casework.invalid";
+        let policies = vec![
+            crate::authoring::CompiledAccessPolicy {
+                id: "lot-tasks".into(),
+                requester_tag: "lot-tasks-tag".into(),
+                questions: vec!["lot-status".into()],
+                task_grant: Some(AccessTaskGrant {
+                    kind: "institutional".into(),
+                    source_issuer: source.into(),
+                    requester_clients: vec!["assistant".into()],
+                    bindings: Vec::new(),
+                }),
+            },
+            crate::authoring::CompiledAccessPolicy {
+                id: "portal-reads".into(),
+                requester_tag: "portal-reads-tag".into(),
+                questions: vec!["lot-status".into()],
+                task_grant: None,
+            },
+        ];
+        let exchange = |kind| access::ActiveClientExchange {
+            kind,
+            bootstrap_scope: "tasks:assert".into(),
+            bootstrap_resource: None,
+            source_issuer: (kind == access::ActiveClientExchangeKind::FirstParty)
+                .then(|| "http://127.0.0.1:4494".to_owned()),
+        };
+        let registration = |client: &str, tag: &str, binding| access::ActiveClientRegistration {
+            client_id: client.into(),
+            public_jwks: "{}".into(),
+            requester_tags: vec![tag.into()],
+            evidence_audience: "urn:registrystack:evidence:local:gateway".into(),
+            exchange: binding,
+        };
+        let institutional = Some(exchange(
+            access::ActiveClientExchangeKind::InstitutionalGrant,
+        ));
+        let first_party = Some(exchange(access::ActiveClientExchangeKind::FirstParty));
+
+        assert_eq!(
+            client_task_sources(
+                &registration("assistant", "lot-tasks-tag", institutional.clone()),
+                &policies,
+                true,
+            )
+            .unwrap(),
+            BTreeSet::from([source.to_owned()])
+        );
+        assert!(client_task_sources(
+            &registration("portal", "portal-reads-tag", first_party.clone()),
+            &policies,
+            true,
+        )
+        .unwrap()
+        .is_empty());
+        assert!(client_task_sources(
+            &registration("direct", "portal-reads-tag", None),
+            &policies,
+            false,
+        )
+        .unwrap()
+        .is_empty());
+
+        for (case, client, tag, binding, borrowed, refusal) in [
+            (
+                "a task requester must hold the policy tag",
+                "assistant",
+                "portal-reads-tag",
+                institutional.clone(),
+                true,
+                "task grant requester is not assigned its access policy",
+            ),
+            (
+                "an institutional binding needs a task policy naming the client",
+                "portal",
+                "portal-reads-tag",
+                institutional.clone(),
+                true,
+                "institutional exchange needs one active assigned task policy",
+            ),
+            (
+                "a task requester cannot also be a first-party exchanger",
+                "assistant",
+                "lot-tasks-tag",
+                first_party.clone(),
+                true,
+                "task requester cannot use first-party exchange",
+            ),
+            (
+                "a task requester needs a declared exchange binding",
+                "assistant",
+                "lot-tasks-tag",
+                None,
+                true,
+                "task grant requester needs one declared institutional exchange binding",
+            ),
+            (
+                "an exchange binding needs a borrowed issuer owner",
+                "portal",
+                "portal-reads-tag",
+                first_party.clone(),
+                false,
+                "signed context exchange needs a borrowed issuer owner",
+            ),
+        ] {
+            let error =
+                client_task_sources(&registration(client, tag, binding), &policies, borrowed)
+                    .expect_err(case)
+                    .to_string();
+            assert_eq!(error, refusal, "{case}");
+        }
     }
 }
