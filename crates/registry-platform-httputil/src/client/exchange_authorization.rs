@@ -653,7 +653,7 @@ impl TokenProvider for ExchangeAuthorization {
             return Err(TokenError::Unavailable);
         }
         // First-party verification is a snapshot of host-owned source facts.
-        // A failed or uncacheable exchange must also require a new snapshot.
+        // A failed exchange must also require a new snapshot.
         *attempted = true;
         let wall_now = now_seconds()?;
         if wall_now >= self.context.deadline {
@@ -668,15 +668,19 @@ impl TokenProvider for ExchangeAuthorization {
         if now_seconds()? >= self.context.deadline {
             return Err(TokenError::Unavailable);
         }
-        let deadline = acquired.expires_at.map(|issued| {
-            issued.min(now + Duration::from_secs((self.context.deadline - wall_now) as u64))
+        // The verified context deadline bounds every token this provider hands
+        // out, so it is also the bound for one the issuer stated no lifetime
+        // for. Holding such a token no longer than the context is what lets one
+        // verified context serve the several requests an operation makes,
+        // without any token outliving the facts it was issued against.
+        let context_deadline = now + Duration::from_secs((self.context.deadline - wall_now) as u64);
+        let expires_at = acquired
+            .expires_at
+            .map_or(context_deadline, |issued| issued.min(context_deadline));
+        *self.cached.write().await = Some(CachedExchange {
+            token: acquired.token.clone(),
+            expires_at,
         });
-        if let Some(expires_at) = deadline {
-            *self.cached.write().await = Some(CachedExchange {
-                token: acquired.token.clone(),
-                expires_at,
-            });
-        }
         Ok(acquired.token)
     }
 }
@@ -937,7 +941,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_issuer_lifetime_requires_fresh_host_context_after_first_exchange() {
+    async fn no_issuer_lifetime_is_bounded_by_the_verified_context_deadline() {
+        // RFC 6749 section 5.1 makes `expires_in` optional, so an issuer that
+        // states no lifetime is a legitimate deployment, not a broken one. A
+        // caller performs more than one request inside one verified context,
+        // so the token has to survive between them. The verified context
+        // deadline is the bound this provider already refuses past, and it is
+        // the one such a token is held to.
         let server = MockServer::start().await;
         endpoint(&server, None).await;
         let first = ExchangeAuthorization::first_party(
@@ -946,11 +956,12 @@ mod tests {
             source(&["records:read"]),
         )
         .unwrap();
-        first.bearer_token().await.unwrap();
-        assert!(matches!(
-            first.bearer_token().await,
-            Err(TokenError::Unavailable)
-        ));
+        let held = first.bearer_token().await.unwrap();
+        let again = first.bearer_token().await.unwrap();
+        assert_eq!(
+            held.authorization_header_value(),
+            again.authorization_header_value()
+        );
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
