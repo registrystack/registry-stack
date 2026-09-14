@@ -358,11 +358,20 @@ fn state_dir(base: &Path) -> PathBuf {
 }
 
 /// Remove this session's own container by its exact name before a case
-/// recreates the state. The name encodes this driver's label and session id,
-/// so nothing unrelated is ever touched; an absent container is not an error.
-fn pre_clean() {
+/// recreates the state. The name encodes this driver's label, session id and
+/// state root, so nothing unrelated is ever touched; an absent container is
+/// not an error.
+fn pre_clean(state_root: &Path) {
+    let pin = ThunderIdPin::load().expect("the maintained pin loads");
+    let session = Session {
+        label: "identity-integration",
+        id: "b2c3d4e5f6071829",
+        port: PORT,
+        state_root,
+        image: &pin.image,
+    };
     let _ = std::process::Command::new("docker")
-        .args(["rm", "-f", "thunderid-identity-integration-b2c3d4e5f607"])
+        .args(["rm", "-f", &session.container_name()])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status();
@@ -386,7 +395,7 @@ fn main() {
 
     match case.as_str() {
         "A09.schema-and-restart" => {
-            pre_clean();
+            pre_clean(&state_root);
             let _ = std::fs::remove_dir_all(&state_root);
             let (key, public_jwks) = fresh_client_key("integration-key-1");
             let live = bring_up(&state_root, public_jwks);
@@ -440,7 +449,7 @@ fn main() {
             println!("PASS A09.schema-and-restart");
         }
         "A10.client-key-rotation" => {
-            pre_clean();
+            pre_clean(&state_root);
             let _ = std::fs::remove_dir_all(&state_root);
             let (old_key, old_public) = fresh_client_key("integration-key-1");
             let (new_key, new_public) = fresh_client_key("integration-key-2");
@@ -487,7 +496,7 @@ fn main() {
             println!("PASS A10.client-key-rotation");
         }
         "A10.client-and-role-revocation" => {
-            pre_clean();
+            pre_clean(&state_root);
             let _ = std::fs::remove_dir_all(&state_root);
             let (key, public_jwks) = fresh_client_key("integration-key-1");
             let live = bring_up(&state_root, public_jwks);
@@ -510,7 +519,7 @@ fn main() {
             println!("PASS A10.client-and-role-revocation");
         }
         "A15.restart-replay" => {
-            pre_clean();
+            pre_clean(&state_root);
             let _ = std::fs::remove_dir_all(&state_root);
             let (key, public_jwks) = fresh_client_key("integration-key-1");
             let live = bring_up(&state_root, public_jwks);
