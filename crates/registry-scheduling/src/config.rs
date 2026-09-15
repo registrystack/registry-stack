@@ -14,7 +14,8 @@ use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    TokenVerifierConfig,
 };
 use registry_scheduling_core::{
     parse_policy_yaml, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
@@ -221,6 +222,11 @@ pub struct OidcConfig {
     #[serde(default = "default_explain_scope")]
     pub explain_scope: String,
 }
+
+/// The RFC 9068 access-token media type this runtime verifies. The pair of
+/// spellings it admits is derived, never authored, so no deployment can widen
+/// it to an ordinary JWT.
+const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 
 fn default_scope_claim() -> String {
     "registry_scopes".to_owned()
@@ -605,15 +611,28 @@ impl RuntimeConfig {
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
-        let verifier = TokenVerifierConfig::access_token_profile(
+        Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
+    }
+
+    /// The access-token verifier profile this deployment's OIDC settings
+    /// describe.
+    ///
+    /// RFC 9068 gives the access token one media type spelled two ways,
+    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
+    /// accept that pair and refuse every other `typ`. The list comes from
+    /// [`access_token_typ_set`] so a plain `JWT` stays out: an ID token, a
+    /// UserInfo JWT or any other JWT minted for this audience is not an
+    /// access token, and admitting one would let a credential issued for
+    /// another purpose book, reschedule or cancel an appointment.
+    pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.issuer.clone(),
             vec![self.authentication.oidc.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
-            vec!["at+jwt".to_owned(), "JWT".to_owned()],
+            access_token_typ_set(SCHEDULING_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
-        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone());
-        Ok((verifier, std::sync::Arc::new(fetcher)))
+        .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
     }
 }
 
@@ -795,6 +814,7 @@ impl RuntimeConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_oidc::is_access_token_typ_pair;
 
     const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
@@ -1010,6 +1030,32 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             assert_eq!(error.path(), "database.testOnlyPlaintext");
             assert!(!error.to_string().contains(canary));
         }
+    }
+
+    #[test]
+    fn the_access_token_profile_admits_only_the_rfc_9068_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "development-loopback"),
+        );
+        let config = RuntimeConfig::load(&operator).expect("configuration is accepted");
+        let profile = config.verifier_profile();
+        assert!(
+            is_access_token_typ_pair(&profile.allowed_typ),
+            "the access-token profile is not the RFC 9068 pair: {:?}",
+            profile.allowed_typ
+        );
+        assert!(
+            !profile
+                .allowed_typ
+                .iter()
+                .any(|value| value.eq_ignore_ascii_case("JWT")),
+            "a plain JWT reaches the access-token profile: {:?}",
+            profile.allowed_typ
+        );
     }
 
     #[test]
