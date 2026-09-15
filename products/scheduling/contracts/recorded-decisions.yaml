@@ -149,3 +149,41 @@ decisions:
     evidence:
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
+  - id: SCHEDULING-DEC-08
+    subject: An environment-records swap is refused whole when it retires occupied supply
+    decision: >-
+      `records apply` replaces the environment facts wholesale, but not
+      unconditionally. The swap takes every supply anchor in the anchor's own
+      order before it reads a claim, and refuses the whole apply when any
+      active booking, or any hold whose lifetime is still ahead, occupies a
+      pool member the incoming records do not carry. The operator either keeps
+      the member or closes what stands on it first; nothing partial is
+      written.
+    reasoning: >-
+      The ledger's claims name their supply by id and the facts are what give
+      that id a member, so deleting a member under a live claim leaves the
+      claim pointing at supply the deployment no longer has. Nothing else in
+      the runtime would notice: availability would stop offering the member
+      while the appointment kept its seat, and the caller would arrive to a
+      station that no longer exists. Taking the anchors first is what makes
+      the guard honest rather than advisory: a capacity transaction holds its
+      own anchor from its snapshot until it commits, so holding all of them
+      means no commitment is mid-evaluation against a member about to be
+      deleted, and a claim written a moment later is seen by the guard rather
+      than stranded behind it. A capacity transaction takes exactly one anchor
+      and the swap takes them in order, so the two cannot cycle.
+    alsoTrue: >-
+      A window supply anchor is excluded from the guard: a window claim
+      occupies the window, which the published policy carries, not the
+      environment records this verb replaces. An expired hold occupies
+      nothing, matching the live-predicate rule the rest of the ledger uses,
+      so it never blocks a swap.
+    residual: >-
+      The guard is keyed on a member disappearing, not on a member moving.
+      Moving a member between pools while it carries active claims still
+      applies, because the claim's supply id survives the swap. The claim then
+      sits in a pool its offering may not serve. Phase 2 work.
+    evidence:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_records_swap_waits_for_the_capacity_transaction_holding_the_pool}
+      - {path: crates/registry-schedulingctl/tests/records_apply_postgres.rs, name: records_apply_replaces_facts_wholesale_and_audits_each_write}

@@ -225,22 +225,21 @@ invariants:
       path: crates/registry-scheduling/src/config.rs
       name: typed_parse_path_does_not_echo_the_rejected_value
   - id: SCHEDULING-SEC-14
-    state: partial
+    state: enforced
     threat: >-
       A commitment decision leaves no accountable record, so a booking or a
-      refusal cannot be attributed afterwards.
+      refusal cannot be attributed afterwards, and grant-scope enumeration
+      against the edge passes unseen.
     enforcementPoint: >-
-      An authorization audit record built per commitment with a pseudonymized
-      principal, stamped with its identity exactly once, written for the
-      allowed case and for every refusal the ledger decides.
+      An authorization audit record built with a pseudonymized principal and
+      stamped with its identity exactly once, written for the allowed case,
+      for every refusal the ledger decides, and for every permission mismatch
+      the service refuses before the capacity transaction opens. The journal
+      is published in the order it was written, and the hash chain continues
+      across a restart from its verified tail.
     refusal: >-
       Record authorization.allowed or authorization.refused as an audit reason,
       never as a problem code, and never carry the caller's raw identifier.
-    partialNote: >-
-      A permission mismatch refused at the service, before the capacity
-      transaction opens, writes no audit row today, so grant-scope enumeration
-      against the edge is not visible in the journal. See deferred entry
-      SCHEDULING-DEF-02.
     negativeTest:
       path: crates/registry-scheduling/src/runtime.rs
       name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once
@@ -300,6 +299,85 @@ invariants:
     negativeTest:
       path: products/scheduling/scripts/test_dependency_direction.py
       name: test_product_dependency_on_scheduling_is_rejected
+  - id: SCHEDULING-SEC-19
+    state: enforced
+    threat: >-
+      Caller strings stored verbatim in the ledger entry, the idempotency
+      receipt, and the audit journal are bounded only by the body ceiling, and
+      an unbounded duplicate key can be varied at will to slip the duplicate
+      guard.
+    enforcementPoint: >-
+      Edge bounds at the authoring grammar's own identifier, reference,
+      collection, and idempotency-key limits, plus a cancellation reason
+      bounded to the column that stores it.
+    refusal: >-
+      Answer request.invalid at the edge rather than passing the value to a
+      database CHECK that surfaces as a service problem on the caller's own
+      request.
+    negativeTest:
+      path: crates/registry-scheduling/src/http.rs
+      name: an_admission_request_is_bounded_before_it_reaches_the_store
+  - id: SCHEDULING-SEC-20
+    state: enforced
+    threat: >-
+      The accepted token type set admits a plain JWT, so an identity token, or
+      any other JWT the same issuer signs, satisfies the access-token profile
+      and reaches a scheduling operation.
+    enforcementPoint: >-
+      The access-token profile built at configuration time, which admits the
+      RFC 9068 media type and its case variants only. No configuration key
+      widens it.
+    refusal: >-
+      Refuse the credential; a token that is not an access token never reaches
+      authorization.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: the_access_token_profile_admits_only_the_rfc_9068_pair
+  - id: SCHEDULING-SEC-21
+    state: enforced
+    threat: >-
+      A deployment that names no clients admits every client the issuer
+      verifies, so any application in the issuer's realm reaches the
+      scheduling edge with a token the issuer minted for something else.
+    enforcementPoint: >-
+      Configuration validation at startup, which requires a named client list
+      for any listener that is not loopback.
+    refusal: >-
+      Refuse to start rather than serve a deployment that admits an unnamed
+      client.
+    negativeTest:
+      path: crates/registry-scheduling/src/config.rs
+      name: a_production_deployment_must_name_the_clients_it_admits
+  - id: SCHEDULING-SEC-22
+    state: enforced
+    threat: >-
+      A credential exchanged from a third-party assertion is accepted on the
+      strength of the issuer the token itself names, so any authority the
+      identity provider will exchange from reaches the deployment.
+    enforcementPoint: >-
+      A declared assertion-issuer map binding each accepted authority to the
+      client that may exchange from it, matched when the exchanged credential
+      is authenticated, and bounded in the runtime schema.
+    refusal: >-
+      Refuse the credential until its authority is declared; an undeclared
+      authority is a credentials problem, never a silent acceptance.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: an_exchanged_token_is_refused_until_its_authority_is_declared
+  - id: SCHEDULING-SEC-23
+    state: enforced
+    threat: >-
+      A clock the runtime cannot read yields a timestamp against which every
+      grant compares as unexpired, so an expired credential commits.
+    enforcementPoint: >-
+      The expiry comparison in the authenticator, which propagates a clock
+      failure rather than substituting a default instant.
+    refusal: >-
+      Refuse the request as an authentication failure; an unreadable clock
+      never judges an expiry as passed.
+    negativeTest:
+      path: crates/registry-scheduling/src/auth.rs
+      name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
@@ -314,31 +392,6 @@ deferred:
       Short grant deadlines. The published reference states the limit plainly
       rather than claiming the bounds are re-read.
     recordedIn: docs/site/src/content/docs/reference/apis/registry-scheduling.mdx
-  - id: SCHEDULING-DEF-02
-    subject: Audit rows for permission refusals decided before the transaction
-    state: deferred
-    reason: >-
-      Refusals the ledger decides are audited; a permission mismatch refused at
-      the service is not, so an attacker probing grant scope against the edge
-      leaves no journal trail.
-    compensatingControl: >-
-      The refusal is answered from a closed vocabulary and carries no
-      information about which bound failed, so probing yields nothing beyond
-      allowed or not allowed.
-    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
-  - id: SCHEDULING-DEF-03
-    subject: Caller string ceilings above the body limit
-    state: deferred
-    reason: >-
-      The idempotency key and the page limit are bounded, and the whole body is
-      capped at 1 MiB, but capabilities, prerequisites, channel, duplicate key,
-      and reason are not individually bounded at the edge. A reason over the
-      database ceiling surfaces as a service-unavailable problem rather than a
-      request problem.
-    compensatingControl: >-
-      The 1 MiB body ceiling and the database CHECK constraints bound the
-      damage to a caller-triggered 5xx on that caller's own request.
-    recordedIn: products/scheduling/SECURITY-REVIEW-NOTES.md
   - id: SCHEDULING-DEF-04
     subject: Channel bound to the verified caller
     state: deferred
