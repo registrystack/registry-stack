@@ -8,9 +8,9 @@
 //! Every test runs in its own schema inside the database named by
 //! `SCHEDULING_TEST_DATABASE_URL`, adopted under one scheduling id, seeded
 //! with one location, two pools of one member each, and driven through the
-//! same router the runtime serves. Without the variable each test skips with
-//! a notice: a skipped test binary is not database verification, so the gate
-//! that matters runs with the variable set.
+//! same router the runtime serves. A test binary that passes because its
+//! database URL is absent is not database verification, so the variable is
+//! required: without it every test in this file fails on the spot.
 
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
@@ -172,7 +172,7 @@ impl Fixture {
 /// A fresh deployment in its own schema: migrated, adopted, seeded, published
 /// with every pool the policy names, and serving through the same router the
 /// runtime serves.
-async fn fixture() -> Option<Fixture> {
+async fn fixture() -> Fixture {
     let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
     let mut pool_ids: Vec<String> = policy
         .offerings
@@ -186,10 +186,9 @@ async fn fixture() -> Option<Fixture> {
 
 /// A fresh deployment whose publication anchored exactly `pool_ids`, so a
 /// test can pin what happens when a policy names a pool no anchor covers.
-async fn fixture_anchoring(pool_ids: &[String]) -> Option<Fixture> {
-    let Ok(base) = std::env::var("SCHEDULING_TEST_DATABASE_URL") else {
-        return None;
-    };
+async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
+    let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
+        .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
     let separator = if base.contains('?') { '&' } else { '?' };
     let scoped = format!("{base}{separator}options=-csearch_path%3D{schema}");
@@ -273,13 +272,13 @@ async fn fixture_anchoring(pool_ids: &[String]) -> Option<Fixture> {
         authenticator: Arc::new(authenticator()),
         store: store.clone(),
     });
-    Some(Fixture {
+    Fixture {
         http,
         store,
         revision: u64::try_from(revision).expect("a bounded policy revision"),
         reader: reader_token(),
         agent: agent_token(),
-    })
+    }
 }
 
 fn authenticator() -> SchedulingAuthenticator {
@@ -499,10 +498,7 @@ async fn booked(fx: &Fixture, from_minutes: i64, to_minutes: i64, key: &str) -> 
 
 #[tokio::test]
 async fn a_hold_confirms_into_an_appointment_with_attributable_history() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (status, hold) = fx
         .post(
@@ -580,10 +576,7 @@ async fn a_hold_confirms_into_an_appointment_with_attributable_history() {
 
 #[tokio::test]
 async fn a_direct_create_books_without_a_hold_and_exhausts_capacity() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 300, 440).await;
     let (status, appointment) = fx
         .post(
@@ -614,10 +607,7 @@ async fn a_direct_create_books_without_a_hold_and_exhausts_capacity() {
 
 #[tokio::test]
 async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let from = first_slot(&fx, OFFERING, 300, 440).await;
     let (status, appointment) = fx
         .post(
@@ -666,10 +656,7 @@ async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones()
 
 #[tokio::test]
 async fn cancellation_respects_the_cutoff_and_replays_its_verdict() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     // Near: inside the four-hour cutoff. Far: clear of it.
     let (near_id, near_revision) = booked(&fx, 90, 200, "cancel-near").await;
     let (status, refused) = fx
@@ -755,10 +742,7 @@ async fn cancellation_respects_the_cutoff_and_replays_its_verdict() {
 
 #[tokio::test]
 async fn a_release_returns_capacity_answers_replay_and_blocks_confirmation() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 300, 440).await;
     let (status, hold) = fx
         .post(
@@ -799,10 +783,7 @@ async fn a_release_returns_capacity_answers_replay_and_blocks_confirmation() {
 
 #[tokio::test]
 async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (status, hold) = fx
         .post(
@@ -846,10 +827,7 @@ async fn an_expired_hold_returns_capacity_and_refuses_confirmation() {
 
 #[tokio::test]
 async fn cursors_page_their_own_listing_and_refuse_foreign_contexts() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let (status, first) = fx.get("/v1/services?limit=1", &fx.reader).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(first["items"].as_array().unwrap().len(), 1);
@@ -902,10 +880,7 @@ async fn cursors_page_their_own_listing_and_refuse_foreign_contexts() {
 
 #[tokio::test]
 async fn the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     let slot = first_slot(&fx, OFFERING, 300, 440).await;
 
     let (status, problem) = fx.request("GET", "/v1/services", "", None, None).await;
@@ -980,10 +955,7 @@ async fn a_commitment_against_an_unanchored_pool_refuses_loudly() {
     // still answer, while a commitment that must lock the unanchored pool
     // refuses rather than transacting without the anchor it serializes
     // against, and the refusal leaves no stored attempt behind.
-    let Some(fx) = fixture_anchoring(&["north-counter".to_owned()]).await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture_anchoring(&["north-counter".to_owned()]).await;
     let slot = first_slot(&fx, SECOND_OFFERING, 300, 440).await;
     let (status, problem) = fx
         .post(
@@ -1016,10 +988,7 @@ async fn a_commitment_against_an_unanchored_pool_refuses_loudly() {
 /// silently.
 #[tokio::test]
 async fn adoption_binds_one_identity_and_refuses_a_second() {
-    let Some(fx) = fixture().await else {
-        eprintln!("skipping: SCHEDULING_TEST_DATABASE_URL is not set");
-        return;
-    };
+    let fx = fixture().await;
     fx.store
         .adopt(SCHEDULING_ID)
         .await
