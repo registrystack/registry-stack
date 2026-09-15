@@ -81,7 +81,10 @@ class GeneratedOpenApiTests(unittest.TestCase):
     def test_every_operation_answers_exactly_the_problems_it_was_mapped(self) -> None:
         for key, expected in GENERATOR.OPERATION_PROBLEMS.items():
             by_status = codes_of(self.openapi, key)
-            self.assertEqual(sorted(expected), sorted(set().union(*by_status.values())), key)
+            # An operation can reach one refusal down more than one path, and
+            # the declaration names every path it has, so the document answers
+            # a code once however many groups carry it.
+            self.assertEqual(sorted(set(expected)), sorted(set().union(*by_status.values())), key)
             for status, codes in by_status.items():
                 for code in codes:
                     self.assertEqual(status, self.catalog[code]["httpStatuses"][0], code)
@@ -128,10 +131,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         documented = {
             code for codes in GENERATOR.OPERATION_PROBLEMS.values() for code in codes
         }
-        self.assertEqual(
-            set(self.catalog) - set(GENERATOR.RESERVED_PROBLEMS) - {"request.not-found"},
-            documented,
-        )
+        self.assertEqual(set(self.catalog) - set(GENERATOR.RESERVED_PROBLEMS), documented)
         self.assertEqual(
             {
                 "request.body-too-large",
@@ -144,7 +144,12 @@ class GeneratedOpenApiTests(unittest.TestCase):
             set(self.openapi["x-registry-scheduling-edge-problems"]),
         )
         self.assertEqual(
-            {"eligibility.unavailable", "hook.unavailable", "resource.unavailable"},
+            {
+                "eligibility.unavailable",
+                "hook.unavailable",
+                "precondition.failed",
+                "resource.unavailable",
+            },
             set(self.openapi["x-registry-scheduling-reserved-problems"]),
         )
 
@@ -154,7 +159,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
             code for codes in GENERATOR.OPERATION_PROBLEMS.values() for code in codes
         }
         self.assertEqual(documented, documented & produced)
-        self.assertEqual(set(), set(GENERATOR.RESERVED_PROBLEMS[:2]) & produced)
+        self.assertEqual(set(), set(GENERATOR.UNPRODUCED_PROBLEMS) & produced)
         self.assertIn("resource.unavailable", produced)
 
     def test_every_route_is_described_by_exactly_one_operation(self) -> None:
@@ -279,7 +284,10 @@ class GeneratedOpenApiTests(unittest.TestCase):
     def test_a_fallible_service_method_always_documents_an_unavailable_dependency(self) -> None:
         for key in GENERATOR.ROUTE_HANDLERS:
             codes = documented_codes(self.openapi, key)
-            if key in {("GET", "/healthz"), ("GET", "/v1/scheduling")}:
+            # Liveness is the one route that reaches neither the store nor the
+            # issuer's key material. Every other route reaches at least one of
+            # them, and an outage in either is answered with a retry.
+            if key == ("GET", "/healthz"):
                 self.assertNotIn("service.unavailable", codes, key)
             else:
                 self.assertIn("service.unavailable", codes, key)
@@ -342,12 +350,14 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertNotIn("policy.changed", codes)
         self.assertIn("never by the policy revision", operation(self.openapi, key)["description"])
 
-    def test_a_reschedule_answers_a_moved_policy_but_never_a_failed_precondition(self) -> None:
+    def test_a_reschedule_answers_a_moved_policy_but_never_an_absent_offering(self) -> None:
+        # A reschedule resolves its offering from the appointment rather than
+        # from the caller, so there is no caller-named offering to be absent.
         key = ("POST", "/v1/appointments/{appointment_id}/reschedule")
         codes = documented_codes(self.openapi, key)
         self.assertIn("policy.changed", codes)
         self.assertIn("revision.mismatch", codes)
-        self.assertNotIn("precondition.failed", codes)
+        self.assertNotIn("request.not-found", codes)
 
     def test_only_a_confirming_create_answers_an_expired_hold(self) -> None:
         expected = {("POST", "/v1/appointments")}
@@ -358,7 +368,11 @@ class GeneratedOpenApiTests(unittest.TestCase):
                 key,
             )
 
-    def test_only_availability_answers_an_unknown_offering_as_a_failed_precondition(self) -> None:
+    def test_only_an_offering_the_caller_names_can_be_answered_as_absent(self) -> None:
+        # The four operations that resolve a caller-named offering against the
+        # deployed policy. Everywhere else request.not-found would conceal an
+        # owned record rather than name an absence the offering listing
+        # already discloses.
         expected = {
             ("GET", "/v1/availability"),
             ("GET", "/v1/availability/explain"),
@@ -368,7 +382,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         for key in GENERATOR.ROUTE_HANDLERS:
             self.assertEqual(
                 key in expected,
-                "precondition.failed" in documented_codes(self.openapi, key),
+                "request.not-found" in documented_codes(self.openapi, key),
                 key,
             )
 
@@ -578,7 +592,7 @@ class GeneratedOpenApiTests(unittest.TestCase):
         self.assertEqual({"hold", "admission"}, set(create["properties"]))
         self.assertEqual(1, create["minProperties"])
         self.assertIn("Exactly one of hold or admission", create["description"])
-        self.assertIn("Both, or neither, is precondition.failed", create["description"])
+        self.assertIn("Both, or neither, is request.invalid", create["description"])
 
     def test_the_documented_bounds_are_the_rust_ones(self) -> None:
         naming = GENERATOR.production_source(ROOT, GENERATOR.NAMING_SOURCE)
