@@ -133,11 +133,52 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 struct Fixture {
     http: Router,
     store: PostgresStore,
+    /// A session on the test's own schema, for the facts operator tooling
+    /// owns and for the rows a test needs to observe or hold directly.
+    admin: tokio_postgres::Client,
     revision: u64,
     /// A standing reader: the reads scope, no task grant.
     reader: String,
     /// The booking agent: reads and explain scopes plus the full task grant.
     agent: String,
+}
+
+/// Drive one request through the router. The free function takes the router
+/// by value so a test can hold two requests in flight at once.
+async fn send(
+    http: Router,
+    method: String,
+    uri: String,
+    token: String,
+    idempotency: Option<String>,
+    body: Option<Value>,
+) -> (StatusCode, Value) {
+    let mut builder = Request::builder()
+        .method(method.as_str())
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json");
+    if let Some(key) = idempotency {
+        builder = builder.header("idempotency-key", key);
+    }
+    let body = match body {
+        Some(value) => Body::from(value.to_string()),
+        None => Body::empty(),
+    };
+    let response = http
+        .oneshot(builder.body(body).expect("a well-formed test request"))
+        .await
+        .expect("an in-process request always answers");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), 1 << 20)
+        .await
+        .expect("a bounded test body");
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("a JSON test body")
+    };
+    (status, value)
 }
 
 impl Fixture {
@@ -149,34 +190,15 @@ impl Fixture {
         idempotency: Option<&str>,
         body: Option<Value>,
     ) -> (StatusCode, Value) {
-        let mut builder = Request::builder()
-            .method(method)
-            .uri(uri)
-            .header("authorization", format!("Bearer {token}"))
-            .header("content-type", "application/json");
-        if let Some(key) = idempotency {
-            builder = builder.header("idempotency-key", key);
-        }
-        let body = match body {
-            Some(value) => Body::from(value.to_string()),
-            None => Body::empty(),
-        };
-        let response = self
-            .http
-            .clone()
-            .oneshot(builder.body(body).expect("a well-formed test request"))
-            .await
-            .expect("an in-process request always answers");
-        let status = response.status();
-        let bytes = to_bytes(response.into_body(), 1 << 20)
-            .await
-            .expect("a bounded test body");
-        let value = if bytes.is_empty() {
-            Value::Null
-        } else {
-            serde_json::from_slice(&bytes).expect("a JSON test body")
-        };
-        (status, value)
+        send(
+            self.http.clone(),
+            method.to_owned(),
+            uri.to_owned(),
+            token.to_owned(),
+            idempotency.map(str::to_owned),
+            body,
+        )
+        .await
     }
 
     async fn get(&self, uri: &str, token: &str) -> (StatusCode, Value) {
@@ -299,6 +321,7 @@ async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
     Fixture {
         http,
         store,
+        admin,
         revision: u64::try_from(revision).expect("a bounded policy revision"),
         reader: reader_token(),
         agent: agent_token(),
@@ -308,6 +331,7 @@ async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
 fn authenticator() -> SchedulingAuthenticator {
     let oidc = OidcConfig {
         allowed_clients: vec![CLIENT.to_owned()],
+        assertion_issuers: std::collections::BTreeMap::new(),
         issuer: ISSUER.to_owned(),
         audience: AUDIENCE.to_owned(),
         jwks_uri: None,
@@ -1280,4 +1304,61 @@ async fn an_idempotency_key_replays_refuses_a_reuse_and_expires_into_a_refusal()
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["state"], "confirmed");
     assert_eq!(moment(&fetched, "start"), first);
+}
+
+/// Two writers reaching the same idempotency key at once: one commits, and
+/// the loser is told the key is already spoken for instead of being told the
+/// service is unavailable. The loser's whole transaction rolls back, so the
+/// slot it was reaching for stays free.
+#[tokio::test]
+async fn a_concurrent_writer_of_one_idempotency_key_is_refused_not_failed() {
+    let fx = fixture().await;
+    let (first, second) = first_overlapping_pair(&fx, OFFERING, 90, 260).await;
+    let (status, _) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "race-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // Another writer under the caller's own identity claims "race-2" and has
+    // not committed yet, so the request below reads no stored attempt and
+    // only meets the key at the moment it writes its own.
+    fx.admin
+        .batch_execute(
+            "BEGIN; \
+             INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
+             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
+             SELECT gen_random_uuid(), actor_issuer, actor_subject, scope, 'race-2', \
+             'a-different-request', state, status_code, receipt, expires_at \
+             FROM scheduling_attempts WHERE idempotency_key = 'race-1'",
+        )
+        .await
+        .expect("hold the idempotency key from another writer");
+
+    let contender = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("race-2".to_owned()),
+        Some(json!({"hold": null, "admission": admission(&fx, OFFERING, second)})),
+    ));
+    // The contender runs to the point where it writes its attempt and waits
+    // there on the key; releasing the other writer decides the race.
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    fx.admin
+        .batch_execute("COMMIT")
+        .await
+        .expect("release the held idempotency key");
+    let (status, problem) = contender.await.expect("the contending request answers");
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "idempotency.key-reused");
+
+    // Losing the key decided nothing: the slot the contender reached for is
+    // still offered.
+    assert!(slot_offered(&fx, OFFERING, 90, 260, second).await);
 }
