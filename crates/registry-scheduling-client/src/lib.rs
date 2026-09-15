@@ -15,11 +15,12 @@
 //! Scheduling accepts. The client never retains the token, follows
 //! redirects, or retries a mutation. Mutating calls carry a caller-supplied
 //! idempotency key, validated against the pinned bound before any network
-//! input or output. Responses are read under a bounded byte ceiling, the
-//! core documents themselves refuse unknown fields, and every failure lands
+//! input or output. Responses are read under a bounded byte ceiling, the core
+//! answer documents tolerate a member a later deployment added while the
+//! request documents the runtime reads refuse one, and every failure lands
 //! in one of three named shapes: a caller-side request defect, a transport
-//! failure, or a protocol failure, with exactly validated product problems
-//! surfaced as their typed code.
+//! failure, or a protocol failure, with validated product problems surfaced
+//! as their typed code.
 //!
 //! Re-exports are flat, so a caller names a document, a route constant, or a
 //! vocabulary entry through this crate exactly as the core spells it.
