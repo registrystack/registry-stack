@@ -19,8 +19,7 @@ use registry_platform_oidc::{
 };
 use registry_scheduling_core::{
     parse_policy_yaml, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
-    SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND, SCHEDULING_RUNTIME_API_VERSION,
-    SCHEDULING_RUNTIME_KIND,
+    SCHEDULING_RUNTIME_API_VERSION, SCHEDULING_RUNTIME_KIND,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -68,6 +67,17 @@ pub(crate) fn describe_secret_failure(
 
 const MAXIMUM_POLICY_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
+
+/// apiVersion of the package manifest written beside the authored policy.
+///
+/// The manifest names a package identity; the authored policy names a policy.
+/// They are two documents with two readers, so they carry two names and
+/// neither reader accepts the other's document.
+pub const SCHEDULING_PACKAGE_MANIFEST_API_VERSION: &str =
+    "registry.registrystack.org/scheduling-policy-package-manifest/v1alpha1";
+
+/// Kind of the package manifest written beside the authored policy.
+pub const SCHEDULING_PACKAGE_MANIFEST_KIND: &str = "SchedulingPolicyPackageManifest";
 
 /// The default number of days a stored idempotency receipt is replayable
 /// before the retention sweep erases it. The default is a floor, not a
@@ -354,8 +364,8 @@ impl PolicyPackageManifest {
             bytes: u64::try_from(bytes.len()).map_err(|_| PolicyPackageError::Invalid)?,
         }];
         Ok(Self {
-            api_version: SCHEDULING_POLICY_API_VERSION.to_owned(),
-            kind: SCHEDULING_POLICY_KIND.to_owned(),
+            api_version: SCHEDULING_PACKAGE_MANIFEST_API_VERSION.to_owned(),
+            kind: SCHEDULING_PACKAGE_MANIFEST_KIND.to_owned(),
             policy_digest: package_digest(&files)?,
             files,
         })
@@ -404,8 +414,8 @@ pub fn verify_policy_package(
 
 fn package_digest(files: &[PolicyPackageFile]) -> Result<String, PolicyPackageError> {
     let identity = serde_json::json!({
-        "apiVersion": SCHEDULING_POLICY_API_VERSION,
-        "kind": SCHEDULING_POLICY_KIND,
+        "apiVersion": SCHEDULING_PACKAGE_MANIFEST_API_VERSION,
+        "kind": SCHEDULING_PACKAGE_MANIFEST_KIND,
         "files": files,
     });
     let canonical = registry_platform_canonical_json::canonicalize_json(&identity)
@@ -940,6 +950,7 @@ impl RuntimeConfigError {
 mod tests {
     use super::*;
     use registry_platform_oidc::is_access_token_typ_pair;
+    use registry_scheduling_core::{SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND};
 
     const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
@@ -1250,6 +1261,45 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         assert!(message.contains("invalid type: string"), "{message}");
         assert!(message.contains("line"), "{message}");
         assert!(message.contains("column"), "{message}");
+    }
+
+    // The package manifest and the policy it identifies are two documents
+    // with two readers: the manifest is verified by the runtime at startup,
+    // the policy is parsed by the authoring grammar. A reader that accepts
+    // one must be able to refuse the other on its declared names alone.
+    #[test]
+    fn a_package_manifest_is_a_different_document_from_the_policy_it_identifies() {
+        let manifest = PolicyPackageManifest::build(POLICY).expect("the policy is packaged");
+        assert_ne!(manifest.api_version, SCHEDULING_POLICY_API_VERSION);
+        assert_ne!(manifest.kind, SCHEDULING_POLICY_KIND);
+        assert_eq!(
+            manifest.api_version,
+            SCHEDULING_PACKAGE_MANIFEST_API_VERSION
+        );
+        assert_eq!(manifest.kind, SCHEDULING_PACKAGE_MANIFEST_KIND);
+    }
+
+    // A deployment identity is only an identity if a document of another kind
+    // cannot stand in for it. The manifest is verified against its own names,
+    // so an authored policy's names never carry a package identity.
+    #[test]
+    fn a_manifest_wearing_the_authored_policy_names_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let manifest = PolicyPackageManifest::build(POLICY).expect("the policy is packaged");
+        let mut document = serde_json::to_value(&manifest).unwrap();
+        document["apiVersion"] = serde_json::json!(SCHEDULING_POLICY_API_VERSION);
+        document["kind"] = serde_json::json!(SCHEDULING_POLICY_KIND);
+        std::fs::write(
+            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&document).unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_policy_package(&package.join(AUTHORED_POLICY_FILE), POLICY),
+            Err(PolicyPackageError::Invalid)
+        ));
     }
 
     #[test]
