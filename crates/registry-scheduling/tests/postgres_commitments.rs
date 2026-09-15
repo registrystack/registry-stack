@@ -1929,3 +1929,66 @@ async fn the_claim_ledger_bounds_a_caller_chosen_duplicate_key() {
         "the ledger stores a duplicate key of any length the body ceiling allows"
     );
 }
+
+#[tokio::test]
+async fn an_unknown_offering_and_a_malformed_body_answer_their_own_codes() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let absent = "registry-update-90";
+
+    // An offering the deployed policy does not publish is not a precondition
+    // the caller can satisfy by reloading: it does not exist.
+    let (status, problem) = fx
+        .get(&availability_uri(absent, 300, 440), &fx.reader)
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "request.not-found");
+
+    let (status, problem) = fx
+        .get(
+            &format!(
+                "/v1/availability/explain?offering={absent}&start={}",
+                stamp(slot)
+            ),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "request.not-found");
+
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "absent-hold",
+            admission(&fx, absent, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "request.not-found");
+
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "absent-appointment",
+            json!({"hold": null, "admission": admission(&fx, absent, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(problem["code"], "request.not-found");
+
+    // A create names exactly one of a hold and an admission. Both, neither,
+    // or a hold that is not an identifier are all unreadable requests.
+    for body in [
+        json!({"hold": Uuid::new_v4().to_string(), "admission": admission(&fx, OFFERING, slot)}),
+        json!({"hold": null, "admission": null}),
+        json!({"hold": "not-an-identifier", "admission": null}),
+    ] {
+        let (status, problem) = fx
+            .post("/v1/appointments", &fx.agent, "malformed", body)
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(problem["code"], "request.invalid");
+    }
+}
