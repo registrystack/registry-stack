@@ -753,7 +753,7 @@ impl PostgresStore {
         request: &registry_scheduling_core::AdmissionRequest,
         ttl_minutes: u32,
         max_per_caller: u32,
-        commitment: Commitment<'_>,
+        mut commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -772,6 +772,7 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
+        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         if transaction
             .active_holds_by_caller(commitment.actor, commitment.now)
@@ -844,7 +845,7 @@ impl PostgresStore {
         offering: &registry_scheduling_core::OfferingPolicy,
         supply: &SupplyContext<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
-        commitment: Commitment<'_>,
+        mut commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -863,6 +864,7 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
+        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
         let appointment_id = Uuid::new_v4();
@@ -936,7 +938,7 @@ impl PostgresStore {
         hold_id: Uuid,
         offering: &registry_scheduling_core::OfferingPolicy,
         supply: &SupplyContext<'_>,
-        commitment: Commitment<'_>,
+        mut commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("hold:{hold_id}:confirm");
         let mut client = self.client().await?;
@@ -956,6 +958,7 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
+        commitment.policy_revision = current_policy_revision(&transaction).await?;
         // The snapshot is read under the lock for serialization order, but
         // admission is not re-evaluated: the hold's own reservation transfers
         // to the booking in this same transaction, so capacity does not
@@ -1125,7 +1128,7 @@ impl PostgresStore {
         supply: &SupplyContext<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         observed_revision: u64,
-        commitment: Commitment<'_>,
+        mut commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("appointment:{appointment_id}:reschedule");
         let mut client = self.client().await?;
@@ -1145,6 +1148,7 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
+        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         let appointment = transaction
             .claim_in_transaction(appointment_id)
@@ -1804,6 +1808,28 @@ fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
         duplicate_key: hold.duplicate_key.clone(),
         expires_at: hold.hold_expires_at,
     }
+}
+
+/// The policy revision the deployment is published under, read inside the
+/// commitment's own transaction. A commitment is admitted against the stored
+/// revision, never against one cached when the process started: operator
+/// tooling and a rolling deploy both move it under a running process, and a
+/// claim written under the cached number would name a policy that no longer
+/// stands.
+///
+/// The share lock holds it still for the life of the transaction, so a
+/// policy published concurrently waits behind the commitments already in
+/// flight instead of moving under them.
+async fn current_policy_revision(
+    transaction: &deadpool_postgres::Transaction<'_>,
+) -> Result<i64, StoreError> {
+    let row = transaction
+        .query_one(
+            "SELECT policy_revision FROM scheduling_meta WHERE singleton FOR SHARE",
+            &[],
+        )
+        .await?;
+    Ok(row.get(0))
 }
 
 /// Replay a stored attempt: the same key with a different payload is

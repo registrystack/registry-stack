@@ -1362,3 +1362,66 @@ async fn a_concurrent_writer_of_one_idempotency_key_is_refused_not_failed() {
     // still offered.
     assert!(slot_offered(&fx, OFFERING, 90, 260, second).await);
 }
+
+/// The revision a commitment is admitted under is the one the deployment
+/// stores, not the one this process read when it started. Operator tooling
+/// and a rolling deploy both move the stored revision under a running
+/// process, and a caller holding the older number is told the policy moved
+/// rather than having a claim written under a revision that no longer
+/// stands.
+#[tokio::test]
+async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, hold) = fx
+        .post(
+            "/v1/holds",
+            &fx.agent,
+            "moved-hold",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let hold_id = hold["holdId"].as_str().unwrap().to_owned();
+
+    // Operator tooling publishes a different policy against the same
+    // deployment, exactly as `schedulingctl` does beside a running runtime.
+    let moved = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            "a-policy-this-process-never-loaded",
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &[],
+        )
+        .await
+        .expect("publish a second policy revision");
+    assert_eq!(moved, i64::try_from(fx.revision).unwrap() + 1);
+
+    // The hold was admitted under the revision that has now moved, so
+    // confirming it is refused rather than booked under a stale policy.
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "moved-confirm",
+            json!({"hold": hold_id, "admission": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(problem["code"], "policy.changed");
+
+    // So is a direct create carrying the revision availability advertised
+    // before the policy moved.
+    let other = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "moved-create",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, other)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+    assert_eq!(problem["code"], "policy.changed");
+}
