@@ -46,8 +46,11 @@ caller holding anything back.
 
 Observed revisions travel in request bodies, not in an `If-Match` header: an admission names the
 `policyRevision` it resolved the offering under, and a reschedule or cancel names the appointment
-revision it acted on. A stale revision is refused with `policy.changed`, `revision.mismatch`, or
-`precondition.failed`, and the caller reloads the catalogue and tries again.
+revision it acted on. A stale revision is refused with `policy.changed` or `revision.mismatch`, and
+the caller reloads the catalogue and tries again. An offering the deployed policy does not publish
+is a separate answer, `request.not-found`: it does not exist, so no reload produces it, and the
+offering listing every caller holding the reads scope can read is where the published ones are
+named.
 
 {/* Evidence: crates/registry-scheduling-core/src/model.rs, AdmissionRequest;
     crates/registry-scheduling-core/src/admission.rs, check_duplicate();
