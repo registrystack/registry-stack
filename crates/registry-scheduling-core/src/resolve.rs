@@ -34,6 +34,17 @@ pub enum ResolveError {
 
 /// Expand every authored opening at one location into concrete UTC intervals,
 /// layering the location's dated exceptions and each opening's holiday set.
+///
+/// The result is the canonical published schedule: sorted, disjoint, and with
+/// intervals that overlap or meet joined into one, so authoring order is
+/// never observable. That matters twice over, because both answers an
+/// evaluator reads from this list are properties of a single interval: an
+/// appointment is served when one interval covers it, and its start grid is
+/// anchored to the start of the interval that covers it. Concatenating each
+/// pattern's own expansion would let the order two openings happen to be
+/// listed in decide which starts a caller may book, and would refuse an
+/// appointment running across two openings the location publishes as
+/// continuous.
 pub fn location_open_intervals(
     policy: &SchedulingPolicy,
     location_id: &str,
@@ -70,7 +81,24 @@ pub fn location_open_intervals(
         };
         all.extend(expand_weekly_openings(&pattern, exceptions, &revision)?);
     }
-    Ok(all)
+    Ok(merge_intervals(all))
+}
+
+/// Sort intervals and join every pair that overlaps or meets into one.
+///
+/// Meeting counts as continuous: a location whose morning pattern ends where
+/// its afternoon pattern begins never closed between them, and an hour of that
+/// day is one published hour however many patterns authored it.
+fn merge_intervals(mut intervals: Vec<CalendarInterval>) -> Vec<CalendarInterval> {
+    intervals.sort_by_key(|interval| (interval.start, interval.end));
+    let mut merged: Vec<CalendarInterval> = Vec::with_capacity(intervals.len());
+    for interval in intervals {
+        match merged.last_mut() {
+            Some(last) if interval.start <= last.end => last.end = last.end.max(interval.end),
+            _ => merged.push(interval),
+        }
+    }
+    merged
 }
 
 /// Whether the union of `intervals` covers the whole span `[start, end)`.
@@ -121,4 +149,160 @@ pub fn location_closure_intervals(
         }
     }
     Ok(closures)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::policy::parse_policy_yaml;
+
+    fn opening(id: &str, start: &str, end: &str) -> String {
+        format!(
+            "  - id: {id}\n    location: north-counter\n    holidaySet: office-holidays\n    weekdays: [mon]\n    startTime: \"{start}\"\n    endTime: \"{end}\"\n    effectiveFrom: \"2026-10-05\"\n    effectiveUntil: \"2026-10-05\"\n    because: Counter opening hours reviewed by the office manager.\n"
+        )
+    }
+
+    fn policy_with(openings: &str) -> SchedulingPolicy {
+        let text = format!(
+            r#"
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: registry-updates
+  version: 1
+services:
+  - id: registry-update
+    label: Registry record update
+offerings:
+  - id: registry-update-30
+    service: registry-update
+    label: 30-minute counter update
+    mode: exact-time
+    location: north-counter
+    because: A 30-minute update at an interchangeable station.
+    exactTime:
+      durationMinutes: 30
+      bufferBeforeMinutes: 0
+      bufferAfterMinutes: 0
+      leadTimeMinutes: 60
+      horizonDays: 30
+      pool: update-stations
+      startIncrementMinutes: 30
+      maxRecipients: 1
+    cancellationCutoffMinutes: 240
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+    dates: []
+openings:
+{openings}windows: []
+holdPolicy:
+  ttlMinutes: 5
+  maxPerCaller: 3
+  because: Holds are short because counter capacity is scarce.
+"#
+        );
+        parse_policy_yaml(&text).expect("the policy parses")
+    }
+
+    fn resolve(policy: &SchedulingPolicy) -> Vec<CalendarInterval> {
+        location_open_intervals(policy, "north-counter", "Asia/Bangkok", &[])
+            .expect("the openings expand")
+    }
+
+    fn instant(value: &str) -> DateTime<Utc> {
+        value.parse().expect("an RFC 3339 instant")
+    }
+
+    /// The start grid an offering publishes is anchored to the opening that
+    /// covers the request, so the order two openings happen to be authored in
+    /// may never decide which starts a caller can book.
+    #[test]
+    fn overlapping_openings_resolve_the_same_whichever_order_they_are_authored_in() {
+        let early_first = policy_with(&format!(
+            "{}{}",
+            opening("early", "09:00", "17:00"),
+            opening("late", "09:10", "17:00")
+        ));
+        let late_first = policy_with(&format!(
+            "{}{}",
+            opening("late", "09:10", "17:00"),
+            opening("early", "09:00", "17:00")
+        ));
+        assert_eq!(resolve(&early_first), resolve(&late_first));
+        // One covering interval anchored at the earliest published start.
+        assert_eq!(
+            resolve(&early_first),
+            vec![CalendarInterval {
+                start: instant("2026-10-05T02:00:00Z"),
+                end: instant("2026-10-05T10:00:00Z"),
+            }]
+        );
+    }
+
+    /// A location that opens straight from one authored pattern into the next
+    /// never closed between them, so the two resolve into one continuous
+    /// interval and an appointment may run across the join.
+    #[test]
+    fn abutting_openings_resolve_into_one_continuous_interval() {
+        let policy = policy_with(&format!(
+            "{}{}",
+            opening("morning", "09:00", "12:30"),
+            opening("afternoon", "12:30", "17:00")
+        ));
+        assert_eq!(
+            resolve(&policy),
+            vec![CalendarInterval {
+                start: instant("2026-10-05T02:00:00Z"),
+                end: instant("2026-10-05T10:00:00Z"),
+            }]
+        );
+    }
+
+    /// Resolution answers the coverage question once. An evaluator asking for
+    /// the single interval that covers an appointment and a fixture asking
+    /// whether the union covers it read the same published schedule, so a span
+    /// the union covers always lies inside one resolved interval.
+    #[test]
+    fn a_covered_span_always_lies_inside_one_resolved_interval() {
+        let policy = policy_with(&format!(
+            "{}{}",
+            opening("morning", "09:00", "12:30"),
+            opening("afternoon", "12:30", "17:00")
+        ));
+        let open = resolve(&policy);
+        // 12:15 to 12:45 local Bangkok runs across the join between the two
+        // authored patterns.
+        let start = instant("2026-10-05T05:15:00Z");
+        let end = instant("2026-10-05T05:45:00Z");
+        assert!(covers_span(&open, start, end));
+        assert!(open
+            .iter()
+            .any(|interval| interval.start <= start && end <= interval.end));
+
+        // A span reaching past the published hours is covered by neither.
+        let past_close = instant("2026-10-05T10:15:00Z");
+        assert!(!covers_span(&open, start, past_close));
+        assert!(!open
+            .iter()
+            .any(|interval| interval.start <= start && past_close <= interval.end));
+    }
+
+    /// Two openings the day apart stay two intervals: merging joins what a
+    /// location publishes as continuous, never what it publishes as separate.
+    #[test]
+    fn openings_that_do_not_meet_stay_separate_intervals() {
+        let policy = policy_with(&format!(
+            "{}{}",
+            opening("morning", "09:00", "12:00"),
+            opening("afternoon", "13:00", "17:00")
+        ));
+        let open = resolve(&policy);
+        assert_eq!(open.len(), 2);
+        assert_eq!(open[0].end, instant("2026-10-05T05:00:00Z"));
+        assert_eq!(open[1].start, instant("2026-10-05T06:00:00Z"));
+    }
 }
