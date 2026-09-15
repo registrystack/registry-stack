@@ -119,7 +119,7 @@ impl SchedulingAuthenticator {
         }
         let kind = actor_kind(&verified.claims, &self.claim_names)
             .map_err(|_| AuthenticationError::Claims)?;
-        let grant = grant_claims(&verified.claims, &self.claim_names, unix_now())
+        let grant = grant_claims(&verified.claims, &self.claim_names, unix_now()?)
             .map_err(|_| AuthenticationError::Claims)?;
         if let Some(grant) = &grant {
             grant
@@ -207,11 +207,28 @@ fn verifier_failure(error: &OidcError) -> AuthenticationError {
 
 /// The observation of now the grant's expiry is judged against, in the same
 /// units the token's own `exp` carries.
-fn unix_now() -> u64 {
-    SystemTime::now()
+fn unix_now() -> Result<u64, AuthenticationError> {
+    unix_seconds(SystemTime::now())
+}
+
+/// Read one clock observation as seconds since the epoch.
+///
+/// A reading that cannot be taken is refused rather than substituted. Epoch
+/// zero is before every `exp` a credential carries, so falling back to it
+/// would pass every expiry check at once: an expired grant would keep
+/// committing capacity for as long as the clock stayed unreadable, and the
+/// deployment would be told nothing. Nothing has been learned about the
+/// credential either, so the answer is the outage answer, not a challenge.
+fn unix_seconds(observed: SystemTime) -> Result<u64, AuthenticationError> {
+    observed
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
-        .unwrap_or_default()
+        .map_err(|_| {
+            tracing::error!(
+                "the system clock reads before the Unix epoch; refusing to judge an expiry"
+            );
+            AuthenticationError::Unavailable
+        })
 }
 
 #[cfg(test)]
@@ -223,6 +240,7 @@ mod tests {
     use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{ActorKind, JwksFetcherConfig, ASSERTION_ISSUER_CLAIM};
     use serde_json::json;
+    use std::time::Duration;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -506,6 +524,43 @@ mod tests {
             authenticator_with(declared).authenticate_read(&other).await,
             Err(AuthenticationError::Refused)
         ));
+    }
+
+    #[test]
+    fn an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it() {
+        // What the fallback reading would have meant. Epoch zero is before
+        // every `exp` a credential carries, so a grant that expired an hour
+        // ago still reads as live, and would keep committing capacity for as
+        // long as the clock stayed unreadable.
+        let names = ClaimNames::default();
+        let now = Utc::now().timestamp();
+        let mut expired = grant_claims_value(AUDIENCE);
+        expired
+            .as_object_mut()
+            .unwrap()
+            .insert("registry_grant_exp".to_owned(), json!(now - 3_600));
+        let mut value = merged("scheduling-read", expired);
+        let object = value.as_object_mut().unwrap();
+        object.insert("iss".to_owned(), json!(ISSUER));
+        object.insert("aud".to_owned(), json!(AUDIENCE));
+        object.insert("exp".to_owned(), json!(now + 300));
+        let claims: registry_platform_oidc::Claims = serde_json::from_value(value).unwrap();
+        assert!(
+            grant_claims(&claims, &names, 0).is_ok(),
+            "epoch zero would have passed a grant that expired an hour ago"
+        );
+        assert!(grant_claims(&claims, &names, now as u64).is_err());
+
+        // So a reading that cannot be taken is refused outright. The caller is
+        // told to come back; it is never told its credential is good.
+        assert_eq!(
+            unix_seconds(UNIX_EPOCH + Duration::from_secs(1_700_000_000)),
+            Ok(1_700_000_000)
+        );
+        assert_eq!(
+            unix_seconds(UNIX_EPOCH - Duration::from_secs(1)),
+            Err(AuthenticationError::Unavailable)
+        );
     }
 
     #[tokio::test]
