@@ -779,7 +779,7 @@ impl PostgresStore {
         {
             return Err(CommitError::HoldCeiling);
         }
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment)?;
+        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
         let expires_at = commitment
             .now
             .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
@@ -863,7 +863,7 @@ impl PostgresStore {
         }
         check_grant_current(&commitment)?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment)?;
+        let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
         let appointment_id = Uuid::new_v4();
         let claim = transaction
             .insert_claim(&NewClaim {
@@ -1164,7 +1164,18 @@ impl PostgresStore {
         if appointment.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
         }
-        let admission = evaluate(offering, supply, request, &snapshot, &commitment)?;
+        // The appointment's own allocation is the exclusion: a reschedule
+        // never competes with the booking it moves. It is read from the row
+        // this transaction locked, never from the request.
+        let own_claim_id = appointment.claim_id.to_string();
+        let admission = evaluate(
+            offering,
+            supply,
+            request,
+            &snapshot,
+            &commitment,
+            Some(&own_claim_id),
+        )?;
         let next_revision = appointment.revision + 1;
         transaction
             .move_claim(&ClaimMove {
@@ -1717,12 +1728,18 @@ fn check_grant_current(commitment: &Commitment<'_>) -> Result<(), CommitError> {
 }
 
 /// The in-memory evaluator call, step 4.
+///
+/// `exclude` is the one standing claim this commitment replaces, supplied
+/// only by the reschedule transaction from the appointment row it locks. A
+/// create path passes `None`: the wire request cannot carry an exclusion, so
+/// no caller can name another party's allocation out of the check.
 fn evaluate(
     offering: &registry_scheduling_core::OfferingPolicy,
     supply: &SupplyContext<'_>,
     request: &registry_scheduling_core::AdmissionRequest,
     snapshot: &LedgerSnapshot,
     commitment: &Commitment<'_>,
+    exclude: Option<&str>,
 ) -> Result<registry_scheduling_core::Admission, AdmissionRefusal> {
     match supply {
         SupplyContext::ExactTime {
@@ -1742,6 +1759,7 @@ fn evaluate(
                 now: commitment.now,
             },
             request,
+            exclude,
         ),
         SupplyContext::Window {
             window,
@@ -1758,6 +1776,7 @@ fn evaluate(
                 now: commitment.now,
             },
             request,
+            exclude,
         ),
     }
 }

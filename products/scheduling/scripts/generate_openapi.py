@@ -457,7 +457,6 @@ def schemas(problem_entries: list[dict]) -> dict:
             "windowRevision": nullable(revision),
             "capabilities": array(text),
             "prerequisites": array(text),
-            "rescheduleOf": nullable(text),
         },
         ["offering", "start", "party", "policyRevision", "capabilities", "prerequisites"],
     )
