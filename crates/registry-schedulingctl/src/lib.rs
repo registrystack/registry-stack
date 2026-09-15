@@ -161,12 +161,19 @@ where
     let format = cli.format;
     let deny_findings = matches!(&cli.command, Command::Check(args) if args.deny_findings);
     match run(cli) {
-        Ok(report) => {
+        Ok(mut report) => {
+            // The exit code already tells the caller whether this refused;
+            // the JSON must agree instead of reporting "ok": true underneath
+            // a nonzero exit.
+            let refusal = report_is_refusal(&report, deny_findings);
+            if refusal {
+                report["ok"] = json!(false);
+            }
             let outcome = write_success(&report, format, stdout, stderr);
             if outcome != ExitCode::SUCCESS {
                 return outcome;
             }
-            if report_is_refusal(&report, deny_findings) {
+            if refusal {
                 ExitCode::from(DOMAIN_REFUSAL_EXIT)
             } else {
                 ExitCode::SUCCESS
@@ -564,6 +571,8 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "incomplete");
+        // Findings alone, without --deny-findings, are not a refusal.
+        assert_eq!(report["ok"], true);
         assert!(report["findings"]
             .as_array()
             .unwrap()
@@ -577,6 +586,8 @@ mod tests {
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "incomplete");
+        // The exit code already says this refused; the JSON must agree.
+        assert_eq!(report["ok"], false);
 
         let (_root, clean) = initialized("standalone-exact-time");
         let (exit, report, stderr) =
@@ -584,6 +595,7 @@ mod tests {
         assert_eq!(exit, ExitCode::SUCCESS);
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "complete");
+        assert_eq!(report["ok"], true);
     }
 
     #[test]
@@ -599,6 +611,8 @@ mod tests {
         let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
         assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
         assert!(stderr.is_empty());
+        // The exit code already says this refused; the JSON must agree.
+        assert_eq!(report["ok"], false);
         let fixtures = report["fixtures"].as_array().unwrap();
         let counter = fixtures
             .iter()
