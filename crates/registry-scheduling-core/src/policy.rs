@@ -827,11 +827,12 @@ pub struct CapacityReduction {
 /// A normal capacity reduction that would leave confirmed bookings and live
 /// holds above the proposed capacity is rejected: it comes back here as a
 /// finding with the deficit, never as a successful validation. Both levels of
-/// published capacity are assessed: the window total, and each channel
-/// subquota, which is its own committed slice a proposal may strand even when
-/// the total is unchanged. An emergency reduction is a different operation
-/// entirely, recorded as an incident with its affected bookings, and does not
-/// pass through this assessment.
+/// published capacity are assessed on both sides of the proposal: the window
+/// total, and each channel subquota, which is its own committed slice a
+/// proposal may strand by reducing it, by dropping it, or by introducing it
+/// below what the channel already holds. An emergency reduction is a different
+/// operation entirely, recorded as an incident with its affected bookings, and
+/// does not pass through this assessment.
 pub fn assess_publication_impact(
     current: &SchedulingPolicy,
     proposed: &SchedulingPolicy,
@@ -877,6 +878,35 @@ pub fn assess_publication_impact(
                     committed_units: committed_channel,
                     proposed_units: proposed_subquota,
                 });
+            }
+        }
+        // A subquota that exists only in the proposal introduces a ceiling
+        // the channel never had, so the commitments it already holds are
+        // assessed against it: a slice below them strands them exactly as a
+        // reduction of an existing slice would.
+        if let Some(proposed) = proposed_window {
+            for subquota in &proposed.subquotas {
+                let already_published = window
+                    .subquotas
+                    .iter()
+                    .any(|current| current.channel == subquota.channel);
+                if already_published {
+                    continue;
+                }
+                let committed_channel = snapshot.window_units_allocated(
+                    &window.id,
+                    Some(subquota.channel.as_str()),
+                    None,
+                    now,
+                );
+                if committed_channel > subquota.units {
+                    reductions.push(CapacityReduction {
+                        window: window.id.clone(),
+                        channel: Some(subquota.channel),
+                        committed_units: committed_channel,
+                        proposed_units: subquota.units,
+                    });
+                }
             }
         }
     }
@@ -1000,7 +1030,7 @@ mod tests {
     use chrono::TimeZone as _;
 
     fn utc(hour: u32, minute: u32) -> DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 10, 5, hour, minute, 0).unwrap()
+        Utc.with_ymd_and_hms(2026, 10, 10, hour, minute, 0).unwrap()
     }
 
     pub fn minimal_exact_time_policy() -> SchedulingPolicy {
@@ -1505,6 +1535,59 @@ holdPolicy:
         let mut widened = current.clone();
         widened.windows[0].subquotas[0].units = 2;
         assert!(assess_publication_impact(&current, &widened, &snapshot, now).is_empty());
+    }
+
+    /// BL-2: a subquota that exists only in the proposal was never assessed,
+    /// so a publication could add a channel slice below what that channel
+    /// already holds and strand its commitments silently.
+    #[test]
+    fn an_added_subquota_never_strands_its_channel_at_publication() {
+        let mut current = household_window_policy();
+        current.windows[0].subquotas.clear();
+        let now = utc(6, 0);
+        let claim = LedgerClaim {
+            id: "claim-1".to_owned(),
+            supply_id: "household-morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: Some("public".to_owned()),
+            start: utc(8, 0),
+            end: utc(10, 0),
+            units: 2,
+            duplicate_key: None,
+            expires_at: None,
+        };
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![claim],
+        };
+
+        // Two public units already stand; the proposal publishes a public
+        // slice of one for the first time.
+        let mut proposal = current.clone();
+        proposal.windows[0].subquotas = vec![WindowSubquota {
+            id: "public-quota".to_owned(),
+            channel: Channel::Public,
+            units: 1,
+            because: "One public unit in the revised block.".to_owned(),
+        }];
+        assert_eq!(
+            assess_publication_impact(&current, &proposal, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: Some(Channel::Public),
+                committed_units: 2,
+                proposed_units: 1,
+            }]
+        );
+
+        // A slice that still covers what the channel holds passes.
+        let mut covered = current.clone();
+        covered.windows[0].subquotas = vec![WindowSubquota {
+            id: "public-quota".to_owned(),
+            channel: Channel::Public,
+            units: 2,
+            because: "Two public units in the revised block.".to_owned(),
+        }];
+        assert!(assess_publication_impact(&current, &covered, &snapshot, now).is_empty());
     }
 
     #[test]
