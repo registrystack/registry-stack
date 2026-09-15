@@ -82,6 +82,26 @@ token, and one of three authority profiles decides what it must carry; the
 published reference is
 [Registry Scheduling API](https://docs.registrystack.org/reference/apis/registry-scheduling/).
 
+## Local development
+
+There is no `schedulingctl dev` verb that stands up a runtime instance
+directly; this is a tracked exclusion, not an oversight. Local development
+runs the demo instead:
+
+```sh
+products/scheduling/demo/run.sh
+```
+
+which provisions a disposable TLS-enabled PostgreSQL database, a throwaway
+signing key and JWKS, migrates and applies example environment records, and
+serves the runtime on loopback (see `products/scheduling/demo/README.md`). A
+verb over that same provisioning shape does not fit as a surgical addition:
+the shape depends on Docker container lifecycle, TLS certificate generation,
+and JWT signing infrastructure the demo carries in
+`products/scheduling/demo/support/demo.py`, and a resident process supervisor
+over a runtime instance is a project-sized effort on its own, comparable in
+scope to `crates/registry-evidencectl/src/dev.rs`.
+
 ## Task grants
 
 Reads take a scope. Every commitment takes a task grant whose scheduling
