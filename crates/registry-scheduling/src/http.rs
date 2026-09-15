@@ -36,10 +36,11 @@ use registry_platform_httpsec::{
     request_body_limit_default, security_headers, CspBuilder, ProblemBody, TraceContext,
 };
 use registry_scheduling_core::{
-    type_uri, AdmissionRequest, CancelAppointmentRequest, CreateAppointmentRequest, ProblemCode,
-    RescheduleAppointmentRequest, APPOINTMENTS_PATH, AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH,
-    HOLDS_PATH, IDEMPOTENCY_KEY_HEADER, LOCATIONS_PATH, MAXIMUM_IDEMPOTENCY_KEY_BYTES,
-    OFFERINGS_PATH, RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
+    type_uri, valid_identifier, valid_reference, AdmissionRequest, CancelAppointmentRequest,
+    CreateAppointmentRequest, ProblemCode, RescheduleAppointmentRequest, APPOINTMENTS_PATH,
+    AVAILABILITY_EXPLAIN_PATH, AVAILABILITY_PATH, HOLDS_PATH, IDEMPOTENCY_KEY_HEADER,
+    LOCATIONS_PATH, MAXIMUM_COLLECTION_ENTRIES, MAXIMUM_IDEMPOTENCY_KEY_BYTES, OFFERINGS_PATH,
+    RESOURCES_PATH, SCHEDULING_PATH, SERVICES_PATH,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -247,6 +248,7 @@ async fn availability(
     HttpError,
 > {
     authenticate_read(&state, &headers).await?;
+    bounded_identifier(&query.offering)?;
     Ok(Json(
         state
             .service
@@ -268,6 +270,7 @@ async fn explain(
     Query(query): Query<ExplainQuery>,
 ) -> Result<Json<registry_scheduling_core::ExplainDocument>, HttpError> {
     authenticate_explain(&state, &headers).await?;
+    bounded_identifier(&query.offering)?;
     Ok(Json(
         state
             .service
@@ -283,6 +286,7 @@ async fn create_hold(
 ) -> Result<Response, HttpError> {
     let caller = authenticate_mutate(&state, &headers).await?;
     let key = idempotency_key(&headers)?;
+    bounded_admission(&request)?;
     let answer = state
         .service
         .create_hold(&caller, key, &request, Utc::now())
@@ -322,6 +326,9 @@ async fn create_appointment(
 ) -> Result<Response, HttpError> {
     let caller = authenticate_mutate(&state, &headers).await?;
     let key = idempotency_key(&headers)?;
+    if let Some(admission) = &request.admission {
+        bounded_admission(admission)?;
+    }
     let answer = state
         .service
         .create_appointment(&caller, key, &request, Utc::now())
@@ -359,6 +366,7 @@ async fn reschedule_appointment(
 ) -> Result<Response, HttpError> {
     let caller = authenticate_mutate(&state, &headers).await?;
     let key = idempotency_key(&headers)?;
+    bounded_admission(&request.admission)?;
     let answer = state
         .service
         .reschedule_appointment(&caller, appointment_id, key, &request, Utc::now())
@@ -382,6 +390,7 @@ async fn cancel_appointment(
 ) -> Result<Response, HttpError> {
     let caller = authenticate_mutate(&state, &headers).await?;
     let key = idempotency_key(&headers)?;
+    bounded_reason(request.reason.as_deref())?;
     let answer = state
         .service
         .cancel_appointment(&caller, appointment_id, key, &request, Utc::now())
@@ -498,6 +507,68 @@ fn authentication_problem(error: AuthenticationError) -> HttpError {
         // token and invite it to rotate one during an outage that is ours;
         // `service.unavailable` carries `Retry-After` instead.
         AuthenticationError::Unavailable => HttpError(ProblemCode::ServiceUnavailable),
+    }
+}
+
+/// The most octets of a cancellation reason.
+///
+/// The column the reason lands in refuses more, and a database CHECK that
+/// fires during a commitment reaches the caller as service.unavailable: the
+/// service would be reported down for a request only the caller can fix. The
+/// edge refuses the same size first, and answers request.invalid.
+const MAXIMUM_CANCELLATION_REASON_BYTES: usize = 4096;
+
+/// Bound every caller-supplied string an admission request carries.
+///
+/// All of them are stored: the ledger entry, the idempotency receipt and the
+/// audit journal keep them verbatim, so an unbounded string is an unbounded
+/// write for anyone holding a credential. The bounds are the authoring
+/// grammar's own, not new numbers: an offering and a channel are policy
+/// identifiers, a capability, a prerequisite and a duplicate key are scoped
+/// references, and a request may name no more references than a policy
+/// collection may hold. A value outside them could never have matched
+/// anything the deployment published.
+fn bounded_admission(request: &AdmissionRequest) -> Result<(), HttpError> {
+    bounded_identifier(&request.offering)?;
+    if let Some(channel) = &request.channel {
+        bounded_identifier(channel)?;
+    }
+    if let Some(duplicate_key) = &request.duplicate_key {
+        bounded_reference(duplicate_key)?;
+    }
+    bounded_references(&request.capabilities)?;
+    bounded_references(&request.prerequisites)
+}
+
+/// One policy identifier as the authored grammar admits it.
+fn bounded_identifier(value: &str) -> Result<(), HttpError> {
+    valid_identifier(value)
+        .then_some(())
+        .ok_or(HttpError(ProblemCode::RequestInvalid))
+}
+
+/// One scoped reference as the authored grammar admits it.
+fn bounded_reference(value: &str) -> Result<(), HttpError> {
+    valid_reference(value)
+        .then_some(())
+        .ok_or(HttpError(ProblemCode::RequestInvalid))
+}
+
+/// A list of scoped references, no longer than a policy collection may be.
+fn bounded_references(values: &[String]) -> Result<(), HttpError> {
+    if values.len() > MAXIMUM_COLLECTION_ENTRIES {
+        return Err(HttpError(ProblemCode::RequestInvalid));
+    }
+    values.iter().try_for_each(|value| bounded_reference(value))
+}
+
+/// The free text a cancellation may carry, bounded to what the column holds.
+fn bounded_reason(reason: Option<&str>) -> Result<(), HttpError> {
+    match reason {
+        Some(reason) if reason.len() > MAXIMUM_CANCELLATION_REASON_BYTES => {
+            Err(HttpError(ProblemCode::RequestInvalid))
+        }
+        _ => Ok(()),
     }
 }
 
@@ -628,6 +699,7 @@ mod tests {
     use axum::body::{to_bytes, Body};
     use axum::http::header::IntoHeaderName;
     use axum::http::Request;
+    use registry_scheduling_core::PartyCounts;
     use tower::ServiceExt;
 
     const TRACEPARENT: &str = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01";
@@ -922,6 +994,104 @@ mod tests {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = body_json(response).await;
         assert_eq!(body["code"], "service.unavailable");
+    }
+
+    fn admission() -> AdmissionRequest {
+        AdmissionRequest {
+            offering: "registry-update-30".to_owned(),
+            start: Utc::now(),
+            party: PartyCounts {
+                recipients: 1,
+                attendees: 1,
+            },
+            channel: None,
+            duplicate_key: None,
+            policy_revision: 1,
+            window_revision: None,
+            capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_admission_request_is_bounded_before_it_reaches_the_store() {
+        bounded_admission(&admission()).expect("an ordinary admission request passes the edge");
+
+        // Every one of these lands in the ledger, the idempotency receipt and
+        // the audit journal verbatim, so a caller with a body allowance of a
+        // megabyte could write a megabyte into each of them.
+        let oversized = [
+            AdmissionRequest {
+                offering: "o".repeat(65),
+                ..admission()
+            },
+            AdmissionRequest {
+                channel: Some("c".repeat(65)),
+                ..admission()
+            },
+            AdmissionRequest {
+                duplicate_key: Some("k".repeat(257)),
+                ..admission()
+            },
+            AdmissionRequest {
+                capabilities: vec!["c".repeat(257)],
+                ..admission()
+            },
+            AdmissionRequest {
+                prerequisites: vec!["p".repeat(257)],
+                ..admission()
+            },
+            AdmissionRequest {
+                capabilities: vec!["cap".to_owned(); MAXIMUM_COLLECTION_ENTRIES + 1],
+                ..admission()
+            },
+            AdmissionRequest {
+                prerequisites: vec!["req".to_owned(); MAXIMUM_COLLECTION_ENTRIES + 1],
+                ..admission()
+            },
+            // A reference is a stable scoped identifier, so an empty one and
+            // one carrying a control byte are both malformed.
+            AdmissionRequest {
+                duplicate_key: Some(String::new()),
+                ..admission()
+            },
+            AdmissionRequest {
+                capabilities: vec!["cap\u{7}a".to_owned()],
+                ..admission()
+            },
+        ];
+        for request in oversized {
+            assert!(
+                matches!(
+                    bounded_admission(&request),
+                    Err(HttpError(ProblemCode::RequestInvalid))
+                ),
+                "an unbounded caller string reached the store: {request:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cancellation_reason_is_bounded_below_the_column_that_stores_it() {
+        bounded_reason(None).expect("a cancellation needs no reason");
+        bounded_reason(Some(&"r".repeat(MAXIMUM_CANCELLATION_REASON_BYTES)))
+            .expect("a reason the column accepts passes the edge");
+        // Past this the column's own CHECK refuses the write, and a database
+        // refusal projects to service.unavailable: the caller would be told
+        // the service is down for a request only the caller can fix.
+        assert!(matches!(
+            bounded_reason(Some(&"r".repeat(MAXIMUM_CANCELLATION_REASON_BYTES + 1))),
+            Err(HttpError(ProblemCode::RequestInvalid))
+        ));
+    }
+
+    #[test]
+    fn a_listing_offering_is_bounded_the_same_way_a_body_is() {
+        bounded_identifier("registry-update-30").expect("an authored offering reads");
+        assert!(matches!(
+            bounded_identifier(&"o".repeat(65)),
+            Err(HttpError(ProblemCode::RequestInvalid))
+        ));
     }
 
     fn headers_with<K: IntoHeaderName>(key: K, value: &str) -> HeaderMap {
