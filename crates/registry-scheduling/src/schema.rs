@@ -23,7 +23,10 @@ use registry_scheduling_core::{
     SCHEDULING_RUNTIME_SCHEMA_ID,
 };
 
-use crate::config::RuntimeConfig;
+use crate::config::{
+    RuntimeConfig, MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT, MAXIMUM_ASSERTION_ISSUER_BYTES,
+    MAXIMUM_ASSERTION_ISSUER_CLIENTS, MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
+};
 
 const SECRET_REFERENCE_SCHEMA_PATTERN: &str =
     "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$";
@@ -88,6 +91,7 @@ fn install_runtime_constraints(schema: &mut Value) {
         );
     }
     set_jwks_document_reference_constraints(schema);
+    set_assertion_issuer_bounds(schema);
     if let Some(providers) = schema
         .get_mut("$defs")
         .and_then(|definitions| definitions.get_mut("SecretProvidersConfig"))
@@ -131,6 +135,40 @@ fn set_jwks_document_reference_constraints(schema: &mut Value) {
                 );
             }
         }
+    }
+}
+
+/// State the assertion-issuer map's authored bounds, the ones
+/// `RuntimeConfig::check` refuses a document for exceeding.
+fn set_assertion_issuer_bounds(schema: &mut Value) {
+    if let Some(property) = schema
+        .pointer_mut("/$defs/OidcConfig/properties/assertionIssuers")
+        .and_then(Value::as_object_mut)
+    {
+        property.insert(
+            "maxProperties".to_owned(),
+            Value::from(MAXIMUM_ASSERTION_ISSUER_CLIENTS),
+        );
+        property.insert(
+            "propertyNames".to_owned(),
+            serde_json::json!({
+                "minLength": 1,
+                "maxLength": MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES,
+            }),
+        );
+        property.insert(
+            "additionalProperties".to_owned(),
+            serde_json::json!({
+                "type": "array",
+                "maxItems": MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT,
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": MAXIMUM_ASSERTION_ISSUER_BYTES,
+                },
+            }),
+        );
     }
 }
 
