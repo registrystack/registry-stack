@@ -22,7 +22,7 @@ use chrono::{DateTime, Duration, Utc};
 use registry_platform_calendar::CalendarInterval;
 
 use crate::model::{AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, PoolMember};
-use crate::policy::{ExactTimeOffering, OfferingPolicy, PublishedWindow};
+use crate::policy::{Channel, ExactTimeOffering, OfferingPolicy, PublishedWindow};
 use crate::problem::ProblemCode;
 use crate::units::UnitsEvaluationError;
 
@@ -72,6 +72,8 @@ pub enum AdmissionRefusal {
     PartyCapacityInadequate,
     #[error("the party is missing required prerequisites")]
     PrerequisiteMissing { missing: Vec<String> },
+    #[error("the request names a channel the closed vocabulary or the policy does not serve")]
+    ChannelUnknown,
     #[error("no backing member carries the required capabilities")]
     CapabilityUnmatched,
     #[error("an active booking already holds this party's duplicate key")]
@@ -101,6 +103,7 @@ impl AdmissionRefusal {
             Self::LocationClosed { .. } => ProblemCode::LocationClosed,
             Self::PartyCapacityInadequate { .. } => ProblemCode::PartyCapacityInadequate,
             Self::PrerequisiteMissing { .. } => ProblemCode::PrerequisiteMissing,
+            Self::ChannelUnknown => ProblemCode::RequestUnprocessable,
             Self::CapabilityUnmatched { .. } => ProblemCode::CapabilityUnmatched,
             Self::DuplicateActiveBooking { .. } => ProblemCode::BookingDuplicateActive,
             Self::DuplicateKeyRequired { .. } => ProblemCode::PreconditionRequired,
@@ -145,6 +148,12 @@ pub struct WindowContext<'a> {
     pub horizon_days: u32,
     pub snapshot: &'a LedgerSnapshot,
     pub policy_revision: u64,
+    /// The channels the policy declares it serves. The channel vocabulary
+    /// itself is closed; a declaration narrows it to the served subset, and
+    /// a request naming a channel outside either is refused before any
+    /// capacity is counted. An empty slice declares nothing beyond the
+    /// vocabulary.
+    pub channels: &'a [Channel],
     pub now: DateTime<Utc>,
 }
 
@@ -322,6 +331,7 @@ pub fn evaluate_window_admission(
         horizon_days,
         snapshot,
         policy_revision,
+        channels,
         now,
     } = context;
 
@@ -352,14 +362,21 @@ pub fn evaluate_window_admission(
     check_prerequisites(offering, request)?;
     check_duplicate(offering, request, snapshot, exclude, *now)?;
 
-    if let Some(channel) = &request.channel {
+    if let Some(name) = &request.channel {
+        // The channel vocabulary is closed, and a policy that declares the
+        // channels it serves narrows it further. A name outside either once
+        // matched no subquota and drew from the window's total unconstrained,
+        // so it is refused before any capacity is counted.
+        let channel = Channel::from_name(name).ok_or(AdmissionRefusal::ChannelUnknown)?;
+        if !channels.is_empty() && !channels.contains(&channel) {
+            return Err(AdmissionRefusal::ChannelUnknown);
+        }
         if let Some(subquota) = window
             .subquotas
             .iter()
-            .find(|subquota| subquota.channel.as_str() == channel.as_str())
+            .find(|subquota| subquota.channel == channel)
         {
-            let allocated =
-                snapshot.window_units_allocated(&window.id, Some(channel), exclude, *now);
+            let allocated = snapshot.window_units_allocated(&window.id, Some(name), exclude, *now);
             if allocated.saturating_add(required) > subquota.units {
                 return Err(AdmissionRefusal::CapacityExhausted);
             }
@@ -1162,6 +1179,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
+            channels: &[],
             now,
         };
         let admission =
@@ -1186,6 +1204,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
+            channels: &[],
             now,
         };
         let result = evaluate_window_admission(&context, &window_request(2, 2), None);
@@ -1228,6 +1247,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
+            channels: &[],
             now,
         };
         // Four recipients are above the highest band: inadequate party.
@@ -1258,11 +1278,76 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
+            channels: &[],
             now,
         };
         let result = evaluate_window_admission(&context, &window_request(1, 1), None);
         assert_eq!(
             result.err().map(|refusal| refusal.public_code()),
+            Some(ProblemCode::CapacityExhausted)
+        );
+    }
+
+    /// COR-3 / D5(a): the channel vocabulary is closed, and a policy that
+    /// declares the channels it serves narrows it further. A spelling
+    /// outside the vocabulary, or a vocabulary member the deployment does
+    /// not serve, once matched no subquota and drew from the window's total
+    /// unconstrained.
+    #[test]
+    fn a_channel_the_policy_does_not_serve_is_refused_not_let_loose() {
+        let offering = arrival_offering();
+        let window = window();
+        // Public subquota of 2, already fully allocated.
+        let snapshot = LedgerSnapshot {
+            claims: vec![window_claim("claim-1", 2, "public")],
+        };
+        let now = utc(4, 9, 0);
+        let context = WindowContext {
+            offering: &offering,
+            window: &window,
+            lead_time_minutes: 1,
+            horizon_days: 60,
+            snapshot: &snapshot,
+            policy_revision: 1,
+            channels: &[],
+            now,
+        };
+        // The vocabulary itself refuses a misspelled channel: "Public" is
+        // not a channel any subquota can name, so it may not book as one.
+        let misspelled = AdmissionRequest {
+            channel: Some("Public".to_owned()),
+            ..window_request(1, 1)
+        };
+        assert_eq!(
+            evaluate_window_admission(&context, &misspelled, None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::RequestUnprocessable)
+        );
+
+        // A policy that declares only the public channel refuses a request
+        // naming another vocabulary member, whatever its slice would be.
+        let narrowed = WindowContext {
+            channels: &[Channel::Public],
+            ..context
+        };
+        let undeclared = AdmissionRequest {
+            channel: Some("urgent".to_owned()),
+            ..window_request(1, 1)
+        };
+        assert_eq!(
+            evaluate_window_admission(&narrowed, &undeclared, None)
+                .err()
+                .map(|refusal| refusal.public_code()),
+            Some(ProblemCode::RequestUnprocessable)
+        );
+
+        // The declared channel itself still meets its subquota: the public
+        // slice is full, so the same refusal the plain test expects.
+        assert_eq!(
+            evaluate_window_admission(&narrowed, &window_request(1, 1), None)
+                .err()
+                .map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
         );
     }
@@ -1280,6 +1365,7 @@ mod tests {
             horizon_days: 60,
             snapshot: &snapshot,
             policy_revision: 1,
+            channels: &[],
             now,
         };
         let stale_window = AdmissionRequest {

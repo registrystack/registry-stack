@@ -509,6 +509,7 @@ fn replay_case(
                 horizon_days: arrival.horizon_days,
                 snapshot,
                 policy_revision: revision,
+                channels: &policy.channels,
                 now: fixture.now,
             };
             let admitted = evaluate_window_admission(&context, request, exclude)?;

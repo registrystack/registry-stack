@@ -31,6 +31,9 @@ pub enum PolicyCheckReason {
     UnknownWindow,
     /// A referenced holiday set does not exist.
     UnknownHolidaySet,
+    /// A subquota names a channel outside the package's declared channel
+    /// set.
+    UnknownChannel,
     /// A field required by the offering's scheduling mode is absent.
     MissingModeField,
     /// A field that belongs to the other scheduling mode is present.
@@ -68,6 +71,7 @@ impl PolicyCheckReason {
             Self::UnknownOffering => "unknown-offering",
             Self::UnknownWindow => "unknown-window",
             Self::UnknownHolidaySet => "unknown-holiday-set",
+            Self::UnknownChannel => "unknown-channel",
             Self::MissingModeField => "missing-mode-field",
             Self::WrongModeField => "wrong-mode-field",
             Self::InvalidBound => "invalid-bound",
