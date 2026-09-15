@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-docs
-last_reviewed: "2026-09-13"
+last_reviewed: "2026-09-15"
 doc_type: reference
 locale: en
 standards_referenced: []
@@ -17,6 +17,51 @@ Per-product release notes live in each product repository; the entries below lin
 relevant product pages on this site rather than duplicating release notes.
 
 ## Unreleased
+
+## v0.32.0 beta-44
+
+- Exchanged access tokens carry `registry_assertion_issuer`, derived from the
+  verified subject-token issuer. Evidence, Base Registry Engine (BReg), and
+  Casework can pair each client with the assertion issuers it may present and
+  refuse any other. Without that configuration no pairing rule applies.
+
+{/* Evidence: crates/registry-platform-oidc/src/lib.rs, with_assertion_issuers();
+    crates/registry-evidence/src/auth.rs, assertion_issuers. */}
+
+- BReg governed request application can re-check fresh Evidence and
+  linked-record preconditions at Apply, and BReg Evidence providers can use
+  `privateKeyJwt` to refresh credentials instead of a static `tokenRef`. See
+  [operate Base Registry Engine](../operate/breg/).
+
+{/* Evidence: crates/registry-breg/src/request_workflow.rs, FrozenApplicationPreconditions;
+    crates/registry-breg/src/action_evidence_config.rs, EvidencePrivateKeyJwtConfig. */}
+
+- Evidence questions can answer with a governed `bounded-identifier` value.
+  The Rust, Node.js, and Python Evidence clients can authenticate through token
+  exchange, and the BReg, Relay, and Casework clients can obtain person- or
+  task-grant-bound exchanged tokens. See
+  [disclosure modes and computed answers](../explanation/disclosure-modes-and-computed-answers/)
+  and the [client API](../reference/client-api/).
+
+{/* Evidence: products/evidence/contracts/supported-value-forms.yaml, bounded-identifier;
+    crates/registry-evidence-client/src/client.rs, from_profile_with_authorization();
+    crates/registry-platform-httputil/src/client/exchange_authorization.rs, ExchangeAuthorization;
+    crates/registry-casework-client/src/task_assertion_source.rs. */}
+
+- Local development can compose BReg, Evidence, and Casework under one shared
+  issuer. `evidencectl access client add` adds task-grant and first-party
+  exchange modes, and `bregctl examples run` runs the scenarios a project
+  authors in `examples/scenarios.json`. See [evidencectl](../reference/evidencectl/).
+
+{/* Evidence: crates/registry-evidencectl/src/access.rs, grant_bootstrap_scope;
+    crates/registry-bregctl/src/dev/examples.rs, Scenario. */}
+
+- Local ThunderID development containers are now named per state root. After
+  upgrading, remove a container started by v0.31.0 once with
+  `docker rm -f thunderid-<label>-<id prefix>` and start the session again.
+  Retained state is untouched.
+
+{/* Evidence: crates/registry-thunderid-tooling/src/container.rs, container_name(). */}
 
 ## v0.31.0 beta-43
 

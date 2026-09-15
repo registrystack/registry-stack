@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v0.32.0 - 2026-09-15
+
+- Pair each Casework client with the assertion issuers it may present through
+  `assertionIssuers`. A token exchanged through any other assertion authority
+  is refused; without the setting no pairing rule applies.
+- The Rust Casework client adds `CaseworkTaskAssertionSource` for
+  task-grant-bound token exchange. The Node.js client exposes
+  `taskAssertionEndpoint()` and the Python client `task_assertion_endpoint()`.
+- Borrowed local development sessions admit only the clients they declare.
+  `caseworkctl` no longer admits every client of a shared issuer when a session
+  declares none.
+
 ## v0.31.0 - 2026-09-13
 
 - Add institutional task grants. An officer approves a governed task template,

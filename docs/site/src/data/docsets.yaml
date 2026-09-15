@@ -26,6 +26,31 @@ docsets:
       registry-casework:
         version: main source (unreleased)
         ref: HEAD
+  - id: v0.32.0
+    label: v0.32.0
+    path: /v/0.32.0/
+    status: archived
+    availability: candidate
+    source: registry-stack-v0.32.0
+    repo_docs_source: monorepo
+    published_at: 2026-09-15
+    description: Registry Stack v0.32.0 beta-44 candidate documentation set.
+    products:
+      registry-stack:
+        version: v0.32.0
+        ref: v0.32.0
+      registry-relay:
+        version: v0.32.0
+        ref: v0.32.0
+      registry-manifest:
+        version: v0.32.0
+        ref: v0.32.0
+      registry-evidence:
+        version: v0.32.0
+        ref: v0.32.0
+      registry-casework:
+        version: v0.32.0
+        ref: v0.32.0
   - id: v0.31.0
     label: v0.31.0
     path: /v/0.31.0/

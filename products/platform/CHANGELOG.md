@@ -2,12 +2,17 @@
 
 ## Unreleased
 
+## v0.32.0 - 2026-09-15
+
 - Add `registry_assertion_issuer`, derived by the exchange issuer from the
   verified subject-token issuer and reserved against configurable claim names
   and signer-declared attributes alike. A resource server may declare the
   assertion authorities each client is allowed to present, and refuses a token
   naming any other. An unconfigured server applies no rule, and a token that
   was not obtained by token exchange carries no such claim and is unaffected.
+- Add the shared RFC 8693 exchange authorization used by the service clients to
+  obtain tokens bound to one verified person or one approved task grant.
+- Update `rustls` to 0.23.45 for RUSTSEC-2026-0285.
 
 ## v0.31.0 - 2026-09-13
 
