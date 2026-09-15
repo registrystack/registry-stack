@@ -141,9 +141,18 @@ CREATE INDEX IF NOT EXISTS scheduling_outbox_claim_idx
 
 CREATE TABLE IF NOT EXISTS scheduling_audit_outbox (
     event_id uuid PRIMARY KEY,
+    -- The publisher appends every pending record to a hash chain, and a
+    -- chain is a record of order: publishing in an arbitrary one would have
+    -- the chain attest to a sequence the deployment never had. The event id
+    -- is a random UUID and carries no order at all, so the order the rows
+    -- were written is kept here and nowhere else.
+    recorded_seq bigint GENERATED ALWAYS AS IDENTITY,
     audit_record jsonb NOT NULL,
     published_at timestamptz
 );
+CREATE INDEX IF NOT EXISTS scheduling_audit_outbox_pending_idx
+    ON scheduling_audit_outbox(recorded_seq)
+    WHERE published_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS scheduling_attempts (
     attempt_id uuid PRIMARY KEY,

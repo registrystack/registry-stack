@@ -743,19 +743,31 @@ async fn dispatch_due_intents(
 // Audit publication
 // ---------------------------------------------------------------------------
 
-struct AuditPublisher {
-    store: PostgresStore,
-    chain: Arc<ChainState>,
-    sink: Arc<JsonlFileSink>,
+/// What one publication pass writes through: the journal it drains, the keyed
+/// chain it extends, and the sink that retains the envelopes.
+///
+/// Public so the database suite can run a pass against a real deployment,
+/// stop, and start again the way a restart does. Continuity across that
+/// boundary is the property the chain exists to carry, and it cannot be
+/// observed from inside one process that never puts the chain down.
+pub struct AuditPublisher {
+    pub store: PostgresStore,
+    pub chain: Arc<ChainState>,
+    pub sink: Arc<JsonlFileSink>,
 }
 
+/// The one record whose append may have landed without its mark, carried
+/// across passes and across a restart.
 #[derive(Default)]
-struct AuditPublicationState {
+pub struct AuditPublicationState {
     unconfirmed: Option<Uuid>,
 }
 
 impl AuditPublicationState {
-    fn from_verified_tail(tail: Option<&AuditEnvelope>) -> Self {
+    /// Recover the append/mark gap from the retained tail. The caller
+    /// authenticates the chain first: this reads identity only.
+    #[must_use]
+    pub fn from_verified_tail(tail: Option<&AuditEnvelope>) -> Self {
         let unconfirmed = tail
             .and_then(|envelope| envelope.record.as_object())
             .and_then(|record| record.get("eventId"))
@@ -769,7 +781,7 @@ impl AuditPublicationState {
 /// it published. The one record whose append may have landed before its mark
 /// is remembered and re-marked first on the next pass, so a crash between the
 /// two writes never duplicates an envelope.
-async fn publish_audit_pass(
+pub async fn publish_audit_pass(
     publisher: &AuditPublisher,
     state: &mut AuditPublicationState,
 ) -> Result<(), &'static str> {
