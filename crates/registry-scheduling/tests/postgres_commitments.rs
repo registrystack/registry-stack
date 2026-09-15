@@ -2195,3 +2195,128 @@ async fn two_callers_reaching_for_one_unit_book_it_exactly_once() {
         .get(0);
     assert_eq!(active, 1, "replaying either key books nothing further");
 }
+
+/// A booking agent whose grant covers holds on both of the test policy's
+/// services, so one caller can reach for two pools at once. The default agent
+/// may only hold against `registry-update`, and the hold ceiling is a property
+/// of the caller, not of the pool a hold happens to land on.
+fn agent_token_holding_both_services() -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_bounds"]["permissions"][1]["actions"] =
+        json!(["hold.create", "hold.release", "appointment.create"]);
+    let mut claims = json!({
+        "sub": "principal-two-pools",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read scheduling-explain",
+        "registry_actor_kind": "service",
+    });
+    let object = claims.as_object_mut().unwrap();
+    object.extend(
+        grant
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    token(claims)
+}
+
+/// The count of holds one caller currently holds open.
+async fn active_holds(fx: &Fixture) -> i64 {
+    fx.admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims \
+             WHERE kind='hold' AND state='active' AND hold_expires_at > now()",
+            &[],
+        )
+        .await
+        .expect("count the caller's open holds")
+        .get(0)
+}
+
+/// The hold ceiling bounds the caller, not the pool. A commitment locks the
+/// supply anchor it is about to draw from, and two holds on two pools lock two
+/// different rows, so the ceiling check alone is a count with nothing standing
+/// behind it: two concurrent holds each read the same under-ceiling count and
+/// both write. The caller-scoped lock is what makes the count mean something,
+/// and this test is what says so.
+#[tokio::test]
+async fn one_caller_cannot_outrun_the_hold_ceiling_across_two_pools() {
+    let fx = fixture().await;
+    let caller = agent_token_holding_both_services();
+    let north = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, _) = fx
+        .post(
+            "/v1/holds",
+            &caller,
+            "ceiling-first",
+            admission(&fx, OFFERING, north),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "one hold is under the ceiling");
+
+    // Two more at once, against two pools whose supply anchors are distinct
+    // rows. The test policy admits two holds per caller, so exactly one of
+    // these may commit.
+    let other_north = first_slot(&fx, OFFERING, 210, 400).await;
+    let review = first_slot(&fx, SECOND_OFFERING, 90, 200).await;
+    let north_hold = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        caller.clone(),
+        Some("ceiling-north".to_owned()),
+        Some(admission(&fx, OFFERING, other_north)),
+    ));
+    let review_hold = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/holds".to_owned(),
+        caller.clone(),
+        Some("ceiling-review".to_owned()),
+        Some(admission(&fx, SECOND_OFFERING, review)),
+    ));
+    let answers = [
+        north_hold.await.expect("the first hold answers"),
+        review_hold.await.expect("the second hold answers"),
+    ];
+    let created = answers
+        .iter()
+        .filter(|(status, _)| *status == StatusCode::CREATED)
+        .count();
+    let refused: Vec<&Value> = answers
+        .iter()
+        .filter(|(status, _)| *status == StatusCode::CONFLICT)
+        .map(|(_, answer)| answer)
+        .collect();
+    assert_eq!(
+        created, 1,
+        "one of the two concurrent holds reaches the ceiling: {answers:?}"
+    );
+    assert_eq!(
+        refused.len(),
+        1,
+        "the hold over the ceiling is refused: {answers:?}"
+    );
+    assert_eq!(refused[0]["code"], "capacity.exhausted");
+    assert_eq!(
+        active_holds(&fx).await,
+        2,
+        "the caller never holds more than the policy admits"
+    );
+
+    // The same ceiling in sequence, so the concurrent refusal above is the
+    // ceiling and not a coincidence of the race.
+    let later = first_slot(&fx, OFFERING, 500, 700).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &caller,
+            "ceiling-third",
+            admission(&fx, OFFERING, later),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "capacity.exhausted");
+    assert_eq!(active_holds(&fx).await, 2);
+}

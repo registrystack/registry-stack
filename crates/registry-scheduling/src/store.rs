@@ -55,6 +55,14 @@ const MIGRATIONS: [(i64, &str); 1] = [(1, SCHEDULING_MIGRATION)];
 /// ASCII bytes of "sched".
 const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 
+/// The advisory-lock namespace the hold ceiling serializes one caller in. The
+/// second half of the key is the caller's pseudonym, which is already keyed to
+/// this deployment, so two deployments sharing a database do not serialize each
+/// other. The lock is a transaction lock: PostgreSQL releases it when the
+/// capacity transaction ends, committed or rolled back. The namespace spells
+/// the ASCII bytes of "SCHD".
+const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
+
 #[derive(Debug, Error)]
 pub enum StoreError {
     #[error("the Scheduling database configuration is invalid")]
@@ -798,8 +806,11 @@ impl PostgresStore {
         check_grant_current(&commitment)?;
         commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        // The caller lock is taken after the supply lock, never before: every
+        // hold transaction acquires the two in that one order, so no pair of
+        // them can hold what the other is waiting for.
         if transaction
-            .active_holds_by_caller(commitment.actor, commitment.now)
+            .lock_caller_and_count_active_holds(commitment.actor, commitment.now)
             .await?
             >= i64::from(max_per_caller)
         {
@@ -2207,7 +2218,16 @@ trait CapacityStatements {
     ) -> Result<(), CommitError>;
     async fn insert_audit(&self, event_id: Uuid, record: &Value) -> Result<(), StoreError>;
     async fn claim_in_transaction(&self, claim_id: Uuid) -> Result<Option<ClaimRow>, StoreError>;
-    async fn active_holds_by_caller(
+    /// Take the caller's hold-ceiling lock, then count the holds it has open.
+    ///
+    /// The lock is the reason the count means anything. A commitment locks the
+    /// supply anchor it is about to draw from, but the ceiling bounds the
+    /// caller across every pool, and two holds on two pools lock two different
+    /// rows. Without a lock scoped to the caller, two concurrent holds each
+    /// read the same under-ceiling count and both write, so a caller admitted
+    /// two holds can end up holding three. The count and the lock are one
+    /// method so neither can be taken without the other.
+    async fn lock_caller_and_count_active_holds(
         &self,
         actor: &str,
         now: DateTime<Utc>,
@@ -2435,11 +2455,16 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         row.map(map_claim_row).transpose()
     }
 
-    async fn active_holds_by_caller(
+    async fn lock_caller_and_count_active_holds(
         &self,
         actor: &str,
         now: DateTime<Utc>,
     ) -> Result<i64, StoreError> {
+        self.execute(
+            "SELECT pg_advisory_xact_lock($1, hashtext($2))",
+            &[&HOLD_CEILING_LOCK_NAMESPACE, &actor],
+        )
+        .await?;
         let row = self
             .query_one(
                 "SELECT count(*) FROM scheduling_claims \
