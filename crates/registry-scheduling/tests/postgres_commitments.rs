@@ -1193,3 +1193,91 @@ async fn adoption_binds_one_identity_and_refuses_a_second() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(document["schedulingId"], SCHEDULING_ID);
 }
+
+/// An idempotency key answers three ways over its life. The same request
+/// replays the first answer verbatim. A different request under the same key
+/// is refused as reused. A request retried after the receipt's retention
+/// period is refused as expired, because the sweep tombstones the receipt
+/// instead of deleting it: a deleted receipt would let the retry execute a
+/// second time and book a second appointment.
+#[tokio::test]
+async fn an_idempotency_key_replays_refuses_a_reuse_and_expires_into_a_refusal() {
+    let fx = fixture().await;
+    let (first, second) = first_overlapping_pair(&fx, OFFERING, 90, 260).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+
+    // The same key with the same payload replays the stored answer.
+    let (status, replayed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(replayed["appointmentId"], appointment_id);
+
+    // The same key with a different payload is a reuse, not a replay.
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, second)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "idempotency.key-reused");
+
+    // The retention sweep passes over the receipt's period.
+    let erased = fx
+        .store
+        .erase_expired_attempts(Utc::now() + TimeDelta::days(8))
+        .await
+        .expect("the retention sweep runs");
+    assert_eq!(erased, 1, "the sweep covers the one stored receipt");
+
+    // The key is spent, not forgotten: the retry is refused, and no second
+    // appointment was booked behind it.
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, first)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(problem["code"], "idempotency.expired");
+
+    // A different payload under the spent key is still a reuse: the erased
+    // receipt keeps the request it answered, so a conflict outranks expiry.
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "idem-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, second)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "idempotency.key-reused");
+
+    // The original appointment stands untouched.
+    let (status, fetched) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &fx.agent)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched["state"], "confirmed");
+    assert_eq!(moment(&fetched, "start"), first);
+}
