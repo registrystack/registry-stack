@@ -449,11 +449,18 @@ impl SchedulingClient {
 /// A domain problem requires every one of these to hold: the document's
 /// status equals the response status, the code is in the closed vocabulary
 /// and pins that same status, the response trace header matches the
-/// document's trace identifier, and the type URI, title, and detail equal
-/// the pinned definition. Any mismatch, and any code outside the closed
-/// vocabulary (a platform-owned transport problem carrying a different type
-/// base, for example), is the edge talking: a protocol failure, never a
-/// domain problem.
+/// document's trace identifier, and the type URI equals the pinned
+/// definition. Any mismatch, and any code outside the closed vocabulary (a
+/// platform-owned transport problem carrying a different type base, for
+/// example), is the edge talking: a protocol failure, never a domain
+/// problem.
+///
+/// The title and the remediation detail are deliberately not compared. They
+/// are human-readable members of the answer, and the caller reads its own
+/// pinned copies through `code.title()` and `code.detail()`. Holding the
+/// deployment to this build's wording would make an editorial change to a
+/// title, or a deployment one release ahead, an unrecoverable protocol
+/// failure over a refusal the code already named exactly.
 pub(crate) fn domain_problem(
     status: StatusCode,
     header_trace: Option<&str>,
@@ -467,8 +474,6 @@ pub(crate) fn domain_problem(
         || code.http_status() != status.as_u16()
         || header_trace != Some(document.trace_id.as_str())
         || document.type_uri != type_uri(code.code())
-        || document.title != code.title()
-        || document.detail != code.detail()
     {
         return protocol(status, SchedulingProtocolFailure::Problem, trace_id);
     }

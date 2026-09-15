@@ -250,9 +250,27 @@ def header_ref(name: str) -> dict:
 
 
 def obj(properties: dict, required: list[str] | None = None) -> dict:
+    """A document the caller sends: closed, as the Rust request type reads it.
+
+    A member the contract does not declare is either a caller mistake or a
+    reach for a field the store owns, so the runtime answers it rather than
+    passing it over.
+    """
     result = {"type": "object", "additionalProperties": False, "properties": properties}
     if required:
         result["required"] = required
+    return result
+
+
+def answer(properties: dict, required: list[str] | None = None) -> dict:
+    """A document the runtime sends: open, as the Rust answer type reads it.
+
+    A client generated from this contract may be older than the deployment
+    answering it. Closing an answer would make every additive change on the
+    server a failed exchange for every client built before that change.
+    """
+    result = obj(properties, required)
+    result["additionalProperties"] = True
     return result
 
 
@@ -440,7 +458,7 @@ def unauthenticated(summary: str, description: str, schema_name: str | None = No
 
 def page(item_schema_name: str) -> dict:
     """`PageDocument<T>` with its item type named; the wire type is generic."""
-    return obj(
+    return answer(
         {"items": array(ref(item_schema_name)), "nextCursor": nullable({"type": "string"})},
         ["items", "nextCursor"],
     )
@@ -470,18 +488,18 @@ def schemas(problem_entries: list[dict]) -> dict:
         ["offering", "start", "party", "policyRevision", "capabilities", "prerequisites"],
     )
     result = {
-        "SchedulingServiceDocument": obj(
+        "SchedulingServiceDocument": answer(
             {"schedulingId": text, "policyRevision": revision, "policyDigest": text},
             ["schedulingId", "policyRevision", "policyDigest"],
         ),
-        "ServiceDocument": obj({"id": text, "label": text}, ["id", "label"]),
+        "ServiceDocument": answer({"id": text, "label": text}, ["id", "label"]),
         "ServicePage": page("ServiceDocument"),
-        "ReminderDocument": obj({"minutesBefore": count}, ["minutesBefore"]),
-        "WindowDocument": obj(
+        "ReminderDocument": answer({"minutesBefore": count}, ["minutesBefore"]),
+        "WindowDocument": answer(
             {"id": text, "revision": revision, "start": instant, "end": instant, "units": count},
             ["id", "revision", "start", "end", "units"],
         ),
-        "OfferingDocument": obj(
+        "OfferingDocument": answer(
             {
                 "id": text,
                 "service": text,
@@ -516,7 +534,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             ],
         ),
         "OfferingPage": page("OfferingDocument"),
-        "ResourceDocument": obj(
+        "ResourceDocument": answer(
             {
                 "resourceId": text,
                 "pool": text,
@@ -526,13 +544,13 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["resourceId", "pool", "capabilities", "available"],
         ),
         "ResourcePage": page("ResourceDocument"),
-        "LocationDocument": obj({"locationId": text, "timezone": text}, ["locationId", "timezone"]),
+        "LocationDocument": answer({"locationId": text, "timezone": text}, ["locationId", "timezone"]),
         "LocationPage": page("LocationDocument"),
-        "AvailabilitySlot": obj(
+        "AvailabilitySlot": answer(
             {"kind": {"const": "slot"}, "start": instant, "end": instant, "free": count},
             ["kind", "start", "end", "free"],
         ),
-        "AvailabilityWindow": obj(
+        "AvailabilityWindow": answer(
             {
                 "kind": {"const": "window"},
                 "window": text,
@@ -548,7 +566,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "discriminator": {"propertyName": "kind"},
         },
         "AvailabilityPage": page("AvailabilityEntry"),
-        "HoldDocument": obj(
+        "HoldDocument": answer(
             {
                 "holdId": text,
                 "offering": text,
@@ -579,7 +597,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["observedRevision"],
         ),
         "AppointmentState": appointment_state,
-        "AppointmentDocument": obj(
+        "AppointmentDocument": answer(
             {
                 "appointmentId": text,
                 "offering": text,
@@ -606,7 +624,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "createdAt",
             ],
         ),
-        "AppointmentHistoryEntryDocument": obj(
+        "AppointmentHistoryEntryDocument": answer(
             {
                 "eventId": text,
                 "kind": {
@@ -621,7 +639,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             ["eventId", "kind", "revision", "occurredAt", "detail"],
         ),
         "AppointmentHistoryPage": page("AppointmentHistoryEntryDocument"),
-        "ExplainDocument": obj(
+        "ExplainDocument": answer(
             {
                 "offering": text,
                 "start": instant,
@@ -1228,6 +1246,27 @@ def rust_struct_fields(source: str, name: str) -> set[str]:
     return set(re.findall(r"^\s*pub\s+([a-z_]+)\s*:", match.group("body"), re.M))
 
 
+def rust_serde_attributes(source: str, name: str, keyword: str = "struct") -> str:
+    """The serde attribute list immediately above one Rust DTO declaration."""
+    declaration = re.search(
+        rf"^pub {keyword} {re.escape(name)}(?:<[^>]+>)?\s*[{{(]", source, re.M
+    )
+    if not declaration:
+        raise ValueError(f"Rust DTO is missing: {name}")
+    attribute = re.search(r"#\[serde\(([^()]*)\)\]\s*\Z", source[: declaration.start()], re.S)
+    if not attribute:
+        raise ValueError(f"Rust DTO carries no serde attributes: {name}")
+    return attribute.group(1)
+
+
+def rust_refuses_unknown_members(source: str, name: str, keyword: str = "struct") -> bool:
+    return "deny_unknown_fields" in rust_serde_attributes(source, name, keyword)
+
+
+def schema_is_closed(schema: dict) -> bool:
+    return schema.get("additionalProperties") is False
+
+
 def rust_kebab_case_unit_enum_values(source: str, name: str) -> list[str]:
     match = re.search(
         rf'#\[serde\(rename_all = "kebab-case"\)\]\s*pub enum {re.escape(name)}\s*\{{(?P<body>.*?)^\}}',
@@ -1253,6 +1292,16 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
                     f"documented_only={sorted(schema_fields - rust_fields)}, "
                     f"rust_only={sorted(rust_fields - schema_fields)}"
                 )
+            # Openness follows the wire type, and the wire type follows the
+            # direction: a request the runtime reads is closed, an answer a
+            # client reads is open.
+            refuses = rust_refuses_unknown_members(source, rust_name)
+            if refuses != schema_is_closed(openapi_schemas[schema_name]):
+                raise ValueError(
+                    f"OpenAPI openness drifted from {rust_name}; "
+                    f"rust_refuses_unknown_members={refuses}, "
+                    f"schema_is_closed={schema_is_closed(openapi_schemas[schema_name])}"
+                )
     wire = production_source(repository_root, WIRE_SOURCE)
     page_fields = {camel_case(field) for field in rust_struct_fields(wire, "PageDocument")}
     for schema_name in (
@@ -1267,6 +1316,10 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
             raise ValueError(f"OpenAPI page shape drifted for {schema_name}")
         if set(openapi_schemas[schema_name]["required"]) != page_fields:
             raise ValueError(f"OpenAPI page required fields drifted for {schema_name}")
+        if rust_refuses_unknown_members(wire, "PageDocument") != schema_is_closed(
+            openapi_schemas[schema_name]
+        ):
+            raise ValueError(f"OpenAPI page openness drifted from PageDocument for {schema_name}")
     if set(openapi_schemas["OfferingDocument"]["properties"]["mode"]["enum"]) != set(
         rust_kebab_case_unit_enum_values(wire, "SchedulingModeDocument")
     ):
@@ -1284,9 +1337,12 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         raise ValueError("Rust availability entry is missing")
     attributes = entry_match.group("attributes")
     body = entry_match.group("body")
-    for text in ('tag = "kind"', 'rename_all_fields = "camelCase"', "deny_unknown_fields"):
+    for text in ('tag = "kind"', 'rename_all_fields = "camelCase"'):
         if text not in attributes:
             raise ValueError(f"OpenAPI availability entries drifted from Rust: {text}")
+    # An availability entry is an answer, so both variants stay open.
+    if "deny_unknown_fields" in attributes:
+        raise ValueError("Rust availability entries refuse a member a later deployment added")
     variants = re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*\{", body, re.M)
     expected = {re.sub(r"(?<!^)(?=[A-Z])", "-", variant).lower() for variant in variants}
     if expected != {"slot", "window"}:
@@ -1305,6 +1361,8 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
     ):
         if variant["properties"]["kind"]["const"] != kind:
             raise ValueError("OpenAPI availability discriminator drifted from Rust")
+        if schema_is_closed(variant):
+            raise ValueError(f"OpenAPI availability variant is closed against Rust: {kind}")
     explain = openapi_schemas["ExplainDocument"]
     for field in ("publicCode", "detailedCode", "explanation"):
         if field in explain["required"] or "anyOf" in explain["properties"][field]:

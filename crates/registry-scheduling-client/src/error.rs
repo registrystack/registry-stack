@@ -7,9 +7,11 @@
 //! matchable without string inspection, and a product problem carries the
 //! core's typed `ProblemCode`, whose pinned title and remediation detail the
 //! caller reads with `code.title()` and `code.detail()`. The client
-//! validates a problem against that pinned definition before surfacing it,
-//! so a refused answer can never carry text this client has not already
-//! pinned in the core.
+//! validates the identifying members of a problem, its status, code, type
+//! URI, and trace, against that pinned definition before surfacing it. The
+//! human-readable title and detail are read from the core, never compared
+//! against the answer, so a deployment that rewords one still answers a
+//! refusal this caller can recover from.
 
 use registry_platform_httputil::client::TransportKind;
 use registry_scheduling_core::ProblemCode;
@@ -134,6 +136,37 @@ mod tests {
         }
     }
 
+    /// The pinned title and remediation detail are this client's own copy of
+    /// the vocabulary, not members to hold a deployment to. A deployment that
+    /// rewords one has not changed which refusal it answered, and a client
+    /// that refused the answer over the wording would turn an editorial
+    /// change into an unrecoverable protocol failure.
+    #[test]
+    fn a_reworded_title_or_detail_is_still_the_problem_the_code_names() {
+        let document = exhaustive_document();
+        let trace = Some(document.trace_id.as_str());
+        let reworded = vec![
+            ProblemDocument {
+                title: "No capacity remains".to_owned(),
+                ..document.clone()
+            },
+            ProblemDocument {
+                detail: "Every opening at that start is taken.".to_owned(),
+                ..document.clone()
+            },
+        ];
+        for answer in reworded {
+            match domain_problem(StatusCode::CONFLICT, trace, &answer) {
+                SchedulingClientError::Problem {
+                    status: 409,
+                    code: ProblemCode::CapacityExhausted,
+                    ..
+                } => {}
+                other => panic!("expected a typed domain problem, got {other:?}"),
+            }
+        }
+    }
+
     #[test]
     fn every_problem_mismatch_degrades_to_a_protocol_failure() {
         let document = exhaustive_document();
@@ -142,14 +175,6 @@ mod tests {
         let mismatches: Vec<ProblemDocument> = vec![
             ProblemDocument {
                 status: 500,
-                ..document.clone()
-            },
-            ProblemDocument {
-                title: "Wrong title".to_owned(),
-                ..document.clone()
-            },
-            ProblemDocument {
-                detail: "Wrong detail.".to_owned(),
                 ..document.clone()
             },
             ProblemDocument {
