@@ -434,15 +434,8 @@ impl RuntimeConfig {
         let bytes = std::fs::read(path.as_ref()).map_err(RuntimeConfigError::Read)?;
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let config: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
-            let path = error.path().to_string();
-            RuntimeConfigError::Parse {
-                path: if path.is_empty() {
-                    "/".to_owned()
-                } else {
-                    path
-                },
-                source: error.into_inner(),
-            }
+            let (path, cause) = refused_yaml(error);
+            RuntimeConfigError::Parse { path, cause }
         })?;
         config.check()?;
         Ok(config)
@@ -458,14 +451,8 @@ impl RuntimeConfig {
         let policy_text =
             std::fs::read_to_string(self.policy_path()).map_err(RuntimeConfigError::PolicyRead)?;
         let policy = parse_policy_yaml(&policy_text).map_err(|error| {
-            let path = error.path().to_string();
-            RuntimeConfigError::PolicyParse {
-                path: if path.is_empty() {
-                    "/".to_owned()
-                } else {
-                    path
-                },
-            }
+            let (path, cause) = refused_yaml(error);
+            RuntimeConfigError::PolicyParse { path, cause }
         })?;
         if !policy.check().is_empty() {
             return Err(RuntimeConfigError::PolicyFindings);
@@ -780,6 +767,88 @@ fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
     Ok(jwks)
 }
 
+/// Name where a YAML document was refused and why, so an operator reading a
+/// startup failure can open the document at the place that failed.
+///
+/// `serde_path_to_error` renders a refusal it never attributed to a member as
+/// `.`, which names nothing an operator can look up, so a document refused
+/// whole is reported at its root. The reason is serde's own, and carries the
+/// line and column the reader stopped on.
+fn refused_yaml(error: serde_path_to_error::Error<serde_norway::Error>) -> (String, String) {
+    let path = error.path().to_string();
+    let path = if path == "." { "/".to_owned() } else { path };
+    (path, redact_refused_values(&error.into_inner().to_string()))
+}
+
+/// Keep the parts of a refusal an operator acts on, the member, the reason
+/// and the location, while the refused value stays out of the message.
+///
+/// serde reports the offending value inside an `invalid type:` or an
+/// `invalid value:` clause. Only the shape word that opens such a clause
+/// survives, so the message still says a string arrived where a number was
+/// required without repeating the string. A runtime configuration names
+/// secret references, database URLs and destinations, and a startup refusal
+/// is written to the operator's log.
+fn redact_refused_values(message: &str) -> String {
+    const CLAUSES: [&str; 2] = ["invalid type: ", "invalid value: "];
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some((start, len)) = CLAUSES
+            .iter()
+            .filter_map(|clause| rest.find(clause).map(|start| (start, clause.len())))
+            .min_by_key(|(start, _)| *start)
+        else {
+            redacted.push_str(rest);
+            return redacted;
+        };
+        let opened = start + len;
+        redacted.push_str(&rest[..opened]);
+        let (shape, tail) = split_refused_value(&rest[opened..]);
+        redacted.push_str(shape);
+        rest = tail;
+    }
+}
+
+/// Split the text after a clause marker into the shape word serde names and
+/// the remainder that follows the refused value.
+///
+/// serde renders the value with `Debug`, so it opens with a quote or a
+/// backtick and may hold the comma that would otherwise end the clause.
+fn split_refused_value(clause: &str) -> (&str, &str) {
+    let bytes = clause.as_bytes();
+    let mut index = 0;
+    let mut shape_end = None;
+    while index < bytes.len() {
+        match bytes[index] {
+            delimiter @ (b'"' | b'`') => {
+                shape_end.get_or_insert(index);
+                index = skip_delimited(bytes, index, delimiter);
+            }
+            b',' => break,
+            _ => index += 1,
+        }
+    }
+    let shape_end = shape_end.unwrap_or(index);
+    (clause[..shape_end].trim_end(), &clause[index..])
+}
+
+/// Return the offset just past the delimited run that opens at `open`.
+///
+/// A delimiter inside a `Debug` rendering arrives escaped, so it does not end
+/// the run.
+fn skip_delimited(bytes: &[u8], open: usize, delimiter: u8) -> usize {
+    let mut index = open + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == delimiter => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
 #[derive(Debug, Error)]
 pub enum PolicyPackageError {
     #[error("the Scheduling policy package could not be read")]
@@ -792,12 +861,8 @@ pub enum PolicyPackageError {
 pub enum RuntimeConfigError {
     #[error("the Scheduling runtime configuration could not be read")]
     Read(#[source] std::io::Error),
-    #[error("the Scheduling runtime configuration is not valid YAML at {path}")]
-    Parse {
-        path: String,
-        #[source]
-        source: serde_norway::Error,
-    },
+    #[error("the Scheduling runtime configuration is not valid YAML at {path}: {cause}")]
+    Parse { path: String, cause: String },
     #[error(
         "unsupported Scheduling runtime apiVersion; expected registry.registrystack.org/scheduling-runtime/v1alpha1"
     )]
@@ -816,8 +881,8 @@ pub enum RuntimeConfigError {
     SecretProviderRequired { path: String },
     #[error("the authored scheduling policy could not be read")]
     PolicyRead(#[source] std::io::Error),
-    #[error("the authored scheduling policy is not valid YAML at {path}")]
-    PolicyParse { path: String },
+    #[error("the authored scheduling policy is not valid YAML at {path}: {cause}")]
+    PolicyParse { path: String, cause: String },
     #[error("the authored scheduling policy does not pass its checks")]
     PolicyFindings,
     #[error("the Scheduling policy package is invalid")]
@@ -1091,6 +1156,100 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             assert_eq!(error.path(), "database.testOnlyPlaintext");
             assert!(!error.to_string().contains(canary));
         }
+    }
+
+    #[test]
+    fn a_runtime_document_refused_whole_is_reported_at_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let operator = root.path().join("runtime.yaml");
+        let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
+        std::fs::write(&operator, format!("{canary}\n")).unwrap();
+
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let message = error.to_string();
+        // A refusal the reader never attributed to a member belongs to the
+        // document, and "." names nothing an operator can look up.
+        assert_eq!(error.path(), "/");
+        assert!(!message.contains(" at ."), "{message}");
+        assert!(message.contains("invalid type: string"), "{message}");
+        assert!(!message.contains(canary), "{message}");
+    }
+
+    #[test]
+    fn a_refused_value_never_survives_the_clause_that_names_it() {
+        // The value serde renders may hold the comma that ends the clause,
+        // so the shape word is where the rendering opens, not the comma.
+        assert_eq!(
+            redact_refused_values(
+                "invalid type: string \"secret:env/URL, and more\", expected u16 at line 3 column 5"
+            ),
+            "invalid type: string, expected u16 at line 3 column 5"
+        );
+        // A refusal naming a member rather than a value is carried whole: the
+        // member name is what the operator has to correct.
+        assert_eq!(
+            redact_refused_values("unknown field `bnd`, expected `bind` at line 4 column 3"),
+            "unknown field `bnd`, expected `bind` at line 4 column 3"
+        );
+    }
+
+    #[test]
+    fn a_runtime_document_the_reader_stops_on_names_the_line_and_column() {
+        let root = tempfile::tempdir().unwrap();
+        let operator = root.path().join("runtime.yaml");
+        // A tab can never open an indented line, so the reader stops on it.
+        std::fs::write(&operator, "apiVersion: v1\n\tkind: x\n").unwrap();
+
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("line 2"), "{message}");
+        assert!(message.contains("column 1"), "{message}");
+    }
+
+    #[test]
+    fn a_rejected_runtime_member_names_the_cause_without_the_value() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
+        let mut document = operator_value(&package, "development-loopback");
+        document["retention"]["attemptReceiptDays"] = serde_json::json!(canary);
+        let operator = write_operator(root.path(), document);
+
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let message = error.to_string();
+        assert_eq!(error.path(), "retention.attemptReceiptDays");
+        assert!(
+            message.contains("retention.attemptReceiptDays"),
+            "{message}"
+        );
+        assert!(message.contains("invalid type: string"), "{message}");
+        assert!(message.contains("expected u16"), "{message}");
+        assert!(!message.contains(canary), "{message}");
+    }
+
+    #[test]
+    fn a_refused_authored_policy_names_the_member_and_the_cause() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join(AUTHORED_POLICY_FILE),
+            "scheduling: {id: standalone-exact-time, version: one}\n",
+        )
+        .unwrap();
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "development-loopback"),
+        );
+
+        let error = RuntimeConfig::load(&operator).unwrap_err();
+        let message = error.to_string();
+        assert_eq!(error.path(), "package.root/scheduling.yaml");
+        assert!(message.contains("scheduling.version"), "{message}");
+        assert!(message.contains("invalid type: string"), "{message}");
+        assert!(message.contains("line"), "{message}");
+        assert!(message.contains("column"), "{message}");
     }
 
     #[test]
