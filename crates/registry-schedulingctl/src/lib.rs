@@ -4,9 +4,12 @@
 //! tooling: `init` writes a complete starter project, `check` validates the
 //! authored policy offline, `test` replays every fixture offline, `explain`
 //! publishes what the runtime would serve, `package` writes the deployment
-//! identity the runtime verifies, and `records apply` performs the one
-//! attributable operator write of a deployment's live environment records.
+//! identity the runtime verifies, `records apply` performs the one
+//! attributable operator write of a deployment's live environment records,
+//! and `intents` reads the delivery intents a deployment's sweep has stopped
+//! carrying.
 
+pub mod intents;
 mod project;
 pub mod records;
 mod templates;
@@ -51,6 +54,8 @@ enum Command {
     Package(ProjectArgs),
     /// Apply the live environment records of a deployment.
     Records(RecordsArgs),
+    /// List delivery intents a deployment's sweep has stopped carrying.
+    Intents(IntentsArgs),
 }
 
 #[derive(Debug, Args)]
@@ -100,6 +105,16 @@ struct RecordsApplyArgs {
     /// Environment records document: locations, pools, and exceptions.
     #[arg(value_name = "RECORDS")]
     records: PathBuf,
+}
+
+#[derive(Debug, Args)]
+struct IntentsArgs {
+    /// Runtime configuration document of the deployment to read.
+    #[arg(value_name = "RUNTIME_CONFIG")]
+    config: PathBuf,
+    /// Most intents to list.
+    #[arg(long, default_value_t = 50)]
+    limit: i64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
@@ -203,6 +218,7 @@ fn run(cli: Cli) -> Result<Value> {
         Command::Records(args) => match args.command {
             RecordsCommand::Apply(apply) => records::apply(&apply.config, &apply.records),
         },
+        Command::Intents(args) => intents::undelivered(&args.config, args.limit),
     }
 }
 
@@ -372,6 +388,7 @@ fn human_lead(report: &Value) -> String {
             "Policy package manifest written beside the authored policy.".to_owned()
         }
         ("records-apply", _, _) => "Environment records applied.".to_owned(),
+        ("intents", _, _) => "Undelivered delivery intents listed.".to_owned(),
         _ => format!("{command} succeeded."),
     }
 }
@@ -523,6 +540,23 @@ mod tests {
         assert!(
             Cli::try_parse_from(["schedulingctl", "records", "apply", "/runtime.yaml"]).is_err()
         );
+
+        let cli = Cli::try_parse_from(["schedulingctl", "intents", "/runtime.yaml"]).unwrap();
+        let Command::Intents(args) = cli.command else {
+            panic!("expected intents")
+        };
+        assert_eq!(args.config, PathBuf::from("/runtime.yaml"));
+        assert_eq!(args.limit, 50);
+
+        let cli =
+            Cli::try_parse_from(["schedulingctl", "intents", "/runtime.yaml", "--limit", "10"])
+                .unwrap();
+        let Command::Intents(args) = cli.command else {
+            panic!("expected intents")
+        };
+        assert_eq!(args.limit, 10);
+
+        assert!(Cli::try_parse_from(["schedulingctl", "intents"]).is_err());
 
         assert!(Cli::try_parse_from([
             "schedulingctl",
