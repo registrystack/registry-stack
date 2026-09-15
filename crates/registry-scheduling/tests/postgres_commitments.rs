@@ -24,9 +24,13 @@ use registry_platform_audit::{
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
+use registry_scheduling::config::ReminderDestinationConfig;
 use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
 use registry_scheduling::http::{router, HttpState};
-use registry_scheduling::runtime::{publish_audit_pass, AuditPublicationState, AuditPublisher};
+use registry_scheduling::runtime::{
+    dispatch_due_intents, publish_audit_pass, reminder_transport, AuditPublicationState,
+    AuditPublisher,
+};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::PostgresStore;
 use registry_scheduling_core::{
@@ -36,6 +40,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
 use uuid::Uuid;
+use wiremock::matchers::{body_string_contains, header, method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const ISSUER: &str = "https://task-token.test";
 const AUDIENCE: &str = "urn:registry-scheduling:test";
@@ -2659,5 +2665,120 @@ async fn the_audit_chain_continues_across_a_restart() {
             .expect("read the pending journal")
             .is_empty(),
         "it is marked published instead"
+    );
+}
+
+/// How one intent stands after a dispatch pass: the state written back, how
+/// many attempts it has consumed, and whether its next attempt is held behind
+/// a back-off.
+async fn intent_state(fx: &Fixture, claim_id: &str) -> (String, i32, bool) {
+    let claim = Uuid::parse_str(claim_id).expect("a claim identifier");
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT delivery_state, attempts, next_attempt_at > now() \
+             FROM scheduling_outbox WHERE claim_id=$1 AND purpose='confirmation'",
+            &[&claim],
+        )
+        .await
+        .expect("read one intent back");
+    (row.get(0), row.get(1), row.get(2))
+}
+
+/// A dispatch pass sends every due intent to the configured destination and
+/// reads each answer back the way the classes say: a taken event is delivered
+/// and never sent twice, a destination that could not answer proves nothing
+/// and waits out a back-off, and an outright refusal is held for an operator
+/// rather than retried against a destination that has already said no.
+///
+/// The destination is a local server this test controls, because what the
+/// deployment puts on the wire, and what it concludes from an answer, cannot
+/// be observed without one that answers.
+#[tokio::test]
+async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answers() {
+    let destination = MockServer::start().await;
+    let fx = fixture().await;
+    let (taken, _) = booked(&fx, 90, 200, "dispatch-taken").await;
+    let (unanswered, _) = booked(&fx, 300, 440, "dispatch-unanswered").await;
+    let (refused, _) = booked(&fx, 600, 800, "dispatch-refused").await;
+
+    // One stub per appointment, matched on the identity the event carries, so
+    // a single pass produces all three outcomes against one destination.
+    for (appointment, status) in [(&taken, 202), (&unanswered, 503), (&refused, 403)] {
+        Mock::given(method("POST"))
+            .and(path("/events"))
+            .and(header("content-type", "application/cloudevents+json"))
+            .and(body_string_contains(appointment.as_str()))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&destination)
+            .await;
+    }
+
+    // The destination declares no bearer reference, so nothing is resolved;
+    // the resolver still has to exist, and refuses to be built with no
+    // provider enabled at all.
+    let secrets = SecretResolver::new([SecretProvider::Environment], std::path::Path::new(""))
+        .expect("a resolver this destination asks nothing of");
+    let transport = reminder_transport(
+        &ReminderDestinationConfig {
+            url: format!("{}/events", destination.uri()),
+            bearer_token_ref: None,
+        },
+        &secrets,
+    )
+    .expect("the configured destination compiles into a frozen transport");
+
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(&transport))
+        .await
+        .expect("the dispatch pass runs");
+
+    assert_eq!(
+        intent_state(&fx, &taken).await,
+        ("delivered".to_owned(), 1, false),
+        "a destination that took the event leaves nothing to retry"
+    );
+    let (state, attempts, backed_off) = intent_state(&fx, &unanswered).await;
+    assert_eq!(
+        (state.as_str(), attempts),
+        ("pending", 1),
+        "a destination that could not answer proves nothing"
+    );
+    assert!(backed_off, "so the next attempt waits out a back-off");
+    assert_eq!(
+        intent_state(&fx, &refused).await,
+        ("failed".to_owned(), 1, false),
+        "a destination that refused outright is held for an operator"
+    );
+
+    // What went on the wire is one CloudEvents 1.0 event per intent, naming
+    // this deployment and carrying the committed payload, and nothing else.
+    let sent = destination.received_requests().await.expect("the requests");
+    assert_eq!(sent.len(), 3, "one request per due intent, and no more");
+    let event: Value = serde_json::from_slice(
+        &sent
+            .iter()
+            .find(|request| String::from_utf8_lossy(&request.body).contains(taken.as_str()))
+            .expect("the taken appointment's event")
+            .body,
+    )
+    .expect("a JSON event body");
+    assert_eq!(event["specversion"], "1.0");
+    assert_eq!(event["source"], SCHEDULING_ID);
+    assert_eq!(event["type"], "org.registrystack.scheduling.confirmation");
+    assert_eq!(event["data"]["appointmentId"], taken);
+
+    // A second pass repeats nothing: the delivered intent is done and the
+    // other two are held or backed off, so the destination hears no more.
+    dispatch_due_intents(&fx.store, SCHEDULING_ID, Some(&transport))
+        .await
+        .expect("the second dispatch pass runs");
+    assert_eq!(
+        destination
+            .received_requests()
+            .await
+            .expect("the requests")
+            .len(),
+        3,
+        "nothing a pass concluded is sent to the destination again"
     );
 }
