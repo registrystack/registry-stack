@@ -12,6 +12,11 @@ publish = false
 name = "scheduling"
 path = "src/main.rs"
 
+[[test]]
+name = "postgres_commitments"
+path = "tests/postgres_commitments.rs"
+required-features = ["postgres-test"]
+
 [features]
 default = []
 postgres-test = []
