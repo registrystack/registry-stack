@@ -225,10 +225,16 @@ pub enum LeftoverCapacityPolicy {
 /// The staffing block a window's supply is carved from, when the window is
 /// backed by the same concrete resources an exact-time pool sells.
 ///
-/// `reserved_members` is the partition: how many pool members the window's
-/// supply is attributed to. A window that names a pool without a partition
-/// claims the whole block, so any exact-time offering on the same pool is
-/// selling the same staffing twice and is rejected at publication.
+/// A pool that backs a window may not also back an exact-time offering: a
+/// window claim occupies the window's own supply while an exact-time claim
+/// occupies the member it books, so the two modes would double-book the same
+/// staffing in a ledger that cannot see the conflict. That mix is refused at
+/// publication whatever this block declares.
+///
+/// `reserved_members` is the partition among windows: how many pool members
+/// the window's supply is attributed to. A window that names a pool without a
+/// partition claims the whole block, so two overlapping windows each claiming
+/// the whole pool are double-counting and are rejected at publication.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WindowStaffing {
@@ -745,16 +751,28 @@ impl SchedulingPolicy {
                 &format!("{path}.staffing.because"),
                 findings,
             );
+            // A pool that backs a window may not also back an exact-time
+            // offering: the two modes count the same staffing differently, so
+            // the mix would double-book it in a ledger that cannot see the
+            // conflict. No authored partition attributes the supply across
+            // the two modes, so the refusal stands whatever this block
+            // declares.
+            let mixed_modes = self.offerings.iter().any(|offering| {
+                offering
+                    .exact_time
+                    .as_ref()
+                    .is_some_and(|exact| exact.pool == staffing.pool)
+            });
+            if mixed_modes {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{path}.staffing.pool"),
+                    PolicyCheckReason::SharedSupplyUnpartitioned,
+                ));
+            }
             // An unpartitioned staffing claim owns the whole pool block, so
-            // any exact-time offering on the same pool would be selling the
-            // same staffing twice.
+            // two overlapping windows each claiming the whole pool are
+            // double-counting the same staffing.
             if staffing.reserved_members.is_none() {
-                let shared = self.offerings.iter().any(|offering| {
-                    offering
-                        .exact_time
-                        .as_ref()
-                        .is_some_and(|exact| exact.pool == staffing.pool)
-                });
                 let doubly_claimed = self.windows.iter().any(|other| {
                     other.id != window.id
                         && other.staffing.as_ref().is_some_and(|other_staffing| {
@@ -764,7 +782,7 @@ impl SchedulingPolicy {
                                 && window.start < other.end
                         })
                 });
-                if shared || doubly_claimed {
+                if doubly_claimed {
                     findings.push(SchedulingDiagnostic::new(
                         format!("{path}.staffing.reservedMembers"),
                         PolicyCheckReason::SharedSupplyUnpartitioned,
@@ -1413,6 +1431,13 @@ holdPolicy:
 
     /// AT-22, static half: an unpartitioned staffing claim over a pool that an
     /// exact-time offering also sells is rejected at publication.
+    ///
+    /// COR-8 widened the refusal to the mode mix itself: a window claim
+    /// occupies the window's own supply while an exact-time claim occupies the
+    /// member it books, so a pool backing both modes double-books the same
+    /// staffing in a ledger that cannot see the conflict. No authored
+    /// partition attributes the supply across the two modes, so the mix is
+    /// refused whether the block declares one or not.
     #[test]
     fn an_unpartitioned_shared_staffing_block_is_rejected() {
         let mut policy = household_window_policy();
@@ -1447,16 +1472,36 @@ holdPolicy:
         });
         let findings = policy.check();
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(
-            &"windows[0].staffing.reservedMembers: shared-supply-unpartitioned".to_owned()
-        ));
+        assert!(
+            rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
+        );
 
-        // An attributable partition makes the share explicit and passes.
+        // A partition does not attribute the supply across modes, so the mix
+        // is refused with the partition declared.
         policy.windows[0].staffing = Some(WindowStaffing {
             pool: "officer-pool".to_owned(),
             reserved_members: Some(2),
             because: "Two of the four duty officers staff the block.".to_owned(),
         });
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered.contains(&"windows[0].staffing.pool: shared-supply-unpartitioned".to_owned())
+        );
+
+        // A partitioned staffing block over a pool no exact-time offering
+        // sells makes the share explicit and passes.
+        policy.windows[0].staffing = Some(WindowStaffing {
+            pool: "hall-officers".to_owned(),
+            reserved_members: Some(2),
+            because: "Two of the four duty officers staff the block.".to_owned(),
+        });
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+
+        // A window with no staffing block draws on no pool at all, so it
+        // carries no edge an exact-time pool could share: the mode mix a
+        // staffing block would create cannot exist without one.
+        policy.windows[0].staffing = None;
         assert!(policy.check().is_empty(), "{:?}", policy.check());
     }
 
