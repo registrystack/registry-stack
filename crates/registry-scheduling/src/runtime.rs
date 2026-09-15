@@ -510,7 +510,12 @@ fn offering_window_ids(policy: &registry_scheduling_core::SchedulingPolicy) -> V
 /// The frozen outbound transport for due reminder intents: one fixed
 /// destination, one reviewed request shape, and an operator-configured bearer
 /// credential that never reaches a log line.
-struct ReminderTransport {
+///
+/// Public, with its fields kept private, so the database suite can point a
+/// dispatch pass at a local destination it controls. What the deployment
+/// sends, and how it reads each answer back, is only observable against a
+/// destination that answers.
+pub struct ReminderTransport {
     policy: DataDestinationPolicy,
     template: DataDestinationRequestTemplate,
     bearer: Option<ProtectedSecret>,
@@ -533,7 +538,14 @@ fn destination_origin_and_path(configured: &str) -> Result<(String, String), &'s
     Ok((origin.to_string(), path))
 }
 
-fn reminder_transport(
+/// Compile one operator-configured destination into the frozen transport the
+/// dispatch loop sends through.
+///
+/// # Errors
+///
+/// Returns the operator-facing sentence naming what about the configured
+/// destination could not be frozen.
+pub fn reminder_transport(
     destination: &ReminderDestinationConfig,
     secrets: &SecretResolver,
 ) -> Result<ReminderTransport, String> {
@@ -652,8 +664,13 @@ fn next_attempt(attempts: i32) -> DateTime<Utc> {
 /// Claim every due intent and give each one dispatch attempt. A transport
 /// failure proves nothing and schedules a retry; a refusal outside the retry
 /// classes is held as failed for the operator; with no destination configured
-/// the intent is marked local — recorded, never pretended delivered.
-async fn dispatch_due_intents(
+/// the intent is marked local: recorded, never pretended delivered.
+///
+/// # Errors
+///
+/// Returns the store failure that stopped the pass. A destination's answer,
+/// whatever it is, is an outcome written back and not an error.
+pub async fn dispatch_due_intents(
     store: &PostgresStore,
     scheduling_id: &str,
     transport: Option<&ReminderTransport>,
