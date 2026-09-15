@@ -437,101 +437,89 @@ When an image advisory baseline needs review for the prepared version, add
 then builds every image in that version's owned roster from the same local
 payload and pinned image recipes, transfers the layouts only through a pinned
 ephemeral local registry, and uploads the full OCI configs, daemon-backed Syft
-and Grype reports, and exact exported root filesystem archives. The artifact is
-review input for a deliberate baseline or live-pin update. It neither accepts
-an advisory nor supplies publication bytes, and the release candidate still
-rebuilds and checks its exact protected-main images under the normal release
-policy.
+and Grype reports, exact exported root filesystem archives, and one ELF
+exposure report per image. The artifact is review input for a deliberate
+baseline or live-pin update. It neither accepts an advisory nor supplies
+publication bytes, and the release candidate still rebuilds and checks its exact
+protected-main images under the normal release policy.
 
 Wait for the canonical Linux job to finish successfully and upload the artifact.
 For a missing-baseline bootstrap, the normal rehearsal job fails as expected;
 use the artifact from that run even though the overall run did not succeed.
-Download that exact rehearsal artifact and prepare one image's evidence with:
+Download that exact rehearsal artifact, copy the source revision from GitHub's
+record of the run rather than from the artifact, and dry-run the renewal for the
+whole image roster:
 
 ```sh
 rehearsal_run=<run-id-with-successful-canonical-linux-evidence-job>
 version=<version>
 request_id=<rehearsal-request-id>
-name=relay # or evidence, discovery, breg, or casework
-artifact_dir="rehearsal-advisory-${rehearsal_run}-${name}"
+reviewed_at="$(date -u +%F)"
+artifact_dir="rehearsal-advisory-${rehearsal_run}"
 test ! -e "${artifact_dir}"
 gh run download "${rehearsal_run}" \
   --repo registrystack/registry-stack \
   --name "release-advisory-evidence-${version}-${request_id}" \
   --dir "${artifact_dir}"
-
-case "${name}" in
-  relay) baseline=products/relay-v2/security/advisory-baseline.json ;;
-  breg|casework|discovery|evidence)
-    baseline="release/security/${name}-advisory-baseline.json"
-    ;;
-  *) echo "unsupported release image: ${name}" >&2; exit 2 ;;
-esac
-collection="${artifact_dir}/collection.json"
 source_revision="$(
-  jq -er '
-    .revision
-    | select(type == "string" and test("^[0-9a-f]{40}$"))
-  ' "${collection}"
+  gh run view "${rehearsal_run}" \
+    --repo registrystack/registry-stack \
+    --json headSha --jq .headSha
 )"
-digest="$(
-  jq -er --arg name "${name}" '
-    [.images[] | select(.name == $name)] as $matches
-    | if ($matches | length) == 1 then $matches[0].digest
-      else error("image must appear exactly once in collection.json") end
-    | select(type == "string" and test("^sha256:[0-9a-f]{64}$"))
-  ' "${collection}"
-)"
-jq -e \
-  --arg source https://github.com/registrystack/registry-stack \
-  --arg version "${version}" '
-    .source == $source and
-    .version == $version and
-    .purpose == "review_only" and
-    .publication_eligible == false and
-    .advisory_accepted == false
-  ' "${collection}" >/dev/null
-
-review_dir="$(mktemp -d "${TMPDIR:-/tmp}/registry-advisory-review.XXXXXX")"
-mkdir "${review_dir}/rootfs"
-tar --extract \
-  --file="${artifact_dir}/rootfs/${name}.tar" \
-  --directory="${review_dir}/rootfs" \
-  --no-same-owner --no-same-permissions
-if find "${review_dir}/rootfs" \
-    \( -type b -o -type c -o -type p -o -type s \) \
-    -print -quit | grep -q .; then
-  echo "exported rootfs contains a forbidden special file" >&2
-  exit 1
-fi
+release/scripts/registry-release renew-advisory-baselines \
+  --version "${version}" \
+  --evidence-dir "${artifact_dir}" \
+  --source-revision "${source_revision}" \
+  --reviewed-at "${reviewed_at}"
 ```
 
-Independently review the OCI process configuration, ordered DiffIDs, component
-layer, every assertion file and native Syft SHA-256, and the exposure claim as
-described below. If that review supports a local reproduction, update each
-affected `exposure_assertion` in `${baseline}` with
-`reference_provenance: local_reproduction`, `reference_image_digest: ${digest}`,
-and `reference_source_revision: ${source_revision}`. Recompute the runtime and
-assertion definition digests by the documented canonical JSON procedure. Then
-prove those exact schema bindings and run the unchanged strict checker:
+The dry run writes nothing. It refuses the whole roster unless the collection
+record is review-only and names exactly this version, source revision, and
+release image roster, and unless each image's Grype, Syft, OCI configuration,
+and exported rootfs agree with its recorded digest. It also refuses a changed
+runtime base or OCI process configuration, an assertion kind other than a
+whole-image fingerprint, an exception without a matching unfixed finding, a new
+blocking finding, an expired exception, and any renewed baseline that fails the
+strict advisory check against the extracted rootfs. A missing baseline is
+refused too, so a new image's first baseline is still authored by hand. Treat a
+refusal as a review finding: fix the image, or make the deliberate baseline
+change with the procedure in "Renew an image advisory fingerprint".
+
+Otherwise the dry run prints every baseline binding it would move, whether the
+live pins in `release/scripts/test_check_advisory_baselines.py` would move, and
+the exceptions whose rationale it leaves unchanged. The subcommand moves only
+evidence bindings: application and component layers, `reviewed_at`, file and
+definition digests, and the reference image digest, source revision, and
+`local_reproduction` provenance. It never writes a rationale, extends
+`expires_at`, or accepts a new finding.
+
+Each `exposure/<name>.json` records review-only facts about the image's
+Entrypoint executable: its loader inputs, dynamic-loading imports, and every
+located `dlsym` or `dlvsym` use, with the constant symbol name when the report
+can prove one. It is not a gate and proves nothing about source reachability.
+Every entry marked `review_required` needs a reviewer's judgement, such as a
+wrapper that forwards a runtime name.
+
+Independently review each image's OCI process configuration, ordered DiffIDs,
+component layer, every assertion file, and each exception's exposure claim
+against that report and the source. If that review supports a local
+reproduction, write the renewal, update each exception rationale to describe the
+same evidence, and confirm that the rationale edits left no binding to move:
 
 ```sh
-jq -e --arg digest "${digest}" --arg revision "${source_revision}" '
-  (.exceptions | length > 0) and
-  all(.exceptions[].exposure_assertion;
-    .reference_provenance == "local_reproduction" and
-    .reference_image_digest == $digest and
-    .reference_source_revision == $revision)
-' "${baseline}" >/dev/null
-python3 release/scripts/check-advisory-baselines.py \
-  grype "${artifact_dir}/grype/${name}.grype.json" \
-  --baseline "${baseline}" \
-  --syft-report "${artifact_dir}/syft/${name}.syft.json" \
-  --rootfs "${review_dir}/rootfs" \
-  --candidate-image-digest "${digest}" \
+release/scripts/registry-release renew-advisory-baselines \
+  --version "${version}" \
+  --evidence-dir "${artifact_dir}" \
   --source-revision "${source_revision}" \
-  --oci-config "${artifact_dir}/oci-config/${name}.json" \
-  --subject "${name}-image"
+  --reviewed-at "${reviewed_at}" \
+  --write
+# Update each exception rationale, then expect "0 file(s) would change".
+release/scripts/registry-release renew-advisory-baselines \
+  --version "${version}" \
+  --evidence-dir "${artifact_dir}" \
+  --source-revision "${source_revision}" \
+  --reviewed-at "${reviewed_at}"
+python3 -m unittest release/scripts/test_check_advisory_baselines.py
 ```
 
 This local check does not accept the vulnerability decision by itself. Commit

@@ -17,6 +17,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+import advisory_renewal
 import release_candidate
 import release_notes
 import verify_latest_published_release
@@ -4090,6 +4091,34 @@ def main() -> int:
     docs_prepare_parser.add_argument("--repo", type=Path, default=ROOT)
     docs_prepare_parser.add_argument("--output-dir", type=Path, help="new directory for logs, patch and archive")
     docs_prepare_parser.add_argument("--apply", action="store_true", help="apply the verified documentation patch")
+    renew_advisory_parser = subparsers.add_parser(
+        "renew-advisory-baselines",
+        help="renew reviewed advisory baseline bindings from rehearsal advisory evidence",
+    )
+    renew_advisory_parser.add_argument("--version", required=True)
+    renew_advisory_parser.add_argument(
+        "--evidence-dir",
+        type=Path,
+        required=True,
+        help="downloaded rehearsal advisory evidence artifact",
+    )
+    renew_advisory_parser.add_argument(
+        "--source-revision",
+        required=True,
+        help="rehearsal source revision, resolved independently of the artifact",
+    )
+    renew_advisory_parser.add_argument(
+        "--reviewed-at", required=True, help="human review date, YYYY-MM-DD"
+    )
+    renew_advisory_parser.add_argument(
+        "--today", help="evaluation date for expiry checks, YYYY-MM-DD (default: today)"
+    )
+    renew_advisory_parser.add_argument("--repo", type=Path, default=ROOT)
+    renew_advisory_parser.add_argument(
+        "--write",
+        action="store_true",
+        help="write the renewed baselines and live test pins (default: report only)",
+    )
     candidate_parser = subparsers.add_parser("request-candidate")
     candidate_parser.add_argument("--version", required=True)
     candidate_parser.add_argument("--release-id", required=True)
@@ -4214,6 +4243,16 @@ def main() -> int:
     if args.command == "prepare-docs":
         return prepare_release_docs.run(
             args.repo, args.version, args.release_id, args.date, args.output_dir, args.apply
+        )
+    if args.command == "renew-advisory-baselines":
+        return advisory_renewal.run(
+            args.repo,
+            args.evidence_dir,
+            version=args.version,
+            source_revision=args.source_revision,
+            reviewed_at=args.reviewed_at,
+            write=args.write,
+            today=args.today,
         )
     if args.command == "request-candidate":
         return request_release_candidate(

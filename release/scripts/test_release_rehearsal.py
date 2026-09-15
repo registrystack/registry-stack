@@ -378,43 +378,40 @@ class ReleaseRehearsalTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, text)
 
-    def test_advisory_artifact_docs_bind_one_image_before_strict_check(self) -> None:
+    def test_advisory_artifact_docs_renew_from_an_independent_revision(self) -> None:
         operations = (ROOT / "release/OPERATIONS.md").read_text(encoding="utf-8")
+        blocks = operations.split("```")
         preparation = next(
-            block
-            for block in operations.split("```")
-            if 'gh run download "${rehearsal_run}"' in block
+            block for block in blocks if 'gh run download "${rehearsal_run}"' in block
         )
-        checker = next(
+        write = next(
             block
-            for block in operations.split("```")
-            if 'grype "${artifact_dir}/grype/${name}.grype.json"' in block
+            for block in blocks
+            if "renew-advisory-baselines" in block and "--write" in block
         )
-        self.assertIn('collection="${artifact_dir}/collection.json"', preparation)
-        self.assertIn(".revision", preparation)
-        self.assertIn("[.images[] | select(.name == $name)] as $matches", preparation)
-        self.assertIn("image must appear exactly once", preparation)
-        self.assertIn(".version == $version", preparation)
-        self.assertIn('.purpose == "review_only"', preparation)
-        self.assertIn('--file="${artifact_dir}/rootfs/${name}.tar"', preparation)
-        self.assertIn('--directory="${review_dir}/rootfs"', preparation)
-        for schema_binding in (
-            '.reference_provenance == "local_reproduction"',
-            ".reference_image_digest == $digest",
-            ".reference_source_revision == $revision",
-        ):
-            self.assertIn(schema_binding, checker)
-        for argument in (
-            '--baseline "${baseline}"',
-            '--syft-report "${artifact_dir}/syft/${name}.syft.json"',
-            '--rootfs "${review_dir}/rootfs"',
-            '--candidate-image-digest "${digest}"',
+        renewal_arguments = (
+            'release/scripts/registry-release renew-advisory-baselines',
+            '--version "${version}"',
+            '--evidence-dir "${artifact_dir}"',
             '--source-revision "${source_revision}"',
-            '--oci-config "${artifact_dir}/oci-config/${name}.json"',
-            '--subject "${name}-image"',
-        ):
-            self.assertIn(argument, checker)
-        self.assertNotIn("--reference-provenance", checker)
+            '--reviewed-at "${reviewed_at}"',
+        )
+        self.assertIn('gh run view "${rehearsal_run}"', preparation)
+        self.assertIn("--json headSha", preparation)
+        self.assertNotIn("collection.json", preparation)
+        self.assertNotIn("--write", preparation)
+        self.assertLess(
+            preparation.index('source_revision="$('),
+            preparation.index("renew-advisory-baselines"),
+        )
+        for argument in renewal_arguments:
+            self.assertIn(argument, preparation)
+            self.assertIn(argument, write)
+        self.assertIn(
+            "python3 -m unittest release/scripts/test_check_advisory_baselines.py",
+            write,
+        )
+        self.assertLess(operations.index(preparation), operations.index(write))
 
     def test_docs_ci_replaces_root_build_with_dev_base_build(self) -> None:
         package = json.loads(

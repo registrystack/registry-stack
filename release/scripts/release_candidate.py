@@ -195,6 +195,14 @@ def _require_regular_file(path: Path, description: str) -> None:
         raise CandidateError(f"{description} is missing: {path}")
 
 
+def advisory_baseline_path(root: Path, image_name: str) -> Path:
+    """Return the reviewed advisory baseline that gates one release image."""
+
+    if image_name == "relay":
+        return root / "products/relay-v2/security/advisory-baseline.json"
+    return root / f"release/security/{image_name}-advisory-baseline.json"
+
+
 def check_image_onboarding(
     root: Path,
     version: str,
@@ -235,11 +243,7 @@ def check_image_onboarding(
             raise CandidateError(
                 f"release image recipe does not recognize {image_name}"
             )
-        baseline = (
-            root / "products/relay-v2/security/advisory-baseline.json"
-            if image_name == "relay"
-            else root / f"release/security/{image_name}-advisory-baseline.json"
-        )
+        baseline = advisory_baseline_path(root, image_name)
         if baseline.is_symlink():
             raise CandidateError(
                 f"{image_name} advisory baseline must not be a symlink: {baseline}"

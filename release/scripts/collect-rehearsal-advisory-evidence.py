@@ -18,6 +18,13 @@ from pathlib import Path
 from typing import Any, TextIO
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+import image_exposure
+
+
 ROOT = Path(__file__).resolve().parents[2]
 IMAGE_NAMES = frozenset({"breg", "casework", "discovery", "evidence", "relay"})
 SEMVER_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
@@ -138,6 +145,41 @@ def validate_oci_config(
                 f"OCI config at {path} has {label}={labels.get(label)!r}; expected {wanted!r}"
             )
     return tuple(diff_ids)
+
+
+def entrypoint_executable(path: Path) -> str:
+    document = load_json_object(path, "OCI config")
+    config = document.get("config")
+    entrypoint = config.get("Entrypoint") if isinstance(config, dict) else None
+    executable = (
+        entrypoint[0] if isinstance(entrypoint, list) and entrypoint else None
+    )
+    if (
+        not isinstance(executable, str)
+        or not executable.startswith("/")
+        or "\0" in executable
+    ):
+        raise EvidenceError(
+            f"OCI config at {path} must name an absolute Entrypoint executable"
+        )
+    return executable
+
+
+def write_exposure_report(
+    *,
+    name: str,
+    rootfs_tar: Path,
+    executable: str,
+    temporary: Path,
+    output: Path,
+) -> None:
+    try:
+        report = image_exposure.report_archive_executable(
+            rootfs_tar, executable, image=name, temporary=temporary
+        )
+    except image_exposure.ExposureError as error:
+        raise EvidenceError(f"ELF exposure report for {name} failed: {error}") from error
+    output.write_text(image_exposure.render_report(report), encoding="utf-8")
 
 
 def validate_grype_database(descriptor: dict[str, Any]) -> None:
@@ -271,6 +313,10 @@ def collect(args: argparse.Namespace) -> None:
         raise EvidenceError("Buildx builder name is invalid")
     if args.output.exists():
         raise EvidenceError(f"output path already exists: {args.output}")
+    try:
+        image_exposure.require_binutils()
+    except image_exposure.ExposureError as error:
+        raise EvidenceError(str(error)) from error
     head = run_command(["git", "rev-parse", "HEAD"]).stdout.strip()
     if head != args.revision:
         raise EvidenceError(
@@ -288,7 +334,7 @@ def collect(args: argparse.Namespace) -> None:
     names = parse_roster(roster_result.stdout)
 
     args.output.mkdir(parents=True)
-    for directory in ("grype", "oci-config", "rootfs", "syft"):
+    for directory in ("exposure", "grype", "oci-config", "rootfs", "syft"):
         (args.output / directory).mkdir()
     registry_name = f"registry-stack-rehearsal-{os.getpid()}"
     registry_started = False
@@ -413,6 +459,7 @@ def collect(args: argparse.Namespace) -> None:
                     revision=args.revision,
                     version=args.version,
                 )
+                executable = entrypoint_executable(config_path)
                 syft_path = args.output / f"syft/{name}.syft.json"
                 scan_env = {
                     **os.environ,
@@ -457,6 +504,13 @@ def collect(args: argparse.Namespace) -> None:
                     ]
                 )
                 reject_special_files(rootfs)
+                write_exposure_report(
+                    name=name,
+                    rootfs_tar=rootfs_tar,
+                    executable=executable,
+                    temporary=temporary_path,
+                    output=args.output / f"exposure/{name}.json",
+                )
                 images.append({"name": name, "digest": digest})
 
             manifest = {

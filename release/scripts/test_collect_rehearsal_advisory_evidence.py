@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import io
 import json
 import subprocess
+import tarfile
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,8 +35,12 @@ class FakeCommands:
         wrong_source: bool = False,
         wrong_grype_layers: bool = False,
         grype_db: dict | None = None,
+        relative_entrypoint: bool = False,
+        omit_executable: bool = False,
     ):
         self.calls: list[tuple[list[str], dict]] = []
+        self.relative_entrypoint = relative_entrypoint
+        self.omit_executable = omit_executable
         self.fail_tool = fail_tool
         self.fail_prefix = fail_prefix
         self.wrong_source = wrong_source
@@ -56,6 +62,25 @@ class FakeCommands:
             "os": "linux",
             "layers": [{"digest": "sha256:" + "c" * 64}],
         }
+
+    @staticmethod
+    def image_name(digest_ref: str) -> str:
+        return digest_ref.split("/", 1)[1].split("@", 1)[0]
+
+    def write_rootfs(self, path: Path, name: str) -> None:
+        with tarfile.open(path, mode="w") as archive:
+            for directory in ("usr", "usr/local", "usr/local/bin"):
+                info = tarfile.TarInfo(directory)
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                archive.addfile(info)
+            if self.omit_executable:
+                return
+            content = f"{name} executable".encode()
+            info = tarfile.TarInfo(f"usr/local/bin/{name}")
+            info.size = len(content)
+            info.mode = 0o755
+            archive.addfile(info, io.BytesIO(content))
 
     def __call__(
         self,
@@ -101,6 +126,10 @@ class FakeCommands:
                 "os": "linux",
                 "rootfs": {"type": "layers", "diff_ids": ["sha256:" + "c" * 64]},
                 "config": {
+                    "Entrypoint": [
+                        ("" if self.relative_entrypoint else "/")
+                        + f"usr/local/bin/{self.image_name(command[-1])}"
+                    ],
                     "User": "65532",
                     "Labels": {
                         "org.opencontainers.image.source": (
@@ -160,7 +189,7 @@ class FakeCommands:
         elif command[:4] == ["grype", "db", "status", "-o"]:
             Path(stdout_path).write_text(json.dumps({"built": "now"}), encoding="utf-8")
         elif command[:3] == ["crane", "export", "--insecure"]:
-            Path(command[-1]).write_bytes(b"synthetic tar")
+            self.write_rootfs(Path(command[-1]), self.image_name(command[-2]))
         elif executable == "tar":
             directory = Path(
                 next(
@@ -176,6 +205,26 @@ class FakeCommands:
 
 
 class CollectRehearsalAdvisoryEvidenceTest(TestCase):
+    def setUp(self) -> None:
+        self.analyzed: list[dict] = []
+        binutils = mock.patch.object(MODULE.image_exposure, "require_binutils")
+        analyze = mock.patch.object(
+            MODULE.image_exposure, "analyze_executable", side_effect=self.analyze
+        )
+        binutils.start()
+        analyze.start()
+        self.addCleanup(binutils.stop)
+        self.addCleanup(analyze.stop)
+
+    def analyze(self, path: Path, *, image: str, executable: str) -> dict:
+        report = {
+            "content": path.read_text(encoding="utf-8"),
+            "executable": executable,
+            "image": image,
+        }
+        self.analyzed.append({**report, "path": path})
+        return report
+
     def arguments(self, output: Path) -> argparse.Namespace:
         return argparse.Namespace(
             version=FakeCommands.version,
@@ -273,6 +322,112 @@ class CollectRehearsalAdvisoryEvidenceTest(TestCase):
             for _command, details in syft_calls:
                 self.assertEqual(details["env"]["SYFT_FILE_METADATA_SELECTION"], "all")
                 self.assertEqual(details["env"]["SYFT_FILE_METADATA_DIGESTS"], "sha256")
+            self.assertEqual(
+                sorted(path.name for path in (output / "exposure").iterdir()),
+                [f"{name}.json" for name in sorted(fake.roster)],
+            )
+            for name in fake.roster:
+                report_path = output / f"exposure/{name}.json"
+                expected = {
+                    "content": f"{name} executable",
+                    "executable": f"/usr/local/bin/{name}",
+                    "image": name,
+                }
+                self.assertEqual(json.loads(report_path.read_text()), expected)
+                self.assertEqual(
+                    report_path.read_text(),
+                    json.dumps(expected, indent=2, sort_keys=True) + "\n",
+                )
+            self.assertEqual(
+                [entry["image"] for entry in self.analyzed], list(fake.roster)
+            )
+            for entry in self.analyzed:
+                self.assertFalse(entry["path"].exists())
+                self.assertNotEqual(entry["path"].parent, output)
+            self.assertNotIn("exposure", manifest)
+
+    def test_missing_binutils_fails_before_local_resources(self) -> None:
+        fake = FakeCommands()
+        failure = MODULE.image_exposure.ExposureError(
+            "ELF exposure analysis requires binutils; missing: objdump, readelf"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(
+                MODULE.image_exposure, "require_binutils", side_effect=failure
+            ):
+                with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                    with self.assertRaisesRegex(
+                        MODULE.EvidenceError, "binutils; missing: objdump, readelf"
+                    ):
+                        MODULE.collect(self.arguments(output))
+            self.assertFalse(output.exists())
+        self.assertEqual(fake.calls, [])
+
+    def test_relative_entrypoint_never_seals_collection(self) -> None:
+        fake = FakeCommands(relative_entrypoint=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                with self.assertRaisesRegex(
+                    MODULE.EvidenceError, "absolute Entrypoint"
+                ):
+                    MODULE.collect(self.arguments(output))
+            self.assertFalse((output / "collection.json").exists())
+            self.assertEqual(list((output / "exposure").iterdir()), [])
+        self.assertTrue(
+            any(command[:3] == ["docker", "rm", "--force"] for command, _ in fake.calls)
+        )
+        self.assertEqual(self.analyzed, [])
+
+    def test_entrypoint_config_shapes_are_refused(self) -> None:
+        for entrypoint in (None, [], "/usr/local/bin/relay", [7], ["/usr/\0bin"]):
+            with self.subTest(entrypoint=entrypoint):
+                with tempfile.TemporaryDirectory() as temporary:
+                    path = Path(temporary) / "config.json"
+                    config = {} if entrypoint is None else {"Entrypoint": entrypoint}
+                    path.write_text(json.dumps({"config": config}), encoding="utf-8")
+                    with self.assertRaisesRegex(
+                        MODULE.EvidenceError, "absolute Entrypoint"
+                    ):
+                        MODULE.entrypoint_executable(path)
+
+    def test_missing_entrypoint_member_never_seals_collection(self) -> None:
+        fake = FakeCommands(omit_executable=True)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                with self.assertRaisesRegex(
+                    MODULE.EvidenceError,
+                    "ELF exposure report for breg failed: .*does not exist",
+                ):
+                    MODULE.collect(self.arguments(output))
+            self.assertFalse((output / "collection.json").exists())
+            self.assertEqual(list((output / "exposure").iterdir()), [])
+        self.assertEqual(self.analyzed, [])
+
+    def test_exposure_analysis_failure_never_seals_collection(self) -> None:
+        fake = FakeCommands()
+        failure = MODULE.image_exposure.ExposureError(
+            "objdump failed with exit status 1: synthetic failure"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "evidence"
+            with mock.patch.object(
+                MODULE.image_exposure, "analyze_executable", side_effect=failure
+            ):
+                with mock.patch.object(MODULE, "run_command", side_effect=fake):
+                    with self.assertRaisesRegex(
+                        MODULE.EvidenceError,
+                        "ELF exposure report for breg failed: objdump failed",
+                    ):
+                        MODULE.collect(self.arguments(output))
+            self.assertFalse((output / "collection.json").exists())
+            self.assertEqual(list((output / "exposure").iterdir()), [])
+            self.assertEqual(list((output / "rootfs").iterdir()), [output / "rootfs/breg.tar"])
+        self.assertTrue(
+            any(command[:3] == ["docker", "image", "rm"] for command, _ in fake.calls)
+        )
 
     def test_current_database_status_checksum_and_age_boundary(self) -> None:
         built = datetime(2026, 9, 6, tzinfo=timezone.utc)
