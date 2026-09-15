@@ -299,7 +299,7 @@ async fn fixture_publishing(
     let store = PostgresStore::connect_runtime(&database, &secrets).expect("the runtime store");
 
     // The admin connection seeds the facts the policy resolves supply
-    // against — the path operator tooling owns — and the store adopts the
+    // against (the path operator tooling owns), and the store adopts the
     // deployment identity, the same provisioning verb `scheduling migrate`
     // runs on a fresh database.
     for statement in [

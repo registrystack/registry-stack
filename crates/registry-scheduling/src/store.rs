@@ -8,7 +8,7 @@
 //! 1. `SELECT ... FOR UPDATE` on the supply row that anchors the decision:
 //!    the resource pool for an exact-time offering, the published window for
 //!    an arrival window.
-//! 2. A ledger snapshot whose hold expiry is evaluated *in the query* — a
+//! 2. A ledger snapshot whose hold expiry is evaluated *in the query*: a
 //!    claim consumes capacity when it is an active booking, or an active
 //!    hold whose `hold_expires_at` is still ahead of the observed now. A
 //!    delayed cleanup worker therefore cannot keep an expired hold alive.
@@ -997,8 +997,8 @@ impl PostgresStore {
         // The snapshot is read under the lock for serialization order, but
         // admission is not re-evaluated: the hold's own reservation transfers
         // to the booking in this same transaction, so capacity does not
-        // change. What must hold is identity — the policy revision the hold
-        // was admitted under is still current — checked below.
+        // change. What must hold is identity (the policy revision the hold
+        // was admitted under is still current), checked below.
         let _snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         let hold = transaction
             .claim_in_transaction(hold_id)
@@ -1390,7 +1390,7 @@ impl PostgresStore {
 
     /// Expire holds whose TTL has passed. Each expiry is a state change with
     /// its own history event, so the ledger never depends on the sweeper
-    /// having run for capacity to be free — the snapshot query already
+    /// having run for capacity to be free: the snapshot query already
     /// discounts expired holds.
     pub async fn expire_due_holds(
         &self,
@@ -1959,7 +1959,8 @@ async fn replay_stored_attempt(
 
 /// Mint reminder intents for a freshly committed appointment: one outbox
 /// row per authored offset whose due time is still ahead. An offset already
-/// past mints nothing — a reminder about the past is noise, not a notice.
+/// past mints nothing, because a reminder about the past is noise, not a
+/// notice.
 async fn mint_reminders(
     transaction: &deadpool_postgres::Transaction<'_>,
     claim: &ClaimRow,

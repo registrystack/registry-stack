@@ -2,7 +2,7 @@
 
 //! Service assembly and the supervised background loops: `scheduling serve`
 //! builds the store connection, the authenticator, the audit chain, and the
-//! scheduling service, then runs the HTTP listener beside four workers — hold
+//! scheduling service, then runs the HTTP listener beside four workers: hold
 //! expiry, reminder-intent dispatch, retention sweeps, and audit publication.
 //! A worker that dies stops the process rather than letting the runtime keep
 //! selling capacity its clocks no longer guard.
@@ -67,8 +67,8 @@ const REMINDER_RETRY_MAX_SECONDS: i64 = 3600;
 const REMINDER_MAXIMUM_BODY_BYTES: usize = 16 * 1024;
 const REMINDER_MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
 const REMINDER_BEARER_MAXIMUM_BYTES: usize = 8192;
-/// The whole dispatch of one intent — resolve, connect, send, and the status
-/// line — shares one deadline.
+/// The whole dispatch of one intent (resolve, connect, send, and the status
+/// line) shares one deadline.
 const REMINDER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[must_use]
