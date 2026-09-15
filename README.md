@@ -38,7 +38,7 @@ release manifests, and docs.
 
 ## What It Includes
 
-Registry Stack ships six installable products on one release train. Each has
+Registry Stack ships seven installable products on one release train. Each has
 its own deployment contract and adopter tooling, and each one is optional.
 
 - **Base Registry Engine:** a configuration-defined writable registry backed by
@@ -66,12 +66,18 @@ its own deployment contract and adopter tooling, and each one is optional.
   and small human decisions requested by another service. It can run with a
   governed Base Registry Engine source or in standalone hosted mode.
   Docs: [Registry Casework overview](https://docs.registrystack.org/dev/start/casework/).
+- **Registry Scheduling:** a coordinated booking surface over anchored supply:
+  published openings, exact-time offerings, arrival windows with channel
+  subquotas, holds, and accountable appointments, with every capacity decision
+  made inside one transaction under a task grant.
+  Docs: [Registry Scheduling API](https://docs.registrystack.org/reference/apis/registry-scheduling/).
 
 Evidence Gateway can use a Base Registry Engine or Registry Relay API as one of
 its fixed sources, and keeps its own authorization either way. The stack also
 includes Registry Platform shared primitives, the `bregctl`, `caseworkctl`,
-`relayctl`, `evidencectl`, and `discoveryctl` adopter tools, unified Node.js and
-Python clients, and release tooling for validating the public source model.
+`schedulingctl`, `relayctl`, `evidencectl`, and `discoveryctl` adopter tools,
+unified Node.js and Python clients, and release tooling for validating the
+public source model.
 
 ### Install a released build
 
@@ -82,6 +88,9 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 # Registry Casework: casework and caseworkctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/casework-install.sh | bash
 
+# Registry Scheduling: scheduling and schedulingctl
+curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/scheduling-install.sh | bash
+
 # Registry Relay: relay and relayctl
 curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/download/relay-install.sh | bash
 
@@ -91,13 +100,13 @@ curl -fsSL https://github.com/registrystack/registry-stack/releases/latest/downl
 
 Each installer verifies the binaries against the published `SHA256SUMS` before
 writing them to `$HOME/.local/bin`, or to the directory `BREG_INSTALL_DIR`,
-`CASEWORK_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or `EVIDENCECTL_INSTALL_DIR`
-names. Registry Discovery and Registry Manifest publish a binary and no
-installer: download `discovery-<tag>-linux-amd64` or
+`CASEWORK_INSTALL_DIR`, `SCHEDULING_INSTALL_DIR`, `RELAY_INSTALL_DIR`, or
+`EVIDENCECTL_INSTALL_DIR` names. Registry Discovery and Registry Manifest
+publish a binary and no installer: download `discovery-<tag>-linux-amd64` or
 `registry-manifest-<tag>-linux-amd64` from the
 [release page](https://github.com/registrystack/registry-stack/releases) and
 check it against the release checksum chain. Container images for `breg`,
-`casework`, `relay`, `evidence`, and `discovery` are published as
+`casework`, `scheduling`, `relay`, `evidence`, and `discovery` are published as
 `ghcr.io/registrystack/<name>:<tag>`. Which platforms each artifact supports,
 and what is not supported, is recorded in
 [known limitations](https://docs.registrystack.org/dev/explanation/known-limitations/#platform-support).
@@ -128,13 +137,14 @@ flowchart LR
 ## Repository Layout
 
 - `crates/`: Rust crates and runnable binaries for Base Registry Engine,
-  Registry Relay, Evidence Gateway, Registry Casework, Registry Discovery,
-  Registry Manifest, Registry Platform, and the `bregctl`,
-  `caseworkctl`, `relayctl`, `evidencectl`, and `discoveryctl` adopter tools.
-  Base Registry Engine lives in `crates/registry-breg` with one `breg`
-  binary, Evidence Gateway in `crates/registry-evidence` with one `evidence`
-  binary, and Registry Casework in `crates/registry-casework` with one
-  `casework` binary.
+  Registry Relay, Evidence Gateway, Registry Casework, Registry Scheduling,
+  Registry Discovery, Registry Manifest, Registry Platform, and the `bregctl`,
+  `caseworkctl`, `schedulingctl`, `relayctl`, `evidencectl`, and `discoveryctl`
+  adopter tools. Base Registry Engine lives in `crates/registry-breg` with one
+  `breg` binary, Evidence Gateway in `crates/registry-evidence` with one
+  `evidence` binary, Registry Casework in `crates/registry-casework` with one
+  `casework` binary, and Registry Scheduling in `crates/registry-scheduling`
+  with one `scheduling` binary.
 - `products/`: product-owned docs, examples, Docker inputs, specs, security
   material, scripts, performance harnesses, and fixtures that are not normal
   workspace crates.
