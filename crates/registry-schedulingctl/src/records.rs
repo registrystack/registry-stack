@@ -4,8 +4,8 @@
 //!
 //! `records apply` is the one attributable operator write that swaps a
 //! deployment's locations, pools, members, and exceptions wholesale. The
-//! records document is parsed and validated offline first — nothing reaches
-//! the database until the whole document holds together — and the swap itself
+//! records document is parsed and validated offline first, nothing reaches
+//! the database until the whole document holds together, and the swap itself
 //! lands through the store's single replace transaction, which writes its own
 //! audit row beside the new facts.
 
