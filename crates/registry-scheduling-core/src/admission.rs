@@ -402,7 +402,7 @@ pub fn evaluate_window_admission(
 ///
 /// An active hold confirms. A hold that expired at or before `now` is
 /// expired, whatever the cleanup worker has or has not done. A claim that is
-/// not a hold at all — a booking, or a hold already released or consumed — is
+/// not a hold at all (a booking, or a hold already released or consumed) is
 /// not confirmable; release and consumption are store states the runtime
 /// reports with `hold.released` when it resolves the claim, so seeing one
 /// here means the caller passed the wrong claim.

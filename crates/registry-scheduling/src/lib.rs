@@ -4,7 +4,7 @@
 //! the supervised workers.
 //!
 //! The runtime owns commitment: every booking, hold, release, and cancellation
-//! lands through one capacity-transaction shape — lock the supply row, read a
+//! lands through one capacity-transaction shape: lock the supply row, read a
 //! ledger snapshot whose hold expiries are evaluated in the query, run the
 //! pure evaluators from `registry-scheduling-core` in memory, and write the
 //! claim, the idempotency attempt, the history event, and the outbox rows in
