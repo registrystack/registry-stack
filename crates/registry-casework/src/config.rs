@@ -10,7 +10,8 @@ use registry_platform_config::{
     SecretError, SecretProvider, SecretReference, SecretResolver, MAX_SECRET_BYTES,
 };
 use registry_platform_oidc::{
-    fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig, TokenVerifierConfig,
+    access_token_typ_set, fetch_discovery, JwksFetcher, JwksFetcherConfig, OidcDiscoveryConfig,
+    TokenVerifierConfig,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -63,6 +64,10 @@ pub const POLICY_PACKAGE_MANIFEST_FILE: &str = "casework.package.json";
 pub const RUNTIME_CONFIG_API_VERSION: &str = "registry.registrystack.org/casework-runtime/v1alpha1";
 pub const RUNTIME_CONFIG_KIND: &str = "CaseworkRuntimeConfig";
 pub const POLICY_FILE: &str = "casework.yaml";
+/// The RFC 9068 access-token media type this runtime verifies. The pair of
+/// spellings it admits is derived from this one value, never authored, so no
+/// deployment can widen it to an ordinary JWT.
+const CASEWORK_ACCESS_TOKEN_TYPE: &str = "at+jwt";
 const MAXIMUM_POLICY_PACKAGE_FILE_BYTES: usize = 1024 * 1024;
 const MAXIMUM_POLICY_PACKAGE_MANIFEST_BYTES: usize = 1024 * 1024;
 pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
@@ -783,16 +788,29 @@ impl RuntimeConfig {
                 JwksFetcher::new_static(jwks, JwksFetcherConfig::defaults())
             }
         };
-        let verifier = TokenVerifierConfig::access_token_profile(
+        Ok((self.verifier_profile(), std::sync::Arc::new(fetcher)))
+    }
+
+    /// The access-token verifier profile this deployment's OIDC settings
+    /// describe.
+    ///
+    /// RFC 9068 gives the access token one media type spelled two ways,
+    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
+    /// accept that pair and refuse every other `typ`. The list comes from
+    /// [`access_token_typ_set`] so a plain `JWT` stays out: an ID token, a
+    /// UserInfo JWT, or any other JWT minted for this audience is not an
+    /// access token, and admitting one would let a credential issued for
+    /// another purpose claim, draft, and act on casework.
+    pub(crate) fn verifier_profile(&self) -> TokenVerifierConfig {
+        TokenVerifierConfig::access_token_profile(
             self.authentication.oidc.issuer.clone(),
             vec![self.authentication.oidc.audience.clone()],
             vec![Algorithm::RS256, Algorithm::ES256],
-            vec!["at+jwt".to_owned(), "JWT".to_owned()],
+            access_token_typ_set(CASEWORK_ACCESS_TOKEN_TYPE),
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
         .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
-        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone());
-        Ok((verifier, std::sync::Arc::new(fetcher)))
+        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
     }
 }
 
@@ -884,6 +902,7 @@ fn parse_static_jwks(bytes: &[u8]) -> Result<JwkSet, RuntimeConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_platform_oidc::is_access_token_typ_pair;
 
     const SOURCE_PROJECT: &str = r#"apiVersion: registry.registrystack.org/casework/v1alpha1
 kind: CaseworkProject
@@ -1442,6 +1461,32 @@ sources:
                 if path == "database.runtimeUrlRef"
         ));
         assert_eq!(error.path(), "database.runtimeUrlRef");
+    }
+
+    /// RFC 9068 gives the access token one media type spelled two ways,
+    /// `at+jwt` and `application/at+jwt`, and requires a resource server to
+    /// accept that pair and refuse every other `typ`. A plain `JWT` is not
+    /// that type: an ID token, a UserInfo JWT, or any other JWT this issuer
+    /// mints for this audience would otherwise be admitted as a Casework
+    /// access token and act with the scopes it carries.
+    #[test]
+    fn the_verifier_admits_only_the_rfc_9068_access_token_type() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        std::fs::create_dir(&package).unwrap();
+        write_package(&package);
+        let runtime = root.path().join("runtime.yaml");
+        std::fs::write(
+            &runtime,
+            operator_document(&package, "operator-controlled-upstream"),
+        )
+        .unwrap();
+        let profile = RuntimeConfig::load(&runtime).unwrap().verifier_profile();
+        assert!(
+            is_access_token_typ_pair(&profile.allowed_typ),
+            "the verifier admits {:?}",
+            profile.allowed_typ
+        );
     }
 
     #[test]
