@@ -38,6 +38,9 @@ pub enum PolicyCheckReason {
     MissingModeField,
     /// A field that belongs to the other scheduling mode is present.
     WrongModeField,
+    /// A value's text is outside the grammar its field requires: a clock that
+    /// is not `HH:MM`, a date that is not `YYYY-MM-DD`.
+    MalformedValue,
     /// A numeric bound is zero, negative, or inverted.
     InvalidBound,
     /// An opening's effective range spans more days than the weekly calendar
@@ -77,6 +80,7 @@ impl PolicyCheckReason {
             Self::UnknownChannel => "unknown-channel",
             Self::MissingModeField => "missing-mode-field",
             Self::WrongModeField => "wrong-mode-field",
+            Self::MalformedValue => "malformed-value",
             Self::InvalidBound => "invalid-bound",
             Self::PatternSpanTooLarge => "pattern-span-too-large",
             Self::InvalidBands => "invalid-bands",
@@ -86,6 +90,17 @@ impl PolicyCheckReason {
             Self::HooksUnsupported => "hooks-unsupported",
             Self::LeftoverUnsupported => "leftover-unsupported",
         }
+    }
+
+    /// Whether the reason describes a value whose text is outside the grammar
+    /// its field requires.
+    ///
+    /// Such a value is not an unfinished project: no addition makes it valid,
+    /// only a correction. Adopter tooling refuses a document carrying one
+    /// rather than reporting it as incomplete authoring.
+    #[must_use]
+    pub const fn is_malformed_value(self) -> bool {
+        matches!(self, Self::MalformedValue)
     }
 }
 
@@ -132,5 +147,22 @@ mod tests {
                 .to_string(),
             "windows[0].offering: unknown-offering"
         );
+    }
+
+    #[test]
+    fn only_a_malformed_value_says_the_text_is_wrong() {
+        assert!(PolicyCheckReason::MalformedValue.is_malformed_value());
+        assert_eq!(
+            PolicyCheckReason::MalformedValue.as_str(),
+            "malformed-value"
+        );
+        for reason in [
+            PolicyCheckReason::InvalidBound,
+            PolicyCheckReason::InvalidIdentifier,
+            PolicyCheckReason::InvalidBecause,
+            PolicyCheckReason::EmptyCollection,
+        ] {
+            assert!(!reason.is_malformed_value(), "{reason}");
+        }
     }
 }

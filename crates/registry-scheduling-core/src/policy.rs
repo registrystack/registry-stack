@@ -450,7 +450,7 @@ impl SchedulingPolicy {
                 if !valid_iso_date(date) {
                     findings.push(SchedulingDiagnostic::new(
                         format!("{path}.dates[{date_index}]"),
-                        PolicyCheckReason::InvalidBound,
+                        PolicyCheckReason::MalformedValue,
                     ));
                 }
             }
@@ -476,21 +476,43 @@ impl SchedulingPolicy {
                 &format!("{path}.weekdays"),
                 &mut findings,
             );
-            if !valid_hh_mm(&opening.start_time) || !valid_hh_mm(&opening.end_time) {
-                findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.startTime"),
-                    PolicyCheckReason::InvalidBound,
-                ));
-            } else if opening.start_time >= opening.end_time {
+            // A value outside its grammar is named where it stands, and the
+            // range it belongs to is left unjudged: comparing text that is not
+            // a clock, or not a date, would answer a question the author never
+            // asked.
+            for (field, value) in [
+                ("startTime", &opening.start_time),
+                ("endTime", &opening.end_time),
+            ] {
+                if !valid_hh_mm(value) {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.{field}"),
+                        PolicyCheckReason::MalformedValue,
+                    ));
+                }
+            }
+            let clocks_are_clocks =
+                valid_hh_mm(&opening.start_time) && valid_hh_mm(&opening.end_time);
+            if clocks_are_clocks && opening.start_time >= opening.end_time {
                 findings.push(SchedulingDiagnostic::new(
                     format!("{path}.endTime"),
                     PolicyCheckReason::InvalidBound,
                 ));
             }
-            if !valid_iso_date(&opening.effective_from)
-                || !valid_iso_date(&opening.effective_until)
-                || opening.effective_from > opening.effective_until
-            {
+            for (field, value) in [
+                ("effectiveFrom", &opening.effective_from),
+                ("effectiveUntil", &opening.effective_until),
+            ] {
+                if !valid_iso_date(value) {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.{field}"),
+                        PolicyCheckReason::MalformedValue,
+                    ));
+                }
+            }
+            let dates_are_dates =
+                valid_iso_date(&opening.effective_from) && valid_iso_date(&opening.effective_until);
+            if dates_are_dates && opening.effective_from > opening.effective_until {
                 findings.push(SchedulingDiagnostic::new(
                     format!("{path}.effectiveUntil"),
                     PolicyCheckReason::InvalidBound,
@@ -1930,6 +1952,55 @@ holdPolicy:
         assert!(valid_iso_date("2026-10-05"));
         assert!(!valid_iso_date("2026-10-5"));
         assert!(!valid_iso_date("2026-02-30"));
+    }
+
+    /// A value whose text is outside its grammar is not an unfinished
+    /// project: no addition turns `9:00 AM` into a clock, only a correction.
+    /// The reason says so, and it names the field that is actually malformed,
+    /// so adopter tooling can refuse the document instead of reporting it as
+    /// incomplete authoring. A well-formed value that breaks its range stays
+    /// an invalid bound: the text parses, the range does not hold.
+    #[test]
+    fn a_clock_or_date_outside_its_grammar_is_malformed_rather_than_unbounded() {
+        let rendered = |policy: &SchedulingPolicy| -> Vec<String> {
+            policy.check().iter().map(ToString::to_string).collect()
+        };
+
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].start_time = "9:00 AM".to_owned();
+        assert_eq!(
+            rendered(&policy),
+            ["openings[0].startTime: malformed-value"]
+        );
+
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].end_time = "12.30".to_owned();
+        assert_eq!(rendered(&policy), ["openings[0].endTime: malformed-value"]);
+
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].effective_from = "01/10/2026".to_owned();
+        assert_eq!(
+            rendered(&policy),
+            ["openings[0].effectiveFrom: malformed-value"]
+        );
+
+        let mut policy = minimal_exact_time_policy();
+        policy.holiday_sets[0].dates[0] = "25 December 2026".to_owned();
+        assert_eq!(
+            rendered(&policy),
+            ["holidaySets[0].dates[0]: malformed-value"]
+        );
+
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].end_time = "08:00".to_owned();
+        assert_eq!(rendered(&policy), ["openings[0].endTime: invalid-bound"]);
+
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].effective_until = "2026-09-30".to_owned();
+        assert_eq!(
+            rendered(&policy),
+            ["openings[0].effectiveUntil: invalid-bound"]
+        );
     }
 
     #[test]
