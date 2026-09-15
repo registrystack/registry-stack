@@ -130,8 +130,9 @@ a grant narrowed or withdrawn at the issuer after its token was minted keeps the
 carries until the token or the grant deadline passes. Keep grant deadlines short. Re-checking the full
 bounds inside the capacity transaction is a recorded deferral, not a promise this milestone keeps.
 
-The audit journal records `authorization.allowed` or `authorization.refused` for the commitment as an
-audit reason, never as a problem code.
+The audit journal records `authorization.allowed` or `authorization.refused` as an audit reason, never
+as a problem code, for the commitment and for a permission the service refuses before any commitment is
+reached.
 
 {/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current() checks grant_exp_unix and
     nothing else; crates/registry-scheduling/src/service.rs, require_permission() and problem_of();
