@@ -273,6 +273,12 @@ class CiChangesTest(unittest.TestCase):
     ) -> None:
         selectors = {
             "casework-postgres": "needs.changes.outputs.casework_postgres == 'true'",
+            "scheduling-postgres": (
+                "needs.changes.outputs.scheduling_postgres == 'true'"
+            ),
+            "scheduling-contracts": (
+                "needs.changes.outputs.scheduling_contracts == 'true'"
+            ),
             "platform-fuzz": "needs.changes.outputs.platform == 'true'",
             "platform-coverage": "needs.changes.outputs.platform == 'true'",
             "rust-quality": "needs.changes.outputs.rust == 'true'",
@@ -338,6 +344,8 @@ class CiChangesTest(unittest.TestCase):
             "identifiers",
             "rust-result",
             "casework-postgres",
+            "scheduling-contracts",
+            "scheduling-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -371,6 +379,8 @@ class CiChangesTest(unittest.TestCase):
                 "breg-wasm",
                 "identifiers",
                 "casework-postgres",
+                "scheduling-postgres",
+                "scheduling-contracts",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -394,6 +404,8 @@ class CiChangesTest(unittest.TestCase):
                 "breg-wasm",
                 "identifiers",
                 "casework-postgres",
+                "scheduling-postgres",
+                "scheduling-contracts",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -449,7 +461,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(29, len(final_needs))
+        self.assertEqual(31, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]
