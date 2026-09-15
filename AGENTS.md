@@ -4,7 +4,7 @@ This is the Registry Stack monorepo: registry-facing services over the data
 institutions already hold and the registries they do not hold yet. Pre-1.0;
 APIs and deployment contracts may change.
 
-Four independent runtime products are relevant:
+Five independent runtime products are relevant:
 
 - **Base Registry Engine** compiles a declared registry project into a
   PostgreSQL-backed writable registry: schema, REST API, per-profile
@@ -16,12 +16,22 @@ Four independent runtime products are relevant:
 - **Registry Casework** gives authorized human teams a coordinated inbox over
   source-owned work while leaving eligibility and registry mutations with the
   source system.
+- **Registry Scheduling** publishes bookable services over anchored supply
+  and gives authorized callers short holds and confirmed appointments, with
+  every capacity decision made inside one transaction under a task grant.
 
 The products compose without merging their boundaries. Evidence may use a Base
 Registry Engine route or a Relay-protected API as a fixed HTTP source and
 inherits neither one's authorization. Casework may present source-owned work
 from a Base Registry Engine through its adapter, while current source
-visibility and action authority remain with that registry.
+visibility and action authority remain with that registry. Registry Scheduling
+may publish bookable supply for work another product governs, and another
+product may show an appointment Scheduling holds, without either side gaining
+the other's authority: eligibility stays with the source, and the authority to
+commit capacity stays with the task grant Scheduling verifies. Scheduling owns
+its capacity ledger absolutely. A hold or an appointment is created, moved, or
+released only inside the Scheduling runtime's own capacity transaction, and no
+other product may write to that ledger, directly or through a shared database.
 
 A Base Registry Engine governed action may also consume an Evidence assertion
 as an ordinary relying party: a Rhai handler declaring handler ABI
@@ -78,6 +88,10 @@ The dependency runs one way only in production: no Evidence crate depends on
 | `crates/registry-casework-client` | Rust Casework client and its bounded problem and recovery contract |
 | `crates/registry-casework-client-node` | Internal napi-rs binding used to assemble the unified Node.js client |
 | `crates/registry-casework-client-py` | Internal PyO3 binding used to assemble the unified Python client |
+| `crates/registry-scheduling-core` | Source-neutral Scheduling policy model, wire DTOs, problem codes, and authoring checks |
+| `crates/registry-scheduling` | PostgreSQL-backed Scheduling runtime and the `scheduling` binary |
+| `crates/registry-schedulingctl` | Scheduling authoring and local operator tooling and the `schedulingctl` binary |
+| `crates/registry-scheduling-client` | Bounded Rust Scheduling client over the runtime's HTTP contract |
 | `crates/registry-record` | Product-neutral Registry Record v1 response DTOs shared by the Base Registry Engine and Relay clients |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
 | `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
@@ -125,6 +139,36 @@ Casework coordinates claims, private drafts, accountable attempts, and
 caller-visible inboxes. Source adapters retain source visibility and action
 authority. The source-neutral core and generic clients must not depend on BReg
 protocol types, and BReg must not depend on Casework.
+
+Registry Scheduling is implemented by `registry-scheduling`,
+`registry-scheduling-core`, `registry-schedulingctl`, and its Rust client
+crate. Its product contracts, generated schemas, examples, and focused gates
+live under `products/scheduling`.
+Scheduling sells capacity only over supply the operator anchored: resource
+pools and published windows are runtime records the policy references by
+identifier, a hold or appointment is a claim against that supply inside one
+capacity transaction, and every mutation carries a task grant matched against
+the offering's service, location, and action before that transaction opens,
+with the grant's expiry re-checked inside it immediately before the claim
+commits. Reminder delivery and retention are outbox work, never inline side
+effects, and the runtime has no scripting engine: the reserved hook ABI
+`registry.scheduling-hook/v1` exists on the authored form only. The
+source-neutral core and the client must not depend on the runtime or another
+product's protocol types.
+
+For the MVP, no scheduling crate may reach a BReg, Casework, or Evidence crate
+in either direction, and the dependency-direction gate enforces that on the
+whole forward closure. The restriction is scoped to the MVP because the crates
+that would compose across those boundaries do not exist yet: a
+`registry-scheduling-casework` adapter would depend on
+`registry-casework-client`, a `registry-scheduling-breg` adapter on
+`registry-breg-client`, and the runtime may one day consume an Evidence
+assertion as an ordinary relying party through `registry-evidence-client` and
+`registry-evidence-verifier`, the way a Base Registry Engine governed action
+already does. Adding such a crate relaxes this sentence here and in the gate,
+in the same change; until then the sentence stands as written and no local
+exception may be taken to it. The runtime, the source-neutral core, the client,
+and adopter tooling stay on the strict side of it in every case.
 
 Registry Discovery is a curated index over public provider descriptions, not
 a trust broker, authorization service, protocol adapter, or data proxy.
@@ -377,6 +421,31 @@ The checkpoint script runs the database-free checks. For PostgreSQL execution,
 follow `products/casework/README.md`: its destructive test suites require
 separate disposable databases and the `postgres-test` feature. A test binary
 that skips because its database URL is absent is not database verification.
+
+Registry Scheduling product and gates:
+
+```bash
+cargo build --locked -p registry-schedulingctl
+products/scheduling/scripts/check-checkpoint.sh
+products/scheduling/scripts/check-contracts.sh
+SCHEDULING_TEST_DATABASE_URL=<disposable database> cargo test --locked \
+  -p registry-scheduling --features postgres-test --test postgres_commitments
+python3 products/identifiers/scripts/generate.py --check-references
+```
+
+The checkpoint script runs the database-free checks; the PostgreSQL suite
+needs a disposable database named by `SCHEDULING_TEST_DATABASE_URL` under the
+same `postgres-test` caveat. The contracts check holds
+`products/scheduling/contracts/` against the code and the published reference:
+every security invariant names a threat, an enforcement point, a refusal, and
+a negative test that exists and is selectable by its own runner, and the
+recorded decisions stay in step with the security review notes. The runtime
+configuration schema is regenerated, never hand-edited:
+
+```bash
+cargo run -p registry-scheduling --features schema --example runtime-schema -- \
+  --output products/scheduling/generated/runtime
+```
 
 The unified Node.js and Python packages are generated from the maintained product
 bindings. After changing a binding or facade, run:

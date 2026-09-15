@@ -7,7 +7,6 @@
 mod adapter;
 mod assignment;
 mod attempt_settlement;
-mod calendar;
 mod clock_runtime;
 mod config;
 mod hosted;
@@ -23,13 +22,20 @@ mod transition;
 pub use adapter::*;
 pub use assignment::*;
 pub use attempt_settlement::*;
-pub use calendar::*;
 pub use clock_runtime::*;
 pub use config::*;
 pub use hosted::*;
 pub use http::*;
 pub use model::*;
 pub use policy::*;
+// Casework's clocks are working-day deadlines, so it re-exports that
+// evaluator and nothing else. The weekly opening-pattern evaluator in the
+// same platform crate serves a different product and is not Casework's to
+// publish.
+pub use registry_platform_calendar::{
+    evaluate_working_day_deadline, CalendarEvaluationError, HolidaySetRevision, WorkingCalendar,
+    WorkingDayDeadline, WorkingDayDeadlineRule, MAXIMUM_WORKING_DAY_OFFSET,
+};
 pub use routing::*;
 pub use source_retention::*;
 pub use task_grant::*;

@@ -201,7 +201,7 @@ A calendar names a timezone and its working weekdays, and its holiday dates arri
 Republishing holidays never silently rewrites a running deadline: an Administrator previews the recompute in batches, reviews it, and applies the reviewed preview.
 
 {/* Evidence: crates/registry-casework-core/src/policy.rs, MAXIMUM_CLOCKS, MAXIMUM_CALENDARS, and MAXIMUM_CLOCK_REMINDERS;
-    crates/registry-casework-core/src/calendar.rs, evaluate_working_day_deadline;
+    crates/registry-platform-calendar/src/working_day.rs, evaluate_working_day_deadline;
     crates/registry-casework/src/clocks.rs, apply_clock_recompute. */}
 
 What a clock does when it fires is narrow and local.

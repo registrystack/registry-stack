@@ -3650,6 +3650,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "jsonschema",
+ "registry-platform-calendar",
  "registry-platform-canonical-json",
  "registry-platform-httputil",
  "serde",
@@ -3707,6 +3708,8 @@ dependencies = [
  "registry-evidencectl",
  "registry-relay-v2",
  "registry-relayctl",
+ "registry-scheduling",
+ "registry-schedulingctl",
  "serde",
  "serde_json",
 ]
@@ -4177,6 +4180,15 @@ name = "registry-platform-buildinfo"
 version = "0.32.0"
 
 [[package]]
+name = "registry-platform-calendar"
+version = "0.32.0"
+dependencies = [
+ "chrono",
+ "chrono-tz",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "registry-platform-canonical-json"
 version = "0.32.0"
 dependencies = [
@@ -4487,6 +4499,104 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+]
+
+[[package]]
+name = "registry-scheduling"
+version = "0.32.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "base64",
+ "chrono",
+ "clap",
+ "deadpool-postgres",
+ "futures",
+ "http",
+ "jsonwebtoken",
+ "registry-platform-audit",
+ "registry-platform-authcommon",
+ "registry-platform-buildinfo",
+ "registry-platform-calendar",
+ "registry-platform-canonical-json",
+ "registry-platform-config",
+ "registry-platform-crypto",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-platform-oidc",
+ "registry-scheduling-core",
+ "reqwest",
+ "rustls",
+ "schemars",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-postgres",
+ "tokio-postgres-rustls",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "registry-scheduling-client"
+version = "0.32.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "registry-platform-httpsec",
+ "registry-platform-httputil",
+ "registry-scheduling-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "registry-scheduling-core"
+version = "0.32.0"
+dependencies = [
+ "chrono",
+ "registry-platform-calendar",
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "registry-schedulingctl"
+version = "0.32.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "chrono-tz",
+ "clap",
+ "registry-platform-buildinfo",
+ "registry-platform-config",
+ "registry-scheduling",
+ "registry-scheduling-core",
+ "serde_json",
+ "serde_norway",
+ "serde_path_to_error",
+ "tempfile",
+ "tokio",
+ "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]

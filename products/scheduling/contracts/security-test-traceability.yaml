@@ -1,0 +1,146 @@
+contract: registry.scheduling.security-test-traceability/v1
+scope: mvp
+executionStatus: not-recorded
+note: >-
+  Every entry names the tests that carry its invariant. Tests under
+  crates/registry-scheduling/tests run only with the postgres-test feature and
+  a disposable database; tests in schema.rs run only under the schema feature.
+  This file records the obligation, not a passing run.
+entries:
+  - id: SCHEDULING-SEC-01
+    tests:
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: the_second_caller_against_the_last_unit_is_refused}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: a_party_that_does_not_fit_remaining_capacity_is_refused_whole}
+      - {path: crates/registry-scheduling-core/src/model.rs, name: a_confirmed_booking_consumes_but_an_expired_hold_does_not}
+      - {path: crates/registry-scheduling-core/src/model.rs, name: supply_occupancy_is_half_open_and_honors_the_excluded_claim}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_direct_create_books_without_a_hold_and_exhausts_capacity}
+  - id: SCHEDULING-SEC-02
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_commitment_against_an_unanchored_pool_refuses_loudly}
+      - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_anchors_are_collected_without_duplicates}
+  - id: SCHEDULING-SEC-03
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
+  - id: SCHEDULING-SEC-04
+    tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: a_partial_grant_is_refused_as_invalid_claims}
+      - {path: crates/registry-scheduling/src/auth.rs, name: a_complete_task_grant_is_extracted_and_bound_to_the_deployment}
+      - {path: crates/registry-scheduling/src/auth.rs, name: a_read_without_the_reads_scope_is_a_profile_refusal_but_still_mutates}
+      - {path: crates/registry-scheduling/src/auth.rs, name: the_explain_path_demands_its_own_scope}
+      - {path: crates/registry-scheduling/src/config.rs, name: explain_and_read_scopes_must_differ_and_retention_must_be_positive}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: any_partial_core_grant_set_is_rejected}
+  - id: SCHEDULING-SEC-05
+    tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: a_grant_naming_another_resource_is_a_profile_refusal}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_permission_cardinality_bounds_are_enforced}
+  - id: SCHEDULING-SEC-06
+    tests:
+      - {path: crates/registry-breg/src/task_grant/tests.rs, name: a_scheduling_grant_is_refused_by_the_breg_binding}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: grant_bounds_variants_are_distinct_and_strict}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_value_boundaries_and_unknown_fields_are_enforced}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: the_scheduling_tag_round_trips_through_serde}
+  - id: SCHEDULING-SEC-07
+    tests:
+      - {path: crates/registry-scheduling/src/service.rs, name: the_detailed_code_stays_behind_the_explain_path}
+      - {path: crates/registry-scheduling/src/service.rs, name: commit_errors_project_to_their_public_codes}
+      - {path: crates/registry-scheduling/src/service.rs, name: a_fully_occupied_slot_is_not_availability}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: refusals_carry_their_distinguished_public_codes}
+      - {path: crates/registry-scheduling-core/src/problem.rs, name: exactly_one_code_is_detailed_only}
+  - id: SCHEDULING-SEC-08
+    tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cursors_page_their_own_listing_and_refuse_foreign_contexts}
+      - {path: crates/registry-scheduling/src/cursors.rs, name: a_cursor_binds_to_its_listing_context_and_expires}
+      - {path: crates/registry-scheduling/src/cursors.rs, name: cursor_expiry_is_fifteen_minutes_out}
+      - {path: crates/registry-scheduling/src/cursors.rs, name: positions_round_trip_and_refuse_foreign_shapes}
+  - id: SCHEDULING-SEC-09
+    tests:
+      - {path: crates/registry-scheduling/src/http.rs, name: the_idempotency_key_is_present_bounded_and_graphical}
+      - {path: crates/registry-scheduling/src/http.rs, name: a_replayed_refusal_re_renders_its_pinned_code_under_the_current_trace}
+      - {path: crates/registry-scheduling/src/http.rs, name: a_replayed_release_answers_an_empty_204_again}
+      - {path: crates/registry-scheduling/src/service.rs, name: a_success_replay_receipt_projects_through_the_same_document}
+      - {path: crates/registry-scheduling-core/src/model.rs, name: the_same_request_always_hashes_identically}
+      - {path: crates/registry-scheduling-core/src/model.rs, name: set_order_never_changes_the_request_hash}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: cancellation_respects_the_cutoff_and_replays_its_verdict}
+  - id: SCHEDULING-SEC-10
+    tests:
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: window_revisions_must_match_and_policy_change_wins}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones}
+  - id: SCHEDULING-SEC-11
+    tests:
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}
+      - {path: crates/registry-scheduling-core/src/admission.rs, name: a_live_hold_still_consumes}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
+  - id: SCHEDULING-SEC-12
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: listener_requires_a_private_address_or_explicit_container_network}
+      - {path: crates/registry-scheduling/src/http.rs, name: answers_carry_no_store_and_the_callers_trace}
+      - {path: crates/registry-scheduling/src/http.rs, name: framework_rejections_normalize_to_request_problems}
+      - {path: crates/registry-scheduling/src/http.rs, name: an_unknown_route_answers_the_pinned_problem_under_the_callers_trace}
+      - {path: crates/registry-scheduling/src/http.rs, name: an_unauthenticated_problem_challenges_for_a_bearer}
+      - {path: crates/registry-scheduling/src/http.rs, name: an_unavailable_problem_names_a_retry_interval}
+      - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: oversized_answers_stay_bounded}
+  - id: SCHEDULING-SEC-13
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: typed_parse_path_does_not_echo_the_rejected_value}
+      - {path: crates/registry-scheduling/src/http.rs, name: every_problem_of_the_closed_vocabulary_renders_its_pinned_document}
+      - {path: crates/registry-scheduling/src/http.rs, name: a_receipt_in_no_known_shape_is_never_shown_to_the_caller}
+      - {path: crates/registry-scheduling-core/src/diagnostics.rs, name: reasons_render_as_closed_slugs}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_debug_redacts_service_location_and_actions}
+      - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: grant_debug_redacts_claim_values}
+      - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: edge_answers_stay_edge_talk}
+  - id: SCHEDULING-SEC-14
+    tests:
+      - {path: crates/registry-scheduling/src/runtime.rs, name: a_pending_audit_record_is_stamped_with_its_identity_exactly_once}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hold_confirms_into_an_appointment_with_attributable_history}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_permission_refused_before_the_transaction_writes_its_audit_row}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_journal_is_read_in_the_order_it_was_written}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_audit_chain_continues_across_a_restart}
+  - id: SCHEDULING-SEC-15
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: production_requires_a_verified_package_while_loopback_accepts_authoring}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_policy_that_fails_its_checks_never_reaches_the_runtime}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: the_policy_digest_is_stable_and_moves_with_content}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: adoption_binds_one_identity_and_refuses_a_second}
+  - id: SCHEDULING-SEC-16
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: static_jwks_requires_unique_named_asymmetric_keys}
+      - {path: crates/registry-scheduling/src/auth.rs, name: a_credential_signed_by_an_unknown_key_is_refused}
+  - id: SCHEDULING-SEC-17
+    tests:
+      - {path: crates/registry-scheduling-core/src/model.rs, name: an_admission_request_refuses_a_caller_supplied_exclusion}
+      - {path: crates/registry-scheduling-core/src/model.rs, name: ledger_and_request_shapes_refuse_unknown_fields}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: unknown_policy_fields_are_refused}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: collection_bounds_are_enforced}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: declared_hooks_are_refused_because_nothing_can_run_them}
+      - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: invalid_client_input_never_reaches_the_wire}
+  - id: SCHEDULING-SEC-18
+    tests:
+      - {path: products/scheduling/scripts/test_dependency_direction.py, name: test_product_dependency_on_scheduling_is_rejected}
+      - {path: products/scheduling/scripts/test_dependency_direction.py, name: test_transitive_product_dependency_from_core_is_rejected}
+      - {path: products/scheduling/scripts/test_dependency_direction.py, name: test_evidence_dependency_from_client_is_rejected}
+      - {path: products/scheduling/scripts/test_dependency_direction.py, name: test_core_depending_on_the_runtime_is_rejected}
+      - {path: products/scheduling/scripts/test_dependency_direction.py, name: test_client_depending_on_the_runtime_is_rejected}
+  - id: SCHEDULING-SEC-19
+    tests:
+      - {path: crates/registry-scheduling/src/http.rs, name: an_admission_request_is_bounded_before_it_reaches_the_store}
+      - {path: crates/registry-scheduling/src/http.rs, name: a_cancellation_reason_is_bounded_below_the_column_that_stores_it}
+      - {path: crates/registry-scheduling/src/http.rs, name: a_listing_offering_is_bounded_the_same_way_a_body_is}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_claim_ledger_bounds_a_caller_chosen_duplicate_key}
+  - id: SCHEDULING-SEC-20
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: the_access_token_profile_admits_only_the_rfc_9068_pair}
+  - id: SCHEDULING-SEC-21
+    tests:
+      - {path: crates/registry-scheduling/src/config.rs, name: a_production_deployment_must_name_the_clients_it_admits}
+  - id: SCHEDULING-SEC-22
+    tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: an_exchanged_token_is_refused_until_its_authority_is_declared}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_declared_assertion_authority_binds_the_client_that_may_exchange_from_it}
+      - {path: crates/registry-scheduling/src/config.rs, name: an_assertion_issuer_map_outside_its_bounds_is_refused}
+  - id: SCHEDULING-SEC-23
+    tests:
+      - {path: crates/registry-scheduling/src/auth.rs, name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it}
