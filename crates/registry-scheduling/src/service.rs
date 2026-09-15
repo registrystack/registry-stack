@@ -63,6 +63,13 @@ const MAXIMUM_AVAILABILITY_SPAN_DAYS: i64 = 62;
 /// key on this pseudonym, never on the raw identity.
 const PRINCIPAL_CLASS: &str = "scheduling-principal-v1";
 
+/// The audit reference class for the authority that minted a credential
+/// carrying no task grant. It exists only so a refusal decided before any
+/// grant was resolved still names an accountable second party; a different
+/// class is a different keyed domain, so a digest written under it can never
+/// be mistaken for the pseudonym of a client that actually presented a grant.
+const ISSUER_CLASS: &str = "scheduling-issuer-v1";
+
 /// One verified caller, as the authenticator resolved them.
 pub struct Caller {
     /// The verified actor kind: `human`, `agent`, or `service`.
@@ -502,7 +509,9 @@ impl SchedulingService {
             .policy
             .offering(&request.offering)
             .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
-        let grant = self.require_permission(caller, offering, HOLD_CREATE_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, HOLD_CREATE_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
         let request_hash = admission_request_hash(request);
@@ -564,7 +573,9 @@ impl SchedulingService {
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
-        let grant = self.require_permission(caller, offering, HOLD_RELEASE_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, HOLD_RELEASE_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
         // The release carries no caller-chosen key, so the hold's own id is
@@ -644,7 +655,9 @@ impl SchedulingService {
         let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
             ServiceError::internal("a committed hold names no offering in the policy")
         })?;
-        let grant = self.require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
@@ -686,7 +699,9 @@ impl SchedulingService {
             .policy
             .offering(&request.offering)
             .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
-        let grant = self.require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
         let request_hash = admission_request_hash(request);
@@ -748,7 +763,9 @@ impl SchedulingService {
         let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
             ServiceError::internal("a committed appointment names no offering in the policy")
         })?;
-        let grant = self.require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
         let request_hash = canonical_hash(&json!({
@@ -808,7 +825,9 @@ impl SchedulingService {
         let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
             ServiceError::internal("a committed appointment names no offering in the policy")
         })?;
-        let grant = self.require_permission(caller, offering, APPOINTMENT_CANCEL_ACTION)?;
+        let grant = self
+            .require_permission(caller, offering, APPOINTMENT_CANCEL_ACTION)
+            .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({
             "observedRevision": request.observed_revision,
@@ -994,13 +1013,27 @@ impl SchedulingService {
     /// A grant that covers this offering's service, location, and action, or
     /// the refusal. Readable availability is not authority to book: the
     /// permission must name all three.
-    fn require_permission(
+    ///
+    /// Both refusals are audited. A refusal decided here never opens the
+    /// capacity transaction, so nothing further in the request would record
+    /// that it happened, and a caller probing which services and locations its
+    /// grant reaches would leave the journal empty. What the journal gains is
+    /// the attribution: the answer stays the same closed code, naming neither
+    /// the bound that failed nor whether a grant was carried at all.
+    async fn require_permission(
         &self,
         caller: &Caller,
         offering: &OfferingPolicy,
         action: &str,
     ) -> Result<GrantClaims, ServiceError> {
         let Some(grant) = &caller.grant else {
+            self.record_refusal(grantless_refusal_record(
+                &self.hasher,
+                &self.scheduling_id,
+                caller,
+                action,
+            ))
+            .await;
             return Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized));
         };
         let allowed = grant
@@ -1019,7 +1052,38 @@ impl SchedulingService {
         if allowed {
             Ok(grant.clone())
         } else {
+            self.record_refusal(audit_record(
+                &self.hasher,
+                &self.scheduling_id,
+                caller,
+                grant,
+                action,
+                AuthorizationOutcome::Denied,
+                "authorization.refused",
+            ))
+            .await;
             Err(ServiceError::Problem(ProblemCode::OperationNotAuthorized))
+        }
+    }
+
+    /// Write one authorization refusal to the journal. A journal that cannot
+    /// be written must not change the caller's answer: the decision is already
+    /// made and the caller is refused either way, so the failure is logged
+    /// loudly and the refusal stands.
+    async fn record_refusal(&self, record: Result<Value, ServiceError>) {
+        match record {
+            Ok(record) => {
+                if let Err(failure) = self
+                    .store
+                    .record_refusal_audit(Uuid::new_v4(), record)
+                    .await
+                {
+                    tracing::error!(%failure, "the refusal audit row could not be recorded");
+                }
+            }
+            Err(refused) => {
+                tracing::error!(error = %refused, "the refusal audit row could not be built");
+            }
         }
     }
 
@@ -1147,7 +1211,7 @@ impl SchedulingService {
                         CommitError::Unauthorized => "authorization.refused",
                         _ => "authorization.profile",
                     };
-                    match audit_record(
+                    self.record_refusal(audit_record(
                         &self.hasher,
                         &self.scheduling_id,
                         caller,
@@ -1155,20 +1219,8 @@ impl SchedulingService {
                         operation,
                         AuthorizationOutcome::Denied,
                         reason,
-                    ) {
-                        Ok(record) => {
-                            if let Err(failure) = self
-                                .store
-                                .record_refusal_audit(Uuid::new_v4(), record)
-                                .await
-                            {
-                                tracing::error!(%failure, "the refusal audit row could not be recorded");
-                            }
-                        }
-                        Err(refused) => {
-                            tracing::error!(error = %refused, "the refusal audit row could not be built");
-                        }
-                    }
+                    ))
+                    .await;
                 }
                 Err(ServiceError::Problem(problem))
             }
@@ -1663,6 +1715,38 @@ fn hex(bytes: &[u8]) -> String {
         rendered.push(HEX[(byte & 0x0f) as usize] as char);
     }
     rendered
+}
+
+/// The attributable record of a refusal decided before any grant was
+/// resolved. The caller authenticated, so there is a principal to attribute
+/// the attempt to, but no grant, approver, or purpose exists to record and
+/// none is invented.
+///
+/// The shape still demands a client. Without a grant the deployment verified
+/// no client identity, so the field carries the credential's issuer under the
+/// issuer reference class, and the absent grant pseudonym is what tells a
+/// reader of the journal which of the two it is looking at.
+fn grantless_refusal_record(
+    hasher: &AuditKeyHasher,
+    scope: &str,
+    caller: &Caller,
+    operation: &str,
+) -> Result<Value, ServiceError> {
+    let issuer = hasher
+        .audit_reference_hash(ISSUER_CLASS, scope, &caller.issuer)
+        .map_err(|_| ServiceError::internal("an audit reference could not be pseudonymized"))?;
+    let event = AuthorizationAuditEvent::denied_without_purpose(
+        caller.actor_kind.clone(),
+        caller.actor_pseudonym(hasher, scope)?,
+        issuer,
+        None,
+        None,
+        operation,
+        "authorization.no-grant",
+    )
+    .map_err(|_| ServiceError::internal("the authorization audit event is not publishable"))?;
+    serde_json::to_value(event)
+        .map_err(|_| ServiceError::internal("the authorization audit event is not publishable"))
 }
 
 /// The attributable authorization record of one commitment, with the
