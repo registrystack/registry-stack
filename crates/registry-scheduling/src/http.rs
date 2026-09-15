@@ -4,10 +4,10 @@
 //! problem rendering every refusal flows through.
 //!
 //! Every refusal leaves this edge as one problem shape: a code from the closed
-//! vocabulary — the product refusals (authentication, authorization,
+//! vocabulary, the product refusals (authentication, authorization,
 //! admission, idempotency, cursors, availability) and the `request.*` family
 //! carrying the request-edge rejections (a route that does not exist, a
-//! method the route refuses, a body too large or not JSON) — under the
+//! method the route refuses, a body too large or not JSON), under the
 //! Scheduling problem base, with the answering request's trace id. No shared
 //! platform problem prefix exists in the Registry Stack catalog, so the edge
 //! codes live in this product's own vocabulary exactly as Casework's do.
@@ -660,7 +660,7 @@ fn finish_problem(status: u16, body: ProblemBody, trace: &TraceContext) -> Respo
 /// Answer a replayed idempotency key exactly as the stored attempt first
 /// answered. A release's empty receipt answers as an empty 204 again. A
 /// refusal receipt carries its problem without a trace id, so it re-renders
-/// from its pinned code under the answering request's trace — the first
+/// from its pinned code under the answering request's trace: the first
 /// answer's words, this answer's correlation. A receipt in no known shape is
 /// corrupt stored state: the caller learns nothing from it.
 fn replay_response(status_code: u16, receipt: Value) -> Response {
