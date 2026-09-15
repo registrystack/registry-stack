@@ -60,7 +60,10 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "template": template,
         "project": project,
         "created": created,
-        "next": ["Run schedulingctl check PROJECT, then schedulingctl test PROJECT."],
+        "next": [
+            "Run schedulingctl check PROJECT, then schedulingctl test PROJECT.",
+            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, and run scheduling migrate and scheduling serve with it.",
+        ],
     }))
 }
 
@@ -331,6 +334,7 @@ fn effective(policy: &SchedulingPolicy) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use registry_scheduling::config::RuntimeConfig;
 
     /// A tempdir holding one freshly initialized template project, plus the
     /// paths the tempdir keeps alive.
@@ -350,14 +354,74 @@ mod tests {
         assert_eq!(report["template"], "standalone-arrival-window");
         assert_eq!(
             report["created"],
-            json!(["scheduling.yaml", "fixtures/household-morning.yaml"])
+            json!([
+                "scheduling.yaml",
+                "runtime.example.yaml",
+                "fixtures/household-morning.yaml"
+            ])
         );
         assert!(project.join(AUTHORED_POLICY_FILE).is_file());
+        assert!(project.join("runtime.example.yaml").is_file());
         assert!(project.join("fixtures/household-morning.yaml").is_file());
         let error = init(&project, "standalone-arrival-window").unwrap_err();
         assert!(error.to_string().contains("never overwrites"));
         let error = init(&root.path().join("other"), "no-such-template").unwrap_err();
         assert!(error.to_string().contains("standalone-arrival-window"));
+    }
+
+    /// The example's placeholder roots, replaced with real absolute paths so
+    /// the emitted document can be loaded and checked as it stands.
+    const EXAMPLE_PACKAGE_ROOT: &str = "/srv/registry-scheduling/package";
+    const EXAMPLE_STATE_ROOT: &str = "/var/lib/registry-scheduling";
+
+    #[test]
+    fn init_writes_a_runtime_example_beside_the_authored_project() {
+        let mut examples = Vec::new();
+        for template in ["standalone-exact-time", "standalone-arrival-window"] {
+            let root = tempfile::tempdir().unwrap();
+            let project = root.path().join("project");
+            let report = init(&project, template).unwrap();
+            assert!(
+                report["created"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry == "runtime.example.yaml"),
+                "{template}: {report}"
+            );
+            let text = fs::read_to_string(project.join("runtime.example.yaml")).unwrap();
+            // Nothing in the document names the directory it was written
+            // beside, so the committed example can never drift from what an
+            // adopter initializes.
+            assert!(!text.contains(root.path().to_str().unwrap()));
+            examples.push(text);
+        }
+        // One document serves both templates.
+        assert_eq!(examples[0], examples[1]);
+
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        init(&project, "standalone-exact-time").unwrap();
+        let text = fs::read_to_string(project.join("runtime.example.yaml"))
+            .unwrap()
+            .replace(
+                EXAMPLE_PACKAGE_ROOT,
+                project.to_str().expect("utf-8 project path"),
+            )
+            .replace(
+                EXAMPLE_STATE_ROOT,
+                root.path().to_str().expect("utf-8 root path"),
+            );
+        let runtime = root.path().join("runtime.yaml");
+        fs::write(&runtime, &text).unwrap();
+        let config = RuntimeConfig::load(&runtime).expect("the emitted example loads");
+        assert_eq!(
+            config.policy_path(),
+            project.join(AUTHORED_POLICY_FILE),
+            "the example selects the project beside it"
+        );
+        assert_eq!(config.retention.attempt_receipt_days, 7);
+        assert!(config.destinations.reminders.is_none());
     }
 
     #[test]

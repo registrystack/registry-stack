@@ -1,0 +1,90 @@
+# A complete Scheduling runtime configuration: the document
+# `scheduling serve --runtime-config` reads and `scheduling migrate` reads.
+# Copy it to runtime.yaml, set every absolute path to this deployment's real
+# location, and point the secret references at secrets the configured provider
+# can resolve. Scheduling reads the authored policy at
+# package.root/scheduling.yaml and refuses to start when that file is missing
+# or does not pass its checks.
+apiVersion: registry.registrystack.org/scheduling-runtime/v1alpha1
+kind: SchedulingRuntimeConfig
+package:
+  # The selected package always contains the policy at scheduling.yaml; no
+  # second selector can override it. Under
+  # listener.tlsTermination: operator-controlled-upstream the directory must
+  # also contain the scheduling.package.json manifest `schedulingctl package`
+  # writes; development loopback may select an unpackaged project directory.
+  root: /srv/registry-scheduling/package
+listener:
+  bind: 127.0.0.1:8105
+  tlsTermination: development-loopback
+  networkExposure: private-address
+  # `operator-controlled-upstream` is the production value: the runtime itself
+  # stays plaintext and an operator-managed TLS edge terminates transport in
+  # front of it. `development-loopback` is direct plaintext, refused on any
+  # non-loopback bind. `networkExposure: container-private` additionally
+  # permits an unspecified bind for a listener kept on a private container
+  # network.
+secretProviders:
+  file:
+    # Every secret:file reference resolves under this root. A secret file must
+    # be a regular file owned by the runtime user, with mode 0400 or 0600 and
+    # exactly one hard link, carrying non-empty text of at most 64 KiB without
+    # NUL bytes; `openssl rand -hex 32` generates the audit key.
+    root: /run/secrets/registry-scheduling
+  # Declare `environment: {}` to enable secret:env/NAME references. The
+  # runtime does not fall back from one provider to another; every configured
+  # reference must resolve under a provider declared here.
+  # environment: {}
+database:
+  # The least-privilege service connection and the operator-run migration
+  # connection, each a PostgreSQL URL held in the secret provider. The
+  # runtime requires TLS on the database connection: it sets sslmode Require
+  # and refuses a connection that cannot be verified.
+  runtimeUrlRef: secret:file/runtime-database-url
+  migrationUrlRef: secret:file/migration-database-url
+  # The PEM bundle of the private CA in front of PostgreSQL, when the
+  # deployment terminates database TLS with one.
+  # trustedRootCertificateRef: secret:file/postgres-ca.pem
+  # `testOnlyPlaintext: true` is the one plaintext escape, and only a build
+  # carrying the `postgres-test` feature accepts it: a production build
+  # refuses the setting at startup instead of opening an unencrypted
+  # connection.
+  # testOnlyPlaintext: true
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:scheduling
+    # The claim carrying the accepted OAuth scopes. The default is
+    # `registry_scopes` for deployments that omit this field; stock ThunderID
+    # emits `scope`.
+    scopeClaim: scope
+    # The read scope defaults to `scheduling-read` and the explain scope to
+    # `scheduling-explain`; the two must differ. `allowedClients` names the
+    # client ids the runtime admits and is empty by default, which admits
+    # every client the issuer verifies.
+    # allowedClients: [scheduling-booking-agent]
+    # Signing keys come from issuer discovery by default. Declare the static
+    # alternative instead when the runtime cannot reach the issuer's discovery
+    # document, when the deployment is air-gapped, or when a test issuer's
+    # keys are pinned by hand. It does no rotation of its own: rolling a key
+    # means replacing the referenced document and restarting Scheduling.
+    # jwksSource:
+    #   kind: static
+    #   documentRef: secret:file/jwks.json
+audit:
+  path: /var/lib/registry-scheduling/audit.ndjson
+  hashKeyRef: secret:file/scheduling-audit-key
+destinations: {}
+  # Where due reminder intents are delivered as CloudEvents 1.0 events. An
+  # absent reminders destination is a supported deployment: the intents stay
+  # readable in the outbox and are marked local, never pretended delivered.
+  # reminders:
+  #   url: https://bus.example.test/scheduling-reminders
+  #   bearerTokenRef: secret:file/reminder-bearer-token
+retention:
+  # The one retention period the sweep enforces today, and it covers
+  # idempotency attempt receipts and listing cursors and nothing else:
+  # appointment, history, outbox, and audit retention are deferred. Seven days
+  # is the default floor, not a recommendation; a jurisdiction's retention
+  # schedule approves the deployed value, and the audit journal records it.
+  attemptReceiptDays: 7
