@@ -787,7 +787,10 @@ mod tests {
             registry_scheduling::config::verify_policy_package(&policy_path, &policy_text)
                 .unwrap()
                 .expect("the written manifest verifies");
-        assert_eq!(verified, report["packageDigest"].as_str().unwrap());
+        // `verify_policy_package` returns the manifest's own byte-exact
+        // digest, which the on-disk manifest calls `policyDigest`; the
+        // report must mirror that naming, not the policy's semantic digest.
+        assert_eq!(verified, report["policyDigest"].as_str().unwrap());
         // Pretty-printed, newline-terminated: a text document an operator
         // diffs.
         let bytes = std::fs::read(&manifest_path).unwrap();
