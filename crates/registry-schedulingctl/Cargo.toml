@@ -41,3 +41,7 @@ tokio-postgres.workspace = true
 [[test]]
 name = "records_apply_postgres"
 required-features = ["postgres-test"]
+
+[[test]]
+name = "intents_postgres"
+required-features = ["postgres-test"]

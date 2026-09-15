@@ -188,7 +188,7 @@ fn counts(facts: &SchedulingFacts) -> Value {
     })
 }
 
-fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver> {
+pub(crate) fn secret_resolver(config: &RuntimeConfig) -> Result<SecretResolver> {
     let mut providers = Vec::new();
     if config.secret_providers.file.is_some() {
         providers.push(SecretProvider::File);
