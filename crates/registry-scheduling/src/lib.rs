@@ -16,7 +16,12 @@
 //! and shared `registry-platform-*` primitives, and nothing here may grow a
 //! second product's protocol types.
 
+pub mod auth;
 pub mod config;
 pub mod cursors;
+pub mod http;
+pub mod runtime;
+#[cfg(feature = "schema")]
+pub mod schema;
 pub mod service;
 pub mod store;
