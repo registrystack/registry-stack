@@ -448,6 +448,21 @@ impl SchedulingPolicy {
                     format!("{path}.effectiveUntil"),
                     PolicyCheckReason::InvalidBound,
                 ));
+            } else if let (Some(from), Some(until)) = (
+                chrono::NaiveDate::parse_from_str(&opening.effective_from, "%Y-%m-%d").ok(),
+                chrono::NaiveDate::parse_from_str(&opening.effective_until, "%Y-%m-%d").ok(),
+            ) {
+                // The weekly expansion refuses a span this wide at evaluation
+                // time; the authoring check refuses it first, so a checked
+                // policy never deploys into a runtime that cannot expand it.
+                if until.signed_duration_since(from).num_days()
+                    > i64::from(registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS)
+                {
+                    findings.push(SchedulingDiagnostic::new(
+                        format!("{path}.effectiveUntil"),
+                        PolicyCheckReason::PatternSpanTooLarge,
+                    ));
+                }
             }
             check_because(&opening.because, &format!("{path}.because"), &mut findings);
             self.check_unique_id(&opening.id, &path, "openings", &mut findings);
@@ -1181,6 +1196,32 @@ holdPolicy:
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered.contains(&"offerings[0].service: unknown-service".to_owned()));
         assert!(rendered.contains(&"openings[0].holidaySet: unknown-holiday-set".to_owned()));
+    }
+
+    /// The weekly expansion serves at most MAXIMUM_PATTERN_SPAN_DAYS days, and
+    /// the authoring check refuses a wider span at exactly that boundary, so a
+    /// checked policy never deploys into a runtime that cannot expand it.
+    #[test]
+    fn an_opening_span_is_refused_only_past_the_calendar_boundary() {
+        let base = chrono::NaiveDate::from_ymd_opt(2026, 1, 1).expect("a well-formed base date");
+        let until = |days: u64| {
+            base.checked_add_days(chrono::Days::new(days))
+                .expect("a bounded span")
+                .format("%Y-%m-%d")
+                .to_string()
+        };
+        let mut policy = minimal_exact_time_policy();
+        policy.openings[0].effective_from = base.format("%Y-%m-%d").to_string();
+        policy.openings[0].effective_until = until(u64::from(
+            registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS,
+        ));
+        assert!(policy.check().is_empty(), "{:?}", policy.check());
+
+        policy.openings[0].effective_until =
+            until(u64::from(registry_platform_calendar::MAXIMUM_PATTERN_SPAN_DAYS) + 1);
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"openings[0].effectiveUntil: pattern-span-too-large".to_owned()));
     }
 
     #[test]

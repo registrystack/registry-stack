@@ -396,6 +396,35 @@ impl PostgresStore {
         }
     }
 
+    /// Adopt this database for one deployment identity. A fresh database
+    /// carries the empty id the migration seeds; the first adopt claims it
+    /// for the policy's scheduling id, an adopt under the same id again is a
+    /// no-op, and an adopt under a different id is refused: two deployments
+    /// never share one database silently.
+    pub async fn adopt(&self, scheduling_id: &str) -> Result<(), StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let row = transaction
+            .query_one(
+                "SELECT scheduling_id FROM scheduling_meta WHERE singleton FOR UPDATE",
+                &[],
+            )
+            .await?;
+        let stored: String = row.get(0);
+        if stored.is_empty() {
+            transaction
+                .execute(
+                    "UPDATE scheduling_meta SET scheduling_id=$1, updated_at=now() WHERE singleton",
+                    &[&scheduling_id],
+                )
+                .await?;
+        } else if stored != scheduling_id {
+            return Err(StoreError::Corrupt);
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
     /// The deployment identity and current policy revision.
     pub async fn scheduling_meta(&self) -> Result<(String, i64, String), StoreError> {
         let client = self.client().await?;
@@ -1415,13 +1444,13 @@ impl PostgresStore {
 
     /// Hold one intent locally: the deployment has no destination
     /// configured, so the intent stays recorded instead of pretending a
-    /// delivery happened.
+    /// delivery happened. Nothing is delivered, so no delivery instant is
+    /// stamped either.
     pub async fn hold_intent_local(&self, outbox_id: Uuid) -> Result<(), StoreError> {
         let client = self.client().await?;
         client
             .execute(
-                "UPDATE scheduling_outbox SET delivery_state='local', delivered_at=now() \
-                 WHERE outbox_id=$1",
+                "UPDATE scheduling_outbox SET delivery_state='local' WHERE outbox_id=$1",
                 &[&outbox_id],
             )
             .await?;
@@ -1620,8 +1649,21 @@ async fn lock_and_snapshot(
     now: DateTime<Utc>,
 ) -> Result<LedgerSnapshot, StoreError> {
     match supply {
-        SupplyContext::ExactTime { members, open, .. } => {
-            let supply_ids: Vec<String> = members
+        SupplyContext::ExactTime {
+            exact,
+            members,
+            open,
+            ..
+        } => {
+            // The anchor is the pool, not the members: two offerings on one
+            // pool sell the same members and must serialize against each
+            // other, and `apply_policy` anchors pool ids only.
+            transaction
+                .lock_supply(std::slice::from_ref(&exact.pool))
+                .await?;
+            // Claims occupy a member, so the snapshot reads member ids even
+            // though the lock is the pool's.
+            let member_ids: Vec<String> = members
                 .iter()
                 .map(|member| member.resource_id.clone())
                 .collect();
@@ -1635,9 +1677,8 @@ async fn lock_and_snapshot(
                 .map(|interval| interval.end)
                 .max()
                 .unwrap_or(now);
-            transaction.lock_supply(&supply_ids).await?;
             let rows = transaction
-                .query(CONSUMING_CLAUSES, &[&supply_ids, &earliest, &latest, &now])
+                .query(CONSUMING_CLAUSES, &[&member_ids, &earliest, &latest, &now])
                 .await?;
             Ok(snapshot_from_rows(rows))
         }

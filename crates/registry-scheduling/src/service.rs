@@ -553,12 +553,9 @@ impl SchedulingService {
         if hold.kind != LedgerKind::Hold {
             return Err(ServiceError::Problem(ProblemCode::HoldReleased));
         }
-        let offering = self
-            .policy
-            .offering(&hold.offering)
-            .ok_or(ServiceError::internal(
-                "a committed hold names no offering in the policy",
-            ))?;
+        let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
+            ServiceError::internal("a committed hold names no offering in the policy")
+        })?;
         let grant = self.require_permission(caller, offering, HOLD_RELEASE_ACTION)?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
@@ -636,12 +633,9 @@ impl SchedulingService {
         if hold.kind != LedgerKind::Hold {
             return Err(ServiceError::Problem(ProblemCode::HoldReleased));
         }
-        let offering = self
-            .policy
-            .offering(&hold.offering)
-            .ok_or(ServiceError::internal(
-                "a committed hold names no offering in the policy",
-            ))?;
+        let offering = self.policy.offering(&hold.offering).ok_or_else(|| {
+            ServiceError::internal("a committed hold names no offering in the policy")
+        })?;
         let grant = self.require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
@@ -743,12 +737,9 @@ impl SchedulingService {
             .booking(appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        let offering =
-            self.policy
-                .offering(&appointment.offering)
-                .ok_or(ServiceError::internal(
-                    "a committed appointment names no offering in the policy",
-                ))?;
+        let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
+            ServiceError::internal("a committed appointment names no offering in the policy")
+        })?;
         let grant = self.require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let supply = self.supply(offering).await?;
@@ -806,12 +797,9 @@ impl SchedulingService {
             .booking(appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        let offering =
-            self.policy
-                .offering(&appointment.offering)
-                .ok_or(ServiceError::internal(
-                    "a committed appointment names no offering in the policy",
-                ))?;
+        let offering = self.policy.offering(&appointment.offering).ok_or_else(|| {
+            ServiceError::internal("a committed appointment names no offering in the policy")
+        })?;
         let grant = self.require_permission(caller, offering, APPOINTMENT_CANCEL_ACTION)?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
         let request_hash = canonical_hash(&json!({
