@@ -75,7 +75,19 @@ CREATE TABLE IF NOT EXISTS scheduling_claims (
     occupied_start timestamptz NOT NULL,
     occupied_end timestamptz NOT NULL,
     units integer NOT NULL CHECK (units > 0),
-    duplicate_key text,
+    -- The caller chooses this value, so the column bounds it: 256 octets,
+    -- the same ceiling the evaluator gives every other caller-supplied
+    -- string. The edge refuses the same size first, so the bound is not
+    -- reached by an ordinary request.
+    --
+    -- The uniqueness the key promises is not a UNIQUE index here. The
+    -- evaluator refuses a duplicate against the snapshot it locked, scoped to
+    -- the offering and to the interval under consideration, while a partial
+    -- UNIQUE over active claims would be a different and stronger rule: it
+    -- would collide across two offerings that share one pool, and it would
+    -- fire inside a hold confirmation, which writes the booking while the
+    -- hold carrying the same key is still active in the same transaction.
+    duplicate_key text CHECK (duplicate_key IS NULL OR octet_length(duplicate_key) <= 256),
     hold_expires_at timestamptz,
     revision bigint NOT NULL CHECK (revision > 0),
     policy_revision bigint NOT NULL CHECK (policy_revision > 0),
