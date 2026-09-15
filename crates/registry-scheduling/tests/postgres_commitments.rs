@@ -2082,3 +2082,116 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
         "an intent the sweep will still retry needs no operator"
     );
 }
+
+/// AT-01 run in parallel: two callers reach for the same last unit at the same
+/// moment. Every commitment locks its supply anchor before it reads the
+/// ledger, so the two transactions serialize there and the one that arrives
+/// second reads a snapshot already carrying the first booking. Exactly one
+/// caller is created, the other is refused a conflict over capacity rather
+/// than answered an infrastructure failure for having lost, and each key
+/// stays spent on the answer it got: a replay repeats the verdict instead of
+/// reaching for the unit a second time.
+#[tokio::test]
+async fn two_callers_reaching_for_one_unit_book_it_exactly_once() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let contender = agent_token_for("principal-contender");
+    let body = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+
+    let first = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        fx.agent.clone(),
+        Some("last-unit-first".to_owned()),
+        Some(body.clone()),
+    ));
+    let second = tokio::spawn(send(
+        fx.http.clone(),
+        "POST".to_owned(),
+        "/v1/appointments".to_owned(),
+        contender.clone(),
+        Some("last-unit-second".to_owned()),
+        Some(body.clone()),
+    ));
+    let answers = [
+        first.await.expect("the first request answers"),
+        second.await.expect("the second request answers"),
+    ];
+
+    let created: Vec<&Value> = answers
+        .iter()
+        .filter(|(status, _)| *status == StatusCode::CREATED)
+        .map(|(_, answer)| answer)
+        .collect();
+    let refused: Vec<&Value> = answers
+        .iter()
+        .filter(|(status, _)| *status == StatusCode::CONFLICT)
+        .map(|(_, answer)| answer)
+        .collect();
+    assert_eq!(
+        created.len(),
+        1,
+        "exactly one caller books the last unit: {answers:?}"
+    );
+    assert_eq!(
+        refused.len(),
+        1,
+        "the caller that lost is refused a conflict: {answers:?}"
+    );
+    assert_eq!(refused[0]["code"], "capacity.exhausted");
+
+    // The ledger carries one claim on the contested slot, the winning
+    // appointment is that claim, and availability stops offering the start.
+    let active: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE state='active' AND displayed_start=$1",
+            &[&slot],
+        )
+        .await
+        .expect("count the claims on the contested slot")
+        .get(0);
+    assert_eq!(active, 1, "the request that lost wrote no claim");
+    let booked = Uuid::parse_str(
+        created[0]["appointmentId"]
+            .as_str()
+            .expect("an appointment id"),
+    )
+    .expect("a parseable appointment identifier");
+    assert!(
+        fx.store
+            .claim(booked)
+            .await
+            .expect("read the booked claim")
+            .is_some(),
+        "the appointment the winner was answered is in the ledger"
+    );
+    assert!(!slot_offered(&fx, OFFERING, 90, 200, slot).await);
+
+    // Each caller's key is spent on its own verdict, so neither replay moves
+    // the ledger.
+    let (replayed, _) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "last-unit-first",
+            body.clone(),
+        )
+        .await;
+    assert_eq!(replayed, answers[0].0, "the first key replays its answer");
+    let (replayed, _) = fx
+        .post("/v1/appointments", &contender, "last-unit-second", body)
+        .await;
+    assert_eq!(replayed, answers[1].0, "the second key replays its answer");
+    let active: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE state='active' AND displayed_start=$1",
+            &[&slot],
+        )
+        .await
+        .expect("count the claims on the contested slot")
+        .get(0);
+    assert_eq!(active, 1, "replaying either key books nothing further");
+}
