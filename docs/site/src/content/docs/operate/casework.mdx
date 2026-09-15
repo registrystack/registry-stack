@@ -174,7 +174,10 @@ that issuer. `humanIdentity` defaults to the claim
 `registry_actor_kind` with the value `human`, must
 differ from `scopeClaim`, and no access profile in the package may use it as its principal claim.
 Each access profile names its own `principalClaim`; there is no runtime-wide principal claim.
-The runtime accepts RS256 and ES256 signatures and the token types `at+jwt` and `JWT`.
+The runtime accepts RS256 and ES256 signatures and admits one access-token type, the RFC 9068
+media type spelled `at+jwt` or `application/at+jwt`. A token carrying any other `typ`, a plain
+`JWT` included, is refused, so an issuer that mints ordinary JWTs for this audience must be
+configured to mint the access-token type.
 
 With the discovery source, the runtime reads the issuer's discovery document at startup and
 fetches its keys from the `jwks_uri` that document names; an optional `jwksUri` in this file
