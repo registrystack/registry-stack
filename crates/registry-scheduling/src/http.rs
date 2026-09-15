@@ -493,6 +493,11 @@ fn authentication_problem(error: AuthenticationError) -> HttpError {
             HttpError(ProblemCode::AuthenticationRefused)
         }
         AuthenticationError::Profile => HttpError(ProblemCode::ProfileNotAuthorized),
+        // The verifier reached no verdict, so the credential is not what is
+        // wrong. Answering 401 here would challenge a caller holding a good
+        // token and invite it to rotate one during an outage that is ours;
+        // `service.unavailable` carries `Retry-After` instead.
+        AuthenticationError::Unavailable => HttpError(ProblemCode::ServiceUnavailable),
     }
 }
 
@@ -817,6 +822,43 @@ mod tests {
             .await;
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "5");
+    }
+
+    #[tokio::test]
+    async fn a_verifier_that_cannot_answer_is_unavailable_not_a_challenge() {
+        // A 401 tells a caller its credential is wrong. When the issuer's key
+        // material cannot be reached, nothing has been learned about the
+        // credential, so the caller is told to come back instead of being sent
+        // to rotate a working token.
+        let problem = authentication_problem(AuthenticationError::Unavailable);
+        assert!(matches!(
+            problem,
+            HttpError(ProblemCode::ServiceUnavailable)
+        ));
+        let response = REQUEST_TRACE
+            .scope(TraceContext::server_created(), async {
+                problem_response(problem.0)
+            })
+            .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers().get(RETRY_AFTER).unwrap(), "5");
+        assert!(response.headers().get(WWW_AUTHENTICATE).is_none());
+        let body = body_json(response).await;
+        assert_eq!(body["code"], "service.unavailable");
+    }
+
+    #[test]
+    fn a_refused_credential_still_answers_a_challenge() {
+        for refusal in [AuthenticationError::Refused, AuthenticationError::Claims] {
+            assert!(matches!(
+                authentication_problem(refusal),
+                HttpError(ProblemCode::AuthenticationRefused)
+            ));
+        }
+        assert!(matches!(
+            authentication_problem(AuthenticationError::Profile),
+            HttpError(ProblemCode::ProfileNotAuthorized)
+        ));
     }
 
     fn stored_refusal(problem: ProblemCode) -> Value {

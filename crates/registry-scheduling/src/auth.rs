@@ -26,8 +26,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{
-    actor_kind, grant_claims, ClaimNames, JwksFetcher, TokenVerifier, TokenVerifierConfig,
-    ASSERTION_ISSUER_CLAIM,
+    actor_kind, grant_claims, ClaimNames, JwksFetcher, OidcError, TokenVerifier,
+    TokenVerifierConfig, ASSERTION_ISSUER_CLAIM,
 };
 use thiserror::Error;
 
@@ -102,7 +102,7 @@ impl SchedulingAuthenticator {
         validate_compact_access_token(token).map_err(|_| AuthenticationError::Refused)?;
         let verified = self.verifier.verify(token).await.map_err(|error| {
             tracing::debug!(error = %error, "the Scheduling bearer credential did not verify");
-            AuthenticationError::Refused
+            verifier_failure(&error)
         })?;
         // An exchanged token names the authority whose assertion produced it.
         // The platform applies no rule while the deployment's map is empty, so
@@ -170,6 +170,39 @@ pub enum AuthenticationError {
     Claims,
     #[error("the caller's authentication profile is not authorized for this request")]
     Profile,
+    /// The verifier could not reach a verdict at all.
+    #[error("the credential could not be verified because this verifier cannot answer")]
+    Unavailable,
+}
+
+/// Separate a verifier outage from a bad credential.
+///
+/// A 401 tells a caller its credential is the problem, so it has to be
+/// reserved for credentials. When the issuer's discovery document or key set
+/// cannot be fetched, read, parsed or used, nothing has been learned about
+/// the credential, and telling the caller to fix it would send it rotating a
+/// perfectly good token through an incident that is ours. A deployment whose
+/// own OIDC settings are contradictory is the same kind of failure.
+fn verifier_failure(error: &OidcError) -> AuthenticationError {
+    match error {
+        OidcError::Transport(_)
+        | OidcError::BoundedRead(_)
+        | OidcError::FetchUrl(_)
+        | OidcError::HttpStatus(_)
+        | OidcError::InvalidUrl
+        | OidcError::Parse
+        | OidcError::InvalidJwk
+        | OidcError::EmptyKeySet
+        | OidcError::MissingIssuer
+        | OidcError::ConflictingEndpointConfiguration => AuthenticationError::Unavailable,
+        // Every other outcome is a judgement about the credential, including
+        // an unknown `kid`: a key the issuer never published is a forgery
+        // signal, not an outage, and answering 503 there would let a caller
+        // probe the key set. A variant added to the platform later is read as
+        // a credential refusal until it is classified here, so a new outcome
+        // can never widen the door.
+        _ => AuthenticationError::Refused,
+    }
 }
 
 /// The observation of now the grant's expiry is judged against, in the same
@@ -187,8 +220,11 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Utc;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
+    use registry_platform_httputil::FetchUrlPolicy;
     use registry_platform_oidc::{ActorKind, JwksFetcherConfig, ASSERTION_ISSUER_CLAIM};
     use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const ISSUER: &str = "https://task-token.test";
     const AUDIENCE: &str = "urn:registry-scheduling:test";
@@ -230,6 +266,13 @@ mod tests {
     /// Build the authenticator the way the runtime does, so the verifier and
     /// the authenticator read the same deployment settings.
     fn authenticator_with(oidc: OidcConfig) -> SchedulingAuthenticator {
+        authenticator_over(oidc, keys())
+    }
+
+    /// The same deployment reading a different key source, so a test can put
+    /// the issuer's key endpoint out of service without changing anything
+    /// else about the caller or the profile.
+    fn authenticator_over(oidc: OidcConfig, keys: Arc<JwksFetcher>) -> SchedulingAuthenticator {
         let verifier = TokenVerifierConfig::access_token_profile(
             ISSUER,
             vec![AUDIENCE.to_owned()],
@@ -239,7 +282,7 @@ mod tests {
         .with_scope_claim("registry_scopes")
         .with_allowed_clients(vec![CLIENT.to_owned()])
         .with_assertion_issuers(oidc.assertion_issuers.clone());
-        SchedulingAuthenticator::new(&oidc, verifier, keys())
+        SchedulingAuthenticator::new(&oidc, verifier, keys)
     }
 
     /// Sign an access token, filling in the claims a real token always
@@ -463,6 +506,88 @@ mod tests {
             authenticator_with(declared).authenticate_read(&other).await,
             Err(AuthenticationError::Refused)
         ));
+    }
+
+    #[tokio::test]
+    async fn a_key_endpoint_outage_is_unavailable_not_a_refusal() {
+        // The issuer is up enough to answer, and answers that it cannot serve
+        // its key set. Nothing has been learned about the credential, so
+        // blaming it would send a caller holding a perfectly good token off
+        // to rotate credentials during an incident on this side.
+        let issuer_keys = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/jwks.json"))
+            .respond_with(ResponseTemplate::new(503))
+            .mount(&issuer_keys)
+            .await;
+        let credential = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling-read",
+            "registry_actor_kind": "service",
+        }));
+        let during_outage = authenticator_over(
+            oidc(),
+            Arc::new(JwksFetcher::new_with_fetch_url_policy(
+                format!("{}/jwks.json", issuer_keys.uri()),
+                JwksFetcherConfig::defaults(),
+                FetchUrlPolicy::dev(),
+            )),
+        );
+        assert!(
+            matches!(
+                during_outage.authenticate_read(&credential).await,
+                Err(AuthenticationError::Unavailable)
+            ),
+            "a key endpoint that cannot answer was reported as a bad credential"
+        );
+    }
+
+    #[test]
+    fn only_a_verifier_that_reached_no_verdict_is_unavailable() {
+        for outage in [
+            OidcError::HttpStatus(503),
+            OidcError::InvalidUrl,
+            OidcError::Parse,
+            OidcError::InvalidJwk,
+            OidcError::EmptyKeySet,
+            OidcError::MissingIssuer,
+            OidcError::ConflictingEndpointConfiguration,
+        ] {
+            assert_eq!(
+                verifier_failure(&outage),
+                AuthenticationError::Unavailable,
+                "{outage} was blamed on the credential"
+            );
+        }
+        for refusal in [
+            OidcError::IssuerMismatch {
+                expected: ISSUER.to_owned(),
+                actual: "https://elsewhere.test".to_owned(),
+            },
+            OidcError::MalformedToken,
+            OidcError::AlgorithmNotAllowed,
+            OidcError::TokenTypeNotAllowed,
+            OidcError::MissingKid,
+            OidcError::KidTooLong,
+            // An unknown `kid` is a key the issuer never published, which is a
+            // forgery signal and not an outage. Answering 503 here would also
+            // hand a caller a probe for the key set.
+            OidcError::UnknownKid,
+            OidcError::TokenExpired,
+            OidcError::TokenNotYetValid,
+            OidcError::AudienceMismatch,
+            OidcError::SignatureInvalid,
+            OidcError::InvalidToken,
+            OidcError::ClientNotAllowed,
+            OidcError::AssertionIssuerNotAllowed,
+        ] {
+            assert_eq!(
+                verifier_failure(&refusal),
+                AuthenticationError::Refused,
+                "{refusal} was excused as an outage"
+            );
+        }
     }
 
     #[tokio::test]
