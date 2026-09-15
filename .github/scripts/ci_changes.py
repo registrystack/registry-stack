@@ -24,6 +24,7 @@ SHARDS = {
         "registry-platform-audit",
         "registry-platform-authcommon",
         "registry-platform-buildinfo",
+        "registry-platform-calendar",
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
@@ -61,6 +62,12 @@ SHARDS = {
         "registry-casework-client",
         "registry-casework-client-node",
         "registry-casework-client-py",
+    ),
+    "scheduling": (
+        "registry-scheduling-core",
+        "registry-scheduling",
+        "registry-schedulingctl",
+        "registry-scheduling-client",
     ),
     "stack-client": ("registry-record", "registry-stack-client"),
     "evidence": (
