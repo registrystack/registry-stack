@@ -8,6 +8,7 @@ schedulingctl_bin=${SCHEDULINGCTL_BIN:-"$repo_root/target/debug/schedulingctl"}
 cd "$repo_root"
 python3 products/scheduling/scripts/generate_openapi.py --check
 python3 products/scheduling/scripts/check_dependency_direction.py
+python3 products/scheduling/scripts/check_database_test_isolation.py
 python3 -m unittest discover -s products/scheduling/scripts -p 'test_*.py'
 python3 products/scheduling/scripts/validate_contracts.py
 
