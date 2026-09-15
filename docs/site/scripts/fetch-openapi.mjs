@@ -42,6 +42,7 @@ const cacheRoot = resolve(root, '.repo-docs-cache');
 // aggregated API reference; others are skipped.
 const SPEC_SOURCES = {
   'registry-casework': 'products/casework/generated/registry-casework.openapi.json',
+  'registry-scheduling': 'products/scheduling/generated/registry-scheduling.openapi.json',
   'registry-evidence': 'products/evidence/generated/registry-evidence.openapi.json',
 };
 
@@ -117,7 +118,9 @@ async function main() {
 
   let written = 0;
   for (const [repoId, specPath] of Object.entries(SPEC_SOURCES)) {
-    if (repoId === 'registry-casework' && !docset.products[repoId]) {
+    // Casework and Scheduling first enter the docset line after the archives
+    // that predate them, so a docset without the product pins no spec for it.
+    if ((repoId === 'registry-casework' || repoId === 'registry-scheduling') && !docset.products[repoId]) {
       console.log(`Skipped ${repoId} OpenAPI spec absent from docset ${docset.id}.`);
       continue;
     }

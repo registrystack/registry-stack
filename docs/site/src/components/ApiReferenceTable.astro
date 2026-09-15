@@ -1,13 +1,18 @@
 ---
 import bregTables from '../data/generated/breg-api.json';
 import caseworkTables from '../data/generated/casework-api.json';
+import schedulingTables from '../data/generated/scheduling-api.json';
 
 interface Props {
   id: string;
-  source?: 'breg-api' | 'casework-api';
+  source?: 'breg-api' | 'casework-api' | 'scheduling-api';
 }
 
-const sources = { 'breg-api': bregTables, 'casework-api': caseworkTables };
+const sources = {
+  'breg-api': bregTables,
+  'casework-api': caseworkTables,
+  'scheduling-api': schedulingTables,
+};
 const source = Astro.props.source ?? 'breg-api';
 const table = sources[source].find((entry) => entry.id === Astro.props.id);
 if (!table) throw new Error(`Unknown ${source} reference table: ${Astro.props.id}`);
