@@ -88,6 +88,7 @@ offerings:
       pool: north-counter
       startIncrementMinutes: 30
       maxRecipients: 1
+    reminders: [{minutesBefore: 60, because: test}]
     requiresCapabilities: []
     prerequisites: []
   - id: registry-update-60
@@ -1424,4 +1425,79 @@ async fn a_policy_applied_under_a_running_process_refuses_the_older_revision() {
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED);
     assert_eq!(problem["code"], "policy.changed");
+}
+
+/// A reminder intent is minted when the appointment commits, and a delivery
+/// that failed waits out its back-off. Re-claiming a failing intent on every
+/// tick would hammer the destination and burn the attempts ceiling in
+/// seconds, so the claim predicate reads the back-off the retry wrote.
+#[tokio::test]
+async fn a_failing_reminder_intent_waits_out_its_back_off() {
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 90, 200, "reminder-1").await;
+
+    // The commitment's own confirmation is due at once; the authored reminder
+    // offset is an hour before a start at least ninety minutes out, so the
+    // reminder is not due with it.
+    let now_due = fx
+        .store
+        .claim_due_intents(Utc::now(), 100)
+        .await
+        .expect("the delivery sweep runs");
+    assert_eq!(
+        now_due
+            .iter()
+            .map(|intent| intent.purpose.as_str())
+            .collect::<Vec<_>>(),
+        vec!["confirmation"],
+        "a reminder ahead of its offset is not due yet"
+    );
+
+    let due = Utc::now() + TimeDelta::days(1);
+    let claimed: Vec<_> = fx
+        .store
+        .claim_due_intents(due, 100)
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.purpose == "reminder")
+        .collect();
+    assert_eq!(
+        claimed.len(),
+        1,
+        "the commitment minted one reminder intent"
+    );
+    assert_eq!(claimed[0].claim_id.to_string(), appointment_id);
+    assert_eq!(claimed[0].attempts, 1);
+    assert_eq!(claimed[0].payload["appointmentId"], appointment_id);
+
+    // The send failed, so the intent goes back to pending behind a back-off.
+    fx.store
+        .retry_intent(claimed[0].outbox_id, due + TimeDelta::minutes(5), 8)
+        .await
+        .expect("the failed delivery is scheduled to retry");
+
+    let early: Vec<_> = fx
+        .store
+        .claim_due_intents(due + TimeDelta::seconds(2), 100)
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.outbox_id == claimed[0].outbox_id)
+        .collect();
+    assert!(
+        early.is_empty(),
+        "an intent inside its back-off is not claimed again"
+    );
+
+    let later: Vec<_> = fx
+        .store
+        .claim_due_intents(due + TimeDelta::minutes(6), 100)
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.outbox_id == claimed[0].outbox_id)
+        .collect();
+    assert_eq!(later.len(), 1, "the back-off passed, so the intent is due");
+    assert_eq!(later[0].attempts, 2, "the second attempt is counted once");
 }
