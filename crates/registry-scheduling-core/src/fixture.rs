@@ -17,7 +17,9 @@ use registry_platform_calendar::CalendarEvaluationError;
 use crate::admission::{
     evaluate_exact_time_admission, evaluate_window_admission, ExactTimeContext, WindowContext,
 };
-use crate::model::{AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, SchedulingFacts};
+use crate::model::{
+    AdmissionRequest, LedgerClaim, LedgerKind, LedgerSnapshot, PartyCounts, SchedulingFacts,
+};
 use crate::naming::{SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND};
 use crate::policy::{SchedulingMode, SchedulingPolicy};
 use crate::problem::ProblemCode;
@@ -40,12 +42,72 @@ pub enum FixtureExpectation {
     },
 }
 
+/// One replayed request as an author writes it.
+///
+/// This is the authoring form of an admission request, not the wire form. It
+/// carries everything the wire request carries plus `rescheduleOf`, the claim
+/// this case replaces: a fixture legitimately says "this case reschedules that
+/// one", where an HTTP caller may not, because on the wire the exclusion is
+/// the runtime's to supply from inside its own transaction.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FixtureAdmissionRequest {
+    pub offering: String,
+    pub start: DateTime<Utc>,
+    pub party: PartyCounts,
+    pub channel: Option<String>,
+    pub duplicate_key: Option<String>,
+    pub policy_revision: u64,
+    pub window_revision: Option<u64>,
+    pub capabilities: Vec<String>,
+    pub prerequisites: Vec<String>,
+    /// The claim this case replaces. Its allocation is left out of this
+    /// case's conflict checks and removed when the case is admitted, so a
+    /// reschedule never competes with what it replaces.
+    pub reschedule_of: Option<String>,
+}
+
+impl FixtureAdmissionRequest {
+    /// The wire request this authored case makes, without the exclusion:
+    /// that travels beside it, as the evaluator's own argument.
+    ///
+    /// Both sides are written out in full on purpose. Adding a field to
+    /// either shape stops compiling here until the author decides what the
+    /// other shape does with it.
+    #[must_use]
+    pub fn admission(&self) -> AdmissionRequest {
+        let Self {
+            offering,
+            start,
+            party,
+            channel,
+            duplicate_key,
+            policy_revision,
+            window_revision,
+            capabilities,
+            prerequisites,
+            reschedule_of: _,
+        } = self;
+        AdmissionRequest {
+            offering: offering.clone(),
+            start: *start,
+            party: *party,
+            channel: channel.clone(),
+            duplicate_key: duplicate_key.clone(),
+            policy_revision: *policy_revision,
+            window_revision: *window_revision,
+            capabilities: capabilities.clone(),
+            prerequisites: prerequisites.clone(),
+        }
+    }
+}
+
 /// One replayed request and its expectation.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FixtureCase {
     pub name: String,
-    pub request: AdmissionRequest,
+    pub request: FixtureAdmissionRequest,
     pub expect: FixtureExpectation,
 }
 
@@ -114,6 +176,10 @@ pub enum ReplayError {
     UnknownLocation { case: String, location: String },
     #[error("case {case} needs window {window}, which the policy does not publish")]
     UnknownWindow { case: String, window: String },
+    #[error("case name {case} is used more than once; case names identify claims")]
+    DuplicateCaseName { case: String },
+    #[error("case {case} reschedules claim {claim}, which no claim in the ledger carries")]
+    UnknownRescheduleTarget { case: String, claim: String },
     #[error("case {case} expects code {code}, which is outside the closed vocabulary")]
     UnknownExpectationCode { case: String, code: String },
     #[error(
@@ -147,6 +213,19 @@ impl SchedulingFixture {
             || self.kind != SCHEDULING_FIXTURE_KIND
         {
             return Err(ReplayError::UnsupportedEnvelope);
+        }
+        // A replayed claim is identified by its case name, and a reschedule
+        // names the claim it replaces. Two cases under one name would answer
+        // to each other's id: the second silently erases the first's claim,
+        // and one reschedule frees two allocations.
+        let mut seen: Vec<&str> = Vec::with_capacity(self.cases.len());
+        for case in &self.cases {
+            if seen.contains(&case.name.as_str()) {
+                return Err(ReplayError::DuplicateCaseName {
+                    case: case.name.clone(),
+                });
+            }
+            seen.push(&case.name);
         }
         for case in &self.cases {
             if let FixtureExpectation::Refused { code } = &case.expect {
@@ -332,7 +411,21 @@ fn replay_case(
     case: &FixtureCase,
     snapshot: &mut LedgerSnapshot,
 ) -> Result<crate::admission::Admission, CaseStoppage> {
-    let request = &case.request;
+    let request = &case.request.admission();
+    // A reschedule of a claim the ledger does not carry excludes nothing and
+    // replaces nothing, so it would quietly replay as an ordinary booking and
+    // pass against an expectation it never tested. It is an authoring error,
+    // not a caller's refusal.
+    let exclude = case.request.reschedule_of.as_deref();
+    if let Some(target) = exclude {
+        if !snapshot.claims.iter().any(|claim| claim.id == target) {
+            return Err(CaseStoppage::Replay(ReplayError::UnknownRescheduleTarget {
+                case: case.name.clone(),
+                claim: target.to_owned(),
+            }));
+        }
+    }
+
     let offering = policy
         .offering(&request.offering)
         .ok_or(CaseStoppage::Refusal(
@@ -388,12 +481,12 @@ fn replay_case(
                 policy_revision: revision,
                 now: fixture.now,
             };
-            let admitted = evaluate_exact_time_admission(&context, request)?;
+            let admitted = evaluate_exact_time_admission(&context, request, exclude)?;
             let supply = admitted
                 .resource
                 .clone()
                 .expect("an exact-time admission names its member");
-            record_admission(&case.name, &admitted, &supply, request, snapshot);
+            record_admission(&case.name, &admitted, &supply, &case.request, snapshot);
             Ok(admitted)
         }
         SchedulingMode::ArrivalWindow => {
@@ -418,10 +511,10 @@ fn replay_case(
                 policy_revision: revision,
                 now: fixture.now,
             };
-            let admitted = evaluate_window_admission(&context, request)?;
+            let admitted = evaluate_window_admission(&context, request, exclude)?;
             // A window claim occupies the window itself, so later cases sum
             // against the window's published units.
-            record_admission(&case.name, &admitted, &window.id, request, snapshot);
+            record_admission(&case.name, &admitted, &window.id, &case.request, snapshot);
             Ok(admitted)
         }
     }
@@ -434,7 +527,7 @@ fn record_admission(
     case: &str,
     admitted: &crate::admission::Admission,
     supply_id: &str,
-    request: &AdmissionRequest,
+    request: &FixtureAdmissionRequest,
     snapshot: &mut LedgerSnapshot,
 ) {
     if let Some(replaced) = &request.reschedule_of {
@@ -673,6 +766,44 @@ cases:
         assert!(outcomes
             .iter()
             .all(|outcome| outcome.status == CaseStatus::Pass));
+    }
+
+    /// COR-6. A replayed claim is identified by its case name, so two cases
+    /// under one name answer to each other's id: the second erases the
+    /// first's claim and one reschedule frees two allocations.
+    #[test]
+    fn duplicate_case_names_are_refused_before_any_case_runs() {
+        let policy = policy_for_fixture();
+        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+        let repeated = fixture.cases[0].name.clone();
+        fixture.cases[1].name = repeated.clone();
+        assert_eq!(
+            fixture.check(&policy),
+            Err(ReplayError::DuplicateCaseName {
+                case: repeated.clone()
+            })
+        );
+        assert_eq!(
+            fixture.replay(&policy),
+            Err(ReplayError::DuplicateCaseName { case: repeated })
+        );
+    }
+
+    /// COR-7. A reschedule naming a claim the ledger does not carry excludes
+    /// nothing and replaces nothing, so it would replay as an ordinary
+    /// booking and pass against an expectation it never tested.
+    #[test]
+    fn a_reschedule_of_a_claim_the_ledger_does_not_carry_is_reported() {
+        let policy = policy_for_fixture();
+        let mut fixture = parse_fixture_yaml(exact_time_fixture_yaml()).expect("parses");
+        fixture.cases[0].request.reschedule_of = Some("booking-404".to_owned());
+        assert_eq!(
+            fixture.replay(&policy),
+            Err(ReplayError::UnknownRescheduleTarget {
+                case: fixture.cases[0].name.clone(),
+                claim: "booking-404".to_owned(),
+            })
+        );
     }
 
     #[test]

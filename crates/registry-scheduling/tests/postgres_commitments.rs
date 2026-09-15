@@ -39,6 +39,10 @@ const SECRET: &[u8] = b"01234567890123456789012345678901";
 const SCHEDULING_ID: &str = "commitments-test";
 const OFFERING: &str = "registry-update-30";
 const SECOND_OFFERING: &str = "registry-review-45";
+/// An offering whose service runs twice its start increment, so consecutive
+/// published starts overlap each other. It is the only shape that can move an
+/// appointment inside the interval it already holds.
+const OVERLAPPING_OFFERING: &str = "registry-update-60";
 
 /// One plain booking grid: slots every 30 minutes around the clock, every
 /// day, one hour of lead time, a four-hour cancellation cutoff, and a
@@ -46,8 +50,10 @@ const SECOND_OFFERING: &str = "registry-review-45";
 /// use, all at least 110 minutes wide, certain to contain a bookable start
 /// regardless of when the test runs, and the single member per pool makes
 /// every commitment's capacity effect total: a booked or held slot is not
-/// availability. The second offering sells a second pool so one fixture can
-/// also pin a commitment against a pool the publication never anchored.
+/// availability. A third offering serves an hour on the same pool at the same
+/// half-hour increment, so its published starts overlap one another. The last
+/// offering sells a second pool so one fixture can also pin a commitment
+/// against a pool the publication never anchored.
 const POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
 scheduling: {id: commitments-test, version: 1}
@@ -75,6 +81,24 @@ offerings:
     cancellationCutoffMinutes: 240
     exactTime:
       durationMinutes: 30
+      bufferBeforeMinutes: 0
+      bufferAfterMinutes: 0
+      leadTimeMinutes: 60
+      horizonDays: 60
+      pool: north-counter
+      startIncrementMinutes: 30
+      maxRecipients: 1
+    requiresCapabilities: []
+    prerequisites: []
+  - id: registry-update-60
+    service: registry-update
+    label: 60-minute counter update
+    mode: exact-time
+    location: north-counter
+    because: test
+    cancellationCutoffMinutes: 240
+    exactTime:
+      durationMinutes: 60
       bufferBeforeMinutes: 0
       bufferAfterMinutes: 0
       leadTimeMinutes: 60
@@ -388,7 +412,10 @@ fn agent_token() -> String {
     token(claims)
 }
 
-/// A complete admission request for `offering` at `slot`.
+/// A complete admission request for `offering` at `slot`. The wire shape
+/// carries no `rescheduleOf`: the exclusion is the runtime's to supply from
+/// inside the reschedule transaction, and a caller who sends one is refused
+/// as a malformed request.
 fn admission(fx: &Fixture, offering: &str, slot: DateTime<Utc>) -> Value {
     json!({
         "offering": offering,
@@ -400,7 +427,6 @@ fn admission(fx: &Fixture, offering: &str, slot: DateTime<Utc>) -> Value {
         "windowRevision": null,
         "capabilities": [],
         "prerequisites": [],
-        "rescheduleOf": null,
     })
 }
 
@@ -475,6 +501,47 @@ async fn slot_offered(
                     .is_ok_and(|start| start.with_timezone(&Utc) == slot)
         })
     })
+}
+
+/// The first published start of `offering` whose next start is published too.
+/// Both are inside one opening, so an appointment on the first can move onto
+/// the second, and for an offering serving longer than its start increment
+/// the two intervals overlap.
+async fn first_overlapping_pair(
+    fx: &Fixture,
+    offering: &str,
+    from_minutes: i64,
+    to_minutes: i64,
+) -> (DateTime<Utc>, DateTime<Utc>) {
+    let (status, page) = fx
+        .get(
+            &availability_uri(offering, from_minutes, to_minutes),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "availability answers over the window"
+    );
+    let starts: Vec<DateTime<Utc>> = page["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry["kind"] == "slot")
+        .filter_map(|entry| entry["start"].as_str())
+        .filter_map(|start| DateTime::parse_from_rfc3339(start).ok())
+        .map(|start| start.with_timezone(&Utc))
+        .collect();
+    starts
+        .iter()
+        .find_map(|start| {
+            let next = *start + TimeDelta::minutes(30);
+            starts.contains(&next).then_some((*start, next))
+        })
+        .unwrap_or_else(|| {
+            panic!("two consecutive bookable starts inside [{from_minutes}, {to_minutes}] minutes")
+        })
 }
 
 /// Book directly on a fresh slot of the default offering and return the
@@ -652,6 +719,129 @@ async fn a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones()
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED);
     assert_eq!(problem["code"], "revision.mismatch");
+}
+
+/// COR-1. A reschedule must never compete with the appointment it is moving.
+/// The runtime supplies the appointment's own allocation as the exclusion
+/// from inside the commitment transaction, so a move that overlaps the
+/// interval the appointment already holds is admitted rather than answered
+/// `capacity.exhausted`.
+#[tokio::test]
+async fn a_reschedule_moves_inside_the_interval_the_appointment_already_holds() {
+    let fx = fixture().await;
+    let (from, onto) = first_overlapping_pair(&fx, OVERLAPPING_OFFERING, 300, 900).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "self-overlap-create",
+            json!({"hold": null, "admission": admission(&fx, OVERLAPPING_OFFERING, from)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+    let observed = appointment["revision"].as_u64().unwrap();
+
+    // The new interval starts inside the one the appointment already holds.
+    // The only claim standing in its way is its own.
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "self-overlap-move",
+            json!({
+                "observedRevision": observed,
+                "admission": admission(&fx, OVERLAPPING_OFFERING, onto),
+            }),
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a reschedule excludes its own allocation: {moved}"
+    );
+    assert_eq!(moment(&moved, "start"), onto);
+
+    // The degenerate case: a move onto the start the appointment already
+    // holds, entirely inside its own occupied interval.
+    let (status, again) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "self-overlap-restate",
+            json!({
+                "observedRevision": observed + 1,
+                "admission": admission(&fx, OVERLAPPING_OFFERING, onto),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "a move onto its own start: {again}");
+    assert_eq!(moment(&again, "start"), onto);
+    assert_eq!(again["revision"], json!(observed + 2));
+}
+
+/// BL-1. The exclusion belongs to the runtime, never to the caller. A create
+/// path handed a live claim's id is refused at the edge, so no caller can
+/// name another party's allocation out of the capacity check.
+#[tokio::test]
+async fn a_create_cannot_name_a_live_claim_to_leave_out_of_the_capacity_check() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "bypass-standing",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let standing = appointment["appointmentId"].as_str().unwrap().to_owned();
+
+    let mut named = admission(&fx, OFFERING, slot);
+    named["rescheduleOf"] = json!(standing);
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "bypass-create",
+            json!({"hold": null, "admission": named.clone()}),
+        )
+        .await;
+    // The wire shape no longer declares the field, so a body carrying it is
+    // refused as unprocessable by the strict request parsing every create
+    // route already answers through.
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the create path refuses a caller-named exclusion: {problem}"
+    );
+    assert_eq!(problem["code"], "request.unprocessable");
+
+    let (status, problem) = fx.post("/v1/holds", &fx.agent, "bypass-hold", named).await;
+    assert_eq!(
+        status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the hold path refuses it too: {problem}"
+    );
+    assert_eq!(problem["code"], "request.unprocessable");
+
+    // The same second caller without the field meets the standing
+    // appointment, which is the whole capacity of this pool.
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "bypass-plain",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(problem["code"], "capacity.exhausted");
+    assert!(
+        !slot_offered(&fx, OFFERING, 300, 440, slot).await,
+        "the slot the standing appointment {standing} holds is not availability"
+    );
 }
 
 #[tokio::test]

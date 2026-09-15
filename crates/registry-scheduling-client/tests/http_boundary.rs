@@ -148,7 +148,6 @@ fn admission() -> AdmissionRequest {
         window_revision: None,
         capabilities: Vec::new(),
         prerequisites: Vec::new(),
-        reschedule_of: None,
     }
 }
 
@@ -546,8 +545,7 @@ async fn appointment_commands_carry_their_keys_and_exact_bodies() {
         .expect("appointment");
     assert_eq!(read.value.revision, 2);
 
-    let mut reschedule_admission = admission();
-    reschedule_admission.reschedule_of = Some("claim-appt-1".to_owned());
+    let reschedule_admission = admission();
     let moved = client
         .reschedule_appointment(
             auth(&token),
@@ -599,6 +597,15 @@ async fn appointment_commands_carry_their_keys_and_exact_bodies() {
         serde_json::from_slice(&observations[2].body).expect("sent reschedule");
     assert_eq!(sent_reschedule.admission, reschedule_admission);
     assert_eq!(sent_reschedule.observed_revision, 2);
+    // The wire request carries no exclusion of its own: the runtime supplies
+    // the appointment's own claim from inside the reschedule transaction, so
+    // the serialized admission names no claim to leave out of the check.
+    let sent_reschedule_value: serde_json::Value =
+        serde_json::from_slice(&observations[2].body).expect("sent reschedule as json");
+    assert!(!sent_reschedule_value["admission"]
+        .as_object()
+        .expect("the admission is an object")
+        .contains_key("rescheduleOf"));
     assert_eq!(observations[3].uri, "/v1/appointments/appt-1/cancel");
     assert_eq!(observations[3].headers["idempotency-key"], "cancel-1");
     let sent_cancel: CancelAppointmentRequest =

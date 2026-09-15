@@ -155,9 +155,17 @@ pub struct WindowContext<'a> {
 /// horizon, party bounds, prerequisites, duplicate key, published schedule
 /// coverage including the start grid, member capability and availability,
 /// then member occupancy including buffers.
+///
+/// `exclude` is the one standing claim this request replaces: a reschedule
+/// must not compete with the appointment it is moving. It is never a value a
+/// caller sends. The runtime supplies the appointment's own id from inside
+/// the commitment transaction, and offline replay supplies the claim the
+/// authored case names, so no create path can name another party's
+/// allocation out of the capacity check.
 pub fn evaluate_exact_time_admission(
     context: &ExactTimeContext<'_>,
     request: &AdmissionRequest,
+    exclude: Option<&str>,
 ) -> Result<Admission, AdmissionRefusal> {
     let ExactTimeContext {
         offering,
@@ -184,7 +192,7 @@ pub fn evaluate_exact_time_admission(
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
     check_prerequisites(offering, request)?;
-    check_duplicate(offering, request, snapshot, *now)?;
+    check_duplicate(offering, request, snapshot, exclude, *now)?;
 
     // Interval arithmetic that leaves representable time is a horizon
     // refusal, never a mislabeled capacity answer: a start whose service or
@@ -268,7 +276,7 @@ pub fn evaluate_exact_time_admission(
                 &member.resource_id,
                 occupied_start,
                 occupied_end,
-                request.reschedule_of.as_deref(),
+                exclude,
                 *now,
             )
         })
@@ -298,9 +306,14 @@ pub fn evaluate_exact_time_admission(
 /// channel subquota and the total window capacity are both checked, and a
 /// party the published units could never carry is refused as inadequate
 /// rather than as exhausted.
+///
+/// `exclude` carries the same meaning it carries for an exact-time request:
+/// the one standing claim this request replaces, supplied by the runtime or
+/// by offline replay and never by a caller.
 pub fn evaluate_window_admission(
     context: &WindowContext<'_>,
     request: &AdmissionRequest,
+    exclude: Option<&str>,
 ) -> Result<Admission, AdmissionRefusal> {
     let WindowContext {
         offering,
@@ -337,7 +350,7 @@ pub fn evaluate_window_admission(
         return Err(AdmissionRefusal::PartyCapacityInadequate);
     }
     check_prerequisites(offering, request)?;
-    check_duplicate(offering, request, snapshot, *now)?;
+    check_duplicate(offering, request, snapshot, exclude, *now)?;
 
     if let Some(channel) = &request.channel {
         if let Some(subquota) = window
@@ -345,19 +358,14 @@ pub fn evaluate_window_admission(
             .iter()
             .find(|subquota| subquota.channel.as_str() == channel.as_str())
         {
-            let allocated = snapshot.window_units_allocated(
-                &window.id,
-                Some(channel),
-                request.reschedule_of.as_deref(),
-                *now,
-            );
+            let allocated =
+                snapshot.window_units_allocated(&window.id, Some(channel), exclude, *now);
             if allocated.saturating_add(required) > subquota.units {
                 return Err(AdmissionRefusal::CapacityExhausted);
             }
         }
     }
-    let allocated =
-        snapshot.window_units_allocated(&window.id, None, request.reschedule_of.as_deref(), *now);
+    let allocated = snapshot.window_units_allocated(&window.id, None, exclude, *now);
     if allocated.saturating_add(required) > window.units {
         return Err(AdmissionRefusal::CapacityExhausted);
     }
@@ -435,6 +443,7 @@ fn check_duplicate(
     offering: &OfferingPolicy,
     request: &AdmissionRequest,
     snapshot: &LedgerSnapshot,
+    exclude: Option<&str>,
     now: DateTime<Utc>,
 ) -> Result<(), AdmissionRefusal> {
     if offering.duplicate_active_key.is_none() {
@@ -445,7 +454,7 @@ fn check_duplicate(
         // key: skipping the check would let the same party hold two active
         // bookings by omission.
         None => Err(AdmissionRefusal::DuplicateKeyRequired),
-        Some(key) if snapshot.duplicate_active(key, request.reschedule_of.as_deref(), now) => {
+        Some(key) if snapshot.duplicate_active(key, exclude, now) => {
             Err(AdmissionRefusal::DuplicateActiveBooking)
         }
         Some(_) => Ok(()),
@@ -573,7 +582,6 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
-            reschedule_of: None,
         }
     }
 
@@ -620,7 +628,7 @@ mod tests {
         let now = utc(4, 4, 0);
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
 
-        let first = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)))
+        let first = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None)
             .expect("the first caller is admitted");
         assert_eq!(first.resource.as_deref(), Some("station-1"));
 
@@ -632,9 +640,10 @@ mod tests {
             first.occupied_end,
         ));
         let second_context = exact_context(&offering, &exact, members(), &after, now);
-        let second = evaluate_exact_time_admission(&second_context, &exact_request(utc(5, 2, 30)))
-            .map(|admission| admission.resource)
-            .map_err(|refusal| refusal.public_code());
+        let second =
+            evaluate_exact_time_admission(&second_context, &exact_request(utc(5, 2, 30)), None)
+                .map(|admission| admission.resource)
+                .map_err(|refusal| refusal.public_code());
         assert_eq!(second, Ok(Some("station-2".to_owned())));
 
         // With one station left occupied at the same displayed time, the
@@ -647,7 +656,8 @@ mod tests {
             utc(5, 3, 5),
         ));
         let third_context = exact_context(&offering, &exact, members(), &after, now);
-        let third = evaluate_exact_time_admission(&third_context, &exact_request(utc(5, 2, 30)));
+        let third =
+            evaluate_exact_time_admission(&third_context, &exact_request(utc(5, 2, 30)), None);
         assert_eq!(
             third.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
@@ -677,14 +687,14 @@ mod tests {
 
         // A 02:30 start displays as touching, but its 02:25 buffer start
         // overlaps both claims' cleanup, so every member is blocked.
-        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)));
+        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None);
         assert_eq!(
             result.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
         );
 
         // At 03:00, with the increment grid observed, both stations are free.
-        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)));
+        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)), None);
         assert!(result.is_ok());
     }
 
@@ -700,17 +710,14 @@ mod tests {
         let now = utc(4, 4, 0);
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
 
-        let fresh = evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)));
+        let fresh = evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)), None);
         assert_eq!(
             fresh.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::BookingDuplicateActive)
         );
 
-        let rescheduling = AdmissionRequest {
-            reschedule_of: Some("claim-1".to_owned()),
-            ..exact_request(utc(5, 3, 0))
-        };
-        let moved = evaluate_exact_time_admission(&context, &rescheduling);
+        let moved =
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 3, 0)), Some("claim-1"));
         assert!(moved.is_ok(), "{moved:?}");
     }
 
@@ -726,7 +733,7 @@ mod tests {
             duplicate_key: None,
             ..exact_request(utc(5, 2, 30))
         };
-        let refusal = evaluate_exact_time_admission(&context, &request)
+        let refusal = evaluate_exact_time_admission(&context, &request, None)
             .expect_err("refused for the missing key");
         assert_eq!(refusal.public_code(), ProblemCode::PreconditionRequired);
         assert_eq!(refusal.detailed_code(), ProblemCode::PreconditionRequired);
@@ -747,7 +754,7 @@ mod tests {
         let at_the_edge = now + Duration::minutes(5);
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(at_the_edge)).err(),
+            evaluate_exact_time_admission(&context, &exact_request(at_the_edge), None).err(),
             Some(AdmissionRefusal::HorizonOutside {
                 kind: HorizonKind::TooFar
             })
@@ -767,7 +774,7 @@ mod tests {
             ..exact_context(&offering, &exact, members(), &snapshot, now)
         };
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(start)).err(),
+            evaluate_exact_time_admission(&context, &exact_request(start), None).err(),
             Some(AdmissionRefusal::HorizonOutside {
                 kind: HorizonKind::TooFar
             })
@@ -785,7 +792,7 @@ mod tests {
             ..exact_context(&offering, &exact, members(), &snapshot, now)
         };
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(start)).err(),
+            evaluate_exact_time_admission(&context, &exact_request(start), None).err(),
             Some(AdmissionRefusal::HorizonOutside {
                 kind: HorizonKind::TooSoon
             })
@@ -803,7 +810,7 @@ mod tests {
         let now = utc(4, 4, 0);
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)))
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 30)), None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::ScheduleUnpublished)
@@ -831,20 +838,20 @@ mod tests {
         let now = utc(4, 4, 0);
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
 
-        let same_slot = AdmissionRequest {
-            reschedule_of: Some("claim-1".to_owned()),
-            ..exact_request(utc(5, 2, 0))
-        };
-        let result = evaluate_exact_time_admission(&context, &same_slot);
+        // The exclusion is the evaluator's own argument, not something the
+        // request carries, so this is the shape the runtime calls.
+        let result =
+            evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)), Some("claim-1"));
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(result.unwrap().resource.as_deref(), Some("station-1"));
 
-        // Another caller at 02:00 without the exclusion is refused.
+        // The identical request without the exclusion is refused, which is
+        // what a create path is: no caller can ask for one.
         let other = AdmissionRequest {
             duplicate_key: Some("subject:two".to_owned()),
             ..exact_request(utc(5, 2, 0))
         };
-        let result = evaluate_exact_time_admission(&context, &other);
+        let result = evaluate_exact_time_admission(&context, &other, None);
         assert_eq!(
             result.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
@@ -880,7 +887,7 @@ mod tests {
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
         // The expired hold neither blocks the slot nor blocks the duplicate
         // key: its capacity is bookable again.
-        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)));
+        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)), None);
         assert!(result.is_ok(), "{result:?}");
     }
 
@@ -905,7 +912,7 @@ mod tests {
         };
         let (offering, exact) = exact_offering();
         let context = exact_context(&offering, &exact, members(), &snapshot, now);
-        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)));
+        let result = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 0)), None);
         // station-1 is held; station-2 still serves the party.
         assert_eq!(
             result.map(|admission| admission.resource),
@@ -925,7 +932,7 @@ mod tests {
 
         // Too soon: 02:00 is inside the 60-minute lead time at 04:00? No: it
         // is in the past, which is the strongest form of too soon.
-        let past = evaluate_exact_time_admission(&context, &exact_request(utc(4, 4, 30)));
+        let past = evaluate_exact_time_admission(&context, &exact_request(utc(4, 4, 30)), None);
         assert!(matches!(
             past.err(),
             Some(AdmissionRefusal::HorizonOutside {
@@ -939,14 +946,14 @@ mod tests {
             ..exact_request(utc(5, 2, 30))
         };
         assert!(matches!(
-            evaluate_exact_time_admission(&context, &far).err(),
+            evaluate_exact_time_admission(&context, &far, None).err(),
             Some(AdmissionRefusal::HorizonOutside {
                 kind: HorizonKind::TooFar
             })
         ));
 
         // Off-grid start: no published schedule serves 02:15.
-        let off_grid = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 15)));
+        let off_grid = evaluate_exact_time_admission(&context, &exact_request(utc(5, 2, 15)), None);
         assert_eq!(
             off_grid.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::ScheduleUnpublished)
@@ -954,7 +961,7 @@ mod tests {
 
         // Off the published day entirely.
         let unpublished_day =
-            evaluate_exact_time_admission(&context, &exact_request(utc(9, 2, 30)));
+            evaluate_exact_time_admission(&context, &exact_request(utc(9, 2, 30)), None);
         assert_eq!(
             unpublished_day.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::ScheduleUnpublished)
@@ -976,7 +983,8 @@ mod tests {
             closures: &closures,
             ..exact_context(&offering, &exact, members(), &snapshot, now)
         };
-        let closed = evaluate_exact_time_admission(&closed_context, &exact_request(utc(5, 2, 30)));
+        let closed =
+            evaluate_exact_time_admission(&closed_context, &exact_request(utc(5, 2, 30)), None);
         assert_eq!(
             closed.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::LocationClosed)
@@ -991,7 +999,7 @@ mod tests {
             ..exact_request(utc(5, 2, 30))
         };
         assert_eq!(
-            evaluate_exact_time_admission(&context, &party)
+            evaluate_exact_time_admission(&context, &party, None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::PartyCapacityInadequate)
@@ -1011,7 +1019,7 @@ mod tests {
         let wanting_context =
             exact_context(&wanting, &exact_wanting, &capable_members, &snapshot, now);
         assert_eq!(
-            evaluate_exact_time_admission(&wanting_context, &exact_request(utc(5, 2, 30)))
+            evaluate_exact_time_admission(&wanting_context, &exact_request(utc(5, 2, 30)), None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapabilityUnmatched)
@@ -1026,9 +1034,12 @@ mod tests {
         }];
         let unavailable_context =
             exact_context(&wanting, &exact_wanting, &unavailable, &snapshot, now);
-        let refused =
-            evaluate_exact_time_admission(&unavailable_context, &exact_request(utc(5, 2, 30)))
-                .expect_err("refused");
+        let refused = evaluate_exact_time_admission(
+            &unavailable_context,
+            &exact_request(utc(5, 2, 30)),
+            None,
+        )
+        .expect_err("refused");
         assert_eq!(refused.public_code(), ProblemCode::CapacityExhausted);
         assert_eq!(refused.detailed_code(), ProblemCode::ResourceUnavailable);
     }
@@ -1045,7 +1056,7 @@ mod tests {
             ..exact_request(utc(5, 2, 30))
         };
         assert_eq!(
-            evaluate_exact_time_admission(&context, &stale).err(),
+            evaluate_exact_time_admission(&context, &stale, None).err(),
             Some(AdmissionRefusal::PolicyChanged)
         );
     }
@@ -1065,7 +1076,7 @@ mod tests {
             ..exact_request(utc(5, 2, 30))
         };
         assert_eq!(
-            evaluate_exact_time_admission(&context, &request).err(),
+            evaluate_exact_time_admission(&context, &request, None).err(),
             Some(AdmissionRefusal::PrerequisiteMissing {
                 missing: vec!["case:approved-application".to_owned()]
             })
@@ -1133,7 +1144,6 @@ mod tests {
             window_revision: Some(2),
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
-            reschedule_of: None,
         }
     }
 
@@ -1155,7 +1165,7 @@ mod tests {
             now,
         };
         let admission =
-            evaluate_window_admission(&context, &window_request(2, 3)).expect("admitted");
+            evaluate_window_admission(&context, &window_request(2, 3), None).expect("admitted");
         assert_eq!(admission.units, 2);
     }
 
@@ -1178,7 +1188,7 @@ mod tests {
             policy_revision: 1,
             now,
         };
-        let result = evaluate_window_admission(&context, &window_request(2, 2));
+        let result = evaluate_window_admission(&context, &window_request(2, 2), None);
         assert_eq!(
             result.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
@@ -1190,7 +1200,7 @@ mod tests {
             channel: None,
             ..window_request(1, 1)
         };
-        let single = evaluate_window_admission(&context, &unchanneled);
+        let single = evaluate_window_admission(&context, &unchanneled, None);
         assert_eq!(single.map(|admission| admission.units), Ok(1));
     }
 
@@ -1222,14 +1232,14 @@ mod tests {
         };
         // Four recipients are above the highest band: inadequate party.
         assert_eq!(
-            evaluate_window_admission(&context, &window_request(4, 4))
+            evaluate_window_admission(&context, &window_request(4, 4), None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::PartyCapacityInadequate)
         );
         // Two recipients fall in the band at 2 units, exactly the published 2:
         // admitted, not inadequate.
-        assert!(evaluate_window_admission(&context, &window_request(2, 2)).is_ok());
+        assert!(evaluate_window_admission(&context, &window_request(2, 2), None).is_ok());
     }
 
     #[test]
@@ -1250,7 +1260,7 @@ mod tests {
             policy_revision: 1,
             now,
         };
-        let result = evaluate_window_admission(&context, &window_request(1, 1));
+        let result = evaluate_window_admission(&context, &window_request(1, 1), None);
         assert_eq!(
             result.err().map(|refusal| refusal.public_code()),
             Some(ProblemCode::CapacityExhausted)
@@ -1277,7 +1287,7 @@ mod tests {
             ..window_request(1, 1)
         };
         assert!(matches!(
-            evaluate_window_admission(&context, &stale_window).err(),
+            evaluate_window_admission(&context, &stale_window, None).err(),
             Some(AdmissionRefusal::RevisionMismatch { observed: 2 })
         ));
 
@@ -1286,7 +1296,7 @@ mod tests {
             ..stale_window
         };
         assert_eq!(
-            evaluate_window_admission(&context, &stale_both).err(),
+            evaluate_window_admission(&context, &stale_both, None).err(),
             Some(AdmissionRefusal::PolicyChanged)
         );
     }
@@ -1349,6 +1359,7 @@ mod tests {
         let first = evaluate_exact_time_admission(
             &context,
             &exact_request(Utc.with_ymd_and_hms(2026, 11, 1, 5, 30, 0).unwrap()),
+            None,
         )
         .expect("the first 01:30 admits");
         assert_eq!(
@@ -1358,6 +1369,7 @@ mod tests {
         let second = evaluate_exact_time_admission(
             &context,
             &exact_request(Utc.with_ymd_and_hms(2026, 11, 1, 6, 30, 0).unwrap()),
+            None,
         )
         .expect("the second 01:30 admits");
         assert_eq!(
@@ -1369,7 +1381,7 @@ mod tests {
         // published schedule serves it, whatever the wall clock says.
         let outside = Utc.with_ymd_and_hms(2026, 11, 1, 7, 30, 0).unwrap();
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(outside))
+            evaluate_exact_time_admission(&context, &exact_request(outside), None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::ScheduleUnpublished)
@@ -1436,7 +1448,7 @@ mod tests {
         // Inside the closed stretch: a closure, not an unpublished schedule.
         let closed_start = Utc.with_ymd_and_hms(2026, 11, 1, 4, 30, 0).unwrap();
         assert_eq!(
-            evaluate_exact_time_admission(&context, &exact_request(closed_start))
+            evaluate_exact_time_admission(&context, &exact_request(closed_start), None)
                 .err()
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::LocationClosed)
@@ -1445,6 +1457,7 @@ mod tests {
         let served = evaluate_exact_time_admission(
             &context,
             &exact_request(Utc.with_ymd_and_hms(2026, 11, 1, 5, 15, 0).unwrap()),
+            None,
         )
         .expect("the post-closure grid serves");
         assert_eq!(
