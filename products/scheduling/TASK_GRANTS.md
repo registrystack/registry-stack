@@ -99,7 +99,8 @@ this milestone keeps.
 ## What the audit journal records
 
 Every commitment and every refused commitment writes one authorization record
-under `authorization.allowed` or `authorization.refused`. The principal,
+under `authorization.allowed` or `authorization.refused`, and so does a
+permission the service refuses before any commitment is reached. The principal,
 client, grant, and approver are keyed pseudonyms scoped to the request's
 reference class, the purpose is recorded as presence only and never as a
 value, and the record adds the grant's source issuer and its deadline. No
