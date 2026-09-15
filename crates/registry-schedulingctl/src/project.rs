@@ -13,8 +13,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use registry_scheduling::config::{verify_policy_package, PolicyPackageManifest};
 use registry_scheduling_core::{
-    parse_fixture_yaml, parse_policy_yaml, CaseStatus, ReplayError, SchedulingDiagnostic,
-    SchedulingFixture, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
+    parse_fixture_yaml, parse_policy_yaml, CaseStatus, FixtureExpectation, ReplayError,
+    SchedulingDiagnostic, SchedulingFixture, SchedulingPolicy, AUTHORED_POLICY_FILE,
+    SCHEDULING_PACKAGE_MANIFEST_FILE,
 };
 use serde_json::{json, Value};
 
@@ -278,11 +279,23 @@ fn run_fixture(project: &Path, policy: &SchedulingPolicy, path: &Path) -> Result
     };
     let cases = outcomes
         .iter()
-        .map(|outcome| {
+        .zip(fixture.cases.iter())
+        .map(|(outcome, case)| {
+            // A failing case names what the fixture expected beside what
+            // replay actually produced, so a mismatched problem code is
+            // legible from the report alone, never only from opening the
+            // fixture file.
+            let detail = match (outcome.status, &outcome.detail) {
+                (CaseStatus::Fail, Some(actual)) => Some(format!(
+                    "expected {}, actual {actual}",
+                    expected_summary(&case.expect)
+                )),
+                (_, detail) => detail.clone(),
+            };
             json!({
                 "name": outcome.name,
                 "status": outcome.status.as_str(),
-                "detail": outcome.detail,
+                "detail": detail,
             })
         })
         .collect::<Vec<_>>();
@@ -300,6 +313,18 @@ fn run_fixture(project: &Path, policy: &SchedulingPolicy, path: &Path) -> Result
         "file": relative,
         "cases": cases,
     }))
+}
+
+/// Render a fixture case's expectation the same way replay renders what
+/// actually happened, so the two read side by side.
+fn expected_summary(expect: &FixtureExpectation) -> String {
+    match expect {
+        FixtureExpectation::Admitted { units, resource } => format!(
+            "admitted onto {} for {units} unit(s)",
+            resource.as_deref().unwrap_or("the window")
+        ),
+        FixtureExpectation::Refused { code } => format!("refused {code}"),
+    }
 }
 
 fn load_policy(project: &Path) -> Result<SchedulingPolicy> {

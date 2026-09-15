@@ -647,12 +647,13 @@ mod tests {
             .find(|case| case["name"] == "same-key-retry-is-refused")
             .unwrap();
         assert_eq!(case["status"], "fail");
-        // The detail reports what actually happened: the duplicate-active
-        // refusal the broken expectation no longer matches.
-        assert!(case["detail"]
-            .as_str()
-            .unwrap()
-            .contains("booking.duplicate-active"));
+        // A failing case prints what the fixture expected and what actually
+        // happened side by side, so a mismatch is legible without opening
+        // the fixture file.
+        let detail = case["detail"].as_str().unwrap();
+        assert!(detail.contains("expected"), "{detail}");
+        assert!(detail.contains("capacity.exhausted"), "{detail}");
+        assert!(detail.contains("booking.duplicate-active"), "{detail}");
     }
 
     #[test]
