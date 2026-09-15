@@ -173,9 +173,11 @@ OPERATION_IDS = {
 # Every operation: the edge answers 405 for a foreign method and 413 for a body
 # over the router's limit. Every authenticated operation: a missing, invalid,
 # or expired bearer is authentication.refused, and a credential that does not
-# carry the route's authority is profile.not-authorized. Every operation whose
-# service method opens a store round trip can answer service.unavailable; the
-# one that cannot (`SchedulingService::scheduling`) documents no problems.
+# carry the route's authority is profile.not-authorized. Every authenticated
+# operation can also answer service.unavailable, whether or not its service
+# method opens a store round trip: verifying the bearer needs the issuer's key
+# material, and an issuer that cannot be reached is an outage on this side,
+# answered with Retry-After rather than a challenge the caller cannot satisfy.
 EDGE = ["request.body-too-large", "request.method-not-allowed"]
 AUTHENTICATION = ["authentication.refused", "profile.not-authorized"]
 JSON_BODY = [
@@ -206,7 +208,7 @@ ADMISSION = [
 OPERATION_PROBLEMS = {
     ("GET", "/healthz"): EDGE,
     ("GET", "/readyz"): EDGE + STORAGE,
-    ("GET", "/v1/scheduling"): EDGE + AUTHENTICATION,
+    ("GET", "/v1/scheduling"): EDGE + AUTHENTICATION + STORAGE,
     ("GET", "/v1/services"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/offerings"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/resources"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
@@ -1027,13 +1029,20 @@ def verify_handler_wiring(
             status for status in operation["responses"] if int(status) >= 400
         ]
         unavailable = "503" in documented_problems
-        # An infallible service method can answer no store refusal, so its
-        # operation documents no service.unavailable; a fallible one must,
-        # because every one of them opens a store round trip.
-        if derived["service_infallible"] is True and unavailable:
-            raise ValueError(f"an infallible service method documents 503 for {key}")
+        unauthenticated = derived["authority"] == "unauthenticated"
+        # A fallible service method opens a store round trip, so its operation
+        # must document service.unavailable. An authenticated operation must
+        # document it too even when its service method cannot fail, because
+        # verifying the bearer reaches the issuer's key material and an issuer
+        # outage is answered with Retry-After, never with a challenge the
+        # caller cannot satisfy. Only an unauthenticated operation over an
+        # infallible service method answers no 503 at all.
+        if derived["service_infallible"] is True and unavailable and unauthenticated:
+            raise ValueError(f"an unauthenticated infallible operation documents 503 for {key}")
         if derived["service_infallible"] is False and not unavailable:
             raise ValueError(f"a fallible service method documents no 503 for {key}")
+        if not unauthenticated and not unavailable:
+            raise ValueError(f"an authenticated operation documents no 503 for {key}")
         if not documented_problems and derived["authority"] != "unauthenticated":
             raise ValueError(f"an authenticated operation answers no refusal for {key}")
         for code in derived["problem_codes"]:
@@ -1110,7 +1119,14 @@ def verify_operation_problems(
             )
         required = {"request.body-too-large", "request.method-not-allowed"}
         if operation["x-scheduling-authority"] != "unauthenticated":
-            required |= {"authentication.refused", "profile.not-authorized"}
+            # Authentication itself reaches the issuer's key material, so an
+            # authenticated operation answers service.unavailable even when it
+            # never opens the store.
+            required |= {
+                "authentication.refused",
+                "profile.not-authorized",
+                "service.unavailable",
+            }
         if operation.get("requestBody"):
             required |= {"request.invalid", "request.unprocessable", "request.unsupported-media-type"}
         if any(parameter["in"] == "query" for parameter in operation["parameters"]):

@@ -5153,6 +5153,31 @@
                 "$ref": "#/components/headers/TraceparentHeader"
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemServiceUnavailable"
+                }
+              }
+            },
+            "description": "Problem response: service.unavailable",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds before retrying the unavailable dependency; the runtime answers 5.",
+                "schema": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
           }
         },
         "security": [
