@@ -4183,7 +4183,7 @@ version = "0.32.0"
 
 [[package]]
 name = "registry-platform-calendar"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "chrono",
  "chrono-tz",
@@ -4505,7 +4505,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "async-trait",
  "axum",
@@ -4550,7 +4550,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-client"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "axum",
  "chrono",
@@ -4567,7 +4567,7 @@ dependencies = [
 
 [[package]]
 name = "registry-scheduling-core"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "chrono",
  "registry-platform-calendar",
@@ -4582,7 +4582,7 @@ dependencies = [
 
 [[package]]
 name = "registry-schedulingctl"
-version = "0.31.0"
+version = "0.32.0"
 dependencies = [
  "anyhow",
  "chrono",
