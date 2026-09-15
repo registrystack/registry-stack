@@ -110,6 +110,30 @@ mod tests {
         }
     }
 
+    /// The request-edge family is part of the closed vocabulary, so the
+    /// product's own route-not-found answer is a typed problem, never edge
+    /// talk; only a foreign dialect's is.
+    #[test]
+    fn the_products_own_request_edge_problem_is_typed() {
+        let code = ProblemCode::RequestNotFound;
+        let document = ProblemDocument {
+            type_uri: type_uri(code.code()),
+            title: code.title().to_owned(),
+            status: code.http_status(),
+            detail: code.detail().to_owned(),
+            code: code.code().to_owned(),
+            trace_id: TraceId::parse(TRACE_ID).expect("fixture trace identifier"),
+        };
+        match domain_problem(StatusCode::NOT_FOUND, Some(TRACE_ID), &document) {
+            SchedulingClientError::Problem {
+                status: 404,
+                code: ProblemCode::RequestNotFound,
+                ..
+            } => {}
+            other => panic!("expected a typed request-edge problem, got {other:?}"),
+        }
+    }
+
     #[test]
     fn every_problem_mismatch_degrades_to_a_protocol_failure() {
         let document = exhaustive_document();
@@ -130,7 +154,7 @@ mod tests {
             },
             ProblemDocument {
                 type_uri: format!(
-                    "https://id.registrystack.org/problems/registry-platform/{}",
+                    "https://example.test/problems/other/{}",
                     document.code.replace('.', "/")
                 ),
                 ..document.clone()
