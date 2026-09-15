@@ -61,10 +61,24 @@ existing deployments; stock ThunderID emits `scope`, so the maintained example
 and `schedulingctl init` set that explicit override. `readsScope` defaults to
 `scheduling-read` and `explainScope` to `scheduling-explain`; the two must
 differ, because the explain path can name member-level causes the public
-availability read never discloses. `allowedClients` is empty by default, which
-admits every client the issuer verifies; list the exact client ids to narrow
-that. Scopes authorize reads only. Every commitment takes its authority from a
-task grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
+availability read never discloses. `allowedClients` lists the exact client ids
+the runtime admits. A deployment whose `listener.tlsTermination` is
+`operator-controlled-upstream` must name them: an empty or absent list is a
+startup refusal there, because a forgotten field would otherwise admit every
+client the issuer verifies, including an application in the same realm that has
+nothing to do with booking. Development loopback keeps the empty-means-any
+convenience, since it is not a deployment an unrelated client can reach.
+
+`assertionIssuers` maps a client id to the assertion authorities that client may
+exchange a subject token from. A deployment that performs no token exchange
+leaves it empty, and an exchanged token whose authority no entry declares is
+refused. Once a client is listed, a token it exchanged is accepted only for one
+of that client's declared authorities, so an assertion minted by an unrelated
+authority the issuer happens to federate cannot become a booking credential
+here.
+
+Scopes authorize reads only. Every commitment takes its authority from a task
+grant instead, which [TASK_GRANTS.md](TASK_GRANTS.md) documents.
 
 `audit.path` is the absolute JSONL journal path. `audit.hashKeyRef` supplies
 its keyed-chain secret. Every commitment and every authorization refusal is
