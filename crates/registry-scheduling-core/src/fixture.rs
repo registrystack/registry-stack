@@ -1054,7 +1054,6 @@ windows:
         channel: assisted
         units: 1
         because: Assisted bookings hold a protected unit.
-    leftover: becomes-walk-in
     because: The Saturday morning household block.
 holdPolicy:
   ttlMinutes: 10
