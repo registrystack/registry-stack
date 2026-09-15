@@ -5188,6 +5188,8 @@ dependencies = [
  "registry-relay-v2",
  "registry-relayctl",
  "registry-render",
+ "registry-scheduling",
+ "registry-schedulingctl",
  "serde",
  "serde_json",
 ]
