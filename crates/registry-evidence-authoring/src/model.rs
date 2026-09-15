@@ -7,16 +7,38 @@
 
 use std::collections::BTreeMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One authored access policy: its format version, stable identifier, and the
 /// questions a caller assigned this policy may ask.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccessPolicy {
     pub version: u8,
     pub id: String,
     pub questions: Vec<String>,
+    #[serde(rename = "taskGrant", default, skip_serializing_if = "Option::is_none")]
+    pub task_grant: Option<AccessTaskGrant>,
+}
+
+/// Optional trusted task-grant origin for every question in one local policy.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccessTaskGrant {
+    pub kind: String,
+    pub source_issuer: String,
+    pub requester_clients: Vec<String>,
+    pub bindings: Vec<AccessTaskBinding>,
+}
+
+/// Exact authored selector field to verified-token claim path binding.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccessTaskBinding {
+    pub question: String,
+    pub role: String,
+    pub selector_profile: String,
+    pub value_claims: BTreeMap<String, String>,
 }
 
 /// One authored question: what is asked, of which subjects, from which source,

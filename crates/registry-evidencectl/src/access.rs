@@ -93,6 +93,25 @@ pub struct ClientAddArgs {
     /// Generate an owner-only P-256 key for local client authentication.
     #[arg(long, required = true)]
     generate_local_key: bool,
+    /// Use institutional task exchange with this one bootstrap scope.
+    #[arg(long)]
+    grant_bootstrap_scope: Option<String>,
+    /// Bootstrap resource audience. Omit to use the shared issuer owner's default.
+    #[arg(long, requires = "grant_bootstrap_scope")]
+    grant_bootstrap_resource: Option<String>,
+    /// Use a signed first-party context with this one bootstrap scope.
+    #[arg(
+        long,
+        conflicts_with = "grant_bootstrap_scope",
+        requires_all = ["first_party_bootstrap_resource", "first_party_issuer"]
+    )]
+    first_party_bootstrap_scope: Option<String>,
+    /// Exact resource for the first-party bootstrap credential.
+    #[arg(long, requires = "first_party_bootstrap_scope")]
+    first_party_bootstrap_resource: Option<String>,
+    /// Exact trusted issuer of the signed first-party context.
+    #[arg(long, requires = "first_party_bootstrap_scope")]
+    first_party_issuer: Option<String>,
     /// Project root. Defaults to the current directory.
     #[arg(long, default_value = ".", hide = true)]
     project: PathBuf,
@@ -107,13 +126,7 @@ pub struct ClientRevokeArgs {
     project: PathBuf,
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct AccessPolicyDocument {
-    version: u8,
-    id: String,
-    questions: Vec<String>,
-}
+type AccessPolicyDocument = registry_evidence_authoring::model::AccessPolicy;
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -132,6 +145,63 @@ struct ClientDocument {
     principal: String,
     evidence_audience: String,
     keys: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exchange: Option<ActiveClientExchange>,
+}
+
+/// Local issuer wiring for a client whose Evidence authority comes from a task
+/// assertion. This does not grant access or change the governed task policy.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ActiveClientExchange {
+    pub(crate) kind: ActiveClientExchangeKind,
+    pub(crate) bootstrap_scope: String,
+    /// None means the issuer owner's default resource, not the Evidence resource.
+    #[serde(default)]
+    pub(crate) bootstrap_resource: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) source_issuer: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum ActiveClientExchangeKind {
+    InstitutionalGrant,
+    FirstParty,
+}
+
+impl ActiveClientExchange {
+    fn validate(&self) -> Result<()> {
+        if self.bootstrap_scope.is_empty()
+            || self.bootstrap_scope.len() > 128
+            || !self
+                .bootstrap_scope
+                .bytes()
+                .all(|byte| matches!(byte, 0x21 | 0x23..=0x5b | 0x5d..=0x7e))
+        {
+            bail!("grant bootstrap scope must be one bounded OAuth scope token");
+        }
+        if self.bootstrap_resource.as_ref().is_some_and(|resource| {
+            resource.len() > 512 || !authoring::valid_local_audience(resource)
+        }) {
+            bail!("grant bootstrap resource must be a bounded resource URI");
+        }
+        match self.kind {
+            ActiveClientExchangeKind::InstitutionalGrant if self.source_issuer.is_some() => {
+                bail!("institutional grant issuer comes from its governed task policy")
+            }
+            ActiveClientExchangeKind::FirstParty
+                if self.bootstrap_resource.is_none()
+                    || self.source_issuer.as_ref().is_none_or(|issuer| {
+                        issuer.len() > 512 || !authoring::valid_local_audience(issuer)
+                    }) =>
+            {
+                bail!("first-party exchange needs exact bootstrap resource and source issuer")
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -147,6 +217,7 @@ pub(crate) struct ActiveClientRegistration {
     pub(crate) public_jwks: String,
     pub(crate) requester_tags: Vec<String>,
     pub(crate) evidence_audience: String,
+    pub(crate) exchange: Option<ActiveClientExchange>,
 }
 
 pub fn run(command: AccessCommand) -> Result<ExitCode> {
@@ -185,6 +256,7 @@ fn add_policy(args: &PolicyAddArgs) -> Result<ExitCode> {
         version: 1,
         id: args.policy.clone(),
         questions,
+        task_grant: None,
     };
     write_new_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
     println!(
@@ -214,6 +286,26 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
     validate_identifier(&args.client, "client")?;
     if !args.generate_local_key {
         bail!("local client creation requires --generate-local-key");
+    }
+    let exchange = if let Some(scope) = &args.grant_bootstrap_scope {
+        Some(ActiveClientExchange {
+            kind: ActiveClientExchangeKind::InstitutionalGrant,
+            bootstrap_scope: scope.clone(),
+            bootstrap_resource: args.grant_bootstrap_resource.clone(),
+            source_issuer: None,
+        })
+    } else {
+        args.first_party_bootstrap_scope
+            .as_ref()
+            .map(|scope| ActiveClientExchange {
+                kind: ActiveClientExchangeKind::FirstParty,
+                bootstrap_scope: scope.clone(),
+                bootstrap_resource: args.first_party_bootstrap_resource.clone(),
+                source_issuer: args.first_party_issuer.clone(),
+            })
+    };
+    if let Some(exchange) = &exchange {
+        exchange.validate()?;
     }
     let policy_ids = sorted_unique(&args.policy, "policies", MAX_POLICIES_PER_CLIENT)?;
     for policy_id in &policy_ids {
@@ -268,6 +360,7 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
         principal: format!("urn:registrystack:evidence:local:client:{}", args.client),
         evidence_audience: format!("urn:registrystack:evidence:local:client:{}", args.client),
         keys: vec![public_key],
+        exchange,
     };
 
     // Publish the private directory first. The public document is the marker
@@ -381,7 +474,7 @@ pub(crate) fn load_active_clients(
         bail!("compiled access policies do not match the editable project policies");
     }
     for policy in policies.values() {
-        let expected = authoring::access_policy_requester_tag(&policy.id, &policy.questions)?;
+        let expected = authoring::access_policy_requester_tag_for(policy)?;
         if policy_tags.get(&policy.id) != Some(&expected) {
             bail!(
                 "editable access policy {} differs from the active generation",
@@ -411,9 +504,26 @@ pub(crate) fn load_active_clients(
             public_jwks: serde_json::to_string(&json!({"keys": document.keys}))?,
             requester_tags,
             evidence_audience: document.evidence_audience.clone(),
+            exchange: document.exchange.clone(),
         });
     }
     Ok(registrations)
+}
+
+/// Public, editable client admission for local bundle compilation. Private
+/// keys are checked separately when `dev` registers the issuer generation.
+pub(crate) fn active_client_policies(project: &Path) -> Result<BTreeMap<String, Vec<String>>> {
+    let project = canonical_project(project)?;
+    let policies = load_policy_documents_if_present(&project)?;
+    let clients = load_client_documents_if_present(&project)?;
+    let mut admitted = BTreeMap::new();
+    for document in clients.values() {
+        validate_client_policies(&document.policies, &policies)?;
+        if document.status == ClientStatus::Active {
+            admitted.insert(document.client_id.clone(), document.policies.clone());
+        }
+    }
+    Ok(admitted)
 }
 
 fn require_stopped_or_absent_session(project: &Path) -> Result<()> {
@@ -464,6 +574,9 @@ fn load_policy_documents_if_present(
     let mut policies = BTreeMap::new();
     for path in paths {
         let mut document: AccessPolicyDocument = read_yaml(&path, PUBLIC_FILE_MODE)?;
+        if !registry_evidence_authoring::validate::validate_access_policy(&document).is_empty() {
+            bail!("access policy does not satisfy the authored policy contract");
+        }
         if document.version != 1 {
             bail!("access policy version must be 1");
         }
@@ -522,6 +635,9 @@ fn read_client_document(path: &Path) -> Result<ClientDocument> {
         }
         let text = serde_json::to_string(key).context("rendering client public key")?;
         PublicJwk::parse(&text).context("client public JWK is invalid")?;
+    }
+    if let Some(exchange) = &document.exchange {
+        exchange.validate()?;
     }
     Ok(document)
 }

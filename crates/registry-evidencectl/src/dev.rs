@@ -37,15 +37,19 @@ use zeroize::Zeroizing;
 #[cfg(test)]
 use std::os::unix::fs::symlink;
 
+#[cfg(test)]
+use crate::authoring::access_policy_requester_tag;
 use crate::{
     access,
     authoring::{
-        access_policy_requester_tag, compile_local_project_with_ports_and_resource,
+        compile_local_project_with_ports_and_resource,
         compile_local_project_with_target_inputs_and_resource, valid_local_audience,
-        CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalServicePorts,
+        CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalAdmission,
+        LocalServicePorts,
     },
     keygen, OutputFormat,
 };
+use registry_evidence_authoring::model::{AccessPolicy, AccessTaskGrant};
 
 const STATE_SCHEMA: &str = "registry.evidencectl.dev-state/v6";
 const CONTROL_SOCKET_NAME: &str = "control.sock";
@@ -300,6 +304,8 @@ struct AccessPolicyState {
     id: String,
     requester_tag: String,
     questions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_grant: Option<AccessTaskGrant>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -394,6 +400,7 @@ pub(crate) struct ReadyAccessPolicy {
     pub(crate) id: String,
     pub(crate) requester_tag: String,
     pub(crate) questions: Vec<String>,
+    pub(crate) task_grant: Option<AccessTaskGrant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,11 +671,82 @@ fn verify_borrowed_issuer(owner: &BorrowedIssuer) -> Result<()> {
     Ok(())
 }
 
+/// The task source authorities an active client requests Evidence under. Its
+/// declared exchange binding must match the task policies that name it: a task
+/// requester holds the policy tag and exchanges institutionally, and any
+/// exchange binding needs a borrowed issuer owner to register it.
+fn client_task_sources(
+    registration: &access::ActiveClientRegistration,
+    policies: &[crate::authoring::CompiledAccessPolicy],
+    borrowed_owner: bool,
+) -> Result<BTreeSet<String>> {
+    let mut task_sources = BTreeSet::new();
+    for policy in policies {
+        if let Some(task) = &policy.task_grant {
+            if task.requester_clients.contains(&registration.client_id) {
+                if !registration.requester_tags.contains(&policy.requester_tag) {
+                    bail!("task grant requester is not assigned its access policy");
+                }
+                task_sources.insert(task.source_issuer.clone());
+            }
+        }
+    }
+    match registration.exchange.as_ref().map(|binding| binding.kind) {
+        Some(access::ActiveClientExchangeKind::InstitutionalGrant) if task_sources.is_empty() => {
+            bail!("institutional exchange needs one active assigned task policy");
+        }
+        Some(access::ActiveClientExchangeKind::FirstParty) if !task_sources.is_empty() => {
+            bail!("task requester cannot use first-party exchange");
+        }
+        None if !task_sources.is_empty() => {
+            bail!("task grant requester needs one declared institutional exchange binding");
+        }
+        _ => {}
+    }
+    if registration.exchange.is_some() && !borrowed_owner {
+        bail!("signed context exchange needs a borrowed issuer owner");
+    }
+    Ok(task_sources)
+}
+
+/// The assertion authorities the issuer owner pairs each admitted client with,
+/// derived the way the owner's own BREG runtime derives its pairing: every
+/// exchange connection names the clients that may present its authority.
+fn borrowed_assertion_issuers(
+    inventory: &Value,
+    admitted: &[String],
+) -> Result<BTreeMap<String, Vec<String>>> {
+    let mut authorities: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for connection in inventory["issuer"]["exchangeIssuers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        let issuer = connection["issuer"]
+            .as_str()
+            .context("BREG issuer owner has an exchange connection without an issuer")?;
+        for client in connection["clients"].as_array().into_iter().flatten() {
+            let client = client
+                .as_str()
+                .context("BREG issuer owner has an invalid exchange connection client")?;
+            if admitted.iter().any(|id| id == client) {
+                let registered = authorities.entry(client.to_owned()).or_default();
+                if !registered.iter().any(|known| known == issuer) {
+                    registered.push(issuer.to_owned());
+                }
+            }
+        }
+    }
+    Ok(authorities)
+}
+
 fn verify_borrowed_registrations(
     owner: &BorrowedIssuer,
     audience: &str,
     clients: &[registry_thunderid_tooling::local::TypedLocalClient],
     admitted: &[String],
+    assertion_issuers: &BTreeMap<String, Vec<String>>,
+    exchange_bindings: &BTreeMap<String, (access::ActiveClientExchange, BTreeSet<String>)>,
 ) -> Result<()> {
     // The compiled bundle admits exactly these client identifiers, and the
     // shared issuer holds clients this Evidence project never activated. A
@@ -684,6 +762,11 @@ fn verify_borrowed_registrations(
     }
     let root = owner.project.join(".breg/dev");
     let inventory = read_owner_json(&root.join("clients.json"), MAX_STATE_BYTES)?;
+    if borrowed_assertion_issuers(&inventory, admitted)? != *assertion_issuers {
+        bail!(
+            "the BREG issuer owner's assertion pairing changed while the local bundle was compiled"
+        );
+    }
     if !inventory["issuer"]["resources"]
         .as_array()
         .is_some_and(|resources| {
@@ -707,11 +790,18 @@ fn verify_borrowed_registrations(
                     client.client_id
                 )
             })?;
+        let exchange = exchange_bindings.get(&client.client_id);
         if registered["scopes"] != json!(client.scopes)
             || registered["claims"] != json!(client.claims)
             || registered["allowHumanFixture"] == true
             || registered["allowBregAccess"] == true
-            || inventory["issuer"]["clientResources"][&client.client_id] != audience
+            || match exchange {
+                Some((binding, _)) => {
+                    inventory["issuer"]["clientResources"][&client.client_id]
+                        != json!(binding.bootstrap_resource)
+                }
+                None => inventory["issuer"]["clientResources"][&client.client_id] != audience,
+            }
         {
             bail!(
                 "BREG issuer registration differs from Evidence client {}",
@@ -719,17 +809,52 @@ fn verify_borrowed_registrations(
             );
         }
         // An exchange client may present any assertion authority the shared
-        // issuer trusts, and a local Evidence bundle states no per-client
-        // pairing to refuse the others with. A client that is both is refused
-        // here rather than admitted without that rule.
-        if inventory["issuer"]["exchangeClients"]
+        // issuer trusts. The compiled bundle carries the owner's pairing, so a
+        // client registered as both is admitted only with a declared exchange
+        // binding whose source authorities that pairing names, and refused
+        // here otherwise rather than admitted without the rule.
+        let registered_exchange = inventory["issuer"]["exchangeClients"]
             .as_array()
-            .is_some_and(|declared| declared.iter().any(|id| id == &json!(client.client_id)))
-        {
-            bail!(
+            .is_some_and(|declared| declared.iter().any(|id| id == &json!(client.client_id)));
+        match exchange {
+            None if registered_exchange => bail!(
                 "BREG issuer owner registered Evidence client {} as an exchange client",
                 client.client_id
-            );
+            ),
+            None => {}
+            Some((binding, source_issuers)) => {
+                let (sources, mapping) = match binding.kind {
+                    access::ActiveClientExchangeKind::InstitutionalGrant => {
+                        (source_issuers.clone(), "institutional_grant")
+                    }
+                    access::ActiveClientExchangeKind::FirstParty => (
+                        binding.source_issuer.iter().cloned().collect(),
+                        "first_party",
+                    ),
+                };
+                let paired = assertion_issuers.get(&client.client_id);
+                if !registered_exchange
+                    || sources.is_empty()
+                    || (binding.kind == access::ActiveClientExchangeKind::FirstParty
+                        && !source_issuers.is_empty())
+                    || sources.iter().any(|source| {
+                        !paired.is_some_and(|issuers| issuers.contains(source))
+                            || !inventory["issuer"]["exchangeIssuers"]
+                                .as_array()
+                                .is_some_and(|issuers| {
+                                    issuers.iter().any(|issuer| {
+                                        issuer["issuer"] == *source && issuer["mapping"] == mapping
+                                    })
+                                })
+                    })
+                    || client.scopes != [binding.bootstrap_scope.clone()]
+                {
+                    bail!(
+                        "BREG issuer signed-context exchange registration differs from Evidence client {}",
+                        client.client_id
+                    );
+                }
+            }
         }
         let expected: Value = serde_json::from_str(&client.public_jwks)?;
         let public = read_owner_json(
@@ -917,6 +1042,7 @@ pub(crate) fn load_ready_state(project: &Path) -> Result<ReadyDevState> {
                 id: policy.id,
                 requester_tag: policy.requester_tag,
                 questions: policy.questions,
+                task_grant: policy.task_grant,
             })
             .collect(),
         questions: state.questions.into_iter().map(ready_question).collect(),
@@ -1089,8 +1215,13 @@ fn valid_access_policy_state(
             .questions
             .iter()
             .all(|question| question_aliases.contains(question.as_str()))
-        && access_policy_requester_tag(&policy.id, &policy.questions)
-            .is_ok_and(|tag| tag == policy.requester_tag)
+        && crate::authoring::access_policy_requester_tag_for(&AccessPolicy {
+            version: 1,
+            id: policy.id.clone(),
+            questions: policy.questions.clone(),
+            task_grant: policy.task_grant.clone(),
+        })
+        .is_ok_and(|tag| tag == policy.requester_tag)
 }
 
 fn valid_question_state(question: &QuestionState) -> bool {
@@ -1272,6 +1403,7 @@ fn state_matches_sealed_bundle(
                 profile,
                 LOCAL_REQUESTER_TAG,
                 &questions.iter().collect::<Vec<_>>(),
+                None,
             ));
     }
     if authority_profiles.len() != access_policies.len() {
@@ -1287,7 +1419,12 @@ fn state_matches_sealed_bundle(
             .filter_map(|alias| questions.iter().find(|question| question.alias == *alias))
             .collect::<Vec<_>>();
         if governed_questions.len() != policy.questions.len()
-            || !authority_profile_matches(profile, &policy.requester_tag, &governed_questions)
+            || !authority_profile_matches(
+                profile,
+                &policy.requester_tag,
+                &governed_questions,
+                policy.task_grant.as_ref(),
+            )
         {
             return Ok(false);
         }
@@ -1299,12 +1436,25 @@ fn authority_profile_matches(
     profile: &Value,
     requester_tag: &str,
     questions: &[&QuestionState],
+    task_grant: Option<&AccessTaskGrant>,
 ) -> bool {
-    if profile.get("kind").and_then(Value::as_str) != Some("explicit-request")
+    let expected_kind = task_grant.map_or("explicit-request", |grant| grant.kind.as_str());
+    if profile.get("kind").and_then(Value::as_str) != Some(expected_kind)
         || profile
             .get("requesterTags")
             .and_then(Value::as_array)
             .is_none_or(|tags| tags.as_slice() != [Value::String(requester_tag.to_owned())])
+    {
+        return false;
+    }
+    if let Some(task) = task_grant {
+        if profile["requesterClients"] != json!(task.requester_clients)
+            || profile["grantSourceIssuer"] != task.source_issuer
+        {
+            return false;
+        }
+    } else if profile.get("requesterClients").is_some()
+        || profile.get("grantSourceIssuer").is_some()
     {
         return false;
     }
@@ -1334,7 +1484,7 @@ fn authority_profile_matches(
         }) else {
             return false;
         };
-        grant_matches_question(grant, question)
+        grant_matches_question(grant, question, task_grant)
             && seen.insert((
                 question.requirement_uri.as_str(),
                 grant["subjects"].to_string(),
@@ -1342,7 +1492,11 @@ fn authority_profile_matches(
     })
 }
 
-fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
+fn grant_matches_question(
+    grant: &Value,
+    question: &QuestionState,
+    task_grant: Option<&AccessTaskGrant>,
+) -> bool {
     if grant.get("requirement").and_then(Value::as_str) != Some(question.requirement_uri.as_str())
         || grant.get("purpose").and_then(Value::as_str) != Some(question.purpose.as_str())
         || grant.get("audienceFrom").and_then(Value::as_str) != Some("authenticated-requester")
@@ -1364,8 +1518,23 @@ fn grant_matches_question(grant: &Value, question: &QuestionState) -> bool {
                                 configured.get("selectorProfile").and_then(Value::as_str)
                                     == Some(selector.profile.as_str())
                             })
-                            && configured.get("valueOrigin").and_then(Value::as_str)
-                                == Some("request")
+                            && match task_grant {
+                                Some(task) => task.bindings.iter().any(|binding| {
+                                    binding.question == question.alias
+                                        && binding.role == expected.role
+                                        && configured.get("selectorProfile").and_then(Value::as_str)
+                                            == Some(binding.selector_profile.as_str())
+                                        && configured.get("valueOrigin").and_then(Value::as_str)
+                                            == Some("authenticated-grant")
+                                        && configured.get("valueClaims")
+                                            == Some(&json!(binding.value_claims))
+                                }),
+                                None => {
+                                    configured.get("valueOrigin").and_then(Value::as_str)
+                                        == Some("request")
+                                        && configured.get("valueClaims").is_none()
+                                }
+                            }
                     })
         })
 }
@@ -1804,21 +1973,29 @@ fn prepare_and_start(
         docker_override,
         "EVIDENCECTL_TEST_DOCKER_BIN",
     )?)?;
-    let (compiled, admitted_clients) = {
+    let (compiled, admission) = {
         let _project_lock = crate::source_import::ProjectLock::acquire(project)?;
         // A session that owns its issuer registers only its own clients, so it
         // leaves admission to that issuer. A session borrowing a shared issuer
         // reads the clients it is about to register while it still holds the
-        // project lock, and states them in the bundle it compiles.
-        let admitted_clients = match owner {
-            Some(_) => {
+        // project lock, and states them in the bundle it compiles together with
+        // the assertion authorities the owner pairs each of them with.
+        let admission = match owner {
+            Some(owner) => {
                 let admitted = access::active_client_ids(project)?;
                 if admitted.len() > MAX_ADMITTED_CLIENTS {
                     bail!("a session borrowing a shared issuer names its clients in the bundle, which admits at most {MAX_ADMITTED_CLIENTS}");
                 }
-                admitted
+                let inventory = read_owner_json(
+                    &owner.project.join(".breg/dev/clients.json"),
+                    MAX_STATE_BYTES,
+                )?;
+                LocalAdmission {
+                    assertion_issuers: borrowed_assertion_issuers(&inventory, &admitted)?,
+                    allowed_clients: admitted,
+                }
             }
-            None => Vec::new(),
+            None => LocalAdmission::default(),
         };
         let compiled = match target {
             Some(target) => {
@@ -1831,7 +2008,7 @@ fn prepare_and_start(
                     connections,
                     outbound_tls,
                     resource,
-                    &admitted_clients,
+                    &admission,
                 )?;
                 if format == OutputFormat::Human {
                     println!("Local caller rehearsal uses the target's source connections and outbound TLS; Evidence and the local issuer use generated local governance.");
@@ -1844,10 +2021,10 @@ fn prepare_and_start(
                 &evidence_bin,
                 ports,
                 resource,
-                &admitted_clients,
+                &admission,
             )?,
         };
-        (compiled, admitted_clients)
+        (compiled, admission)
     };
     let evidence_origin = local_origin(ports.evidence);
     let issuer_origin = local_origin(ports.issuer);
@@ -1862,6 +2039,7 @@ fn prepare_and_start(
 
     generate_holder_key(&keys)?;
     let mut issuer_clients = Vec::new();
+    let mut exchange_bindings = BTreeMap::new();
     let caller = if compiled.access_policies.is_empty() {
         if owner.is_some() {
             bail!("--issuer-project requires explicit Evidence access policies and active clients before the issuer owner starts");
@@ -1901,21 +2079,47 @@ fn prepare_and_start(
             bail!("explicit access policies require at least one active client");
         }
         for registration in registrations {
+            let task_sources =
+                client_task_sources(&registration, &compiled.access_policies, owner.is_some())?;
+            let (claims, scopes) = if let Some(binding) = &registration.exchange {
+                exchange_bindings.insert(
+                    registration.client_id.clone(),
+                    (binding.clone(), task_sources),
+                );
+                (
+                    BTreeMap::from([(
+                        "registry_actor_kind".to_owned(),
+                        json!(
+                            if binding.kind == access::ActiveClientExchangeKind::FirstParty {
+                                "service"
+                            } else {
+                                "agent"
+                            }
+                        ),
+                    )]),
+                    vec![binding.bootstrap_scope.clone()],
+                )
+            } else {
+                (
+                    BTreeMap::from([
+                        ("registry_actor_kind".to_owned(), json!("service")),
+                        (
+                            "evidence_tags".to_owned(),
+                            json!(registration.requester_tags),
+                        ),
+                        (
+                            "evidence_audience".to_owned(),
+                            json!(registration.evidence_audience),
+                        ),
+                    ]),
+                    vec!["evidence:invoke".to_owned()],
+                )
+            };
             issuer_clients.push(registry_thunderid_tooling::local::TypedLocalClient {
                 client_id: registration.client_id,
                 public_jwks: registration.public_jwks,
-                claims: BTreeMap::from([
-                    ("registry_actor_kind".to_owned(), json!("service")),
-                    (
-                        "evidence_tags".to_owned(),
-                        json!(registration.requester_tags),
-                    ),
-                    (
-                        "evidence_audience".to_owned(),
-                        json!(registration.evidence_audience),
-                    ),
-                ]),
-                scopes: vec!["evidence:invoke".to_owned()],
+                claims,
+                scopes,
                 allow_human_fixture: false,
             });
         }
@@ -1930,7 +2134,9 @@ fn prepare_and_start(
             owner,
             &compiled.local_audience,
             &issuer_clients,
-            &admitted_clients,
+            &admission.allowed_clients,
+            &admission.assertion_issuers,
+            &exchange_bindings,
         )?;
     } else {
         let description = registry_thunderid_tooling::local::typed_local_description(
@@ -2543,6 +2749,7 @@ impl From<&CompiledAccessPolicy> for AccessPolicyState {
             id: compiled.id.clone(),
             requester_tag: compiled.requester_tag.clone(),
             questions: compiled.questions.clone(),
+            task_grant: compiled.task_grant.clone(),
         }
     }
 }
@@ -3004,6 +3211,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn retained_task_grant_profile_refuses_changed_origin_client_or_claim() {
+        let question = QuestionState::from(&compiled(Path::new("/tmp/unused")).questions[0]);
+        let task = AccessTaskGrant {
+            kind: "delegated".to_owned(),
+            source_issuer: "https://casework.invalid".to_owned(),
+            requester_clients: vec!["task-agent".to_owned()],
+            bindings: vec![registry_evidence_authoring::model::AccessTaskBinding {
+                question: "adult-status".to_owned(),
+                role: "person".to_owned(),
+                selector_profile: "local-subject-adult-status-v1".to_owned(),
+                value_claims: BTreeMap::from([(
+                    "person_id".to_owned(),
+                    "identity.person_reference".to_owned(),
+                )]),
+            }],
+        };
+        let profile = json!({
+            "kind":"delegated", "requesterTags":["policy-v2-example"],
+            "requesterClients":["task-agent"], "grantSourceIssuer":"https://casework.invalid",
+            "grants":[{"requirement":"urn:registrystack:evidence:local:requirement:adult-status",
+                "purpose":"age-check", "audienceFrom":"authenticated-requester",
+                "subjects":[{"role":"person", "selectorProfile":"local-subject-adult-status-v1",
+                    "valueOrigin":"authenticated-grant",
+                    "valueClaims":{"person_id":"identity.person_reference"}}]}],
+        });
+        assert!(authority_profile_matches(
+            &profile,
+            "policy-v2-example",
+            &[&question],
+            Some(&task)
+        ));
+        for pointer in [
+            "/grantSourceIssuer",
+            "/requesterClients/0",
+            "/grants/0/subjects/0/valueClaims/person_id",
+        ] {
+            let mut changed = profile.clone();
+            *changed.pointer_mut(pointer).unwrap() = json!("different");
+            assert!(!authority_profile_matches(
+                &changed,
+                "policy-v2-example",
+                &[&question],
+                Some(&task)
+            ));
+        }
+    }
+
     fn compiled(runtime: &Path) -> CompiledProject {
         CompiledProject {
             runtime_path: runtime.to_path_buf(),
@@ -3291,6 +3546,7 @@ requirements:
             id: "age-checks".to_owned(),
             requester_tag: policy_tag.clone(),
             questions: policy_questions,
+            task_grant: None,
         }];
         replace_state(&dev.join("state.json"), &state).expect("explicit policy state");
         let explicit = load_ready_state(&project).expect("explicit ready handoff");
@@ -3516,11 +3772,15 @@ requirements:
             port: 8091,
         };
         let admitted = vec!["evidence-client".to_owned()];
+        let unpaired = BTreeMap::new();
+        let no_exchanges = BTreeMap::new();
         verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             std::slice::from_ref(&client),
             &admitted,
+            &unpaired,
+            &no_exchanges,
         )
         .unwrap();
         // The compiled bundle admits these clients by name, so a registration
@@ -3536,7 +3796,9 @@ requirements:
                     &owner,
                     LOCAL_ACCESS_TOKEN_AUDIENCE,
                     std::slice::from_ref(&client),
-                    &drifted
+                    &drifted,
+                    &unpaired,
+                    &no_exchanges,
                 )
                 .is_err(),
                 "{drifted:?} was admitted against a bundle naming {admitted:?}"
@@ -3550,7 +3812,9 @@ requirements:
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             &[altered],
-            &admitted
+            &admitted,
+            &unpaired,
+            &no_exchanges,
         )
         .is_err());
         let mut altered = client.clone();
@@ -3559,20 +3823,24 @@ requirements:
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             &[altered],
-            &admitted
+            &admitted,
+            &unpaired,
+            &no_exchanges,
         )
         .is_err());
         // An exchange client may present any authority the shared issuer
-        // trusts, and this bundle carries no per-client pairing to refuse the
-        // others. A client registered as both is refused here rather than
-        // admitted without that rule.
+        // trusts. A client registered as both without a declared exchange
+        // binding is refused here rather than admitted on an audience whose
+        // bundle never named the authorities it may present.
         inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
         fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             std::slice::from_ref(&client),
-            &admitted
+            &admitted,
+            &unpaired,
+            &no_exchanges,
         )
         .is_err());
         inventory["issuer"]["exchangeClients"] = json!([]);
@@ -3582,6 +3850,8 @@ requirements:
             LOCAL_ACCESS_TOKEN_AUDIENCE,
             std::slice::from_ref(&client),
             &admitted,
+            &unpaired,
+            &no_exchanges,
         )
         .unwrap();
         inventory["clients"][0]["allowBregAccess"] = json!(true);
@@ -3589,8 +3859,136 @@ requirements:
         assert!(verify_borrowed_registrations(
             &owner,
             LOCAL_ACCESS_TOKEN_AUDIENCE,
-            &[client],
-            &admitted
+            std::slice::from_ref(&client),
+            &admitted,
+            &unpaired,
+            &no_exchanges,
+        )
+        .is_err());
+
+        let mut exchange_client = client;
+        exchange_client.claims = BTreeMap::from([("registry_actor_kind".into(), json!("agent"))]);
+        exchange_client.scopes = vec!["casework:grants:assert".into()];
+        inventory["clients"][0] = json!({
+            "id":"evidence-client", "claims":exchange_client.claims,
+            "scopes":exchange_client.scopes,
+        });
+        inventory["issuer"]["clientResources"] = json!({});
+        inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
+        inventory["issuer"]["exchangeIssuers"] = json!([{
+            "id":"casework", "issuer":"https://casework.invalid",
+            "mapping":"institutional_grant", "clients":["evidence-client"],
+        }]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        let binding = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::InstitutionalGrant,
+            bootstrap_scope: "casework:grants:assert".into(),
+            bootstrap_resource: None,
+            source_issuer: None,
+        };
+        let sources = BTreeSet::from(["https://casework.invalid".to_owned()]);
+        let exchanges =
+            BTreeMap::from([("evidence-client".to_owned(), (binding.clone(), sources))]);
+        let paired = BTreeMap::from([(
+            "evidence-client".to_owned(),
+            vec!["https://casework.invalid".to_owned()],
+        )]);
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&exchange_client),
+            &admitted,
+            &paired,
+            &exchanges,
+        )
+        .expect("registered institutional task client borrows the owner");
+        // The bundle states the pairing it was compiled with, so an owner whose
+        // pairing no longer matches it is refused rather than started against
+        // a rule the bundle does not carry.
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&exchange_client),
+            &admitted,
+            &unpaired,
+            &exchanges,
+        )
+        .is_err());
+        // A task source authority the owner never paired with this client
+        // would be refused by the bundle at every call, so it is refused here.
+        let elsewhere = BTreeMap::from([(
+            "evidence-client".to_owned(),
+            (
+                binding,
+                BTreeSet::from(["https://elsewhere.invalid".to_owned()]),
+            ),
+        )]);
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&exchange_client),
+            &admitted,
+            &paired,
+            &elsewhere,
+        )
+        .is_err());
+        inventory["issuer"]["exchangeClients"] = json!([]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        let mut portal_client = exchange_client.clone();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            &[exchange_client],
+            &admitted,
+            &paired,
+            &exchanges,
+        )
+        .is_err());
+
+        portal_client.claims = BTreeMap::from([("registry_actor_kind".into(), json!("service"))]);
+        portal_client.scopes = vec!["evidence:invoke".into()];
+        inventory["clients"][0] = json!({
+            "id":"evidence-client", "claims":portal_client.claims,
+            "scopes":portal_client.scopes,
+        });
+        inventory["issuer"]["clientResources"] =
+            json!({"evidence-client":LOCAL_ACCESS_TOKEN_AUDIENCE});
+        inventory["issuer"]["exchangeClients"] = json!(["evidence-client"]);
+        inventory["issuer"]["exchangeIssuers"] = json!([{
+            "id":"portal", "issuer":"http://127.0.0.1:4494", "mapping":"first_party",
+            "clients":["evidence-client"],
+        }]);
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        let first_party = access::ActiveClientExchange {
+            kind: access::ActiveClientExchangeKind::FirstParty,
+            bootstrap_scope: "evidence:invoke".into(),
+            bootstrap_resource: Some(LOCAL_ACCESS_TOKEN_AUDIENCE.into()),
+            source_issuer: Some("http://127.0.0.1:4494".into()),
+        };
+        let exchanges =
+            BTreeMap::from([("evidence-client".to_owned(), (first_party, BTreeSet::new()))]);
+        let portal_paired = BTreeMap::from([(
+            "evidence-client".to_owned(),
+            vec!["http://127.0.0.1:4494".to_owned()],
+        )]);
+        verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&portal_client),
+            &admitted,
+            &portal_paired,
+            &exchanges,
+        )
+        .expect("registered first-party context client borrows the owner");
+        inventory["issuer"]["exchangeIssuers"][0]["mapping"] = json!("institutional_grant");
+        fs::write(&clients_path, serde_json::to_vec(&inventory).unwrap()).unwrap();
+        assert!(verify_borrowed_registrations(
+            &owner,
+            LOCAL_ACCESS_TOKEN_AUDIENCE,
+            std::slice::from_ref(&portal_client),
+            &admitted,
+            &portal_paired,
+            &exchanges,
         )
         .is_err());
     }
@@ -3675,5 +4073,120 @@ requirements:
             "local development state is not an active session"
         );
         assert!(diagnostic.contains("must have mode 0700"), "{diagnostic}");
+    }
+
+    #[test]
+    fn client_exchange_binding_must_match_the_task_policies_that_name_it() {
+        let source = "https://casework.invalid";
+        let policies = vec![
+            crate::authoring::CompiledAccessPolicy {
+                id: "lot-tasks".into(),
+                requester_tag: "lot-tasks-tag".into(),
+                questions: vec!["lot-status".into()],
+                task_grant: Some(AccessTaskGrant {
+                    kind: "institutional".into(),
+                    source_issuer: source.into(),
+                    requester_clients: vec!["assistant".into()],
+                    bindings: Vec::new(),
+                }),
+            },
+            crate::authoring::CompiledAccessPolicy {
+                id: "portal-reads".into(),
+                requester_tag: "portal-reads-tag".into(),
+                questions: vec!["lot-status".into()],
+                task_grant: None,
+            },
+        ];
+        let exchange = |kind| access::ActiveClientExchange {
+            kind,
+            bootstrap_scope: "tasks:assert".into(),
+            bootstrap_resource: None,
+            source_issuer: (kind == access::ActiveClientExchangeKind::FirstParty)
+                .then(|| "http://127.0.0.1:4494".to_owned()),
+        };
+        let registration = |client: &str, tag: &str, binding| access::ActiveClientRegistration {
+            client_id: client.into(),
+            public_jwks: "{}".into(),
+            requester_tags: vec![tag.into()],
+            evidence_audience: "urn:registrystack:evidence:local:gateway".into(),
+            exchange: binding,
+        };
+        let institutional = Some(exchange(
+            access::ActiveClientExchangeKind::InstitutionalGrant,
+        ));
+        let first_party = Some(exchange(access::ActiveClientExchangeKind::FirstParty));
+
+        assert_eq!(
+            client_task_sources(
+                &registration("assistant", "lot-tasks-tag", institutional.clone()),
+                &policies,
+                true,
+            )
+            .unwrap(),
+            BTreeSet::from([source.to_owned()])
+        );
+        assert!(client_task_sources(
+            &registration("portal", "portal-reads-tag", first_party.clone()),
+            &policies,
+            true,
+        )
+        .unwrap()
+        .is_empty());
+        assert!(client_task_sources(
+            &registration("direct", "portal-reads-tag", None),
+            &policies,
+            false,
+        )
+        .unwrap()
+        .is_empty());
+
+        for (case, client, tag, binding, borrowed, refusal) in [
+            (
+                "a task requester must hold the policy tag",
+                "assistant",
+                "portal-reads-tag",
+                institutional.clone(),
+                true,
+                "task grant requester is not assigned its access policy",
+            ),
+            (
+                "an institutional binding needs a task policy naming the client",
+                "portal",
+                "portal-reads-tag",
+                institutional.clone(),
+                true,
+                "institutional exchange needs one active assigned task policy",
+            ),
+            (
+                "a task requester cannot also be a first-party exchanger",
+                "assistant",
+                "lot-tasks-tag",
+                first_party.clone(),
+                true,
+                "task requester cannot use first-party exchange",
+            ),
+            (
+                "a task requester needs a declared exchange binding",
+                "assistant",
+                "lot-tasks-tag",
+                None,
+                true,
+                "task grant requester needs one declared institutional exchange binding",
+            ),
+            (
+                "an exchange binding needs a borrowed issuer owner",
+                "portal",
+                "portal-reads-tag",
+                first_party.clone(),
+                false,
+                "signed context exchange needs a borrowed issuer owner",
+            ),
+        ] {
+            let error =
+                client_task_sources(&registration(client, tag, binding), &policies, borrowed)
+                    .expect_err(case)
+                    .to_string();
+            assert_eq!(error, refusal, "{case}");
+        }
     }
 }

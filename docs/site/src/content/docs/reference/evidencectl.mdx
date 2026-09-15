@@ -116,6 +116,9 @@ When borrowing a shared issuer, pass `--issuer-project <owner>` and an exact `--
 registered for this Evidence Gateway service. The default resource is
 `urn:registrystack:evidence:local:gateway`; a retained session keeps its selected resource and
 refuses a different one on restart. The compiled governed bundle binds this audience.
+For a nondefault resource, the compiler also derives distinct governed provider, issuer, and
+service identifiers from that resource, so multiple local Evidence services remain separate in
+Discovery.
 {/* Evidence: crates/registry-evidencectl/src/dev.rs, DevArgs, select_resource;
     crates/registry-evidencectl/src/authoring.rs, render_local_bundle, local_compilation_keeps_two_exact_evidence_resources_separate */}
 It creates a session-scoped P-256 pair for an SD-JWT VC holder and an implicit caller pair only when the project has no explicit access
@@ -136,6 +139,27 @@ client attributes.
 | `evidencectl access client add <client> --policy <policy> --generate-local-key` | Creates `access/clients/<client>.yaml` and `.evidence/clients/<client>/private.jwk` | Registers a local client for repeated `--policy` values with non-overlapping question sets |
 | `evidencectl access client list` | Reads `access/clients/` | Lists local client status and policy membership |
 | `evidencectl access client revoke <client>` | Updates `access/clients/<client>.yaml` | Revokes the local client for the next issuer generation and retains `.evidence/clients/<client>/private.jwk` |
+
+For an institutional task exchange, author an optional `taskGrant` on the policy with its
+`kind`, exact `sourceIssuer`, active `requesterClients`, and one `bindings` entry for each
+question, subject role, and selector alternative. Each binding maps the selector's complete field
+set to verified access-token `valueClaims`. The compiler emits authenticated-grant origins and
+binds the policy tag to the full grant semantics; it refuses revoked, unassigned, or incomplete
+requester bindings. Create the requester with
+`evidencectl access client add <client> --policy <policy> --generate-local-key --grant-bootstrap-scope <scope>`.
+Use `--grant-bootstrap-resource <URI>` only if its issuer bootstrap resource differs from the
+shared issuer owner's default. The borrowed issuer must register that same key and bootstrap
+binding for institutional exchange. A direct client omits both bootstrap flags.
+For a portal that signs first-party context, create an active policy client with
+`--first-party-bootstrap-scope evidence:invoke --first-party-bootstrap-resource <Evidence resource> --first-party-issuer <issuer>`.
+The borrowed owner must register the same client key and bootstrap permission, and an exact
+`first_party` exchange issuer. Its bootstrap registration carries no static Evidence requester
+tags or audience; the signed context supplies those attributes for each request. The client
+still needs an active Evidence policy assignment and cannot use a task-grant policy.
+{/* Evidence: crates/registry-evidence-authoring/src/model.rs, AccessTaskGrant, AccessTaskBinding;
+    crates/registry-evidencectl/src/authoring.rs, render_policy_authority_profile;
+    crates/registry-evidencectl/src/access.rs, ClientAddArgs, ActiveClientExchange;
+    crates/registry-evidencectl/src/dev.rs, verify_borrowed_registrations */}
 
 Public, reviewable local access configuration lives under `access/`. Owner-only private client keys
 live only under `.evidence/clients/`. Generated issuer resources under `.evidence/dev/generated/issuer/`
