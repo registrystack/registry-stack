@@ -510,6 +510,16 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
+        // An empty client list admits every client the issuer verifies, so a
+        // deployment that simply forgot the field would accept a token minted
+        // for an unrelated application in the same realm. Development loopback
+        // keeps that convenience; a deployment behind an operator-controlled
+        // terminator must name the clients it admits.
+        if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
+            && self.authentication.oidc.allowed_clients.is_empty()
+        {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
         if self.database.runtime_url_ref.is_empty() || self.database.migration_url_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidDatabaseReference);
         }
@@ -873,7 +883,8 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             },
             "authentication": {"oidc": {
                 "issuer": "https://identity.example.test",
-                "audience": "urn:example:scheduling"
+                "audience": "urn:example:scheduling",
+                "allowedClients": ["scheduling-booking-agent"]
             }},
             "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:file/audit"},
             "destinations": {},
@@ -1030,6 +1041,49 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             assert_eq!(error.path(), "database.testOnlyPlaintext");
             assert!(!error.to_string().contains(canary));
         }
+    }
+
+    #[test]
+    fn a_production_deployment_must_name_the_clients_it_admits() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let manifest = PolicyPackageManifest::build(POLICY).unwrap();
+        std::fs::write(
+            package.join(SCHEDULING_PACKAGE_MANIFEST_FILE),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let mut document = operator_value(&package, "operator-controlled-upstream");
+        document["authentication"]["oidc"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowedClients");
+        let operator = write_operator(root.path(), document);
+        assert!(
+            matches!(
+                RuntimeConfig::load(&operator),
+                Err(RuntimeConfigError::InvalidOidc)
+            ),
+            "a production deployment with no allowedClients was accepted"
+        );
+
+        let operator = write_operator(
+            root.path(),
+            operator_value(&package, "operator-controlled-upstream"),
+        );
+        RuntimeConfig::load(&operator).expect("a named client list is accepted");
+
+        // Development loopback keeps the convenience: it is not a deployment
+        // an unrelated client can reach.
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]
+            .as_object_mut()
+            .unwrap()
+            .remove("allowedClients");
+        let operator = write_operator(root.path(), document);
+        RuntimeConfig::load(&operator).expect("development loopback stays permissive");
     }
 
     #[test]
