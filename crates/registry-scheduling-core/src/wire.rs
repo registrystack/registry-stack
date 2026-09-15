@@ -353,7 +353,6 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
-            reschedule_of: None,
         };
 
         let direct = CreateAppointmentRequest {

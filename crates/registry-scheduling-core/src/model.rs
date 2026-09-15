@@ -307,10 +307,6 @@ pub struct AdmissionRequest {
     /// The party's held prerequisite references, matched against the
     /// offering's requirements.
     pub prerequisites: Vec<String>,
-    /// The claim a reschedule replaces. Its allocation is excluded from the
-    /// conflict checks for this request so a reschedule never competes with
-    /// the appointment it replaces.
-    pub reschedule_of: Option<String>,
 }
 
 /// The idempotent hash of an admission request.
@@ -319,8 +315,17 @@ pub struct AdmissionRequest {
 /// never change a stored hash. The same request always hashes identically;
 /// the same idempotency key with a different payload hashes differently, which
 /// is exactly the distinction a retry must be able to make.
+///
+/// Capabilities and prerequisites are sets the caller happens to send in an
+/// order, so they are sorted before hashing: two spellings of one set are one
+/// request, and a retry that reorders them replays rather than executing a
+/// second time. Repeats are kept, because a hash never edits its input.
 #[must_use]
 pub fn admission_request_hash(request: &AdmissionRequest) -> String {
+    let mut capabilities = request.capabilities.clone();
+    capabilities.sort();
+    let mut prerequisites = request.prerequisites.clone();
+    prerequisites.sort();
     let fixed = (
         &request.offering,
         request.start.to_rfc3339(),
@@ -330,9 +335,8 @@ pub fn admission_request_hash(request: &AdmissionRequest) -> String {
         &request.duplicate_key,
         request.policy_revision,
         request.window_revision,
-        &request.capabilities,
-        &request.prerequisites,
-        &request.reschedule_of,
+        &capabilities,
+        &prerequisites,
     );
     let value = serde_json::to_value(&fixed).expect("the fixed tuple always serializes");
     let canonical = registry_platform_canonical_json::canonicalize_json(&value)
@@ -374,7 +378,6 @@ mod tests {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
-            reschedule_of: None,
         }
     }
 
@@ -582,11 +585,11 @@ mod tests {
         };
         assert_ne!(base, admission_request_hash(&other_offering));
 
-        let rescheduling = AdmissionRequest {
-            reschedule_of: Some("claim-9".to_owned()),
+        let other_channel = AdmissionRequest {
+            channel: Some("assisted".to_owned()),
             ..request()
         };
-        assert_ne!(base, admission_request_hash(&rescheduling));
+        assert_ne!(base, admission_request_hash(&other_channel));
     }
 
     #[test]
@@ -632,5 +635,53 @@ mod tests {
 
         assert!(serde_norway::from_str::<PartyCounts>("recipients: 1\nattendees: 2\n").is_ok());
         assert!(serde_norway::from_str::<PartyCounts>("recipients: 1\n").is_err());
+    }
+
+    /// The wire request carries no exclusion of its own. A caller who names a
+    /// claim to leave out of the capacity check is refused at the edge, so no
+    /// create path can be handed another caller's allocation to ignore.
+    #[test]
+    fn an_admission_request_refuses_a_caller_supplied_exclusion() {
+        let body = "offering: registry-update-30\nstart: 2026-10-05T02:00:00Z\n\
+                    party:\n  recipients: 1\n  attendees: 1\npolicyRevision: 4\n\
+                    capabilities: []\nprerequisites: []\n";
+        assert!(serde_norway::from_str::<AdmissionRequest>(body).is_ok());
+        assert!(
+            serde_norway::from_str::<AdmissionRequest>(&format!("{body}rescheduleOf: claim-1\n"))
+                .is_err(),
+            "the exclusion is the runtime's to supply, never the caller's"
+        );
+    }
+
+    /// Capabilities and prerequisites are sets the caller happens to send in
+    /// an order. Two spellings of the same set are the same request, so a
+    /// retry that reorders them replays instead of executing again.
+    #[test]
+    fn set_order_never_changes_the_request_hash() {
+        let ordered = AdmissionRequest {
+            capabilities: vec!["cap-a".to_owned(), "cap-b".to_owned()],
+            prerequisites: vec!["proof-a".to_owned(), "proof-b".to_owned()],
+            ..request()
+        };
+        let reordered = AdmissionRequest {
+            capabilities: vec!["cap-b".to_owned(), "cap-a".to_owned()],
+            prerequisites: vec!["proof-b".to_owned(), "proof-a".to_owned()],
+            ..request()
+        };
+        assert_eq!(
+            admission_request_hash(&ordered),
+            admission_request_hash(&reordered)
+        );
+
+        // Membership still counts: a set with a different member is a
+        // different request.
+        let widened = AdmissionRequest {
+            capabilities: vec!["cap-a".to_owned(), "cap-c".to_owned()],
+            ..ordered.clone()
+        };
+        assert_ne!(
+            admission_request_hash(&ordered),
+            admission_request_hash(&widened)
+        );
     }
 }

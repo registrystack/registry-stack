@@ -410,7 +410,6 @@ impl SchedulingService {
             window_revision: None,
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
-            reschedule_of: None,
         };
         let refusal = match self.supply(offering).await? {
             ResolvedSupply::ExactTime {
@@ -445,6 +444,9 @@ impl SchedulingService {
                         now,
                     },
                     &probe,
+                    // A probe replaces nothing; it explains the start as an
+                    // ordinary booking would meet it.
+                    None,
                 )
                 .err()
             }
@@ -465,6 +467,8 @@ impl SchedulingService {
                         now,
                     },
                     &probe,
+                    // A probe replaces nothing here either.
+                    None,
                 )
                 .err()
             }

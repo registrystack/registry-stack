@@ -61,16 +61,6 @@
             },
             "type": "array"
           },
-          "rescheduleOf": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "start": {
             "format": "date-time",
             "type": "string"
