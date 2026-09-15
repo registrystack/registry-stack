@@ -540,7 +540,7 @@ impl SchedulingService {
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
-            hold_document(claim, self.revision())
+            hold_document(claim, &self.policy, self.revision())
         }))
     }
 
@@ -624,7 +624,7 @@ impl SchedulingService {
             }
         }?;
         Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, self.revision())
+            appointment_document(claim, &self.policy, self.revision())
         }))
     }
 
@@ -730,7 +730,7 @@ impl SchedulingService {
             .owned_booking(caller, appointment_id)
             .await?
             .ok_or(ServiceError::Problem(ProblemCode::OperationNotAuthorized))?;
-        Ok(appointment_document(&claim, self.revision()))
+        Ok(appointment_document(&claim, &self.policy, self.revision()))
     }
 
     pub async fn reschedule_appointment(
@@ -794,7 +794,7 @@ impl SchedulingService {
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, self.revision())
+            appointment_document(claim, &self.policy, self.revision())
         }))
     }
 
@@ -854,7 +854,7 @@ impl SchedulingService {
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
-            appointment_document(claim, self.revision())
+            appointment_document(claim, &self.policy, self.revision())
         }))
     }
 
@@ -1633,26 +1633,38 @@ fn history_entry(row: &Value) -> Result<AppointmentHistoryEntryDocument, Service
     })
 }
 
-fn hold_document(claim: &ClaimRow, policy_revision: u64) -> registry_scheduling_core::HoldDocument {
+fn hold_document(
+    claim: &ClaimRow,
+    policy: &SchedulingPolicy,
+    policy_revision: u64,
+) -> registry_scheduling_core::HoldDocument {
     registry_scheduling_core::HoldDocument {
         hold_id: claim.claim_id.to_string(),
         offering: claim.offering.clone(),
         start: claim.displayed_start,
         end: claim.displayed_end,
-        resource: claim.supply_id_is_member().then(|| claim.supply_id.clone()),
+        resource: claim
+            .supply_id_is_member(policy)
+            .then(|| claim.supply_id.clone()),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
         expires_at: claim.hold_expires_at.unwrap_or(claim.created_at),
         policy_revision,
     }
 }
 
-fn appointment_document(claim: &ClaimRow, policy_revision: u64) -> AppointmentDocument {
+fn appointment_document(
+    claim: &ClaimRow,
+    policy: &SchedulingPolicy,
+    policy_revision: u64,
+) -> AppointmentDocument {
     AppointmentDocument {
         appointment_id: claim.claim_id.to_string(),
         offering: claim.offering.clone(),
         start: claim.displayed_start,
         end: claim.displayed_end,
-        resource: claim.supply_id_is_member().then(|| claim.supply_id.clone()),
+        resource: claim
+            .supply_id_is_member(policy)
+            .then(|| claim.supply_id.clone()),
         units: u32::try_from(claim.units).unwrap_or(u32::MAX),
         channel: claim.channel.clone(),
         revision: u64::try_from(claim.revision).unwrap_or(u64::MAX),
@@ -1670,8 +1682,17 @@ fn appointment_document(claim: &ClaimRow, policy_revision: u64) -> AppointmentDo
 impl ClaimRow {
     /// Whether the claim's supply id names a pool member (an exact-time
     /// booking) rather than a window.
-    fn supply_id_is_member(&self) -> bool {
-        self.kind == LedgerKind::Booking || self.kind == LedgerKind::Hold
+    ///
+    /// The ledger keeps one supply column for both: an exact-time claim
+    /// occupies the pool member it was assigned, and a window claim occupies
+    /// the window itself. Only the offering's mode says which of the two the
+    /// column holds, so an offering the policy no longer carries names no
+    /// member: a supply id that cannot be shown to be one is not published
+    /// through a field that promises one.
+    fn supply_id_is_member(&self, policy: &SchedulingPolicy) -> bool {
+        policy
+            .offering(&self.offering)
+            .is_some_and(|offering| offering.mode == SchedulingMode::ExactTime)
     }
 }
 
