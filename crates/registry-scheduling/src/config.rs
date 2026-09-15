@@ -630,6 +630,12 @@ fn valid_destination_url(value: &str) -> bool {
         && parsed.password().is_none()
         && parsed.host().is_some()
         && parsed.port_or_known_default().is_some_and(|port| port != 0)
+        // The destination is one reviewed endpoint, not a template a
+        // configuration value may widen; the runtime's frozen transport
+        // refuses a query or fragment, so the authoring check refuses it
+        // first.
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
     {
         match parsed.scheme() {
             "https" => true,
@@ -994,6 +1000,9 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         let canary = "DO_NOT_DISCLOSE_RUNTIME_VALUE";
         let mut document = operator_value(&package, "development-loopback");
         document["database"]["testOnlyPlaintext"] = serde_json::json!(canary);
+        // The refusal this pins exists only without the test feature: with
+        // it, plaintext is the configuration the suite itself runs under.
+        #[cfg(not(feature = "postgres-test"))]
         let operator = write_operator(root.path(), document);
         #[cfg(not(feature = "postgres-test"))]
         {

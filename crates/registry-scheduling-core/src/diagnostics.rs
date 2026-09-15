@@ -37,6 +37,9 @@ pub enum PolicyCheckReason {
     WrongModeField,
     /// A numeric bound is zero, negative, or inverted.
     InvalidBound,
+    /// An opening's effective range spans more days than the weekly calendar
+    /// expansion can serve.
+    PatternSpanTooLarge,
     /// The banded table is empty, non-increasing, or carries non-positive
     /// units.
     InvalidBands,
@@ -68,6 +71,7 @@ impl PolicyCheckReason {
             Self::MissingModeField => "missing-mode-field",
             Self::WrongModeField => "wrong-mode-field",
             Self::InvalidBound => "invalid-bound",
+            Self::PatternSpanTooLarge => "pattern-span-too-large",
             Self::InvalidBands => "invalid-bands",
             Self::SubquotaOverdrawn => "subquota-overdrawn",
             Self::SharedSupplyUnpartitioned => "shared-supply-unpartitioned",
