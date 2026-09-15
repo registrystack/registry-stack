@@ -3,7 +3,13 @@ use registry_breg_client::{BaseRegistryClient, BaseRegistryClientConfig, StaticT
 use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
 use registry_casework_core::*;
 use serde_json::{json, Value};
-use std::{collections::BTreeMap, sync::Arc};
+use std::io::Write;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+use tracing::instrument::WithSubscriber;
+use tracing_subscriber::fmt::MakeWriter;
 use wiremock::{
     matchers::{header, method, path, query_param},
     Mock, MockServer, ResponseTemplate,
@@ -956,6 +962,145 @@ async fn source_outage_is_not_a_concealed_or_empty_result() {
         SourceAdapterError::Unavailable
     );
 }
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
+
+struct CapturedLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for CapturedLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("log capture").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'writer> MakeWriter<'writer> for CapturedLogs {
+    type Writer = CapturedLogWriter;
+
+    fn make_writer(&'writer self) -> Self::Writer {
+        CapturedLogWriter(Arc::clone(&self.0))
+    }
+}
+
+#[tokio::test]
+async fn source_reader_failure_causes_are_logged_once_per_change_and_on_recovery() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let logs = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .without_time()
+        .with_ansi(false)
+        .with_writer(logs.clone())
+        .finish();
+    async {
+        let refused = Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("traceparent", TRACE)
+                    .insert_header("cache-control", "no-store")
+                    .set_body_raw(
+                        serde_json::to_vec(&json!({"type":"https://id.registrystack.org/problems/registry-breg/authentication/refused","title":"Unauthorized","status":401,"detail":"The bearer credential is missing or refused.","code":"authentication.refused","traceId":"4bf92f3577b34da6a3ce929d0e0e4736"})).unwrap(),
+                        "application/problem+json",
+                    ),
+            )
+            .expect(3)
+            .mount_as_scoped(&server)
+            .await;
+        for _ in 0..3 {
+            assert_eq!(
+                adapter.read_authoritative(&subject()).await.unwrap_err(),
+                SourceAdapterError::Concealed
+            );
+        }
+        drop(refused);
+
+        let outage = Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(2)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter.discover_active(None, 100).await.unwrap_err(),
+            SourceAdapterError::Unavailable
+        );
+        assert_eq!(
+            adapter
+                .read_for_caller(
+                    &subject(),
+                    "reviewer",
+                    EphemeralCredential::new("alice-token")
+                )
+                .await
+                .unwrap_err(),
+            SourceAdapterError::Unavailable
+        );
+        drop(outage);
+
+        let missing = Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter.read_authoritative(&subject()).await.unwrap_err(),
+            SourceAdapterError::Concealed
+        );
+        drop(missing);
+
+        mount_metadata(&server, "reader-token", "reader").await;
+        let mut representation = record("submitted", None);
+        representation["data"]["request"]["review"] = pending_review("review");
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .and(header("authorization", "Bearer reader-token"))
+            .respond_with(response(representation))
+            .expect(1)
+            .mount(&server)
+            .await;
+        adapter.read_authoritative(&subject()).await.unwrap();
+    }
+    .with_subscriber(subscriber)
+    .await;
+
+    let raw = String::from_utf8(logs.0.lock().expect("log capture").clone()).unwrap();
+    for secret in ["reader-token", "alice-token", "SOURCE-CONTENT-CANARY"] {
+        assert!(!raw.contains(secret), "logs must not carry {secret}");
+    }
+    let entries = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("structured tracing entry"))
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), 3, "{raw}");
+    for (entry, level, cause) in [
+        (
+            &entries[0],
+            "WARN",
+            Some("status 401, code authentication.refused"),
+        ),
+        (&entries[1], "WARN", Some("status 503")),
+        (&entries[2], "INFO", None),
+    ] {
+        assert_eq!(entry["level"], level);
+        assert_eq!(entry["fields"]["source_id"], "source");
+        match cause {
+            Some(cause) => assert!(
+                entry["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains(cause)),
+                "{raw}"
+            ),
+            None => assert!(entry["fields"].get("error").is_none()),
+        }
+    }
+}
+
 #[tokio::test]
 async fn draft_does_not_open_review_and_approved_opens_separate_application() {
     for (remote, kind, state) in [

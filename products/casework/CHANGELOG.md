@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Item lists, the item view, history, and clocks stay readable while a
+  subject's source binding has moved but reconciliation has not applied it yet.
+  The retained occurrence is returned without actions, and claims, drafts, and
+  decisions still refuse with `work-item.proposal-changed`. One such item no
+  longer refuses the caller's whole list.
+- The BReg source adapter logs the cause of a source reader failure, such as
+  the refusal status and problem code or the token request failure, when it
+  first appears or changes, and logs its recovery. Caller-facing problem codes
+  are unchanged.
+
 ## v0.32.0 - 2026-09-15
 
 - Pair each Casework client with the assertion issuers it may present through

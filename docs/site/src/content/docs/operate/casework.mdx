@@ -335,13 +335,21 @@ record, and retries; a passing run restores readiness. A maintenance pass runs e
 and a source reconciliation pass per bound source at that binding's
 `reconciliationIntervalMilliseconds`, every 60 seconds unless set. A source outage stays visible
 on the affected work-item operations rather than turning an inbox into an apparently complete empty
-page.
+page. When the source reader fails, the runtime logs `Casework source reader request to BReg failed`
+with the cause, such as the refusal status and problem code or the token request failure, once when
+the cause appears or changes, and logs again when reads recover.
+
+Between a source change and the reconciliation that applies it, the affected item stays in lists
+and its view, history, and clocks stay readable with the binding Casework last applied, but it
+offers no actions, and a claim, draft, or decision on it is refused with
+`work-item.proposal-changed`.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
     serve_until_worker_stops(), supervise(), and AuditPublicationFailure;
     crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
-    crates/registry-casework/src/service.rs, ready(). */}
+    crates/registry-casework/src/service.rs, ready() and assemble_caller_visible_item();
+    crates/registry-casework-breg/src/lib.rs, BregAdapter::read_result(). */}
 
 ## Establish directory authority
 
@@ -450,7 +458,7 @@ bound to the actor and selected profile for 15 minutes; an expired preview retur
 | Startup refuses the OIDC issuer | Check discovery reachability from the Casework host, or the pinned JWKS document's keys and their distinct `kid` values. |
 | `GET /ready` returns `503` while `GET /health` returns `200` | Audit publication or PostgreSQL is failing. Read the runtime log for the failed audit stage, and check the audit file, its lock, and the database. |
 | `profile.not-human` on a token you believe is human | The issuer did not add the configured human-identity claim to that session. Check the claim name and value against the issuer's mapping for interactive sessions. |
-| Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, then check that binding's base URL, token endpoint, and reader grants. |
+| Work items report a source outage | The bound source is unreachable or refusing the reader. Run `caseworkctl doctor`, which names the failing source, read the runtime log's `Casework source reader request to BReg failed` entry for the cause, then check that binding's base URL, token endpoint, and reader grants. |
 
 ## Next
 

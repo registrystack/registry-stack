@@ -3584,6 +3584,8 @@ dependencies = [
  "serde_json",
  "time",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "url",
  "uuid",
  "wiremock",
