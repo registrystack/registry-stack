@@ -55,6 +55,9 @@ pub enum PolicyCheckReason {
     UnsupportedHookAbi,
     /// This version has no hook engine, so a declared hook can never run.
     HooksUnsupported,
+    /// This version reads no leftover policy, so a declared one never
+    /// applies.
+    LeftoverUnsupported,
 }
 
 impl PolicyCheckReason {
@@ -81,6 +84,7 @@ impl PolicyCheckReason {
             Self::SharedSupplyUnpartitioned => "shared-supply-unpartitioned",
             Self::UnsupportedHookAbi => "unsupported-hook-abi",
             Self::HooksUnsupported => "hooks-unsupported",
+            Self::LeftoverUnsupported => "leftover-unsupported",
         }
     }
 }

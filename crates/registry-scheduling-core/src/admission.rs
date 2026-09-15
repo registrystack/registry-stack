@@ -483,8 +483,8 @@ mod tests {
     use super::*;
     use crate::model::PartyCounts;
     use crate::policy::{
-        ArrivalOffering, Channel, ExactTimeOffering, LeftoverCapacityPolicy, OfferingPolicy,
-        PublishedWindow, SchedulingMode, WindowSubquota,
+        ArrivalOffering, Channel, ExactTimeOffering, OfferingPolicy, PublishedWindow,
+        SchedulingMode, WindowSubquota,
     };
     use crate::units::{BandedInput, RequiredUnitsPolicy};
     use chrono::TimeZone as _;
@@ -1119,7 +1119,7 @@ mod tests {
                 units: 2,
                 because: "Most households book the public channel.".to_owned(),
             }],
-            leftover: LeftoverCapacityPolicy::BecomesWalkIn,
+            leftover: None,
             staffing: None,
             because: "The Saturday morning household block.".to_owned(),
         }

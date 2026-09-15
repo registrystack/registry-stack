@@ -225,15 +225,17 @@ pub struct WindowSubquota {
     pub because: String,
 }
 
-/// What happens to a window's leftover capacity when the window closes. The
-/// policy must say; there is no default and no borrowing from the next
-/// window.
+/// What a window says happens to its leftover capacity when it closes. The
+/// declaration names an intent; this version of the runtime reads none of
+/// it, so `check` refuses a window that declares one rather than accept a
+/// promise nothing keeps. There is no default and no borrowing from the
+/// next window.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum LeftoverCapacityPolicy {
-    /// Leftover units lapse with the window.
+    /// Leftover units would lapse with the window.
     ExpiresUnused,
-    /// Leftover units become available to the walk-in channel.
+    /// Leftover units would become available to the walk-in channel.
     BecomesWalkIn,
 }
 
@@ -272,7 +274,11 @@ pub struct PublishedWindow {
     pub units: u32,
     pub units_policy: RequiredUnitsPolicy,
     pub subquotas: Vec<WindowSubquota>,
-    pub leftover: LeftoverCapacityPolicy,
+    /// Declared intent for the window's leftover capacity. Nothing reads it
+    /// in this version, so a declaration is refused at authoring; the field
+    /// stays so a refusal can name it.
+    #[serde(default)]
+    pub leftover: Option<LeftoverCapacityPolicy>,
     pub staffing: Option<WindowStaffing>,
     pub because: String,
 }
@@ -724,6 +730,13 @@ impl SchedulingPolicy {
             ));
         }
         findings.extend(window.units_policy.check(&format!("{path}.unitsPolicy")));
+
+        if window.leftover.is_some() {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.leftover"),
+                PolicyCheckReason::LeftoverUnsupported,
+            ));
+        }
 
         match self.offering(&window.offering) {
             None => findings.push(SchedulingDiagnostic::new(
@@ -1292,7 +1305,6 @@ windows:
         channel: assisted
         units: 1
         because: Assisted bookings hold a protected unit.
-    leftover: becomes-walk-in
     because: The Saturday morning household block, sized for two officers.
 holdPolicy:
   ttlMinutes: 10
@@ -1611,7 +1623,7 @@ holdPolicy:
                 because: "One unit per party.".to_owned(),
             },
             subquotas: Vec::new(),
-            leftover: LeftoverCapacityPolicy::ExpiresUnused,
+            leftover: None,
             staffing: Some(WindowStaffing {
                 pool: "officer-pool".to_owned(),
                 reserved_members: None,
@@ -1892,6 +1904,17 @@ holdPolicy:
         let findings = policy.check();
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(rendered.contains(&"hooks[0].abi: unsupported-hook-abi".to_owned()));
+    }
+
+    #[test]
+    fn a_declared_leftover_policy_is_refused_because_nothing_reads_it() {
+        let mut policy = household_window_policy();
+        assert!(policy.check().is_empty());
+
+        policy.windows[0].leftover = Some(LeftoverCapacityPolicy::BecomesWalkIn);
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(rendered.contains(&"windows[0].leftover: leftover-unsupported".to_owned()));
     }
 
     #[test]
