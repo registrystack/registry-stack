@@ -186,6 +186,9 @@ JSON_BODY = [
     "request.unsupported-media-type",
 ]
 QUERY = ["request.invalid"]
+# A path segment naming a hold or an appointment is read into an identifier
+# before the handler runs, so a segment that is not one is refused at the edge.
+PATH = ["request.invalid"]
 CURSOR = ["cursor.expired", "cursor.invalid"]
 STORAGE = ["service.unavailable"]
 AUTHORITY = ["operation.not-authorized"]
@@ -219,21 +222,22 @@ OPERATION_PROBLEMS = {
     + ["precondition.failed", "service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
     # not reachable: the key and the request hash are both the hold's own id.
-    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + AUTHORITY
+    ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY
     + ["hold.released", "idempotency.expired", "service.unavailable"],
     ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
     + ["hold.expired", "hold.released", "precondition.failed", "service.unavailable"],
-    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + AUTHORITY + STORAGE,
+    ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
     # A reschedule resolves its offering from the appointment, so an unknown
     # offering is operator state, not precondition.failed.
-    ("POST", "/v1/appointments/{appointment_id}/reschedule"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION
-    + IDEMPOTENCY + AUTHORITY + ["hold.released", "service.unavailable"],
+    ("POST", "/v1/appointments/{appointment_id}/reschedule"): EDGE + AUTHENTICATION + PATH + JSON_BODY
+    + ADMISSION + IDEMPOTENCY + AUTHORITY + ["hold.released", "service.unavailable"],
     # Cancellation is guarded by the observed revision and the cutoff, never by
     # the policy revision, so it answers no admission refusal at all.
-    ("POST", "/v1/appointments/{appointment_id}/cancel"): EDGE + AUTHENTICATION + JSON_BODY + IDEMPOTENCY
-    + AUTHORITY + ["cancellation.cutoff-passed", "hold.released", "revision.mismatch", "service.unavailable"],
-    ("GET", "/v1/appointments/{appointment_id}/history"): EDGE + AUTHENTICATION + AUTHORITY + QUERY + CURSOR
-    + STORAGE,
+    ("POST", "/v1/appointments/{appointment_id}/cancel"): EDGE + AUTHENTICATION + PATH + JSON_BODY
+    + IDEMPOTENCY + AUTHORITY
+    + ["cancellation.cutoff-passed", "hold.released", "revision.mismatch", "service.unavailable"],
+    ("GET", "/v1/appointments/{appointment_id}/history"): EDGE + AUTHENTICATION + PATH + AUTHORITY + QUERY
+    + CURSOR + STORAGE,
 }
 
 
@@ -356,7 +360,10 @@ def problem_variant(entry: dict) -> dict:
 
 def problem_responses(codes: list[str], catalog: dict[str, dict]) -> dict:
     by_status: dict[int, list[dict]] = {}
-    for code in codes:
+    # An operation can reach one refusal down more than one path, and the
+    # groups above name every path it has. A code the operation answers is
+    # documented once however many groups carry it.
+    for code in dict.fromkeys(codes):
         entry = catalog[code]
         by_status.setdefault(entry["httpStatuses"][0], []).append(entry)
     result = {}
@@ -1130,6 +1137,11 @@ def verify_operation_problems(
         if operation.get("requestBody"):
             required |= {"request.invalid", "request.unprocessable", "request.unsupported-media-type"}
         if any(parameter["in"] == "query" for parameter in operation["parameters"]):
+            required |= {"request.invalid"}
+        # A path segment is read into its identifier before the handler runs,
+        # so a segment that is not one is refused at the edge, ahead of
+        # authentication and ahead of the store.
+        if any(parameter["in"] == "path" for parameter in operation["parameters"]):
             required |= {"request.invalid"}
         if any(parameter["name"] == "Idempotency-Key" for parameter in operation["parameters"]):
             required |= {"request.invalid"}

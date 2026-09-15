@@ -2396,6 +2396,24 @@
               }
             }
           },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "401": {
             "content": {
               "application/problem+json": {
@@ -4241,6 +4259,24 @@
         "responses": {
           "204": {
             "description": "Success",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestInvalid"
+                }
+              }
+            },
+            "description": "Problem response: request.invalid",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
