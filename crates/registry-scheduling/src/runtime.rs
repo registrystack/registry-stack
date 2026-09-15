@@ -99,16 +99,28 @@ pub async fn run(matches: &clap::ArgMatches) -> Result<(), RuntimeError> {
     }
 }
 
+/// Name the provisioning or startup act a store failure happened in.
+fn database_step(stage: &'static str) -> impl Fn(StoreError) -> RuntimeError {
+    move |source| RuntimeError::Database { stage, source }
+}
+
 pub async fn migrate_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError> {
     let config = RuntimeConfig::load(path)?;
     let policy = config.load_policy()?;
     let secrets = secret_resolver(&config)?;
-    let store = PostgresStore::connect_migration(&config.database, &secrets)?;
-    store.migrate().await?;
+    let store = PostgresStore::connect_migration(&config.database, &secrets)
+        .map_err(database_step("migration database configuration"))?;
+    store
+        .migrate()
+        .await
+        .map_err(database_step("schema migration"))?;
     // Migrations leave the deployment identity unset; adopting it here is the
     // provisioning act that binds this database to the policy's scheduling
     // id, which every serve verifies before it writes anything.
-    store.adopt(&policy.scheduling.id).await?;
+    store
+        .adopt(&policy.scheduling.id)
+        .await
+        .map_err(database_step("deployment adoption"))?;
     Ok(())
 }
 
@@ -125,13 +137,20 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let scheduling_id = policy.scheduling.id.clone();
     let policy_digest = policy.policy_digest();
     let secrets = secret_resolver(&config)?;
-    let store = PostgresStore::connect_runtime(&config.database, &secrets)?;
-    store.ready().await?;
+    let store = PostgresStore::connect_runtime(&config.database, &secrets)
+        .map_err(database_step("runtime database configuration"))?;
+    store
+        .ready()
+        .await
+        .map_err(database_step("schema readiness check"))?;
 
     // The deployment identity is read before anything is written: the store
     // refuses to apply a policy under a scheduling id the deployment does not
     // carry, and an empty one is a deployment that has not been adopted yet.
-    let (stored_id, _, _) = store.scheduling_meta().await?;
+    let (stored_id, _, _) = store
+        .scheduling_meta()
+        .await
+        .map_err(database_step("deployment identity read"))?;
     if stored_id.is_empty() {
         return Err(RuntimeError::Unbootstrapped);
     }
@@ -190,7 +209,8 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     let window_ids = offering_window_ids(&policy);
     let policy_revision = store
         .apply_policy(&scheduling_id, &policy_digest, &pool_ids, &window_ids)
-        .await?;
+        .await
+        .map_err(database_step("policy publication"))?;
 
     let service = Arc::new(SchedulingService::new(
         store.clone(),
@@ -254,6 +274,15 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         },
     ));
 
+    // The whole of retention, and deliberately not all of retention. This
+    // sweep erases two things: idempotency attempt receipts, after the
+    // configured `retention.attemptReceiptDays`, and listing cursors, after
+    // the fifteen minutes the listing contract gives them. Appointments,
+    // their history, the delivery outbox and the audit journal are never
+    // swept, by decision and not by omission: committed scheduling data has
+    // no retention period in this milestone, and one knob must not read as a
+    // promise to sweep it. A future period for those is new configuration and
+    // new passes here, not a wider reading of this one.
     let retention_store = store.clone();
     workers.push(supervise("retention", worker_stopped.clone(), async move {
         let mut interval = worker_timer();
@@ -320,8 +349,17 @@ pub enum RuntimeError {
     Audit,
     #[error("{0}")]
     AuditSecret(String),
-    #[error(transparent)]
-    Store(#[from] StoreError),
+    /// A database step of provisioning or startup failed. The step is named
+    /// because a bare store error says the database refused and not which
+    /// act it refused, and the acts have different remedies: an unreachable
+    /// server, a database nobody migrated, an identity nobody adopted, and a
+    /// policy that cannot be published are four different operator tasks.
+    #[error("the Scheduling {stage} failed: {source}")]
+    Database {
+        stage: &'static str,
+        #[source]
+        source: StoreError,
+    },
     #[error("the Scheduling listener could not bind or serve")]
     Listen(#[from] std::io::Error),
     #[error("the Scheduling reminder destination is invalid: {0}")]

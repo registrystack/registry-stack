@@ -68,9 +68,12 @@ pub enum StoreError {
     /// either keeps the resource or closes what stands on it first.
     #[error("the environment records retire {0}, which live appointments or holds still occupy")]
     FactsInUse(String),
-    #[error("the Scheduling query failed")]
+    // Both carry the driver's own account of what went wrong. Neither the
+    // pool nor the driver repeats the connection string in its message, so
+    // naming the cause costs no credential.
+    #[error("the Scheduling query failed: {0}")]
     Query(#[from] tokio_postgres::Error),
-    #[error("the pooled Scheduling connection could not be built or leased")]
+    #[error("the Scheduling database connection could not be established: {0}")]
     Pool(#[from] deadpool_postgres::PoolError),
 }
 
