@@ -245,6 +245,18 @@ async fn fixture() -> Fixture {
 /// A fresh deployment whose publication anchored exactly `pool_ids`, so a
 /// test can pin what happens when a policy names a pool no anchor covers.
 async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
+    fixture_publishing(POLICY, pool_ids, &[]).await
+}
+
+/// A fresh deployment publishing `policy_yaml`, anchoring exactly `pool_ids`
+/// and `window_ids`. A published window is an anchor of its own: its claims
+/// occupy the window rather than a pool member, so the supply the capacity
+/// transaction locks is the window itself.
+async fn fixture_publishing(
+    policy_yaml: &str,
+    pool_ids: &[String],
+    window_ids: &[String],
+) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -309,10 +321,10 @@ async fn fixture_anchoring(pool_ids: &[String]) -> Fixture {
         .await
         .expect("adopt the scheduling deployment");
 
-    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let policy = parse_policy_yaml(policy_yaml).expect("the scheduling test policy");
     let digest = policy.policy_digest();
     let revision = store
-        .apply_policy(SCHEDULING_ID, &digest, pool_ids, &[])
+        .apply_policy(SCHEDULING_ID, &digest, pool_ids, window_ids)
         .await
         .expect("publish the scheduling policy");
     let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
@@ -2781,4 +2793,218 @@ async fn a_dispatch_pass_delivers_retries_and_holds_by_what_the_destination_answ
         3,
         "nothing a pass concluded is sent to the destination again"
     );
+}
+
+/// The arrival-window offering and the window it serves, added to the test
+/// policy. Both are only in the policies that ask for them: the exact-time
+/// fixtures publish no window, so no test pays for supply it never reads.
+const WINDOW_OFFERING: &str = "registry-arrivals";
+const WINDOW_ID: &str = "morning-arrivals";
+/// The window's own revision, deliberately not the policy revision, so a
+/// request that sends one where the other belongs is caught rather than
+/// accepted by coincidence.
+const WINDOW_REVISION: u64 = 3;
+
+/// The test policy with one arrival window in it, opening at `start` and
+/// running two hours, with two units in total and one of them reserved to the
+/// assisted channel.
+///
+/// A published window carries absolute instants, so its interval is built
+/// against the clock the test runs on rather than frozen into the constant
+/// policy beside it.
+fn policy_with_window(start: DateTime<Utc>) -> String {
+    let end = start + TimeDelta::hours(2);
+    POLICY.replace(
+        "windows: []",
+        &format!(
+            "  - id: {WINDOW_OFFERING}\n\
+             \x20   service: registry-update\n\
+             \x20   label: Counter arrivals\n\
+             \x20   mode: arrival-window\n\
+             \x20   location: north-counter\n\
+             \x20   because: test\n\
+             \x20   cancellationCutoffMinutes: 240\n\
+             \x20   arrival:\n\
+             \x20     window: {WINDOW_ID}\n\
+             \x20     leadTimeMinutes: 0\n\
+             \x20     horizonDays: 60\n\
+             \x20   requiresCapabilities: []\n\
+             \x20   prerequisites: []\n\
+             windows:\n\
+             \x20 - id: {WINDOW_ID}\n\
+             \x20   revision: {WINDOW_REVISION}\n\
+             \x20   offering: {WINDOW_OFFERING}\n\
+             \x20   location: north-counter\n\
+             \x20   start: {}\n\
+             \x20   end: {}\n\
+             \x20   units: 2\n\
+             \x20   unitsPolicy: {{kind: fixed, units: 1, because: test}}\n\
+             \x20   subquotas: [{{id: assisted-quota, channel: assisted, units: 1, because: test}}]\n\
+             \x20   because: test",
+            stamp(start),
+            stamp(end),
+        ),
+    )
+}
+
+/// One direct-create body admitting an arrival on the window, on `channel`
+/// when it names one.
+fn arrival(fx: &Fixture, start: DateTime<Utc>, channel: Option<&str>) -> Value {
+    json!({"hold": null, "admission": {
+        "offering": WINDOW_OFFERING,
+        "start": stamp(start),
+        "party": {"recipients": 1, "attendees": 1},
+        "channel": channel,
+        "duplicateKey": null,
+        "policyRevision": fx.revision,
+        "windowRevision": WINDOW_REVISION,
+        "capabilities": [],
+        "prerequisites": [],
+    }})
+}
+
+/// The window entry availability lists for the window offering, if any.
+async fn window_entry(fx: &Fixture, from_minutes: i64, to_minutes: i64) -> Option<Value> {
+    let (status, page) = fx
+        .get(
+            &availability_uri(WINDOW_OFFERING, from_minutes, to_minutes),
+            &fx.reader,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "availability answers over a window");
+    page["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["kind"] == "window")
+        .cloned()
+}
+
+/// An arrival window is a second admission mode with a ledger of its own: its
+/// claims occupy the window rather than a member of a pool, its capacity is
+/// counted in units rather than in slots, and a channel subquota is a ceiling
+/// inside the window's total. Nothing in the database suite had ever booked
+/// one, so none of that was covered against a real ledger.
+///
+/// The window here carries two units, one of them reserved to the assisted
+/// channel. The assisted caller takes that one, the next assisted caller is
+/// refused on the subquota while the window still has a unit left, a public
+/// caller takes the last unit, and the window then offers nothing.
+#[tokio::test]
+async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
+    // The published interval is stamped to the second, which is the precision
+    // every comparison below reads it back at.
+    let start = Utc::now() + TimeDelta::hours(3);
+    let fx = fixture_publishing(
+        &policy_with_window(start),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[WINDOW_ID.to_owned()],
+    )
+    .await;
+
+    let offered = window_entry(&fx, 60, 300)
+        .await
+        .expect("the published window is offered");
+    assert_eq!(offered["window"], WINDOW_ID);
+    assert_eq!(offered["start"], stamp(start));
+    assert_eq!(offered["remaining"], 2, "the whole window is unallocated");
+
+    // The assisted channel holds one of the two units.
+    let (status, booked) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-assisted",
+            arrival(&fx, start, Some("assisted")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{booked}");
+    assert_eq!(booked["start"], stamp(start));
+    assert_eq!(booked["end"], stamp(start + TimeDelta::hours(2)));
+    // An arrival joins a window, so there is no member to name. The field is
+    // the pool member an exact-time booking occupies, and the ledger's one
+    // supply column must not be reported through it as if it were one.
+    assert!(
+        booked["resource"].is_null(),
+        "an arrival names no resource: {booked}"
+    );
+
+    // The window still has a unit, but the assisted subquota does not, so a
+    // second assisted arrival is refused on the ceiling inside the total.
+    let (status, refused) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-assisted-again",
+            arrival(&fx, start, Some("assisted")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{refused}");
+    assert_eq!(refused["code"], "capacity.exhausted");
+    assert_eq!(
+        window_entry(&fx, 60, 300).await.expect("still offered")["remaining"],
+        1,
+        "the window's own total is what availability reports"
+    );
+
+    // The same unit the assisted caller could not have is free to a public
+    // one, and it is the window's last.
+    let (status, last) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-public",
+            arrival(&fx, start, Some("public")),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{last}");
+    let (status, exhausted) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "arrival-too-late",
+            arrival(&fx, start, None),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{exhausted}");
+    assert_eq!(exhausted["code"], "capacity.exhausted");
+    assert!(
+        window_entry(&fx, 60, 300).await.is_none(),
+        "a window with no units left is not offered"
+    );
+
+    // A window claim occupies the window, not a member of a pool. The ledger
+    // holds both in one `supply_id` column, which carries the resource an
+    // exact-time claim books and the window an arrival claim joins, so the
+    // column means two things and only the claim's offering says which.
+    let occupied: Vec<(String, Option<String>)> = fx
+        .admin
+        .query(
+            "SELECT supply_id, channel FROM scheduling_claims \
+             WHERE state='active' AND offering=$1 ORDER BY created_at",
+            &[&WINDOW_OFFERING],
+        )
+        .await
+        .expect("read the window's claims")
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        occupied,
+        vec![
+            (WINDOW_ID.to_owned(), Some("assisted".to_owned())),
+            (WINDOW_ID.to_owned(), Some("public".to_owned())),
+        ],
+        "both arrivals occupy the window itself, each under its own channel"
+    );
+
+    // The window revision is the caller's agreement about the window, and a
+    // stale one is refused whatever the policy revision says.
+    let mut stale = arrival(&fx, start, None);
+    stale["admission"]["windowRevision"] = json!(WINDOW_REVISION - 1);
+    let (status, mismatch) = fx
+        .post("/v1/appointments", &fx.agent, "arrival-stale", stale)
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{mismatch}");
+    assert_eq!(mismatch["code"], "revision.mismatch");
 }
