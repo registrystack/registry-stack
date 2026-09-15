@@ -18,12 +18,15 @@ use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
-use registry_platform_audit::{AuditHashSecret, AuditKeyHasher};
+use registry_platform_audit::{
+    AuditEnvelope, AuditHashSecret, AuditKeyHasher, AuditProfile, JsonlFileSink,
+};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
 use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
 use registry_scheduling::http::{router, HttpState};
+use registry_scheduling::runtime::{publish_audit_pass, AuditPublicationState, AuditPublisher};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::PostgresStore;
 use registry_scheduling_core::{
@@ -2463,5 +2466,198 @@ async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing(
             .await
             .expect("the receipt retention pass runs"),
         0
+    );
+}
+
+/// The environment variable the publication tests key their audit chain from,
+/// and the master secret they put in it: a test constant like the token
+/// signing secret above, never a deployment value. The platform profile
+/// refuses anything shorter than 32 bytes.
+const AUDIT_SECRET_ENV: &str = "SCHEDULING_TEST_AUDIT_CHAIN_SECRET";
+const AUDIT_SECRET: &str = "scheduling-test-audit-chain-secret";
+
+/// Every envelope the journal retains, in the order it was written.
+fn retained(path: &std::path::Path) -> Vec<AuditEnvelope> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a retained audit envelope"))
+        .collect()
+}
+
+/// One whole deployment life over the same journal: bootstrap the retained
+/// chain under the deployment key, recover the append/mark gap from its tail,
+/// drain what the store holds, and put the journal down again. Returns how
+/// many envelopes the journal retains afterwards.
+///
+/// The sink is a single-writer sink, so dropping it at the end is what makes
+/// the next call a restart rather than a second writer forking the chain.
+async fn publish_one_life(fx: &Fixture, path: &std::path::Path) -> usize {
+    let profile = AuditProfile::production_from_env(AUDIT_SECRET_ENV).expect("the audit profile");
+    let sink = Arc::new(JsonlFileSink::new_single_writer(path).expect("the audit journal sink"));
+    let chain = Arc::new(
+        profile
+            .bootstrap_or_start_empty(sink.as_ref())
+            .await
+            .expect("bootstrap the retained chain under the deployment key"),
+    );
+    let mut state = AuditPublicationState::from_verified_tail(
+        sink.last_envelope()
+            .await
+            .expect("read the retained tail")
+            .as_ref(),
+    );
+    let publisher = AuditPublisher {
+        store: fx.store.clone(),
+        chain,
+        sink,
+    };
+    publish_audit_pass(&publisher, &mut state)
+        .await
+        .expect("the publication pass runs");
+    drop(publisher);
+    retained(path).len()
+}
+
+/// The audit journal is published in the order it was written. The publisher
+/// appends what the store hands it to a hash chain, so the order it reads in
+/// is the order the chain goes on to attest to. An event id is a random UUID
+/// and sorts in no order at all; these rows are written under identifiers
+/// that sort against the order they were written, so a reader ordering by
+/// identifier hands them back reversed.
+#[tokio::test]
+async fn the_audit_journal_is_read_in_the_order_it_was_written() {
+    let fx = fixture().await;
+    let written: Vec<Uuid> = (0..6)
+        .map(|position| {
+            Uuid::parse_str(&format!("{:08x}-0000-4000-8000-000000000000", 5 - position))
+                .expect("a well-formed test event identifier")
+        })
+        .collect();
+    for (position, event_id) in written.iter().enumerate() {
+        fx.store
+            .record_refusal_audit(*event_id, json!({"marker": position}))
+            .await
+            .expect("record one refusal in the journal");
+    }
+
+    let pending = fx
+        .store
+        .pending_audit(100)
+        .await
+        .expect("read the pending journal");
+    let ours: Vec<Uuid> = pending
+        .iter()
+        .map(|(event_id, _)| *event_id)
+        .filter(|event_id| written.contains(event_id))
+        .collect();
+    assert_eq!(
+        ours, written,
+        "the journal reads back in the order it was written"
+    );
+}
+
+/// DB-12: the keyed audit chain survives the process that built it. A
+/// deployment stops and starts again over the same retained journal, and the
+/// first record of the second life links to the last record of the first: the
+/// chain is one unbroken sequence from genesis, with exactly one record that
+/// has no predecessor. A restart that forgot the retained chain would start
+/// again at genesis and leave the earlier records unattested.
+#[tokio::test]
+async fn the_audit_chain_continues_across_a_restart() {
+    std::env::set_var(AUDIT_SECRET_ENV, AUDIT_SECRET);
+    let fx = fixture().await;
+    let journal = tempfile::tempdir().expect("a temporary audit journal");
+    let path = journal.path().join("audit.jsonl");
+
+    booked(&fx, 90, 200, "chain-first").await;
+    let first_life = publish_one_life(&fx, &path).await;
+    assert!(first_life > 0, "the commitment wrote records to publish");
+    assert!(
+        fx.store
+            .pending_audit(100)
+            .await
+            .expect("read the pending journal")
+            .is_empty(),
+        "a completed pass leaves nothing pending"
+    );
+
+    // The process stops. A second life over the same journal commits more and
+    // publishes it.
+    booked(&fx, 300, 440, "chain-second").await;
+    let second_life = publish_one_life(&fx, &path).await;
+    assert!(
+        second_life > first_life,
+        "the second life appended its own records"
+    );
+
+    let envelopes = retained(&path);
+    assert_eq!(envelopes.len(), second_life);
+    assert!(
+        envelopes[0].prev_hash.is_none(),
+        "the journal reaches genesis exactly once"
+    );
+    for pair in envelopes.windows(2) {
+        assert_eq!(
+            pair[1].prev_hash,
+            Some(pair[0].record_hash),
+            "every envelope links to the one before it"
+        );
+    }
+    assert_eq!(
+        envelopes[first_life].prev_hash,
+        Some(envelopes[first_life - 1].record_hash),
+        "the second life continues the chain the first life left"
+    );
+
+    // Every record is retained exactly once, and carries the identity the
+    // store knows it by.
+    let identities: Vec<&str> = envelopes
+        .iter()
+        .filter_map(|envelope| envelope.record["eventId"].as_str())
+        .collect();
+    assert_eq!(
+        identities.len(),
+        envelopes.len(),
+        "every retained envelope carries its event id"
+    );
+    assert_eq!(
+        identities
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<&str>>()
+            .len(),
+        identities.len(),
+        "no record is retained twice"
+    );
+
+    // A crash between the append and the mark: the tail is retained but the
+    // store still lists it pending. The next life re-marks it from the
+    // retained tail rather than appending it a second time.
+    let tail = Uuid::parse_str(
+        envelopes.last().expect("a retained tail").record["eventId"]
+            .as_str()
+            .expect("the tail carries its event id"),
+    )
+    .expect("a parseable event identifier");
+    fx.admin
+        .execute(
+            "UPDATE scheduling_audit_outbox SET published_at=NULL WHERE event_id=$1",
+            &[&tail],
+        )
+        .await
+        .expect("reopen the append and mark gap");
+    let reconciled = publish_one_life(&fx, &path).await;
+    assert_eq!(
+        reconciled, second_life,
+        "the record retained before the crash is not appended again"
+    );
+    assert!(
+        fx.store
+            .pending_audit(100)
+            .await
+            .expect("read the pending journal")
+            .is_empty(),
+        "it is marked published instead"
     );
 }

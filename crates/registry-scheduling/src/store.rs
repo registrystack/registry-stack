@@ -1634,12 +1634,16 @@ impl PostgresStore {
     }
 
     /// The pending audit journal, oldest first.
+    ///
+    /// The order is the one the rows were written in, not the one their
+    /// identifiers sort in: the publisher appends what this returns to a hash
+    /// chain, so the order it reads in is the order the chain attests to.
     pub async fn pending_audit(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
         let client = self.client().await?;
         Ok(client
             .query(
                 "SELECT event_id, audit_record FROM scheduling_audit_outbox \
-                 WHERE published_at IS NULL ORDER BY event_id LIMIT $1",
+                 WHERE published_at IS NULL ORDER BY recorded_seq LIMIT $1",
                 &[&limit],
             )
             .await?
