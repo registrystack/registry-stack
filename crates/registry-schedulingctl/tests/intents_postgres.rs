@@ -10,7 +10,7 @@
 //! against what was seeded, so nothing beyond what the test asserts on is
 //! carried through.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SubsecRound, Utc};
 use registry_platform_config::{SecretProvider, SecretResolver};
 use registry_scheduling::config::RuntimeConfig;
 use registry_scheduling::store::PostgresStore;
@@ -202,7 +202,11 @@ async fn intents_lists_local_and_failed_oldest_due_first_and_respects_limit() {
     seed_claim(&seed, claim_a).await;
     seed_claim(&seed, claim_b).await;
 
-    let base_time = Utc::now();
+    // PostgreSQL `timestamptz` holds microseconds, so the nanosecond tail of a
+    // clock reading does not survive the round trip through `due_at`. Truncating
+    // at the source keeps the seeded instant and the `dueAt` the command reports
+    // comparable as strings on any clock.
+    let base_time = Utc::now().trunc_subsecs(6);
     let pending_id = Uuid::new_v4();
     let local_first_id = Uuid::new_v4();
     let failed_id = Uuid::new_v4();
