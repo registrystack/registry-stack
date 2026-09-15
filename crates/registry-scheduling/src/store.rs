@@ -2051,6 +2051,9 @@ trait CapacityStatements {
         payload: Value,
     ) -> Result<(), StoreError>;
     async fn suppress_pending_reminders(&self, claim_id: Uuid) -> Result<(), StoreError>;
+    /// Write the receipt this commitment answers a replay with. The key is
+    /// claimed here, at the end of the transaction, so a writer who finds it
+    /// already taken is refused rather than failed.
     async fn insert_attempt(
         &self,
         attempt_id: Uuid,
@@ -2059,7 +2062,7 @@ trait CapacityStatements {
         state: AttemptState,
         status_code: u16,
         receipt: Value,
-    ) -> Result<(), StoreError>;
+    ) -> Result<(), CommitError>;
     async fn insert_audit(&self, event_id: Uuid, record: &Value) -> Result<(), StoreError>;
     async fn claim_in_transaction(&self, claim_id: Uuid) -> Result<Option<ClaimRow>, StoreError>;
     async fn active_holds_by_caller(
@@ -2245,25 +2248,34 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         state: AttemptState,
         status_code: u16,
         receipt: Value,
-    ) -> Result<(), StoreError> {
-        self.execute(
-            "INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
-             idempotency_key, request_hash, state, status_code, receipt, expires_at) \
-             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-            &[
-                &attempt_id,
-                &commitment.actor_issuer,
-                &commitment.actor_subject,
-                &scope,
-                &commitment.idempotency_key,
-                &commitment.request_hash,
-                &state.as_str(),
-                &i32::from(status_code),
-                &receipt,
-                &commitment.attempt_expires_at,
-            ],
-        )
-        .await?;
+    ) -> Result<(), CommitError> {
+        let written = self
+            .execute(
+                "INSERT INTO scheduling_attempts(attempt_id, actor_issuer, actor_subject, scope, \
+                 idempotency_key, request_hash, state, status_code, receipt, expires_at) \
+                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT DO NOTHING",
+                &[
+                    &attempt_id,
+                    &commitment.actor_issuer,
+                    &commitment.actor_subject,
+                    &scope,
+                    &commitment.idempotency_key,
+                    &commitment.request_hash,
+                    &state.as_str(),
+                    &i32::from(status_code),
+                    &receipt,
+                    &commitment.attempt_expires_at,
+                ],
+            )
+            .await?;
+        if written == 0 {
+            // The replay read at the head of this transaction saw no stored
+            // attempt because the writer that owns the key had not committed
+            // yet. The key is not this caller's to answer under, and the
+            // whole transaction rolls back behind the refusal, so nothing was
+            // decided.
+            return Err(CommitError::KeyReused);
+        }
         Ok(())
     }
 
