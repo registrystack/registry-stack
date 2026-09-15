@@ -654,8 +654,8 @@ async fn an_exact_problem_document_maps_to_the_typed_runtime_code() {
 #[tokio::test]
 async fn edge_answers_stay_edge_talk() {
     let observations: Observations = Arc::new(Mutex::new(Vec::new()));
-    let platform_problem = serde_json::json!({
-        "type": "https://id.registrystack.org/problems/registry-platform/request/not-found",
+    let foreign_problem = serde_json::json!({
+        "type": "https://example.test/problems/other/request/not-found",
         "title": "Route not found",
         "status": 404,
         "detail": "The requested route does not exist.",
@@ -665,7 +665,7 @@ async fn edge_answers_stay_edge_talk() {
     .to_string();
     let mut untraced = Fixture::json(&observations, StatusCode::OK, SCHEDULING_DOCUMENT);
     untraced.traced = false;
-    let not_found = Fixture::json(&observations, StatusCode::NOT_FOUND, &platform_problem)
+    let not_found = Fixture::json(&observations, StatusCode::NOT_FOUND, &foreign_problem)
         .with_content_type("application/problem+json");
     let plain_json = Fixture::json(
         &observations,
@@ -696,8 +696,9 @@ async fn edge_answers_stay_edge_talk() {
     let token = BearerToken::new("fixture-secret").expect("fixture token");
     let client = client(&address);
 
-    // A platform-owned route-not-found problem carries a different type base
-    // and a code outside the closed vocabulary: the edge talking.
+    // A route-not-found problem from a foreign dialect carries a type base
+    // outside this product's vocabulary: the edge talking. The product's own
+    // request-edge codes are typed by the error taxonomy tests.
     assert!(matches!(
         client.list_services(auth(&token), None).await,
         Err(SchedulingClientError::Protocol {

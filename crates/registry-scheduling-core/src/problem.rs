@@ -10,6 +10,11 @@
 //! reasons and problem codes must not be conflated. The authorization refusals
 //! callers see here are `authentication.refused`, `operation.not-authorized`,
 //! and `profile.not-authorized`.
+//!
+//! The `request.*` family carries the request-edge rejections (a route that
+//! does not exist, a method the route refuses, a body too large or not JSON)
+//! under this product's own prefix, exactly as Casework does: no shared
+//! platform problem prefix exists in the Registry Stack catalog.
 
 use crate::naming::SCHEDULING_PROBLEM_TYPE_BASE;
 
@@ -35,6 +40,12 @@ pub const PRECONDITION_FAILED_PROBLEM: &str = "precondition.failed";
 pub const PRECONDITION_REQUIRED_PROBLEM: &str = "precondition.required";
 pub const PREREQUISITE_MISSING_PROBLEM: &str = "prerequisite.missing";
 pub const PROFILE_NOT_AUTHORIZED_PROBLEM: &str = "profile.not-authorized";
+pub const REQUEST_BODY_TOO_LARGE_PROBLEM: &str = "request.body-too-large";
+pub const REQUEST_INVALID_PROBLEM: &str = "request.invalid";
+pub const REQUEST_METHOD_NOT_ALLOWED_PROBLEM: &str = "request.method-not-allowed";
+pub const REQUEST_NOT_FOUND_PROBLEM: &str = "request.not-found";
+pub const REQUEST_UNPROCESSABLE_PROBLEM: &str = "request.unprocessable";
+pub const REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM: &str = "request.unsupported-media-type";
 pub const RESOURCE_UNAVAILABLE_PROBLEM: &str = "resource.unavailable";
 pub const REVISION_MISMATCH_PROBLEM: &str = "revision.mismatch";
 pub const SCHEDULE_UNPUBLISHED_PROBLEM: &str = "schedule.unpublished";
@@ -65,6 +76,12 @@ pub enum ProblemCode {
     PreconditionRequired,
     PrerequisiteMissing,
     ProfileNotAuthorized,
+    RequestBodyTooLarge,
+    RequestInvalid,
+    RequestMethodNotAllowed,
+    RequestNotFound,
+    RequestUnprocessable,
+    RequestUnsupportedMediaType,
     ResourceUnavailable,
     RevisionMismatch,
     ScheduleUnpublished,
@@ -96,6 +113,12 @@ impl ProblemCode {
         Self::PreconditionRequired,
         Self::PrerequisiteMissing,
         Self::ProfileNotAuthorized,
+        Self::RequestBodyTooLarge,
+        Self::RequestInvalid,
+        Self::RequestMethodNotAllowed,
+        Self::RequestNotFound,
+        Self::RequestUnprocessable,
+        Self::RequestUnsupportedMediaType,
         Self::ResourceUnavailable,
         Self::RevisionMismatch,
         Self::ScheduleUnpublished,
@@ -127,6 +150,12 @@ impl ProblemCode {
             Self::PreconditionRequired => PRECONDITION_REQUIRED_PROBLEM,
             Self::PrerequisiteMissing => PREREQUISITE_MISSING_PROBLEM,
             Self::ProfileNotAuthorized => PROFILE_NOT_AUTHORIZED_PROBLEM,
+            Self::RequestBodyTooLarge => REQUEST_BODY_TOO_LARGE_PROBLEM,
+            Self::RequestInvalid => REQUEST_INVALID_PROBLEM,
+            Self::RequestMethodNotAllowed => REQUEST_METHOD_NOT_ALLOWED_PROBLEM,
+            Self::RequestNotFound => REQUEST_NOT_FOUND_PROBLEM,
+            Self::RequestUnprocessable => REQUEST_UNPROCESSABLE_PROBLEM,
+            Self::RequestUnsupportedMediaType => REQUEST_UNSUPPORTED_MEDIA_TYPE_PROBLEM,
             Self::ResourceUnavailable => RESOURCE_UNAVAILABLE_PROBLEM,
             Self::RevisionMismatch => REVISION_MISMATCH_PROBLEM,
             Self::ScheduleUnpublished => SCHEDULE_UNPUBLISHED_PROBLEM,
@@ -160,9 +189,13 @@ impl ProblemCode {
     #[must_use]
     pub const fn http_status(self) -> u16 {
         match self {
-            Self::CursorInvalid => 400,
+            Self::CursorInvalid | Self::RequestInvalid => 400,
             Self::AuthenticationRefused => 401,
             Self::OperationNotAuthorized | Self::ProfileNotAuthorized => 403,
+            Self::RequestNotFound => 404,
+            Self::RequestMethodNotAllowed => 405,
+            Self::RequestBodyTooLarge => 413,
+            Self::RequestUnsupportedMediaType => 415,
             Self::BookingDuplicateActive
             | Self::CancellationCutoffPassed
             | Self::CapacityExhausted
@@ -176,6 +209,7 @@ impl ProblemCode {
             | Self::HorizonOutside
             | Self::PartyCapacityInadequate
             | Self::PrerequisiteMissing
+            | Self::RequestUnprocessable
             | Self::ScheduleUnpublished => 422,
             Self::PreconditionRequired => 428,
             Self::EligibilityUnavailable | Self::HookUnavailable | Self::ServiceUnavailable => 503,
@@ -211,6 +245,12 @@ impl ProblemCode {
             Self::PreconditionRequired => "Precondition required",
             Self::PrerequisiteMissing => "Prerequisite missing",
             Self::ProfileNotAuthorized => "Profile not authorized",
+            Self::RequestBodyTooLarge => "Payload too large",
+            Self::RequestInvalid => "Request invalid",
+            Self::RequestMethodNotAllowed => "Method not allowed",
+            Self::RequestNotFound => "Route not found",
+            Self::RequestUnprocessable => "Request unprocessable",
+            Self::RequestUnsupportedMediaType => "Unsupported media type",
             Self::ResourceUnavailable => "Resource unavailable",
             Self::RevisionMismatch => "Revision mismatch",
             Self::ScheduleUnpublished => "Schedule unpublished",
@@ -286,6 +326,12 @@ impl ProblemCode {
             Self::ProfileNotAuthorized => {
                 "The selected Scheduling profile does not authorize this request."
             }
+            Self::RequestBodyTooLarge => "The request body exceeds the accepted size.",
+            Self::RequestInvalid => "The request could not be read as a Scheduling request.",
+            Self::RequestMethodNotAllowed => "The route exists but not for this method.",
+            Self::RequestNotFound => "The requested route does not exist.",
+            Self::RequestUnprocessable => "The request body could not be processed.",
+            Self::RequestUnsupportedMediaType => "The request body is not JSON.",
             Self::ResourceUnavailable => {
                 "Every capable member is unavailable for this interval."
             }
@@ -315,7 +361,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 26);
+        assert_eq!(ProblemCode::ALL.len(), 32);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }
@@ -359,12 +405,13 @@ mod tests {
 
     /// Every code carries one pinned status from the statuses this product
     /// answers with, a non-empty title, and a non-empty value-free detail.
-    /// Transport statuses (404, 405, 413, 415) are absent on purpose: those
-    /// are edge rejections under the platform's own problem namespace, never
-    /// domain codes.
+    /// The request-edge family carries the transport statuses (404, 405,
+    /// 413, 415) under this product's own prefix, exactly as Casework does.
     #[test]
     fn every_code_pins_a_status_title_and_detail() {
-        let statuses = [400, 401, 403, 409, 410, 412, 422, 428, 503];
+        let statuses = [
+            400, 401, 403, 404, 405, 409, 410, 412, 413, 415, 422, 428, 503,
+        ];
         for code in ProblemCode::ALL {
             assert!(
                 statuses.contains(&code.http_status()),
@@ -374,6 +421,29 @@ mod tests {
             );
             assert!(!code.title().is_empty(), "{}", code.code());
             assert!(!code.detail().is_empty(), "{}", code.code());
+        }
+    }
+
+    /// The request-edge family is Casework's, pinned one status per code, so
+    /// the runtime's edge and every client agree on what a rejected request
+    /// looks like.
+    #[test]
+    fn the_request_edge_family_pins_casework_s_statuses() {
+        assert_eq!(ProblemCode::RequestInvalid.http_status(), 400);
+        assert_eq!(ProblemCode::RequestNotFound.http_status(), 404);
+        assert_eq!(ProblemCode::RequestMethodNotAllowed.http_status(), 405);
+        assert_eq!(ProblemCode::RequestBodyTooLarge.http_status(), 413);
+        assert_eq!(ProblemCode::RequestUnsupportedMediaType.http_status(), 415);
+        assert_eq!(ProblemCode::RequestUnprocessable.http_status(), 422);
+        for code in [
+            ProblemCode::RequestInvalid,
+            ProblemCode::RequestNotFound,
+            ProblemCode::RequestMethodNotAllowed,
+            ProblemCode::RequestBodyTooLarge,
+            ProblemCode::RequestUnsupportedMediaType,
+            ProblemCode::RequestUnprocessable,
+        ] {
+            assert!(code.code().starts_with("request."), "{}", code.code());
         }
     }
 
