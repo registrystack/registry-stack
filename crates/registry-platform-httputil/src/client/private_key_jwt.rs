@@ -192,12 +192,18 @@ pub fn valid_scope_token(value: &str) -> bool {
 }
 
 /// Split a scope string as RFC 6749 defines it: one or more scope-tokens
-/// separated by exactly one space each. An empty string, a leading or trailing
-/// space, a doubled space, or a byte outside the `scope-token` set is a value
-/// no conformance-checking server would have sent or accepted, so it is
-/// refused rather than guessed at.
+/// separated by exactly one space each. A leading or trailing space, a doubled
+/// space, or a byte outside the `scope-token` set is a value no
+/// conformance-checking server would have sent or accepted, so it is refused
+/// rather than guessed at. An empty string is outside the grammar too, but
+/// Keycloak states it for a grant whose client scopes are all kept out of the
+/// token scope, so it is read as granting no scope: any requested scope is
+/// then refused as narrowed.
 fn split_scope_string(value: &str) -> Result<Vec<&str>, ()> {
-    if value.is_empty() || value.len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+    if value.len() > MAXIMUM_SCOPE_PARAMETER_BYTES {
         return Err(());
     }
     let tokens: Vec<&str> = value.split(' ').collect();
@@ -2070,13 +2076,12 @@ mod tests {
         }
     }
 
-    /// A malformed stated scope — empty, doubled separators, or bytes outside
-    /// the scope-token set — is a response this provider cannot reason about,
-    /// so it is refused as a protocol failure and cached nothing.
+    /// A malformed stated scope (doubled separators, a trailing separator, or
+    /// bytes outside the scope-token set) is a response this provider cannot
+    /// reason about, so it is refused as a protocol failure and cached nothing.
     #[tokio::test]
     async fn a_malformed_response_scope_is_a_protocol_failure() {
         for malformed in [
-            "",
             "records:read  records:write",
             "records:read ",
             "re\u{00e9}cords",
@@ -2103,6 +2108,39 @@ mod tests {
                 "malformed scope {malformed:?}"
             );
         }
+    }
+
+    /// Keycloak states `"scope": ""` for a client-credentials grant whose client
+    /// scopes are all kept out of the token scope. The empty statement grants
+    /// no scope: a provider that requested none accepts and caches the
+    /// credential, and one that requested scopes refuses it as narrowed.
+    #[tokio::test]
+    async fn an_empty_response_scope_grants_no_scope() {
+        let server =
+            token_endpoint_serving(issued_with_scope(Some(TOKEN_LIFETIME_SECONDS), Some(""))).await;
+        let clock = Arc::new(TestClock::new(NOW));
+        let provider = provider(endpoint(&server.uri()), &clock);
+        provider.bearer_token().await.expect("a credential");
+        provider
+            .bearer_token()
+            .await
+            .expect("the cached credential");
+        assert_eq!(token_requests(&server).await, 1);
+
+        let server =
+            token_endpoint_serving(issued_with_scope(Some(TOKEN_LIFETIME_SECONDS), Some(""))).await;
+        let provider = PrivateKeyJwt::with_clock(
+            config(endpoint(&server.uri()), client_key(Some(KEY_ID))).with_scopes(["records:read"]),
+            Arc::new(TestClock::new(NOW)),
+        )
+        .expect("the provider is usable as configured");
+        assert_eq!(
+            provider
+                .bearer_token()
+                .await
+                .expect_err("an empty scope does not cover a requested scope"),
+            TokenError::ScopeNarrowed
+        );
     }
 
     /// A credential is reused while it has more life left than the refresh margin,

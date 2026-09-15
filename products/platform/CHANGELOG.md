@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Read a token response that states an empty `scope` as granting no scope
+  instead of refusing it as malformed. Keycloak states `"scope": ""` for a
+  grant whose client scopes are all kept out of the token scope; a
+  private-key-JWT provider that requested no scope now uses that credential,
+  and one that requested scopes refuses it as narrowed.
+
 ## v0.32.0 - 2026-09-15
 
 - Add `registry_assertion_issuer`, derived by the exchange issuer from the
