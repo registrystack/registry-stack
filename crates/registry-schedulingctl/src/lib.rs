@@ -104,7 +104,7 @@ struct RecordsApplyArgs {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 enum OutputFormat {
     #[default]
-    Text,
+    Human,
     Json,
 }
 
@@ -308,7 +308,7 @@ fn write_success(
         OutputFormat::Json => serde_json::to_writer_pretty(&mut *stdout, report)
             .map_err(io::Error::other)
             .and_then(|()| writeln!(stdout)),
-        OutputFormat::Text => render_human(report, stdout),
+        OutputFormat::Human => render_human(report, stdout),
     };
     if result.is_ok() {
         ExitCode::SUCCESS
@@ -439,12 +439,32 @@ mod tests {
     #[test]
     fn canonical_command_shapes_and_default_format_are_stable() {
         let cli = Cli::try_parse_from(["schedulingctl", "check", "/tmp/project"]).unwrap();
-        assert_eq!(cli.format, OutputFormat::Text);
+        assert_eq!(cli.format, OutputFormat::Human);
         let Command::Check(args) = cli.command else {
             panic!("expected check")
         };
         assert_eq!(args.project, PathBuf::from("/tmp/project"));
         assert!(!args.deny_findings);
+
+        // `--format` matches every sibling ctl's value names: `human` and
+        // `json`, never `text`.
+        let cli = Cli::try_parse_from([
+            "schedulingctl",
+            "--format",
+            "human",
+            "check",
+            "/tmp/project",
+        ])
+        .unwrap();
+        assert_eq!(cli.format, OutputFormat::Human);
+        assert!(Cli::try_parse_from([
+            "schedulingctl",
+            "--format",
+            "text",
+            "check",
+            "/tmp/project"
+        ])
+        .is_err());
 
         let cli =
             Cli::try_parse_from(["schedulingctl", "check", "/tmp/project", "--deny-findings"])
