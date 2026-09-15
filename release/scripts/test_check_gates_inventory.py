@@ -52,6 +52,9 @@ class GateInventoryTest(unittest.TestCase):
         self.casework_checkpoint_runner = (
             ROOT / "products" / "casework" / "scripts" / "check-checkpoint.sh"
         ).read_text(encoding="utf-8")
+        self.scheduling_checkpoint_runner = (
+            ROOT / "products" / "scheduling" / "scripts" / "check-checkpoint.sh"
+        ).read_text(encoding="utf-8")
         self.nightly_security = (
             ROOT / ".github" / "workflows" / "nightly-security.yml"
         ).read_text(encoding="utf-8")
@@ -906,6 +909,105 @@ class GateInventoryTest(unittest.TestCase):
                     self.module.missing_gates(
                         self.workflow,
                         casework_checkpoint_runner_text=runner,
+                    ),
+                )
+
+    def test_missing_scheduling_workflow_gates_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}",
+                "scheduling_contracts: 'false'",
+                "Scheduling contract path filter",
+            ),
+            (
+                "scheduling-contracts:\n    name: Scheduling product contracts",
+                "scheduling-contracts:\n    name: Scheduling disabled",
+                "Scheduling contract gate",
+            ),
+            (
+                "run: products/scheduling/scripts/check-contracts.sh",
+                "run: true # Scheduling contract reproduction disabled",
+                "Scheduling contract reproduction",
+            ),
+            (
+                "scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}",
+                "scheduling_postgres: 'false'",
+                "Scheduling PostgreSQL path filter",
+            ),
+            (
+                "scheduling-postgres:\n    name: Scheduling PostgreSQL transactions",
+                "scheduling-postgres:\n    name: Scheduling disabled",
+                "Scheduling PostgreSQL gate",
+            ),
+            (
+                "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+                "        env:\n"
+                "          POSTGRES_DB: scheduling",
+                "image: postgres:17.11\n        env:\n          POSTGRES_DB: scheduling",
+                "Scheduling PostgreSQL 17 image pin",
+            ),
+            (
+                "run: products/scheduling/scripts/check-checkpoint.sh",
+                "run: true # Scheduling checkpoint wrapper disabled",
+                "Scheduling product checkpoint wrapper",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-scheduling --features postgres-test --test postgres_commitments",
+                "true # Scheduling commitment ledger disabled",
+                "Scheduling commitment ledger suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
+                "true # Scheduling record application disabled",
+                "Scheduling authoring record application suite",
+            ),
+            (
+                "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test intents_postgres",
+                "true # Scheduling delivery intent reads disabled",
+                "Scheduling delivery intent suite",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                text = self.workflow.replace(snippet, replacement, 1)
+                self.assertIn(gate, self.module.missing_gates(text))
+
+    def test_missing_scheduling_checkpoint_wrapper_steps_are_reported(self) -> None:
+        for snippet, replacement, gate in (
+            (
+                "python3 products/scheduling/scripts/generate_openapi.py --check",
+                "true # Scheduling OpenAPI drift check disabled",
+                "Scheduling HTTP contract drift check",
+            ),
+            (
+                "python3 products/scheduling/scripts/check_dependency_direction.py",
+                "true # Scheduling dependency guard disabled",
+                "Scheduling dependency-direction guard",
+            ),
+            (
+                "python3 products/scheduling/scripts/check_database_test_isolation.py",
+                "true # Scheduling database test isolation guard disabled",
+                "Scheduling database test isolation guard",
+            ),
+            (
+                "python3 -m unittest discover -s products/scheduling/scripts -p 'test_*.py'",
+                "true # Scheduling product script tests disabled",
+                "Scheduling product script tests",
+            ),
+            (
+                '"$schedulingctl_bin" test "$work/$template"',
+                "true # Scheduling authoring journey disabled",
+                "Scheduling offline authoring journeys",
+            ),
+        ):
+            with self.subTest(gate=gate):
+                runner = self.scheduling_checkpoint_runner.replace(
+                    snippet, replacement, 1
+                )
+                self.assertIn(
+                    gate,
+                    self.module.missing_gates(
+                        self.workflow,
+                        scheduling_checkpoint_runner_text=runner,
                     ),
                 )
 
