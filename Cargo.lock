@@ -3708,6 +3708,8 @@ dependencies = [
  "registry-evidencectl",
  "registry-relay-v2",
  "registry-relayctl",
+ "registry-scheduling",
+ "registry-schedulingctl",
  "serde",
  "serde_json",
 ]
