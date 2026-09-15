@@ -15,6 +15,7 @@ use anyhow::Result;
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use registry_scheduling::config::RuntimeConfigError;
 use registry_scheduling::store::StoreError;
+use registry_scheduling_core::AUTHORED_POLICY_FILE;
 use serde_json::{json, Value};
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -279,7 +280,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "code": "schedulingctl.io-failure",
                 "artifact": "filesystem",
                 "path": "filesystem",
-                "message": "A required filesystem operation failed.",
+                "message": format!("{error:#}"),
                 "suggestedAction": "Correct the path or permissions, then retry.",
             }),
         )
@@ -290,7 +291,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "severity": "error",
                 "code": "schedulingctl.refused",
                 "artifact": "scheduling_project",
-                "path": "scheduling.yaml",
+                "path": AUTHORED_POLICY_FILE,
                 "message": format!("{error:#}"),
                 "suggestedAction": "Correct the authored input the message names, then retry.",
             }),
@@ -396,7 +397,7 @@ fn render_human(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             writeln!(
                 stdout,
                 "finding {}: {}",
-                finding["path"].as_str().unwrap_or("scheduling.yaml"),
+                finding["path"].as_str().unwrap_or(AUTHORED_POLICY_FILE),
                 finding["reason"].as_str().unwrap_or("review required"),
             )?;
         }
@@ -679,6 +680,9 @@ mod tests {
             assert!(diagnostic.get(field).is_some(), "missing {field}");
         }
         assert_eq!(diagnostic["code"], "schedulingctl.refused");
+        // The path names the authored policy file by the crate's own
+        // constant, not a literal that could drift from it.
+        assert_eq!(diagnostic["path"], AUTHORED_POLICY_FILE);
         assert!(diagnostic["message"]
             .as_str()
             .unwrap()
@@ -725,6 +729,14 @@ mod tests {
         assert_eq!(exit, ExitCode::from(OPERATIONAL_FAILURE_EXIT));
         assert!(stderr.is_empty());
         assert_eq!(report["diagnostics"][0]["code"], "schedulingctl.io-failure");
+        // The failure names the path and the operating system's reason
+        // instead of a generic placeholder that could be any I/O failure.
+        let message = report["diagnostics"][0]["message"].as_str().unwrap();
+        assert!(message.contains(&missing), "{message}");
+        assert!(
+            message.to_lowercase().contains("no such file or directory"),
+            "{message}"
+        );
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
