@@ -429,12 +429,14 @@ mod tests {
             json!([
                 "scheduling.yaml",
                 "runtime.example.yaml",
-                "fixtures/household-morning.yaml"
+                "fixtures/household-morning.yaml",
+                "fixtures/household-afternoon.yaml"
             ])
         );
         assert!(project.join(AUTHORED_POLICY_FILE).is_file());
         assert!(project.join("runtime.example.yaml").is_file());
         assert!(project.join("fixtures/household-morning.yaml").is_file());
+        assert!(project.join("fixtures/household-afternoon.yaml").is_file());
         let error = init(&project, "standalone-arrival-window").unwrap_err();
         assert!(error.to_string().contains("never overwrites"));
         let error = init(&root.path().join("other"), "no-such-template").unwrap_err();

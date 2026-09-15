@@ -262,8 +262,10 @@ cases:
       code: schedule.unpublished
 "#;
 
-/// The `standalone-arrival-window` policy: a Saturday household block with a
-/// public and an assisted subquota over a per-recipient units table.
+/// The `standalone-arrival-window` policy: a Saturday morning household block
+/// with a public and an assisted subquota over a per-recipient units table,
+/// and a Saturday afternoon block over a banded table that refuses a party
+/// above its highest band instead of guessing what it costs.
 const ARRIVAL_WINDOW_POLICY: &str = r#"apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
 kind: SchedulingPolicyPackage
 scheduling:
@@ -286,6 +288,19 @@ offerings:
     cancellationCutoffMinutes: 1440
     requiresCapabilities: []
     prerequisites: []
+  - id: household-afternoon
+    service: household-day
+    label: Afternoon household block
+    mode: arrival-window
+    location: civic-hall
+    because: Larger households arrive in an afternoon block sized by party, not a flat headcount.
+    arrival:
+      window: household-afternoon-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
 holidaySets:
   - id: office-holidays
     revision: 1
@@ -301,6 +316,15 @@ openings:
     effectiveFrom: "2026-10-01"
     effectiveUntil: "2026-12-31"
     because: The hall opens on Saturday mornings.
+  - id: hall-afternoon-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "13:00"
+    endTime: "17:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall reopens on Saturday afternoons for banded household visits.
 windows:
   - id: household-morning-window
     revision: 2
@@ -323,6 +347,28 @@ windows:
         units: 1
         because: Assisted bookings hold a protected unit.
     because: The Saturday morning household block, sized for two officers.
+  - id: household-afternoon-window
+    revision: 1
+    offering: household-afternoon
+    location: civic-hall
+    start: 2026-10-10T07:00:00Z
+    end: 2026-10-10T09:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: bandedTable
+      input: serviceRecipientCount
+      bands:
+        - upTo: 4
+          units: 1
+          because: A household of up to four shares one officers' block.
+        - upTo: 8
+          units: 2
+          because: A larger household of up to eight needs two officers' blocks.
+      aboveHighestBand:
+        policy: refuse
+      because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
+    subquotas: []
+    because: The Saturday afternoon household block, sized by party rather than a flat headcount.
 holdPolicy:
   ttlMinutes: 10
   maxPerCaller: 2
@@ -386,6 +432,63 @@ cases:
     expect:
       outcome: admitted
       units: 1
+"#;
+
+/// The `standalone-arrival-window` fixture: two households fit the banded
+/// table's first two bands, and a household above the highest band is
+/// refused instead of costed by a guess.
+const HOUSEHOLD_AFTERNOON_FIXTURE: &str = r#"apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: household-afternoon
+now: 2026-10-09T20:00:00Z
+facts:
+  locations:
+    - id: civic-hall
+      timezone: Asia/Bangkok
+initial: []
+cases:
+  - name: a-small-household-fits-the-first-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 3
+        attendees: 3
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+  - name: a-household-above-the-highest-band-is-refused
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 9
+        attendees: 9
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: party.capacity-inadequate
+  - name: a-mid-size-household-fits-the-second-band
+    request:
+      offering: household-afternoon
+      start: 2026-10-10T07:00:00Z
+      party:
+        recipients: 6
+        attendees: 6
+      policyRevision: 3
+      windowRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 2
 "#;
 
 /// The operator runtime configuration example every template writes beside
@@ -511,6 +614,10 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
             ("scheduling.yaml", ARRIVAL_WINDOW_POLICY),
             ("runtime.example.yaml", RUNTIME_EXAMPLE),
             ("fixtures/household-morning.yaml", HOUSEHOLD_MORNING_FIXTURE),
+            (
+                "fixtures/household-afternoon.yaml",
+                HOUSEHOLD_AFTERNOON_FIXTURE,
+            ),
         ]),
         _ => None,
     }
@@ -520,9 +627,9 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
 mod tests {
     use super::*;
     use registry_scheduling_core::{
-        parse_fixture_yaml, parse_policy_yaml, CaseStatus, AUTHORED_POLICY_FILE,
-        SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND, SCHEDULING_POLICY_API_VERSION,
-        SCHEDULING_POLICY_KIND,
+        parse_fixture_yaml, parse_policy_yaml, AboveHighestBand, CaseStatus, RequiredUnitsPolicy,
+        AUTHORED_POLICY_FILE, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
+        SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
     };
 
     const TEMPLATE_NAMES: [&str; 2] = ["standalone-exact-time", "standalone-arrival-window"];
@@ -601,6 +708,58 @@ mod tests {
             })
             .map(|(relative, contents)| (*relative, *contents))
             .collect()
+    }
+
+    /// The arrival-window template's second offering exists so an adopter has
+    /// a working example of a banded units table that refuses a party above
+    /// its highest band, rather than only the fixed per-recipient table the
+    /// first offering demonstrates.
+    #[test]
+    fn the_arrival_window_template_demonstrates_a_banded_table_refusing_above_its_highest_band() {
+        let files = template_files("standalone-arrival-window").unwrap();
+        let policy = parse_policy_yaml(files[0].1).expect("the template policy parses");
+        let window = policy
+            .windows
+            .iter()
+            .find(|window| window.id == "household-afternoon-window")
+            .expect("the afternoon window is published");
+        assert!(
+            matches!(
+                window.units_policy,
+                RequiredUnitsPolicy::BandedTable {
+                    above_highest_band: AboveHighestBand::Refuse,
+                    ..
+                }
+            ),
+            "{:?}",
+            window.units_policy
+        );
+
+        let (relative, contents) = template_fixtures(&files)
+            .into_iter()
+            .find(|(relative, _)| relative.contains("household-afternoon"))
+            .expect("the afternoon fixture ships with the template");
+        let fixture = parse_fixture_yaml(contents).expect("the template fixture parses");
+        let outcomes = fixture
+            .replay(&policy)
+            .unwrap_or_else(|error| panic!("{relative}: the fixture replays: {error}"));
+        assert!(
+            outcomes
+                .iter()
+                .all(|outcome| outcome.status == CaseStatus::Pass),
+            "{outcomes:?}"
+        );
+        let refused = outcomes
+            .iter()
+            .find(|outcome| outcome.name.contains("above-the-highest-band"))
+            .expect("a case exercises the above-highest-band refusal");
+        assert!(
+            refused
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("party.capacity-inadequate")),
+            "{refused:?}"
+        );
     }
 
     #[test]
