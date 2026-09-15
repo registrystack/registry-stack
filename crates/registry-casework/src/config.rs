@@ -529,13 +529,13 @@ impl RuntimeConfig {
         }
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let config: Self = serde_path_to_error::deserialize(deserializer).map_err(|error| {
+            // `serde_path_to_error` renders a refusal it never attributed to a
+            // member as `.`, which names nothing an operator can look up, so a
+            // document refused whole is reported at the root every other
+            // whole-document refusal here already names.
             let path = error.path().to_string();
             RuntimeConfigError::Parse {
-                path: if path.is_empty() {
-                    "/".to_owned()
-                } else {
-                    path
-                },
+                path: if path == "." { "/".to_owned() } else { path },
                 source: error.into_inner(),
             }
         })?;
@@ -1487,6 +1487,20 @@ sources:
             "the verifier admits {:?}",
             profile.allowed_typ
         );
+    }
+
+    /// `serde_path_to_error` renders a refusal it never attributed to a
+    /// member as `.`, which names nothing an operator can look up. A document
+    /// refused whole is reported at `/`, the root every other whole-document
+    /// refusal here already names.
+    #[test]
+    fn a_document_refused_whole_is_reported_at_its_root() {
+        let root = tempfile::tempdir().unwrap();
+        let runtime = root.path().join("runtime.yaml");
+        std::fs::write(&runtime, "a scalar, not a runtime configuration\n").unwrap();
+        let error = RuntimeConfig::load(&runtime).unwrap_err();
+        assert!(matches!(error, RuntimeConfigError::Parse { .. }));
+        assert_eq!(error.path(), "/");
     }
 
     #[test]
