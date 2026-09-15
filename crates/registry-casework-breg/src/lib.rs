@@ -262,8 +262,6 @@ impl BregAdapter {
 
     /// Map a BReg read result. A source reader failure is logged when its
     /// cause first appears or changes, and the next success logs recovery.
-    /// Missing records and moved bindings are ordinary source states and are
-    /// not logged.
     fn read_result<T>(
         &self,
         client: ReadClient<'_>,
@@ -287,16 +285,14 @@ impl BregAdapter {
                 Ok(value)
             }
             Err(error) => {
-                if !matches!(error.status(), Some(404 | 409 | 412)) {
-                    let cause = error.to_string();
-                    if reported.as_deref() != Some(cause.as_str()) {
-                        tracing::warn!(
-                            source_id = %self.config.source_id,
-                            error = %cause,
-                            "Casework source reader request to BReg failed"
-                        );
-                        *reported = Some(cause);
-                    }
+                let cause = error.to_string();
+                if reported.as_deref() != Some(cause.as_str()) {
+                    tracing::warn!(
+                        source_id = %self.config.source_id,
+                        error = %cause,
+                        "Casework source reader request to BReg failed"
+                    );
+                    *reported = Some(cause);
                 }
                 Err(read_error(error))
             }
@@ -327,7 +323,12 @@ impl BregAdapter {
             .client(client)
             .get_record(&self.config.route, &subject.id, &Self::options(profile)?)
             .await;
-        let response = self.read_result(client, record)?;
+        // A missing record is an ordinary source state, not a reader failure.
+        // A 404 from the registry contract, readiness, or a list still is.
+        let response = match record {
+            Err(error) if error.status() == Some(404) => return Err(read_error(error)),
+            record => self.read_result(client, record)?,
+        };
         let representation_etag = response
             .metadata
             .etag()

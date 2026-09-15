@@ -986,10 +986,8 @@ impl<'writer> MakeWriter<'writer> for CapturedLogs {
     }
 }
 
-#[tokio::test]
-async fn source_reader_failure_causes_are_logged_once_per_change_and_on_recovery() {
-    let server = MockServer::start().await;
-    let adapter = adapter(&server.uri());
+/// Run `work` under a JSON tracing subscriber and return what it logged.
+async fn captured_logs(work: impl std::future::Future<Output = ()>) -> String {
     let logs = CapturedLogs::default();
     let subscriber = tracing_subscriber::fmt()
         .json()
@@ -997,7 +995,39 @@ async fn source_reader_failure_causes_are_logged_once_per_change_and_on_recovery
         .with_ansi(false)
         .with_writer(logs.clone())
         .finish();
-    async {
+    work.with_subscriber(subscriber).await;
+    let raw = logs.0.lock().expect("log capture").clone();
+    String::from_utf8(raw).unwrap()
+}
+
+/// Assert the source reader entries, in order, as a level and an optional
+/// cause the logged error must contain.
+fn assert_reader_log(raw: &str, expected: &[(&str, Option<&str>)]) {
+    let entries = raw
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("structured tracing entry"))
+        .collect::<Vec<_>>();
+    assert_eq!(entries.len(), expected.len(), "{raw}");
+    for (entry, (level, cause)) in entries.iter().zip(expected) {
+        assert_eq!(entry["level"], *level, "{raw}");
+        assert_eq!(entry["fields"]["source_id"], "source");
+        match cause {
+            Some(cause) => assert!(
+                entry["fields"]["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains(cause)),
+                "{raw}"
+            ),
+            None => assert!(entry["fields"].get("error").is_none(), "{raw}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn source_reader_failure_causes_are_logged_once_per_change_and_on_recovery() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let logs = captured_logs(async {
         let refused = Mock::given(method("GET"))
             .and(path(format!("/v1/records/correction/{ID}")))
             .respond_with(
@@ -1065,40 +1095,120 @@ async fn source_reader_failure_causes_are_logged_once_per_change_and_on_recovery
             .mount(&server)
             .await;
         adapter.read_authoritative(&subject()).await.unwrap();
-    }
-    .with_subscriber(subscriber)
+    })
     .await;
 
-    let raw = String::from_utf8(logs.0.lock().expect("log capture").clone()).unwrap();
     for secret in ["reader-token", "alice-token", "SOURCE-CONTENT-CANARY"] {
-        assert!(!raw.contains(secret), "logs must not carry {secret}");
+        assert!(!logs.contains(secret), "logs must not carry {secret}");
     }
-    let entries = raw
-        .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("structured tracing entry"))
-        .collect::<Vec<_>>();
-    assert_eq!(entries.len(), 3, "{raw}");
-    for (entry, level, cause) in [
-        (
-            &entries[0],
-            "WARN",
-            Some("status 401, code authentication.refused"),
-        ),
-        (&entries[1], "WARN", Some("status 503")),
-        (&entries[2], "INFO", None),
-    ] {
-        assert_eq!(entry["level"], level);
-        assert_eq!(entry["fields"]["source_id"], "source");
-        match cause {
-            Some(cause) => assert!(
-                entry["fields"]["error"]
-                    .as_str()
-                    .is_some_and(|error| error.contains(cause)),
-                "{raw}"
-            ),
-            None => assert!(entry["fields"].get("error").is_none()),
-        }
-    }
+    assert_reader_log(
+        &logs,
+        &[
+            ("WARN", Some("status 401, code authentication.refused")),
+            ("WARN", Some("status 503")),
+            ("INFO", None),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn source_reader_404_is_quiet_only_for_a_record_read() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let logs = captured_logs(async {
+        let contract_missing = Mock::given(method("GET"))
+            .and(path("/v1/registry"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter.discover_active(None, 100).await.unwrap_err(),
+            SourceAdapterError::Concealed
+        );
+        drop(contract_missing);
+
+        mount_metadata(&server, "reader-token", "reader").await;
+        let route_missing = Mock::given(method("GET"))
+            .and(path("/v1/records/correction"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter.discover_active(None, 100).await.unwrap_err(),
+            SourceAdapterError::Concealed
+        );
+        drop(route_missing);
+    })
+    .await;
+
+    assert_reader_log(
+        &logs,
+        &[
+            ("WARN", Some("status 404")),
+            ("INFO", None),
+            ("WARN", Some("status 404")),
+        ],
+    );
+}
+
+#[tokio::test]
+async fn caller_reads_neither_report_nor_clear_a_source_reader_failure() {
+    let server = MockServer::start().await;
+    let adapter = adapter(&server.uri());
+    let logs = captured_logs(async {
+        let caller_refused = Mock::given(method("GET"))
+            .and(header("authorization", "Bearer alice-token"))
+            .respond_with(ResponseTemplate::new(401))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter
+                .read_for_caller(
+                    &subject(),
+                    "reviewer",
+                    EphemeralCredential::new("alice-token")
+                )
+                .await
+                .unwrap_err(),
+            SourceAdapterError::Concealed
+        );
+        drop(caller_refused);
+
+        let reader_outage = Mock::given(method("GET"))
+            .and(header("authorization", "Bearer reader-token"))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount_as_scoped(&server)
+            .await;
+        assert_eq!(
+            adapter.read_authoritative(&subject()).await.unwrap_err(),
+            SourceAdapterError::Unavailable
+        );
+        drop(reader_outage);
+
+        mount_metadata(&server, "alice-token", "reviewer").await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v1/records/correction/{ID}")))
+            .and(header("authorization", "Bearer alice-token"))
+            .respond_with(response(record("needs_changes", None)))
+            .expect(1)
+            .mount(&server)
+            .await;
+        adapter
+            .read_for_caller(
+                &subject(),
+                "reviewer",
+                EphemeralCredential::new("alice-token"),
+            )
+            .await
+            .unwrap();
+    })
+    .await;
+
+    assert_reader_log(&logs, &[("WARN", Some("status 503"))]);
 }
 
 #[tokio::test]

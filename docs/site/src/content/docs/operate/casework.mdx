@@ -337,19 +337,28 @@ and a source reconciliation pass per bound source at that binding's
 on the affected work-item operations rather than turning an inbox into an apparently complete empty
 page. When the source reader fails, the runtime logs `Casework source reader request to BReg failed`
 with the cause, such as the refusal status and problem code or the token request failure, once when
-the cause appears or changes, and logs again when reads recover.
+the cause appears or changes. A missing record is not a reader failure and is not logged; a `404`
+from the registry contract, readiness, or a list is. The next successful reader request logs
+`Casework source reader requests to BReg succeed again`. That entry means BReg answers the reader
+again, not that reconciliation has caught up: a pass that still cannot apply the source logs
+`Casework reconciliation pass did not complete`.
 
-Between a source change and the reconciliation that applies it, the affected item stays in lists
-and its view, history, and clocks stay readable with the binding Casework last applied, but it
-offers no actions, and a claim, draft, or decision on it is refused with
-`work-item.proposal-changed`.
+Between a source change and the reconciliation that applies it, an item whose binding moved within
+the same source generation stays in the inbox, the next-item result, and holdings, and its view,
+history, and clocks stay readable with the binding Casework last applied. It offers no actions.
+Operations that act on the item or its tasks are refused with `work-item.proposal-changed`: claim,
+release, drafts, decisions, attempt recovery, assignment, delegation, task preview, listing, and
+approval, and caseload move apply. A caseload move preview is refused as a whole while such an item
+is among the items it reads.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, migrate_from_path(), serve_from_path(),
     serve_until_worker_stops(), supervise(), and AuditPublicationFailure;
     crates/registry-casework/src/store.rs, migrate();
     crates/registry-casework/src/http.rs, health() and ready();
     crates/registry-casework/src/service.rs, ready() and assemble_caller_visible_item();
-    crates/registry-casework-breg/src/lib.rs, BregAdapter::read_result(). */}
+    crates/registry-casework/src/assignment.rs, assignment_visible_item_for_origin();
+    crates/registry-casework/src/task_grants.rs, preview_tasks(), approve_task(), and list_tasks();
+    crates/registry-casework-breg/src/lib.rs, BregAdapter::read() and BregAdapter::read_result(). */}
 
 ## Establish directory authority
 
