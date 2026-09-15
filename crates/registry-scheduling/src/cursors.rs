@@ -12,6 +12,27 @@
 //! replayed against a different listing, a different offering, or a different
 //! range is refused as invalid rather than silently returning rows from the
 //! wrong view.
+//!
+//! ## The actor-binding contract
+//!
+//! A stored cursor is deliberately not keyed by the caller: it holds its
+//! identity, its context, its position and its expiry, and nothing else. That
+//! is sound only because every listing that mints one is, at the moment the
+//! cursor is honoured, one of two things.
+//!
+//! Either the listing is public to any caller holding the read scope, as the
+//! catalogue and availability listings are, in which case a cursor discloses
+//! nothing its holder could not ask for outright; or the listing re-applies
+//! its own authorization on the continuing request before the cursor is
+//! resolved, as appointment history does by re-running the ownership check
+//! against the caller of the page, never against the caller who minted the
+//! token.
+//!
+//! The obligation is therefore on the call site, and it is a real one: a
+//! listing that is neither public nor re-authorized on every page must bind
+//! the actor into the cursor rather than assume this module did it. Nothing
+//! here can enforce that, which is why it is written where whoever adds the
+//! third listing will read it.
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, TimeDelta, Utc};
