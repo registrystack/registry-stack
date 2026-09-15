@@ -1,0 +1,83 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: fold-day-rebooking
+now: 2026-11-01T04:00:00Z
+# America/New_York falls back on 2026-11-01: local 01:30 occurs twice, and the
+# 00:30-02:30 opening spans three real hours, [04:30Z, 07:30Z). The closure
+# 00:15-00:45 has unambiguous endpoints in one offset and moves the opening
+# start to 04:45Z, so the 30-minute grid anchors there: 04:45, 05:15, 05:45...
+facts:
+  locations:
+    - id: new-york-hall
+      timezone: America/New_York
+  pools:
+    - id: hall-stations
+      members:
+        - resourceId: hall-station-1
+          capabilities: []
+          available: true
+  exceptions:
+    - id: hall-prep
+      location: new-york-hall
+      kind: closure
+      date: "2026-11-01"
+      startTime: "00:15"
+      endTime: "00:45"
+initial: []
+cases:
+  - name: morning-booking-after-the-closure
+    request:
+      offering: fold-day-update-30
+      start: 2026-11-01T05:15:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+      resource: hall-station-1
+  - name: reschedule-into-the-later-morning
+    request:
+      offering: fold-day-update-30
+      start: 2026-11-01T06:45:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      policyRevision: 1
+      rescheduleOf: case:morning-booking-after-the-closure
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+      resource: hall-station-1
+  - name: the-freed-slot-serves-another-caller
+    request:
+      offering: fold-day-update-30
+      start: 2026-11-01T05:15:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+      resource: hall-station-1
+  - name: a-wall-clock-match-off-the-moved-grid-is-not-served
+    request:
+      offering: fold-day-update-30
+      start: 2026-11-01T06:30:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: schedule.unpublished
