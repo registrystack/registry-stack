@@ -830,9 +830,12 @@ pub struct CapacityReduction {
 /// published capacity are assessed on both sides of the proposal: the window
 /// total, and each channel subquota, which is its own committed slice a
 /// proposal may strand by reducing it, by dropping it, or by introducing it
-/// below what the channel already holds. An emergency reduction is a different
-/// operation entirely, recorded as an incident with its affected bookings, and
-/// does not pass through this assessment.
+/// below what the channel already holds. A window the proposal keeps is
+/// assessed over the interval it now publishes: a claim whose interval the
+/// new window no longer covers is a commitment the proposal strands against
+/// zero, and no longer capacity the moved window must cover. An emergency
+/// reduction is a different operation entirely, recorded as an incident with
+/// its affected bookings, and does not pass through this assessment.
 pub fn assess_publication_impact(
     current: &SchedulingPolicy,
     proposed: &SchedulingPolicy,
@@ -843,7 +846,19 @@ pub fn assess_publication_impact(
     for window in &current.windows {
         let proposed_window = proposed.window(&window.id);
         let proposed_units = proposed_window.map_or(0, |proposed| proposed.units);
-        let committed = snapshot.window_units_allocated(&window.id, None, None, now);
+        // A window the proposal drops has no interval left to meet, so every
+        // claim counts against the zero it proposes.
+        let committed = match proposed_window {
+            Some(proposed) => units_committed_within(
+                snapshot,
+                &window.id,
+                None,
+                proposed.start,
+                proposed.end,
+                now,
+            ),
+            None => snapshot.window_units_allocated(&window.id, None, None, now),
+        };
         if proposed_units < window.units && committed > proposed_units {
             reductions.push(CapacityReduction {
                 window: window.id.clone(),
@@ -851,6 +866,21 @@ pub fn assess_publication_impact(
                 committed_units: committed,
                 proposed_units,
             });
+        }
+        if let Some(proposed) = proposed_window {
+            // The commitments the proposed interval no longer covers are
+            // stranded: the proposal publishes no capacity where they stand,
+            // which is a reduction to zero for them.
+            let stranded =
+                units_committed_outside(snapshot, &window.id, proposed.start, proposed.end, now);
+            if stranded > 0 {
+                reductions.push(CapacityReduction {
+                    window: window.id.clone(),
+                    channel: None,
+                    committed_units: stranded,
+                    proposed_units: 0,
+                });
+            }
         }
         // A subquota dropped from the proposal proposes zero for its channel.
         for subquota in &window.subquotas {
@@ -865,12 +895,22 @@ pub fn assess_publication_impact(
             if proposed_subquota >= subquota.units {
                 continue;
             }
-            let committed_channel = snapshot.window_units_allocated(
-                &window.id,
-                Some(subquota.channel.as_str()),
-                None,
-                now,
-            );
+            let committed_channel = match proposed_window {
+                Some(proposed) => units_committed_within(
+                    snapshot,
+                    &window.id,
+                    Some(subquota.channel.as_str()),
+                    proposed.start,
+                    proposed.end,
+                    now,
+                ),
+                None => snapshot.window_units_allocated(
+                    &window.id,
+                    Some(subquota.channel.as_str()),
+                    None,
+                    now,
+                ),
+            };
             if committed_channel > proposed_subquota {
                 reductions.push(CapacityReduction {
                     window: window.id.clone(),
@@ -893,10 +933,12 @@ pub fn assess_publication_impact(
                 if already_published {
                     continue;
                 }
-                let committed_channel = snapshot.window_units_allocated(
+                let committed_channel = units_committed_within(
+                    snapshot,
                     &window.id,
                     Some(subquota.channel.as_str()),
-                    None,
+                    proposed.start,
+                    proposed.end,
                     now,
                 );
                 if committed_channel > subquota.units {
@@ -911,6 +953,49 @@ pub fn assess_publication_impact(
         }
     }
     reductions
+}
+
+/// Recipient units standing against a window's supply at `now`, counting only
+/// claims whose occupied interval meets the half-open interval
+/// `[start, end)`, so a proposal that moves or shortens the window is assessed
+/// over the interval it now publishes.
+fn units_committed_within(
+    snapshot: &crate::model::LedgerSnapshot,
+    window_id: &str,
+    channel: Option<&str>,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> u32 {
+    snapshot
+        .consuming(now)
+        .filter(|claim| {
+            claim.supply_id == window_id
+                && channel.is_none_or(|wanted| claim.channel.as_deref() == Some(wanted))
+                && claim.start < end
+                && start < claim.end
+        })
+        .map(|claim| claim.units)
+        // Saturating, for the same reason the snapshot's own sum saturates:
+        // a total past u32 units must refuse, never wrap toward zero.
+        .fold(0, u32::saturating_add)
+}
+
+/// Recipient units standing against a window's supply at `now` whose occupied
+/// interval meets nothing of the half-open interval `[start, end)`: the
+/// commitments a proposal publishing that interval no longer covers.
+fn units_committed_outside(
+    snapshot: &crate::model::LedgerSnapshot,
+    window_id: &str,
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> u32 {
+    snapshot
+        .consuming(now)
+        .filter(|claim| claim.supply_id == window_id && !(claim.start < end && start < claim.end))
+        .map(|claim| claim.units)
+        .fold(0, u32::saturating_add)
 }
 
 fn service_ids_contains(policy: &SchedulingPolicy, id: &str) -> bool {
@@ -1588,6 +1673,77 @@ holdPolicy:
             because: "Two public units in the revised block.".to_owned(),
         }];
         assert!(assess_publication_impact(&current, &covered, &snapshot, now).is_empty());
+    }
+
+    /// BL-3: a window moved under the same id was assessed by supply id
+    /// alone, so a proposal could move every standing commitment out of its
+    /// window and pass as safe. Each standing claim's interval is now
+    /// compared against the proposed window's interval.
+    #[test]
+    fn moving_a_published_window_reports_no_reduction() {
+        let current = household_window_policy();
+        let now = utc(6, 0);
+        let claim = LedgerClaim {
+            id: "claim-1".to_owned(),
+            supply_id: "household-morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: Some("public".to_owned()),
+            start: utc(8, 0),
+            end: utc(10, 0),
+            units: 2,
+            duplicate_key: None,
+            expires_at: None,
+        };
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![claim.clone()],
+        };
+
+        // The window moves two months under the same id; the two standing
+        // units fall outside the published interval and are stranded against
+        // the zero capacity that proposal leaves where they stand.
+        let mut moved = current.clone();
+        moved.windows[0].start = Utc.with_ymd_and_hms(2026, 12, 24, 8, 0, 0).unwrap();
+        moved.windows[0].end = Utc.with_ymd_and_hms(2026, 12, 24, 10, 0, 0).unwrap();
+        assert_eq!(
+            assess_publication_impact(&current, &moved, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: None,
+                committed_units: 2,
+                proposed_units: 0,
+            }]
+        );
+
+        // A shortened interval strands only the claims it no longer covers:
+        // the morning claim still meets the window, the late one does not.
+        let late = LedgerClaim {
+            id: "claim-2".to_owned(),
+            supply_id: "household-morning-window".to_owned(),
+            kind: LedgerKind::Booking,
+            channel: Some("assisted".to_owned()),
+            start: utc(9, 30),
+            end: utc(10, 0),
+            units: 1,
+            duplicate_key: None,
+            expires_at: None,
+        };
+        let snapshot = crate::model::LedgerSnapshot {
+            claims: vec![claim, late],
+        };
+        let mut shortened = current.clone();
+        shortened.windows[0].end = utc(9, 0);
+        assert_eq!(
+            assess_publication_impact(&current, &shortened, &snapshot, now),
+            vec![CapacityReduction {
+                window: "household-morning-window".to_owned(),
+                channel: None,
+                committed_units: 1,
+                proposed_units: 0,
+            }]
+        );
+
+        // A window that stays put reports nothing: its claims still meet it.
+        assert!(assess_publication_impact(&current, &current.clone(), &snapshot, now).is_empty());
     }
 
     #[test]
