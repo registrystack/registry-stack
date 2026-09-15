@@ -56,6 +56,18 @@ impl AuditPublisherHealth {
     }
 }
 
+/// How a caller read treats an active occurrence whose disclosed source
+/// binding moved within its generation before reconciliation applied it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MovedBinding {
+    /// Refuse, so coordination and source mutations never start from a
+    /// binding the source no longer discloses.
+    Refuse,
+    /// Return the retained occurrence without actions or routing copy, so the
+    /// item stays readable until reconciliation applies the moved binding.
+    WithoutActions,
+}
+
 impl std::fmt::Debug for CaseworkService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -346,6 +358,28 @@ impl CaseworkService {
             .await
     }
 
+    /// Reads an item for display without starting any mutation. Unlike
+    /// [`Self::caller_item`], an unreconciled binding movement within the
+    /// source generation returns the retained occurrence without actions.
+    pub(crate) async fn caller_item_for_read(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+    ) -> Result<WorkItem, ServiceError> {
+        self.read_caller_item(
+            actor,
+            item_id,
+            source_profile_id,
+            token,
+            None,
+            MovedBinding::WithoutActions,
+        )
+        .await
+        .map(|(item, _)| item)
+    }
+
     async fn caller_item_for_attempt(
         &self,
         actor: &ActorContext,
@@ -353,6 +387,26 @@ impl CaseworkService {
         source_profile_id: &str,
         token: &str,
         completed_attempt: Option<&AttemptStatus>,
+    ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
+        self.read_caller_item(
+            actor,
+            item_id,
+            source_profile_id,
+            token,
+            completed_attempt,
+            MovedBinding::Refuse,
+        )
+        .await
+    }
+
+    async fn read_caller_item(
+        &self,
+        actor: &ActorContext,
+        item_id: Uuid,
+        source_profile_id: &str,
+        token: &str,
+        completed_attempt: Option<&AttemptStatus>,
+        moved_binding: MovedBinding,
     ) -> Result<(WorkItem, CallerSubjectView), ServiceError> {
         let item = self.store.item(item_id).await?;
         if !self.store.can_view_item(actor, &item).await? {
@@ -374,11 +428,13 @@ impl CaseworkService {
                 &view,
                 None,
                 completed_attempt,
+                moved_binding,
             )
             .await?;
         Ok((item, view))
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn assemble_caller_visible_item(
         &self,
         actor: &ActorContext,
@@ -387,6 +443,7 @@ impl CaseworkService {
         view: &CallerSubjectView,
         known_holder_timing: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)>,
         completed_attempt: Option<&AttemptStatus>,
+        moved_binding: MovedBinding,
     ) -> Result<WorkItem, ServiceError> {
         // The source call is intentionally outside a database transaction.
         // Read local projections only after source disclosure succeeds, then
@@ -468,12 +525,25 @@ impl CaseworkService {
                 item.actions.clear();
                 return Ok(item);
             }
+            if view.binding.generation != item.binding.generation {
+                return Err(ServiceError::BindingMoved);
+            }
+            // An active occurrence whose binding moved is waiting for
+            // reconciliation. Mutations refuse it. Reads keep the retained
+            // binding without actions or routing copy, so one unreconciled
+            // subject never withholds the caller's other items or its history.
+            if item.state.is_active() {
+                if moved_binding == MovedBinding::Refuse {
+                    return Err(ServiceError::BindingMoved);
+                }
+                item.routing = routing;
+                item.clock_occurrences = clock_occurrences;
+                item.actions.clear();
+                return Ok(item);
+            }
             // Terminal occurrences are historical, read-only records. Within
             // one source generation, the disclosed subject may have advanced
             // since that occurrence ended.
-            if item.state.is_active() || view.binding.generation != item.binding.generation {
-                return Err(ServiceError::BindingMoved);
-            }
             item.routing = routing;
             item.clock_occurrences = clock_occurrences;
             item.routing_copy = routing_copy;
@@ -496,7 +566,7 @@ impl CaseworkService {
         limit: usize,
         cursor: Option<&str>,
     ) -> Result<Page<HistoryEntry>, ServiceError> {
-        self.caller_item(actor, item_id, source_profile_id, token)
+        self.caller_item_for_read(actor, item_id, source_profile_id, token)
             .await?;
         self.store
             .history_page(actor, source_profile_id, item_id, limit, cursor)
@@ -526,9 +596,8 @@ impl CaseworkService {
         token: &str,
     ) -> Result<WorkItem, ServiceError> {
         let item = self
-            .caller_item(actor, item_id, source_profile_id, token)
-            .await?
-            .0;
+            .caller_item_for_read(actor, item_id, source_profile_id, token)
+            .await?;
         self.store.record_opened(actor, item_id).await?;
         Ok(item)
     }
@@ -1038,6 +1107,7 @@ impl CaseworkService {
                             &view,
                             holder_timings.get(&item.item_id).cloned(),
                             None,
+                            MovedBinding::WithoutActions,
                         )
                         .await
                     {

@@ -34,14 +34,15 @@ export const REPOSITORY_ROOTS = [
   'editors',
   'external',
   'schemas',
+  'scripts',
   '\\.cargo',
   '\\.github',
 ];
 // Directories a continuation citation may start from, resolved against the crate or
 // product root of the most recently cited path in the same anchor.
 const CONTINUATION_ROOTS = ['src', 'tests', 'examples', 'benches', 'schemas', 'scripts'];
-// The roots both lists name: a crate or product keeps a schemas/ directory of its own and
-// so does the repository. A citation that starts at one is read against the unit cited
+// The roots both lists name: a crate or product keeps a schemas/ or scripts/ directory of its
+// own and so does the repository. A citation that starts at one is read against the unit cited
 // before it first and against the repository root last, so the nearer directory wins, the
 // way it does for a bare filename that may name a file kept at the root.
 const SHARED_ROOTS = new Set(REPOSITORY_ROOTS.filter((root) => CONTINUATION_ROOTS.includes(root)));

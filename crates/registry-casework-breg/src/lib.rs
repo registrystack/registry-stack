@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
+    sync::{Mutex, PoisonError},
     time::{Duration, SystemTime},
 };
 use zeroize::Zeroizing;
@@ -50,6 +51,18 @@ pub struct BregAdapter {
     config: BregSourceConfig,
     reader: BaseRegistryClient,
     webhook_key: Zeroizing<Vec<u8>>,
+    /// The source reader failure cause last logged, so a persistent failure is
+    /// reported once per change instead of once per subject read.
+    reader_failure: Mutex<Option<String>>,
+}
+
+/// The credential behind a BReg read. A source reader failure stops Casework
+/// learning about source changes, so its cause is logged. A caller's failure
+/// is that caller's own refusal and is only returned.
+#[derive(Clone, Copy)]
+enum ReadClient<'a> {
+    SourceReader,
+    Caller(&'a BaseRegistryClient),
 }
 
 impl BregAdapter {
@@ -125,6 +138,7 @@ impl BregAdapter {
             config,
             reader,
             webhook_key: Zeroizing::new(webhook_key),
+            reader_failure: Mutex::new(None),
         })
     }
 
@@ -135,9 +149,10 @@ impl BregAdapter {
     /// response does not disclose its event destination, and this method must
     /// therefore not be used as evidence of end-to-end webhook delivery.
     pub async fn verify_reader_readiness(&self) -> Result<(), SourceAdapterError> {
-        self.reader.ready().await.map_err(read_error)?;
+        let ready = self.reader.ready().await;
+        self.read_result(ReadClient::SourceReader, ready)?;
         let metadata = self
-            .metadata(&self.reader, &self.config.reader_profile)
+            .metadata(ReadClient::SourceReader, &self.config.reader_profile)
             .await?;
         self.verify_reader_operation(
             &metadata,
@@ -158,10 +173,8 @@ impl BregAdapter {
                 "bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'",
             )
             .map_err(|_| SourceAdapterError::Invalid)?;
-        self.reader
-            .list_records(&self.config.route, &request)
-            .await
-            .map_err(read_error)?;
+        let listed = self.reader.list_records(&self.config.route, &request).await;
+        self.read_result(ReadClient::SourceReader, listed)?;
         Ok(())
     }
 
@@ -240,16 +253,59 @@ impl BregAdapter {
             .map_err(|_| SourceAdapterError::Invalid)
     }
 
+    fn client<'a>(&'a self, client: ReadClient<'a>) -> &'a BaseRegistryClient {
+        match client {
+            ReadClient::SourceReader => &self.reader,
+            ReadClient::Caller(client) => client,
+        }
+    }
+
+    /// Map a BReg read result. A source reader failure is logged when its
+    /// cause first appears or changes, and the next success logs recovery.
+    fn read_result<T>(
+        &self,
+        client: ReadClient<'_>,
+        result: Result<T, BaseRegistryClientError>,
+    ) -> Result<T, SourceAdapterError> {
+        if let ReadClient::Caller(_) = client {
+            return result.map_err(read_error);
+        }
+        let mut reported = self
+            .reader_failure
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        match result {
+            Ok(value) => {
+                if reported.take().is_some() {
+                    tracing::info!(
+                        source_id = %self.config.source_id,
+                        "Casework source reader requests to BReg succeed again"
+                    );
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                let cause = error.to_string();
+                if reported.as_deref() != Some(cause.as_str()) {
+                    tracing::warn!(
+                        source_id = %self.config.source_id,
+                        error = %cause,
+                        "Casework source reader request to BReg failed"
+                    );
+                    *reported = Some(cause);
+                }
+                Err(read_error(error))
+            }
+        }
+    }
+
     async fn metadata(
         &self,
-        client: &BaseRegistryClient,
+        client: ReadClient<'_>,
         profile: &str,
     ) -> Result<BRegMetadata, SourceAdapterError> {
-        let metadata = client
-            .registry_contract(Some(profile))
-            .await
-            .map_err(read_error)?
-            .value;
+        let contract = self.client(client).registry_contract(Some(profile)).await;
+        let metadata = self.read_result(client, contract)?.value;
         if metadata.registry_revision() != self.config.expected_registry_revision {
             return Err(SourceAdapterError::BindingMoved);
         }
@@ -258,15 +314,21 @@ impl BregAdapter {
 
     async fn read(
         &self,
-        client: &BaseRegistryClient,
+        client: ReadClient<'_>,
         subject: &SubjectRef,
         profile: &str,
     ) -> Result<(RegistryRecordSingleResponse, BRegMetadata, String), SourceAdapterError> {
         self.validate_subject(subject)?;
-        let response = client
+        let record = self
+            .client(client)
             .get_record(&self.config.route, &subject.id, &Self::options(profile)?)
-            .await
-            .map_err(read_error)?;
+            .await;
+        // A missing record is an ordinary source state, not a reader failure.
+        // A 404 from the registry contract, readiness, or a list still is.
+        let response = match record {
+            Err(error) if error.status() == Some(404) => return Err(read_error(error)),
+            record => self.read_result(client, record)?,
+        };
         let representation_etag = response
             .metadata
             .etag()
@@ -728,7 +790,11 @@ impl SourceAdapter for BregAdapter {
         subject: &SubjectRef,
     ) -> Result<AuthoritativeObservation, SourceAdapterError> {
         let (record, _, representation_etag) = self
-            .read(&self.reader, subject, &self.config.reader_profile)
+            .read(
+                ReadClient::SourceReader,
+                subject,
+                &self.config.reader_profile,
+            )
             .await?;
         let request = Self::request(&record)?;
         let binding = self.binding(&record, &request)?;
@@ -780,13 +846,17 @@ impl SourceAdapter for BregAdapter {
         cursor: Option<&DiscoveryCursor>,
         limit: usize,
     ) -> Result<ActiveSubjectsPage, SourceAdapterError> {
-        self.metadata(&self.reader, &self.config.reader_profile)
+        self.metadata(ReadClient::SourceReader, &self.config.reader_profile)
             .await?;
         let page = match cursor {
             Some(cursor) => {
-                let projection: BRegContinuationProjection = serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
-                let continuation = BRegContinuation::try_from_projection(projection).map_err(|_| SourceAdapterError::Invalid)?;
-                if continuation.route() != self.config.route || continuation.access_profile() != Some(self.config.reader_profile.as_str()) {
+                let projection: BRegContinuationProjection =
+                    serde_json::from_str(&cursor.0).map_err(|_| SourceAdapterError::Invalid)?;
+                let continuation = BRegContinuation::try_from_projection(projection)
+                    .map_err(|_| SourceAdapterError::Invalid)?;
+                if continuation.route() != self.config.route
+                    || continuation.access_profile() != Some(self.config.reader_profile.as_str())
+                {
                     return Err(SourceAdapterError::Invalid);
                 }
                 self.reader.continue_list(&continuation).await
@@ -797,7 +867,8 @@ impl SourceAdapter for BregAdapter {
                     .filter("bregState eq 'submitted' or bregState eq 'approved' or bregState eq 'needs_changes'").map_err(|_| SourceAdapterError::Invalid)?;
                 self.reader.list_records(&self.config.route, &request).await
             }
-        }.map_err(read_error)?.value;
+        };
+        let page = self.read_result(ReadClient::SourceReader, page)?.value;
         let subjects = page
             .value
             .items
@@ -840,11 +911,17 @@ impl SourceAdapter for BregAdapter {
         }
         let record = if let Some((profile, credential)) = caller {
             let client = self.caller(credential)?;
-            self.read(&client, subject, profile).await?.0
-        } else {
-            self.read(&self.reader, subject, &self.config.reader_profile)
+            self.read(ReadClient::Caller(&client), subject, profile)
                 .await?
                 .0
+        } else {
+            self.read(
+                ReadClient::SourceReader,
+                subject,
+                &self.config.reader_profile,
+            )
+            .await?
+            .0
         };
         let request = Self::request(&record)?;
         if matches!(
@@ -885,7 +962,9 @@ impl SourceAdapter for BregAdapter {
         credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
         let caller = self.caller(credential)?;
-        let (record, _, _) = self.read(&caller, subject, profile).await?;
+        let (record, _, _) = self
+            .read(ReadClient::Caller(&caller), subject, profile)
+            .await?;
         let request = Self::request(&record)?;
         let mut reasons: Vec<_> = request
             .decisions()
@@ -951,7 +1030,11 @@ impl SourceAdapter for BregAdapter {
         }
         let caller = self.caller(input.credential)?;
         let (record, metadata, _) = self
-            .read(&caller, input.subject, input.source_profile_id)
+            .read(
+                ReadClient::Caller(&caller),
+                input.subject,
+                input.source_profile_id,
+            )
             .await?;
         let request = Self::request(&record)?;
         let binding = self.binding(&record, &request)?;
@@ -1015,7 +1098,7 @@ impl SourceAdapter for BregAdapter {
         }
         let caller = self.caller(input.credential)?;
         let metadata = self
-            .metadata(&caller, input.source_profile_id)
+            .metadata(ReadClient::Caller(&caller), input.source_profile_id)
             .await
             .map_err(|error| {
                 if error == SourceAdapterError::Unavailable {

@@ -62,6 +62,7 @@ enum CallerRead {
     Concealed,
     Unavailable,
     Delayed(Duration),
+    MovedBinding,
 }
 
 struct ActiveCallerRead {
@@ -520,6 +521,13 @@ impl SourceAdapter for MockSource {
                 tokio::time::sleep(*delay).await;
                 Ok(Self::visible(subject, "delayed"))
             }
+            Some(CallerRead::MovedBinding) => {
+                let mut view = Self::visible(subject, "moved-binding");
+                view.binding.source_revision = "2".into();
+                view.permitted_operations
+                    .push(OperationName::parse("approve").expect("approve operation"));
+                Ok(view)
+            }
             None => Err(SourceAdapterError::Concealed),
         }
     }
@@ -886,6 +894,7 @@ async fn service_visibility_boundaries() {
     inbox_views_filter_before_candidate_pagination().await;
     source_claim_requires_a_current_permitted_operation().await;
     full_source_binding_movement_fences_stale_items_and_claims().await;
+    unreconciled_binding_movement_keeps_reads_without_actions().await;
     supervisor_release_and_holder_timing_obey_current_authority().await;
     exact_subject_selector_is_complete_and_cursor_bound().await;
 }
@@ -1384,6 +1393,144 @@ async fn full_source_binding_movement_fences_stale_items_and_claims() {
         .expect("stale local item remains")
         .holder
         .is_none());
+}
+
+async fn unreconciled_binding_movement_keeps_reads_without_actions() {
+    let moved_id = Uuid::from_u128(60);
+    let current_id = Uuid::from_u128(61);
+    let mut source = MockSource::with_reads([
+        (moved_id, CallerRead::MovedBinding),
+        (current_id, CallerRead::Visible("current")),
+    ]);
+    source.approve_reads.insert(current_id.to_string());
+    let fixture = fixture_with_source(source, policy(10, 1_000)).await;
+    let moved_item = add_item(&fixture.service, moved_id, None).await;
+    add_item(&fixture.service, current_id, None).await;
+
+    let page = fixture
+        .service
+        .inbox(&fixture.staff, "reader", "token", 10, None, None)
+        .await
+        .expect("one moved binding does not refuse the page");
+    assert_eq!(page.items.len(), 2);
+    let moved = page
+        .items
+        .iter()
+        .find(|item| item.item_id == moved_item)
+        .expect("moved item stays listed");
+    assert_eq!(moved.binding, binding());
+    assert!(moved.actions.is_empty());
+    assert!(moved.routing_copy.is_none());
+    let current = page
+        .items
+        .iter()
+        .find(|item| item.subject.id == current_id.to_string())
+        .expect("current neighbour stays listed");
+    assert!(current
+        .actions
+        .iter()
+        .any(|action| action.operation == "claim"));
+
+    let opened = fixture
+        .service
+        .open_source_item(&fixture.staff, moved_item, "reader", "token")
+        .await
+        .expect("moved item stays readable");
+    assert_eq!(opened.binding, binding());
+    assert!(opened.actions.is_empty());
+    fixture
+        .service
+        .source_history(&fixture.staff, moved_item, "reader", "token", 10, None)
+        .await
+        .expect("moved item history stays readable");
+    fixture
+        .service
+        .work_item_clocks(&fixture.staff, moved_item, "reader", "token")
+        .await
+        .expect("moved item clocks stay readable");
+
+    assert!(matches!(
+        fixture
+            .service
+            .caller_item(&fixture.staff, moved_item, "reader", "token")
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .claim_source_item(
+                &fixture.staff,
+                moved_item,
+                opened.revision,
+                "reader",
+                "unreconciled-binding-claim",
+                "token",
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(fixture
+        .service
+        .store()
+        .item(moved_item)
+        .await
+        .expect("moved local item remains")
+        .holder
+        .is_none());
+
+    assert!(matches!(
+        fixture
+            .service
+            .inbox(
+                &fixture.staff,
+                "reader",
+                "moved-generation-token",
+                10,
+                None,
+                None
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .open_source_item(
+                &fixture.staff,
+                moved_item,
+                "reader",
+                "moved-generation-token"
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .source_history(
+                &fixture.staff,
+                moved_item,
+                "reader",
+                "moved-generation-token",
+                10,
+                None,
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
+    assert!(matches!(
+        fixture
+            .service
+            .work_item_clocks(
+                &fixture.staff,
+                moved_item,
+                "reader",
+                "moved-generation-token"
+            )
+            .await,
+        Err(ServiceError::BindingMoved)
+    ));
 }
 
 async fn exact_subject_selector_is_complete_and_cursor_bound() {

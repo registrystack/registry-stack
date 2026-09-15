@@ -675,9 +675,8 @@ impl CaseworkService {
         token: &str,
     ) -> Result<Vec<ClockOccurrenceView>, ServiceError> {
         Ok(self
-            .caller_item(actor, item_id, source_profile_id, token)
+            .caller_item_for_read(actor, item_id, source_profile_id, token)
             .await?
-            .0
             .clock_occurrences)
     }
 
