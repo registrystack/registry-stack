@@ -213,8 +213,13 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "casework-postgres:\n    name: Casework PostgreSQL transactions",
     ),
     (
+        # Casework and Scheduling run the same pinned PostgreSQL image, so each
+        # pin names the job it belongs to. A bare digest would be satisfied by
+        # the other product's copy and would stop reporting its own removal.
         "Casework PostgreSQL 17 image pin",
-        "postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675",
+        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: casework",
     ),
     (
         "Casework product checkpoint wrapper",
@@ -297,6 +302,12 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "scheduling-postgres:\n    name: Scheduling PostgreSQL transactions",
     ),
     (
+        "Scheduling PostgreSQL 17 image pin",
+        "image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675\n"
+        "        env:\n"
+        "          POSTGRES_DB: scheduling",
+    ),
+    (
         "Scheduling product checkpoint wrapper",
         "run: products/scheduling/scripts/check-checkpoint.sh",
     ),
@@ -307,6 +318,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling dependency-direction guard",
         "python3 products/scheduling/scripts/check_dependency_direction.py",
+    ),
+    (
+        "Scheduling database test isolation guard",
+        "python3 products/scheduling/scripts/check_database_test_isolation.py",
     ),
     (
         "Scheduling product script tests",
@@ -323,6 +338,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Scheduling authoring record application suite",
         "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres",
+    ),
+    (
+        "Scheduling delivery intent suite",
+        "cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test intents_postgres",
     ),
     (
         "Release Linux Node client path filter",
