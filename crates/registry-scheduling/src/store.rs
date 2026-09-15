@@ -63,6 +63,11 @@ pub enum StoreError {
     SecretConfiguration(String),
     #[error("the Scheduling database is not in the state this runtime expects")]
     Corrupt,
+    /// The environment records would retire resources that live appointments
+    /// or holds still occupy. The swap is refused whole, so the operator
+    /// either keeps the resource or closes what stands on it first.
+    #[error("the environment records retire {0}, which live appointments or holds still occupy")]
+    FactsInUse(String),
     #[error("the Scheduling query failed")]
     Query(#[from] tokio_postgres::Error),
     #[error("the pooled Scheduling connection could not be built or leased")]
@@ -1942,6 +1947,23 @@ pub(crate) async fn replace_facts_in_transaction(
     audit_event: Uuid,
     audit_record: Value,
 ) -> Result<(), StoreError> {
+    // Take every supply anchor before reading a claim. A capacity
+    // transaction holds its own anchor from its snapshot until it commits,
+    // so holding all of them means no commitment is mid-evaluation against
+    // members this swap is about to delete, and a claim written a moment
+    // later is seen by the guard below rather than stranded behind it. A
+    // capacity transaction takes exactly one anchor and this one takes them
+    // in the anchor's own order, so the two cannot cycle.
+    transaction
+        .execute(
+            "SELECT supply_id FROM scheduling_supply ORDER BY supply_id FOR UPDATE",
+            &[],
+        )
+        .await?;
+    let occupied = occupied_resources_retired_by(transaction, facts).await?;
+    if !occupied.is_empty() {
+        return Err(StoreError::FactsInUse(occupied.join(", ")));
+    }
     transaction
         .execute("DELETE FROM scheduling_pool_members", &[])
         .await?;
@@ -2014,6 +2036,39 @@ pub(crate) async fn replace_facts_in_transaction(
         )
         .await?;
     Ok(())
+}
+
+/// The resources live claims occupy that the incoming records do not carry.
+///
+/// An exact-time claim names its member in `supply_id`, so a swap that drops
+/// a member out from under a live booking would leave that booking pointing
+/// at a resource the deployment no longer has: invisible to every pool
+/// snapshot, counted against nothing, and still promised to its caller. A
+/// window claim names the window instead, which records never carry, so the
+/// window anchors are excluded rather than reported as missing members.
+async fn occupied_resources_retired_by(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    facts: &SchedulingFacts,
+) -> Result<Vec<String>, StoreError> {
+    let incoming: Vec<String> = facts
+        .pools
+        .iter()
+        .flat_map(|pool| pool.members.iter())
+        .map(|member| member.resource_id.clone())
+        .collect();
+    let rows = transaction
+        .query(
+            "SELECT DISTINCT supply_id FROM scheduling_claims \
+             WHERE state='active' \
+               AND (kind='booking' OR (kind='hold' AND hold_expires_at > now())) \
+               AND supply_id <> ALL($1::text[]) \
+               AND supply_id NOT IN \
+                   (SELECT supply_id FROM scheduling_supply WHERE kind='window') \
+             ORDER BY supply_id",
+            &[&incoming],
+        )
+        .await?;
+    Ok(rows.iter().map(|row| row.get(0)).collect())
 }
 
 /// A claim about to be written.

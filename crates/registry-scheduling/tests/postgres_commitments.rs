@@ -26,7 +26,9 @@ use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
 use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::service::SchedulingService;
 use registry_scheduling::store::PostgresStore;
-use registry_scheduling_core::parse_policy_yaml;
+use registry_scheduling_core::{
+    parse_policy_yaml, LocationRecord, PoolMember, ResourcePool, SchedulingFacts,
+};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -1500,4 +1502,147 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
         .collect();
     assert_eq!(later.len(), 1, "the back-off passed, so the intent is due");
     assert_eq!(later[0].attempts, 2, "the second attempt is counted once");
+}
+
+/// The environment records the fixture seeds, minus the named resources: the
+/// document `schedulingctl records apply` would send to retire a station.
+fn records_without(retired: &[&str]) -> SchedulingFacts {
+    let member = |resource_id: &str| PoolMember {
+        resource_id: resource_id.to_owned(),
+        capabilities: Vec::new(),
+        available: true,
+    };
+    SchedulingFacts {
+        locations: vec![LocationRecord {
+            id: "north-counter".to_owned(),
+            timezone: "UTC".to_owned(),
+        }],
+        pools: vec![
+            ResourcePool {
+                id: "north-counter".to_owned(),
+                members: vec![member("station-1")],
+            },
+            ResourcePool {
+                id: "two-counter".to_owned(),
+                members: vec![member("station-2")],
+            },
+        ]
+        .into_iter()
+        .map(|pool| ResourcePool {
+            members: pool
+                .members
+                .into_iter()
+                .filter(|member| !retired.contains(&member.resource_id.as_str()))
+                .collect(),
+            ..pool
+        })
+        .collect(),
+        exceptions: Vec::new(),
+    }
+}
+
+fn operator_audit() -> Value {
+    json!({
+        "actorKind": "operator",
+        "operation": "records.apply",
+        "outcome": "allowed",
+        "reason": "authorization.allowed",
+    })
+}
+
+#[tokio::test]
+async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, _) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "records-1",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "the direct create commits");
+
+    let refusal = fx
+        .store
+        .replace_facts(
+            &records_without(&["station-1"]),
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect_err("a swap that strands a live booking is refused");
+    assert!(
+        refusal.to_string().contains("station-1"),
+        "{refusal} does not name the occupied resource"
+    );
+
+    // The refusal rolled the whole swap back, so the records stand as they
+    // were and the booking still occupies its slot.
+    let standing = fx.store.facts().await.expect("the records survive");
+    assert_eq!(
+        standing
+            .pool("north-counter")
+            .map(|pool| pool.members.len()),
+        Some(1),
+        "the occupied member is still a member"
+    );
+    assert!(
+        !slot_offered(&fx, OFFERING, 90, 200, slot).await,
+        "the booking still consumes its slot"
+    );
+
+    // Retiring an idle station is exactly what the command is for.
+    fx.store
+        .replace_facts(
+            &records_without(&["station-2"]),
+            Uuid::new_v4(),
+            operator_audit(),
+        )
+        .await
+        .expect("retiring an unoccupied resource commits");
+    let standing = fx.store.facts().await.expect("the records are readable");
+    assert_eq!(
+        standing.pool("two-counter").map(|pool| pool.members.len()),
+        Some(0),
+        "the idle member is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_records_swap_waits_for_the_capacity_transaction_holding_the_pool() {
+    let fx = fixture().await;
+    let mut admin = fx.admin;
+
+    // Stand in for a commitment mid-evaluation: it holds the pool's supply
+    // anchor from its snapshot until it commits.
+    let holder = admin
+        .transaction()
+        .await
+        .expect("the stand-in capacity transaction opens");
+    holder
+        .execute(
+            "SELECT supply_id FROM scheduling_supply WHERE supply_id='north-counter' FOR UPDATE",
+            &[],
+        )
+        .await
+        .expect("the stand-in holds the pool anchor");
+
+    let store = fx.store.clone();
+    let swap = tokio::spawn(async move {
+        store
+            .replace_facts(&records_without(&[]), Uuid::new_v4(), operator_audit())
+            .await
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        !swap.is_finished(),
+        "the swap runs while a commitment holds the pool it would rewrite"
+    );
+
+    holder.commit().await.expect("the stand-in commits");
+    swap.await
+        .expect("the swap task runs to completion")
+        .expect("the swap commits once the pool is free");
 }
