@@ -1895,3 +1895,37 @@ async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
         }
     }
 }
+
+/// The most octets the claim ledger stores for a caller-chosen duplicate key.
+/// It mirrors the CHECK in migration 0001; the edge refuses the same size
+/// first, so a caller who exceeds it is answered rather than told the service
+/// is down.
+const DUPLICATE_KEY_CEILING_BYTES: usize = 256;
+
+/// Write one claim carrying `duplicate_key` straight into the ledger, so the
+/// column's own bound is what decides, not a caller-facing check above it.
+async fn claim_keyed(fx: &Fixture, duplicate_key: &str) -> Result<u64, tokio_postgres::Error> {
+    fx.admin
+        .execute(
+            "INSERT INTO scheduling_claims(claim_id, kind, state, offering, supply_id, \
+             displayed_start, displayed_end, occupied_start, occupied_end, units, \
+             duplicate_key, revision, policy_revision, actor) \
+             VALUES($1,'booking','active','registry-update-30','station-1', \
+             now(), now(), now(), now(), 1, $2, 1, 1, 'actor-pseudonym')",
+            &[&Uuid::new_v4(), &duplicate_key],
+        )
+        .await
+}
+
+#[tokio::test]
+async fn the_claim_ledger_bounds_a_caller_chosen_duplicate_key() {
+    let fx = fixture().await;
+    claim_keyed(&fx, &"k".repeat(DUPLICATE_KEY_CEILING_BYTES))
+        .await
+        .expect("a duplicate key at the ceiling is stored");
+    let refused = claim_keyed(&fx, &"k".repeat(DUPLICATE_KEY_CEILING_BYTES + 1)).await;
+    assert!(
+        refused.is_err(),
+        "the ledger stores a duplicate key of any length the body ceiling allows"
+    );
+}
