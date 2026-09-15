@@ -919,6 +919,7 @@ mod tests {
             holiday_sets: Vec::new(),
             openings: Vec::new(),
             windows: Vec::new(),
+            channels: Vec::new(),
             hold_policy: HoldPolicy {
                 ttl_minutes: 10,
                 max_per_caller: 2,

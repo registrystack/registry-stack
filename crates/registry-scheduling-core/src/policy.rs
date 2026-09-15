@@ -198,6 +198,21 @@ impl Channel {
             Self::WalkIn => "walk-in",
         }
     }
+
+    /// The channel a name names, or `None` when the name is outside the
+    /// closed vocabulary. The vocabulary is the one thing every spelling of
+    /// a channel is measured against, whether a policy declares its served
+    /// subset or not.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "public" => Some(Self::Public),
+            "assisted" => Some(Self::Assisted),
+            "urgent" => Some(Self::Urgent),
+            "walk-in" => Some(Self::WalkIn),
+            _ => None,
+        }
+    }
 }
 
 /// A non-overlapping reserved slice of a window's published capacity.
@@ -295,6 +310,13 @@ pub struct SchedulingPolicy {
     pub holiday_sets: Vec<HolidaySetPolicy>,
     pub openings: Vec<OpeningPatternPolicy>,
     pub windows: Vec<PublishedWindow>,
+    /// The channels this deployment declares it serves. The vocabulary is
+    /// closed by the `Channel` type itself; a declaration narrows it to the
+    /// served subset, every subquota must draw on a declared channel, and a
+    /// request naming anything else is refused. An absent declaration
+    /// declares nothing beyond the vocabulary.
+    #[serde(default)]
+    pub channels: Vec<Channel>,
     pub hold_policy: HoldPolicy,
     #[serde(default)]
     pub hooks: Vec<HookPolicy>,
@@ -375,6 +397,19 @@ impl SchedulingPolicy {
         check_collection_bound(&self.holiday_sets, "holidaySets", &mut findings);
         check_collection_bound(&self.openings, "openings", &mut findings);
         check_collection_bound(&self.windows, "windows", &mut findings);
+
+        // A declared channel set is a closed list of the channels this
+        // deployment serves; naming one twice declares it once.
+        let mut declared_channels: Vec<Channel> = Vec::new();
+        for (index, channel) in self.channels.iter().enumerate() {
+            if declared_channels.contains(channel) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("channels[{index}]"),
+                    PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
+            declared_channels.push(*channel);
+        }
 
         let mut service_ids = Vec::new();
         for (index, service) in self.services.iter().enumerate() {
@@ -733,6 +768,14 @@ impl SchedulingPolicy {
                 findings.push(SchedulingDiagnostic::new(
                     format!("{subquota_path}.channel"),
                     PolicyCheckReason::DuplicateIdentifier,
+                ));
+            }
+            // A declared set is closed: a subquota may not reserve capacity
+            // for a channel the deployment does not say it serves.
+            if !self.channels.is_empty() && !self.channels.contains(&subquota.channel) {
+                findings.push(SchedulingDiagnostic::new(
+                    format!("{subquota_path}.channel"),
+                    PolicyCheckReason::UnknownChannel,
                 ));
             }
             channels.push(subquota.channel);
@@ -1426,6 +1469,48 @@ holdPolicy:
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
         assert!(
             rendered.contains(&"windows[0].subquotas[1].channel: duplicate-identifier".to_owned())
+        );
+    }
+
+    /// COR-3 / D5(a): a declared channel set is closed. A subquota may not
+    /// reserve capacity for a channel the deployment does not say it serves,
+    /// and a declaration naming one channel twice declares it once. An
+    /// absent declaration declares nothing beyond the vocabulary.
+    #[test]
+    fn a_subquota_may_not_draw_on_an_undeclared_channel() {
+        let mut policy = household_window_policy();
+        // The window serves public and assisted; the deployment declares
+        // only assisted.
+        policy.channels = vec![Channel::Assisted];
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered.contains(&"windows[0].subquotas[0].channel: unknown-channel".to_owned()),
+            "{rendered:?}"
+        );
+        assert!(!rendered
+            .iter()
+            .any(|finding| finding.starts_with("windows[0].subquotas[1].channel:")));
+
+        // With no declaration, the vocabulary alone governs and the same
+        // subquotas check clean.
+        policy.channels = Vec::new();
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered
+                .iter()
+                .all(|finding| !finding.ends_with("unknown-channel")),
+            "{rendered:?}"
+        );
+
+        // A repeated declaration is a duplicate identifier.
+        policy.channels = vec![Channel::Public, Channel::Public];
+        let findings = policy.check();
+        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
+        assert!(
+            rendered.contains(&"channels[1]: duplicate-identifier".to_owned()),
+            "{rendered:?}"
         );
     }
 
