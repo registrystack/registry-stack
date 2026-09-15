@@ -71,11 +71,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
 pub(super) fn check(project: &Path) -> Result<Value> {
     let policy = load_policy(project)?;
     let findings = policy.check();
-    let status = if findings.is_empty() {
-        "complete"
-    } else {
-        "incomplete"
-    };
+    let status = authoring_status(&findings);
     Ok(json!({
         "ok": true,
         "command": "check",
@@ -88,14 +84,46 @@ pub(super) fn check(project: &Path) -> Result<Value> {
     }))
 }
 
-pub(super) fn test(project: &Path) -> Result<Value> {
-    let policy = load_policy(project)?;
-    let findings = policy.check();
-    let authoring_status = if findings.is_empty() {
+/// A value whose text is outside its grammar (a clock that is not `HH:MM`, a
+/// date that is not `YYYY-MM-DD`) is not unfinished authoring: no addition
+/// makes it valid, only a correction. `invalid` names that instead of
+/// `incomplete`, so a caller can refuse it without opting into
+/// `--deny-findings`.
+fn authoring_status(findings: &[SchedulingDiagnostic]) -> &'static str {
+    if findings
+        .iter()
+        .any(|finding| finding.reason.is_malformed_value())
+    {
+        "invalid"
+    } else if findings.is_empty() {
         "complete"
     } else {
         "incomplete"
-    };
+    }
+}
+
+pub(super) fn test(project: &Path) -> Result<Value> {
+    let policy = load_policy(project)?;
+    let findings = policy.check();
+    let authoring_status = authoring_status(&findings);
+    if authoring_status == "invalid" {
+        // A malformed value has no business running fixtures against it: the
+        // authored text does not mean what the offering's evaluators would
+        // read it to mean, so replaying against it would answer a question
+        // the author never asked.
+        return Ok(json!({
+            "ok": true,
+            "command": "test",
+            "project": project,
+            "authoringStatus": authoring_status,
+            "findings": findings_json(&findings),
+            "fixtures": [],
+            "proofBoundary": "offline_synthetic",
+            "productionClosure": false,
+            "networkAccess": false,
+            "databaseAccess": false,
+        }));
+    }
     let fixture_dir = project.join(FIXTURES_DIRECTORY);
     let mut paths = fs::read_dir(&fixture_dir)
         .context("reading fixtures directory")?
