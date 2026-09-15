@@ -91,15 +91,19 @@ EDGE_PROBLEMS = [
     "request.unsupported-media-type",
 ]
 
-# Vocabulary entries no documented operation answers. `eligibility.unavailable`
-# and `hook.unavailable` are produced nowhere in this milestone (there is no
-# hook engine yet); `resource.unavailable` is the one detailed-only code, and
-# it travels only inside the explain document, never as a public problem.
-RESERVED_PROBLEMS = [
+# Vocabulary entries the runtime never reaches: there is no hook engine yet,
+# no eligibility source yet, and the four refusals `precondition.failed` once
+# carried are each answered by the code that names them.
+UNPRODUCED_PROBLEMS = [
     "eligibility.unavailable",
     "hook.unavailable",
-    "resource.unavailable",
+    "precondition.failed",
 ]
+# `resource.unavailable` is produced, but only as the detailed code inside the
+# explain document, so it is never a public problem either.
+DETAILED_ONLY_PROBLEMS = ["resource.unavailable"]
+# Vocabulary entries no documented operation answers.
+RESERVED_PROBLEMS = UNPRODUCED_PROBLEMS + DETAILED_ONLY_PROBLEMS
 
 # The wire documents, verified field by field against the Rust structs.
 SCHEMA_STRUCTS = {
@@ -193,6 +197,11 @@ CURSOR = ["cursor.expired", "cursor.invalid"]
 STORAGE = ["service.unavailable"]
 AUTHORITY = ["operation.not-authorized"]
 IDEMPOTENCY = ["idempotency.expired", "idempotency.key-reused"]
+# An operation that resolves a caller-named offering against the deployed
+# policy answers for one the policy does not publish. The offering listing is
+# where a caller learns what exists, so naming the absence discloses nothing
+# that listing would not.
+OFFERING = ["request.not-found"]
 # The refusal vocabulary the admission evaluator answers a booking ask with.
 ADMISSION = [
     "booking.duplicate-active",
@@ -216,19 +225,20 @@ OPERATION_PROBLEMS = {
     ("GET", "/v1/offerings"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/resources"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
     ("GET", "/v1/locations"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE,
-    ("GET", "/v1/availability"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE + ["precondition.failed"],
-    ("GET", "/v1/availability/explain"): EDGE + AUTHENTICATION + QUERY + STORAGE + ["precondition.failed"],
+    ("GET", "/v1/availability"): EDGE + AUTHENTICATION + QUERY + CURSOR + STORAGE + OFFERING,
+    ("GET", "/v1/availability/explain"): EDGE + AUTHENTICATION + QUERY + STORAGE + OFFERING,
     ("POST", "/v1/holds"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
-    + ["precondition.failed", "service.unavailable"],
+    + OFFERING + ["service.unavailable"],
     # A release carries no caller-chosen key, so `idempotency.key-reused` is
     # not reachable: the key and the request hash are both the hold's own id.
     ("DELETE", "/v1/holds/{hold_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY
     + ["hold.released", "idempotency.expired", "service.unavailable"],
     ("POST", "/v1/appointments"): EDGE + AUTHENTICATION + JSON_BODY + ADMISSION + IDEMPOTENCY + AUTHORITY
-    + ["hold.expired", "hold.released", "precondition.failed", "service.unavailable"],
+    + OFFERING + ["hold.expired", "hold.released", "service.unavailable"],
     ("GET", "/v1/appointments/{appointment_id}"): EDGE + AUTHENTICATION + PATH + AUTHORITY + STORAGE,
-    # A reschedule resolves its offering from the appointment, so an unknown
-    # offering is operator state, not precondition.failed.
+    # A reschedule resolves its offering from the appointment rather than from
+    # the caller, so an unknown offering is operator state, not a refusal the
+    # caller can read.
     ("POST", "/v1/appointments/{appointment_id}/reschedule"): EDGE + AUTHENTICATION + PATH + JSON_BODY
     + ADMISSION + IDEMPOTENCY + AUTHORITY + ["hold.released", "service.unavailable"],
     # Cancellation is guarded by the observed revision and the cutoff, never by
@@ -331,7 +341,7 @@ LIMIT_QUERY = parameter(
 OFFERING_QUERY = parameter(
     "offering",
     "query",
-    "Required offering identifier. An offering the deployed policy does not publish is precondition.failed.",
+    "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
     {"type": "string", "minLength": 1},
 )
 
@@ -586,7 +596,7 @@ def schemas(problem_entries: list[dict]) -> dict:
             "additionalProperties": False,
             "minProperties": 1,
             "properties": {"hold": nullable(text), "admission": nullable(ref("AdmissionRequest"))},
-            "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is precondition.failed.",
+            "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is request.invalid.",
         },
         "RescheduleAppointmentRequest": obj(
             {"observedRevision": revision, "admission": ref("AdmissionRequest")},
@@ -1113,10 +1123,8 @@ def verify_operation_problems(
             raise ValueError(f"declared problem is outside the Rust vocabulary: {code}")
     produced = produced_problem_codes(_root(), variants)
     reserved = set(RESERVED_PROBLEMS)
-    # The two reserved codes are produced nowhere; `resource.unavailable` is,
-    # but only as the detailed code the explain path discloses.
-    if set(RESERVED_PROBLEMS[:2]) & produced:
-        raise ValueError("a problem documented as reserved is produced by the runtime")
+    if set(UNPRODUCED_PROBLEMS) & produced:
+        raise ValueError("a problem documented as unproduced is produced by the runtime")
     for key, codes in OPERATION_PROBLEMS.items():
         method, path = key
         operation = openapi["paths"][path][method.lower()]
@@ -1169,7 +1177,7 @@ def verify_operation_problems(
                 f"{sorted(required - set(codes))}"
             )
     answered = {code for codes in OPERATION_PROBLEMS.values() for code in codes}
-    if answered != set(catalog) - reserved - {"request.not-found"}:
+    if answered != set(catalog) - reserved:
         raise ValueError(
             "documented problem coverage drifted from the closed vocabulary; "
             f"unanswered={sorted(set(catalog) - reserved - answered)}, "

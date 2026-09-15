@@ -378,7 +378,7 @@
       },
       "CreateAppointmentRequest": {
         "additionalProperties": false,
-        "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is precondition.failed.",
+        "description": "Exactly one of hold or admission: confirming a held allocation, or a direct create. Both, or neither, is request.invalid.",
         "minProperties": 1,
         "properties": {
           "admission": {
@@ -2120,6 +2120,24 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -2207,15 +2225,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRevisionMismatch"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemPreconditionFailed"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: policy.changed, revision.mismatch, precondition.failed",
+            "description": "Problem response: policy.changed, revision.mismatch",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -3438,7 +3453,7 @@
             }
           },
           {
-            "description": "Required offering identifier. An offering the deployed policy does not publish is precondition.failed.",
+            "description": "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
             "in": "query",
             "name": "offering",
             "required": true,
@@ -3576,6 +3591,24 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -3603,24 +3636,6 @@
               }
             },
             "description": "Problem response: cursor.expired",
-            "headers": {
-              "cache-control": {
-                "$ref": "#/components/headers/CacheControlHeader"
-              },
-              "traceparent": {
-                "$ref": "#/components/headers/TraceparentHeader"
-              }
-            }
-          },
-          "412": {
-            "content": {
-              "application/problem+json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
-                }
-              }
-            },
-            "description": "Problem response: precondition.failed",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -3698,7 +3713,7 @@
             }
           },
           {
-            "description": "Required offering identifier. An offering the deployed policy does not publish is precondition.failed.",
+            "description": "Required offering identifier. An offering the deployed policy does not publish is request.not-found.",
             "in": "query",
             "name": "offering",
             "required": true,
@@ -3797,15 +3812,15 @@
               }
             }
           },
-          "405": {
+          "404": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
                 }
               }
             },
-            "description": "Problem response: request.method-not-allowed",
+            "description": "Problem response: request.not-found",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -3815,15 +3830,15 @@
               }
             }
           },
-          "412": {
+          "405": {
             "content": {
               "application/problem+json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemPreconditionFailed"
+                  "$ref": "#/components/schemas/ProblemRequestMethodNotAllowed"
                 }
               }
             },
-            "description": "Problem response: precondition.failed",
+            "description": "Problem response: request.method-not-allowed",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -4009,6 +4024,24 @@
               }
             }
           },
+          "404": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemRequestNotFound"
+                }
+              }
+            },
+            "description": "Problem response: request.not-found",
+            "headers": {
+              "cache-control": {
+                "$ref": "#/components/headers/CacheControlHeader"
+              },
+              "traceparent": {
+                "$ref": "#/components/headers/TraceparentHeader"
+              }
+            }
+          },
           "405": {
             "content": {
               "application/problem+json": {
@@ -4086,15 +4119,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ProblemRevisionMismatch"
-                    },
-                    {
-                      "$ref": "#/components/schemas/ProblemPreconditionFailed"
                     }
                   ]
                 }
               }
             },
-            "description": "Problem response: policy.changed, revision.mismatch, precondition.failed",
+            "description": "Problem response: policy.changed, revision.mismatch",
             "headers": {
               "cache-control": {
                 "$ref": "#/components/headers/CacheControlHeader"
@@ -5455,6 +5485,7 @@
   "x-registry-scheduling-reserved-problems": [
     "eligibility.unavailable",
     "hook.unavailable",
+    "precondition.failed",
     "resource.unavailable"
   ]
 }
