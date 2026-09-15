@@ -1992,3 +1992,93 @@ async fn an_unknown_offering_and_a_malformed_body_answer_their_own_codes() {
         assert_eq!(problem["code"], "request.invalid");
     }
 }
+
+#[tokio::test]
+async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
+    let fx = fixture().await;
+    let (appointment_id, _) = booked(&fx, 90, 200, "held-1").await;
+    let due = Utc::now() + TimeDelta::days(1);
+    let claimed = fx
+        .store
+        .claim_due_intents(due, 100)
+        .await
+        .expect("the delivery sweep runs");
+    let intent = |purpose: &str| {
+        claimed
+            .iter()
+            .find(|intent| intent.purpose == purpose)
+            .expect("the commitment minted this intent")
+            .outbox_id
+    };
+
+    // One deployment declares no destination, so its reminder stays recorded
+    // rather than pretending a delivery happened. One send exhausted its
+    // attempts. One was delivered, and one is still inside its back-off.
+    fx.store
+        .hold_intent_local(intent("reminder"))
+        .await
+        .expect("the reminder is held locally");
+    fx.store
+        .retry_intent(intent("confirmation"), due, 0)
+        .await
+        .expect("the confirmation exhausts its attempts");
+
+    let held = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    let mut seen: Vec<(String, String)> = held
+        .iter()
+        .map(|intent| (intent.purpose.clone(), intent.delivery_state.clone()))
+        .collect();
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            ("confirmation".to_owned(), "failed".to_owned()),
+            ("reminder".to_owned(), "local".to_owned()),
+        ],
+        "an intent nothing will deliver is invisible to the operator"
+    );
+
+    let reminder = held
+        .iter()
+        .find(|intent| intent.purpose == "reminder")
+        .expect("the held reminder is listed");
+    assert_eq!(reminder.claim_id.to_string(), appointment_id);
+    assert_eq!(reminder.attempts, 1);
+    assert_eq!(reminder.payload["appointmentId"], appointment_id);
+
+    // A delivered intent needs no operator, and neither does one still
+    // waiting out its back-off.
+    let (second, _) = booked(&fx, 210, 320, "held-2").await;
+    let pending = fx
+        .store
+        .claim_due_intents(Utc::now(), 100)
+        .await
+        .expect("the delivery sweep runs");
+    let delivered = pending
+        .iter()
+        .find(|intent| intent.claim_id.to_string() == second)
+        .expect("the second commitment confirms at once")
+        .outbox_id;
+    fx.store
+        .mark_intent_delivered(delivered)
+        .await
+        .expect("the confirmation is delivered");
+    let held = fx
+        .store
+        .undelivered_intents(100)
+        .await
+        .expect("the operator reads the undelivered intents");
+    assert!(
+        held.iter().all(|intent| intent.outbox_id != delivered),
+        "a delivered intent is listed as needing an operator"
+    );
+    assert_eq!(
+        held.len(),
+        2,
+        "an intent the sweep will still retry needs no operator"
+    );
+}

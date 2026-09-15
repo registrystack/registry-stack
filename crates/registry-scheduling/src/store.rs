@@ -255,6 +255,22 @@ pub struct OutboxRow {
     pub payload: Value,
 }
 
+/// One delivery intent no sweep will carry any further, as an operator reads
+/// it. The delivery state is what separates the two ways that happens: `local`
+/// is a deployment that declares no destination, and `failed` is a destination
+/// that refused every attempt the ceiling allowed.
+#[derive(Clone, Debug)]
+pub struct UndeliveredIntent {
+    pub outbox_id: Uuid,
+    pub purpose: String,
+    pub claim_id: Uuid,
+    pub appointment_revision: i64,
+    pub due_at: DateTime<Utc>,
+    pub delivery_state: String,
+    pub attempts: i32,
+    pub payload: Value,
+}
+
 impl PostgresStore {
     pub fn connect_runtime(
         config: &DatabaseConfig,
@@ -1433,6 +1449,43 @@ impl PostgresStore {
                 due_at: row.get(4),
                 attempts: row.get(5),
                 payload: row.get(6),
+            })
+            .collect())
+    }
+
+    /// The intents nothing will deliver without an operator, oldest first.
+    ///
+    /// A deployment that declares no reminders destination holds every intent
+    /// locally, and a destination that refused every attempt leaves the intent
+    /// failed. Both are recorded and then waited on by nobody, so without a
+    /// read path an operator cannot tell either has happened. Delivered
+    /// intents are not listed, and neither are pending ones: the sweep is
+    /// still carrying those.
+    pub async fn undelivered_intents(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<UndeliveredIntent>, StoreError> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "SELECT outbox_id, purpose, claim_id, appointment_revision, due_at, \
+                 delivery_state, attempts, payload FROM scheduling_outbox \
+                 WHERE delivery_state IN ('local','failed') \
+                 ORDER BY due_at, outbox_id LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        Ok(rows
+            .iter()
+            .map(|row| UndeliveredIntent {
+                outbox_id: row.get(0),
+                purpose: row.get(1),
+                claim_id: row.get(2),
+                appointment_revision: row.get(3),
+                due_at: row.get(4),
+                delivery_state: row.get(5),
+                attempts: row.get(6),
+                payload: row.get(7),
             })
             .collect())
     }
