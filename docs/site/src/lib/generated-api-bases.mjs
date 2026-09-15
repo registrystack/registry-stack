@@ -8,13 +8,14 @@
  * this list, so registering a new API reference in astro.config.mjs is the only
  * place that has to learn about it.
  *
- * These are the generated bases, not the hand-authored narrative page
- * reference/apis/registry-evidence and reference/apis/registry-casework, which
- * keep their .md.
+ * These are the generated bases, not the hand-authored narrative pages
+ * reference/apis/registry-evidence, reference/apis/registry-casework, and
+ * reference/apis/registry-scheduling, which keep their .md.
  */
 export const GENERATED_API_BASES = [
   'reference/apis/evidence',
   'reference/apis/casework',
+  'reference/apis/scheduling',
 ];
 
 /** True when a dist-relative page directory is a generated API route. */

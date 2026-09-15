@@ -23,6 +23,13 @@ const resolveDocsetBuildContext = new Function(
 const caseworkRedirects = new Function(
   `${caseworkRoutesSource}; ${redirectsSource.replace(/^export /, '')}; return caseworkRedirects;`,
 )();
+const schedulingRedirectsSource = configSource.match(/export function schedulingRedirects[\s\S]*?^}\n/m)?.[0];
+const schedulingRoutesSource = configSource.match(/const schedulingRoutes = \[[\s\S]*?\];/)?.[0];
+assert.ok(schedulingRedirectsSource && schedulingRoutesSource,
+  'could not isolate Scheduling docset routing');
+const schedulingRedirects = new Function(
+  `${schedulingRoutesSource}; ${schedulingRedirectsSource.replace(/^export /, '')}; return schedulingRedirects;`,
+)();
 const homepageSource = readFileSync(resolve(siteRoot, 'src/content/docs/index.mdx'), 'utf8');
 const validationSource = readFileSync(
   resolve(siteRoot, 'src/content/docs/verify/index.mdx'),
@@ -58,11 +65,18 @@ const caseworkOpenApiSchema = {
   schema: './openapi/registry-casework.openapi.json',
   sidebar: { label: 'API operations', collapsed: true },
 };
+const schedulingOpenApiSchema = {
+  base: 'reference/apis/scheduling',
+  schema: './openapi/registry-scheduling.openapi.json',
+  sidebar: { label: 'API operations', collapsed: true },
+};
 const apiSchemas = new Function(
   'hasCasework',
+  'hasScheduling',
   'caseworkOpenApiSchema',
+  'schedulingOpenApiSchema',
   `return ${apiConfigSource};`,
-)(true, caseworkOpenApiSchema);
+)(true, true, caseworkOpenApiSchema, schedulingOpenApiSchema);
 const generatedAPI = apiSchemas.map((schema) => ({
   ...schema.sidebar,
   items: [{ label: 'Generated tag', items: [] }],
@@ -74,6 +88,7 @@ const sidebarFactory = new Function(
   'openAPISidebarGroups',
   'flattenSidebarGroups',
   'hasCasework',
+  'hasScheduling',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -86,7 +101,7 @@ const sidebarArguments = [
   generatedAPI,
   flattenSidebarGroups,
 ];
-const sidebar = sidebarFactory(...sidebarArguments, true);
+const sidebar = sidebarFactory(...sidebarArguments, true, true);
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -198,6 +213,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
+    'Registry Scheduling',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -210,28 +226,34 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-scheduling': { ref: 'HEAD' } } },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
     ],
   };
-  for (const [id, env, hasCasework] of [
-    ['latest', {}, true],
-    ['v0.29.0', {}, false],
-    ['v0.30.0', {}, true],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true],
+  for (const [id, env, hasCasework, hasScheduling] of [
+    ['latest', {}, true, true],
+    ['v0.29.0', {}, false, false],
+    ['v0.30.0', {}, true, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
-    assert.equal(sidebarFactory(...sidebarArguments, context.hasCasework)
+    assert.equal(context.hasScheduling, hasScheduling, id);
+    assert.equal(sidebarFactory(...sidebarArguments, context.hasCasework, context.hasScheduling)
       .some((item) => item.label === 'Registry Casework'), hasCasework, id);
-    assert.equal(new Function('hasCasework', 'caseworkOpenApiSchema', `return ${apiConfigSource};`)
-      (context.hasCasework, caseworkOpenApiSchema).length, hasCasework ? 2 : 1, id);
+    assert.equal(sidebarFactory(...sidebarArguments, context.hasCasework, context.hasScheduling)
+      .some((item) => item.label === 'Registry Scheduling'), hasScheduling, id);
+    assert.equal(new Function('hasCasework', 'hasScheduling', 'caseworkOpenApiSchema', 'schedulingOpenApiSchema', `return ${apiConfigSource};`)
+      (context.hasCasework, context.hasScheduling, caseworkOpenApiSchema, schedulingOpenApiSchema).length,
+      1 + Number(hasCasework) + Number(hasScheduling), id);
     const redirects = caseworkRedirects(context.hasCasework, context.currentDocsetRedirect);
     assert.equal(redirects['/operate/casework/'] !== undefined, !hasCasework, id);
     assert.equal(redirects['/tutorials/first-casework.md'] !== undefined, !hasCasework, id);
+    const schedulingRedirectsResult = schedulingRedirects(context.hasScheduling, context.currentDocsetRedirect);
+    assert.equal(schedulingRedirectsResult['/reference/apis/registry-scheduling/'] !== undefined, !hasScheduling, id);
   }
-  assert.match(fetchOpenapiSource, /repoId === 'registry-casework' && !docset\.products\[repoId\]/);
+  assert.match(fetchOpenapiSource, /\(repoId === 'registry-casework' \|\| repoId === 'registry-scheduling'\) && !docset\.products\[repoId\]/);
   for (const route of [
     '/start/casework/',
     '/tutorials/first-casework/',
@@ -243,6 +265,8 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     assert.match(configSource, new RegExp(`'${route}'`));
   }
   assert.match(configSource, /\.\.\.caseworkRedirects\(hasCasework, currentDocsetRedirect\)/);
+  assert.match(configSource, /'\/reference\/apis\/registry-scheduling\/'/);
+  assert.match(configSource, /\.\.\.schedulingRedirects\(hasScheduling, currentDocsetRedirect\)/);
 });
 
 test('starts with only Start expanded and all secondary groups collapsed', () => {
@@ -318,6 +342,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
+    'Registry Scheduling',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);

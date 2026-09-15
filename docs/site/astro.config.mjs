@@ -65,6 +65,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const isSearchExcludedBuild =
     isHistoricalArchiveBuild || selectedDocset.availability === 'unreleased';
   const hasCasework = Boolean(selectedDocset.products?.['registry-casework']);
+  const hasScheduling = Boolean(selectedDocset.products?.['registry-scheduling']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -83,6 +84,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     isHistoricalArchiveBuild,
     isSearchExcludedBuild,
     hasCasework,
+    hasScheduling,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -95,6 +97,7 @@ const {
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   hasCasework,
+  hasScheduling,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -129,6 +132,28 @@ const caseworkOpenApiSchema = {
     operations: { labels: /** @type {'path'} */ ('path'), badges: true },
   },
 };
+const schedulingOpenApiSchema = {
+  base: 'reference/apis/scheduling',
+  schema: './openapi/registry-scheduling.openapi.json',
+  sidebar: {
+    label: 'API operations',
+    collapsed: true,
+    operations: { labels: /** @type {'path'} */ ('path'), badges: true },
+  },
+};
+const schedulingRoutes = [
+  '/reference/apis/registry-scheduling/',
+];
+/**
+ * @param {boolean} hasScheduling
+ * @param {(path: string) => string} currentDocsetRedirect
+ */
+export function schedulingRedirects(hasScheduling, currentDocsetRedirect) {
+  if (hasScheduling) return {};
+  return Object.fromEntries(schedulingRoutes.flatMap((route) => [
+    [route, currentDocsetRedirect(route)],
+  ]));
+}
 const caseworkRoutes = [
   '/start/casework/',
   '/tutorials/first-casework/',
@@ -167,6 +192,7 @@ export default defineConfig({
     ...buildNotaryRetirementRedirects(currentDocsetRedirect),
     ...buildRelayV2RetirementRedirects(currentDocsetRedirect),
     ...caseworkRedirects(hasCasework, currentDocsetRedirect),
+    ...schedulingRedirects(hasScheduling, currentDocsetRedirect),
     '/start/': internalRedirect('/'),
     '/start/see-it-live/': internalRedirect('/'),
     // Retired product choosers. The homepage chooses between the products, so
@@ -305,6 +331,7 @@ export default defineConfig({
             },
           },
           ...[caseworkOpenApiSchema].filter(() => hasCasework),
+          ...[schedulingOpenApiSchema].filter(() => hasScheduling),
         ]),
       ],
       defaultLocale: 'root',
@@ -538,6 +565,14 @@ export default defineConfig({
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
             ...openAPISidebarGroups.slice(1, 2),
             { label: 'Client API reference', slug: 'reference/client-api' },
+          ],
+        }] : []),
+        ...(hasScheduling ? [{
+          label: 'Registry Scheduling',
+          collapsed: true,
+          items: [
+            { label: 'API contract', slug: 'reference/apis/registry-scheduling' },
+            ...openAPISidebarGroups.slice(2, 3),
           ],
         }] : []),
         {
