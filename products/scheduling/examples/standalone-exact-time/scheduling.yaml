@@ -1,0 +1,80 @@
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: registry-updates
+  version: 1
+services:
+  - id: registry-update
+    label: Registry record update
+offerings:
+  - id: registry-update-30
+    service: registry-update
+    label: 30-minute counter update
+    mode: exact-time
+    location: bangkok-counter
+    because: A 30-minute registry update at an interchangeable counter station.
+    exactTime:
+      durationMinutes: 30
+      bufferBeforeMinutes: 5
+      bufferAfterMinutes: 5
+      leadTimeMinutes: 120
+      horizonDays: 60
+      pool: update-stations
+      startIncrementMinutes: 30
+      maxRecipients: 1
+    cancellationCutoffMinutes: 240
+    reminders:
+      - minutesBefore: 1440
+        because: One reminder the day before a counter update.
+      - minutesBefore: 120
+        because: A second reminder two hours before, when stations are scarce.
+    duplicateActiveKey: subject
+    requiresCapabilities: []
+    prerequisites: []
+  - id: fold-day-update-30
+    service: registry-update
+    label: 30-minute fold-day update
+    mode: exact-time
+    location: new-york-hall
+    because: A 30-minute update at the hall, published across the autumn time change.
+    exactTime:
+      durationMinutes: 30
+      bufferBeforeMinutes: 0
+      bufferAfterMinutes: 0
+      leadTimeMinutes: 1
+      horizonDays: 3650
+      pool: hall-stations
+      startIncrementMinutes: 30
+      maxRecipients: 1
+    cancellationCutoffMinutes: 240
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry offices.
+    dates: []
+openings:
+  - id: bangkok-counter-hours
+    location: bangkok-counter
+    holidaySet: office-holidays
+    weekdays: [mon, tue, wed, thu, fri]
+    startTime: "09:00"
+    endTime: "12:30"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: Counter opening hours reviewed by the office manager.
+  - id: new-york-hall-hours
+    location: new-york-hall
+    holidaySet: office-holidays
+    weekdays: [sun]
+    startTime: "00:30"
+    endTime: "02:30"
+    effectiveFrom: "2026-11-01"
+    effectiveUntil: "2026-11-01"
+    because: Fold-day hours whose endpoints sit outside the repeated local hour.
+windows: []
+holdPolicy:
+  ttlMinutes: 5
+  maxPerCaller: 3
+  because: Holds are short because counter capacity is scarce.

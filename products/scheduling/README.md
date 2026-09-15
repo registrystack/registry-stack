@@ -8,13 +8,21 @@ model and evaluators live in `crates/registry-scheduling-core`; adopter
 tooling is `crates/registry-schedulingctl` (`schedulingctl`).
 
 This folder holds the product's own contracts, examples, fixtures, and gates.
-It currently carries the dependency-direction gate that holds the product
-boundary from the first commit:
+The database-free checkpoint runs the dependency-direction gate and the whole
+offline authoring journey:
 
 ```bash
-python3 products/scheduling/scripts/check_dependency_direction.py
-python3 -m unittest products/scheduling/scripts/test_dependency_direction.py
+cargo build --locked -p registry-schedulingctl
+products/scheduling/scripts/check-checkpoint.sh
 ```
+
+For PostgreSQL execution, destructive test suites require a separate disposable
+database and the `postgres-test` feature; a test binary that skips because its
+database URL is absent is not database verification.
+
+`examples/standalone-exact-time/` is exactly what
+`schedulingctl init --template standalone-exact-time` writes, and the
+checkpoint fails if the two drift apart.
 
 No scheduling crate, directly or through any shared dependency, may reach a
 Base Registry Engine, Casework, or Evidence crate, and none of those products
