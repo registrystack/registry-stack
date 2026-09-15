@@ -114,6 +114,7 @@ registry-relayctl = { path = "crates/registry-relayctl", version = "0.32.0" }
 registry-scheduling = { path = "crates/registry-scheduling", version = "0.32.0" }
 registry-scheduling-core = { path = "crates/registry-scheduling-core", version = "0.32.0" }
 registry-schedulingctl = { path = "crates/registry-schedulingctl", version = "0.32.0" }
+registry-scheduling-client = { path = "crates/registry-scheduling-client", version = "0.32.0" }
 registry-breg = { path = "crates/registry-breg", version = "0.32.0", default-features = false }
 registry-bregctl = { path = "crates/registry-bregctl", version = "0.32.0" }
 registry-stack-client = { path = "crates/registry-stack-client", version = "0.32.0" }
