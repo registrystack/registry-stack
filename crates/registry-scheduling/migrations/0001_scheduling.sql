@@ -142,13 +142,20 @@ CREATE TABLE IF NOT EXISTS scheduling_attempts (
     request_hash text NOT NULL,
     state text NOT NULL CHECK (state IN ('completed','refused')),
     status_code integer NOT NULL,
-    receipt jsonb NOT NULL,
+    -- The retention sweep tombstones a receipt rather than deleting it: the
+    -- row keeps the key and the request it answered, and drops only the
+    -- answer. A key whose receipt is gone is spent, not free, so a retry
+    -- after the period is refused instead of executed a second time.
+    receipt jsonb,
     created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL,
+    erased_at timestamptz,
+    CHECK (erased_at IS NOT NULL OR receipt IS NOT NULL),
     UNIQUE (actor_issuer, actor_subject, scope, idempotency_key)
 );
 CREATE INDEX IF NOT EXISTS scheduling_attempts_expiry_idx
-    ON scheduling_attempts(expires_at);
+    ON scheduling_attempts(expires_at)
+    WHERE erased_at IS NULL;
 
 CREATE TABLE IF NOT EXISTS scheduling_cursors (
     cursor_id uuid PRIMARY KEY,

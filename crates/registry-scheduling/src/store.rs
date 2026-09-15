@@ -1533,12 +1533,20 @@ impl PostgresStore {
         Ok(())
     }
 
-    /// Erase idempotency receipts past their retention period.
+    /// Erase idempotency receipts past their retention period. The answer is
+    /// dropped, the row is kept and stamped erased: a key that answered once
+    /// stays spent, so a retry after the period is refused as expired rather
+    /// than executed again as a fresh request.
+    ///
+    /// This is the only retention the sweep enforces beside listing cursors.
+    /// Appointments, history, the delivery outbox and the audit journal are
+    /// not swept.
     pub async fn erase_expired_attempts(&self, now: DateTime<Utc>) -> Result<u64, StoreError> {
         let client = self.client().await?;
         Ok(client
             .execute(
-                "DELETE FROM scheduling_attempts WHERE expires_at <= $1",
+                "UPDATE scheduling_attempts SET erased_at=$1, receipt=NULL \
+                 WHERE expires_at <= $1 AND erased_at IS NULL",
                 &[&now],
             )
             .await?)
@@ -1808,7 +1816,7 @@ async fn replay_stored_attempt(
 ) -> Result<Option<ReplayOutcome>, StoreError> {
     let row = transaction
         .query_opt(
-            "SELECT request_hash, state, status_code, receipt, expires_at \
+            "SELECT request_hash, state, status_code, receipt, expires_at, erased_at \
              FROM scheduling_attempts \
              WHERE actor_issuer=$1 AND actor_subject=$2 AND scope=$3 AND idempotency_key=$4",
             &[
@@ -1824,15 +1832,21 @@ async fn replay_stored_attempt(
     };
     let stored_hash: String = row.get(0);
     let expires_at: DateTime<Utc> = row.get(4);
+    let erased_at: Option<DateTime<Utc>> = row.get(5);
+    let receipt: Option<Value> = row.get(3);
+    // A different payload under a stored key is a reuse whether or not the
+    // answer is still held: the caller is told the key is not theirs to
+    // re-aim before being told the answer is gone.
     if stored_hash != commitment.request_hash {
         return Ok(Some(ReplayOutcome::Refused(CommitError::KeyReused)));
     }
-    if expires_at <= commitment.now {
+    let Some(receipt) = receipt.filter(|_| erased_at.is_none() && expires_at > commitment.now)
+    else {
         return Ok(Some(ReplayOutcome::Refused(CommitError::KeyExpired)));
-    }
+    };
     Ok(Some(ReplayOutcome::Replay {
         status_code: u16::try_from(row.get::<_, i32>(2)).unwrap_or(500),
-        receipt: row.get(3),
+        receipt,
     }))
 }
 
