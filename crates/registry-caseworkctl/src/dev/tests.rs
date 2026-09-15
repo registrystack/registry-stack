@@ -1593,7 +1593,15 @@ fn active_http_prerequisite_stops_promptly_when_interrupted() {
     let refusal = format!("{:#}", result.unwrap_err());
 
     assert!(refusal.contains("interrupted"), "{refusal}");
-    assert!(elapsed < Duration::from_secs(1), "elapsed: {elapsed:?}");
+    // The budget only has to show the terminate flag beat HTTP_TIMEOUT (10s,
+    // dev/mod.rs), so 5s still leaves a 2x margin. The window being measured
+    // is not just cancellation: http_with_timeout builds a fresh
+    // current-thread runtime and reqwest client inside it, and that client
+    // build loads the system root certificate store on first use in the
+    // process. Cancellation itself is bounded by the 50ms sleep poll loop in
+    // http_with_timeout, so a 1s budget was really measuring process
+    // warm-up, which is the volatile term here.
+    assert!(elapsed < Duration::from_secs(5), "elapsed: {elapsed:?}");
 }
 
 #[test]

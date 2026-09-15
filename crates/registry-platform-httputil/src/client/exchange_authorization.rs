@@ -800,6 +800,30 @@ mod tests {
         .unwrap()
     }
 
+    /// Waits until the wall clock has just crossed a whole-second boundary.
+    ///
+    /// `now_seconds()` truncates to whole seconds, so a deadline built as
+    /// `now_seconds() + N` at an arbitrary instant buys anywhere from just
+    /// over `N - 1` to a full `N` seconds of real headroom, depending on how
+    /// far into the current second the call happened to land. At `N` of two
+    /// that is the difference between one second and two. Aligning to a
+    /// fresh boundary first makes that headroom a near-constant `N` seconds,
+    /// which is what the short-deadline tests below need: the deadline has to
+    /// stay far enough away for context and provider construction to clear
+    /// their own "not already expired" checks, while still being close enough
+    /// that the test does not sit around waiting.
+    async fn wait_for_second_boundary() {
+        let nanos_into_second = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let remaining = Duration::from_secs(1) - Duration::from_nanos(u64::from(nanos_into_second));
+        // A short cushion after the boundary keeps the next `now_seconds()`
+        // call from landing a hair before it, which would buy a full second
+        // less than intended.
+        tokio::time::sleep(remaining + Duration::from_millis(20)).await;
+    }
+
     #[tokio::test]
     async fn discovered_binding_requires_every_profile_and_issuer_pin() {
         let server = MockServer::start().await;
@@ -1190,6 +1214,8 @@ mod tests {
     async fn cached_person_token_stops_at_verified_context_deadline() {
         let server = MockServer::start().await;
         endpoint(&server, Some(300)).await;
+        wait_for_second_boundary().await;
+        let deadline_set_at = Instant::now();
         let provider = ExchangeAuthorization::first_party(
             exchange(&server, "urn:records", &["records:read"]),
             context("person-1", now_seconds().unwrap() + 2),
@@ -1197,7 +1223,12 @@ mod tests {
         )
         .unwrap();
         provider.bearer_token().await.unwrap();
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Sleep to a fixed point relative to `deadline_set_at` rather than a
+        // fixed duration from here, so a slow key generation or token round
+        // trip above cannot eat into the margin past the deadline: whatever
+        // that took, the sleep below still lands about 250ms past it.
+        let past_deadline = Duration::from_millis(2250).saturating_sub(deadline_set_at.elapsed());
+        tokio::time::sleep(past_deadline).await;
         assert!(matches!(
             provider.bearer_token().await,
             Err(TokenError::Unavailable)
@@ -1297,6 +1328,8 @@ mod tests {
     async fn cached_grant_token_stops_at_immutable_grant_deadline() {
         let server = MockServer::start().await;
         endpoint(&server, Some(300)).await;
+        wait_for_second_boundary().await;
+        let deadline_set_at = Instant::now();
         let grant = ExchangeContext::grant(
             "https://casework.example",
             "agent-1",
@@ -1313,7 +1346,12 @@ mod tests {
         )
         .unwrap();
         provider.bearer_token().await.unwrap();
-        tokio::time::sleep(Duration::from_secs(2)).await;
+        // Sleep to a fixed point relative to `deadline_set_at` rather than a
+        // fixed duration from here, so a slow key generation or token round
+        // trip above cannot eat into the margin past the deadline: whatever
+        // that took, the sleep below still lands about 250ms past it.
+        let past_deadline = Duration::from_millis(2250).saturating_sub(deadline_set_at.elapsed());
+        tokio::time::sleep(past_deadline).await;
         assert!(matches!(
             provider.bearer_token().await,
             Err(TokenError::Unavailable)
