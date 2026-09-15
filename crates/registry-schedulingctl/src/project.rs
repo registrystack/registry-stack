@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use registry_scheduling::config::{verify_policy_package, PolicyPackageManifest};
 use registry_scheduling_core::{
-    parse_fixture_yaml, parse_policy_yaml, CaseStatus, SchedulingDiagnostic, SchedulingFixture,
-    SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
+    parse_fixture_yaml, parse_policy_yaml, CaseStatus, ReplayError, SchedulingDiagnostic,
+    SchedulingFixture, SchedulingPolicy, AUTHORED_POLICY_FILE, SCHEDULING_PACKAGE_MANIFEST_FILE,
 };
 use serde_json::{json, Value};
 
@@ -241,8 +241,13 @@ pub(super) fn package(project: &Path) -> Result<Value> {
         "command": "package",
         "project": project,
         "manifest": manifest_path,
-        "policyDigest": policy.policy_digest(),
-        "packageDigest": manifest.policy_digest,
+        // The manifest on disk names its own byte-exact digest `policyDigest`
+        // (see `PolicyPackageManifest`); mirror that naming here instead of
+        // reporting the policy's separate semantic digest under the same
+        // key. `packageDigest` is that semantic digest, the one `explain`
+        // also reports.
+        "policyDigest": manifest.policy_digest,
+        "packageDigest": policy.policy_digest(),
         "files": manifest.files,
         "runtimeConfigurationIncluded": false,
         "secretsIncluded": false,
@@ -254,9 +259,23 @@ pub(super) fn package(project: &Path) -> Result<Value> {
 fn run_fixture(project: &Path, policy: &SchedulingPolicy, path: &Path) -> Result<Value> {
     let relative: PathBuf = path.strip_prefix(project).unwrap_or(path).to_owned();
     let fixture = load_fixture(path)?;
-    let outcomes = fixture
-        .replay(policy)
-        .with_context(|| format!("replaying fixture {}", relative.display()))?;
+    // A calendar gap or fold is invisible to `check`: an opening carries no
+    // timezone, only a fixture's location record does, so authoring can
+    // never see this coming. Report it the way any other fixture failure is
+    // reported instead of refusing the whole command over a fixture whose
+    // policy `check` already called complete.
+    let outcomes = match fixture.replay(policy) {
+        Err(ReplayError::Calendar(error)) => {
+            return Ok(json!({
+                "name": fixture.name,
+                "status": "failed",
+                "file": relative,
+                "cases": [],
+                "calendarRefusal": error.to_string(),
+            }));
+        }
+        other => other.with_context(|| format!("replaying fixture {}", relative.display()))?,
+    };
     let cases = outcomes
         .iter()
         .map(|outcome| {
@@ -534,6 +553,62 @@ mod tests {
             .unwrap()
             .iter()
             .all(|fixture| fixture["status"] == "passed"));
+    }
+
+    #[test]
+    fn a_daylight_saving_gap_check_cannot_see_is_a_fixture_failure_not_a_command_refusal() {
+        // Openings carry no timezone; only a fixture's location record does.
+        // `check` never resolves a calendar, so it cannot see that an
+        // opening's local wall-clock hours fall inside a real spring-forward
+        // gap. Move `standalone-arrival-window`'s Saturday opening onto the
+        // Sunday of 2026-03-08, 02:00-03:00 America/New_York: a nonexistent
+        // local time, per registry-platform-calendar's own pinned case.
+        let (_root, project) = initialized("standalone-arrival-window");
+        let policy_path = project.join(AUTHORED_POLICY_FILE);
+        let policy_text = std::fs::read_to_string(&policy_path)
+            .unwrap()
+            .replacen("weekdays: [sat]", "weekdays: [sun]", 1)
+            .replacen("startTime: \"08:00\"", "startTime: \"02:00\"", 1)
+            .replacen("endTime: \"12:00\"", "endTime: \"03:00\"", 1)
+            .replacen(
+                "effectiveFrom: \"2026-10-01\"",
+                "effectiveFrom: \"2026-03-08\"",
+                1,
+            )
+            .replacen(
+                "effectiveUntil: \"2026-12-31\"",
+                "effectiveUntil: \"2026-03-08\"",
+                1,
+            );
+        std::fs::write(&policy_path, policy_text).unwrap();
+        let fixture_path = project.join("fixtures/household-morning.yaml");
+        let fixture_text = std::fs::read_to_string(&fixture_path).unwrap().replacen(
+            "timezone: Asia/Bangkok",
+            "timezone: America/New_York",
+            1,
+        );
+        std::fs::write(&fixture_path, fixture_text).unwrap();
+
+        // check() has no calendar to resolve, so it reports clean.
+        let checked = check(&project).unwrap();
+        assert_eq!(checked["status"], "complete");
+        assert_eq!(checked["findings"], json!([]));
+
+        // test() replays the calendar and must not let one fixture's
+        // calendar refusal abort the whole command: it reports that
+        // fixture as failed and names the calendar problem, the same way
+        // any other fixture failure is reported.
+        let tested = test(&project).unwrap();
+        assert_eq!(tested["authoringStatus"], "complete");
+        let fixtures = tested["fixtures"].as_array().unwrap();
+        let fixture = fixtures
+            .iter()
+            .find(|fixture| fixture["name"] == "household-morning")
+            .unwrap();
+        assert_eq!(fixture["status"], "failed");
+        assert_eq!(fixture["cases"], json!([]));
+        let detail = fixture["calendarRefusal"].as_str().unwrap();
+        assert!(detail.contains("does not exist"), "{detail}");
     }
 
     #[test]
