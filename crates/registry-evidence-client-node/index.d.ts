@@ -265,8 +265,8 @@ export declare class SdJwtVcBatchResponse {
  * selector or disclosed value is copied into it here.
  */
 export type SubjectContinuity =
-  | { status: 'firstUse', receipt: any }
-  | { status: 'matched', receipt: any }
+  | { status: 'firstUse'; receipt: any }
+  | { status: 'matched'; receipt: any }
 
 /**
  * A response that satisfied every expectation.
@@ -306,7 +306,7 @@ export interface VerifiedEvidenceRequestBatch {
  * `{ status: "available", verified } | { status: "notAvailable" }`.
  */
 export type VerifiedEvidenceRequestBatchItem =
-  | { status: 'available', verified: VerifiedEvidence }
+  | { status: 'available'; verified: VerifiedEvidence }
   | { status: 'notAvailable' }
 
 /**

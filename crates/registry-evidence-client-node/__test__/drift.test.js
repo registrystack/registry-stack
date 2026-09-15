@@ -246,7 +246,7 @@ test('the generated request-batch result remains an available/notAvailable union
   const declaration = fs.readFileSync(path.join(__dirname, '..', 'index.d.ts'), 'utf8');
   assert.match(
     declaration,
-    /export type VerifiedEvidenceRequestBatchItem =\s*\| \{ status: 'available', verified: VerifiedEvidence \}\s*\| \{ status: 'notAvailable' \}/,
+    /export type VerifiedEvidenceRequestBatchItem =\s*\| \{ status: 'available'; verified: VerifiedEvidence \}\s*\| \{ status: 'notAvailable' \}/,
   );
 });
 
