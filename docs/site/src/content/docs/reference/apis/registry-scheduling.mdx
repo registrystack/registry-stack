@@ -115,14 +115,24 @@ and the grant's client must equal the client the deployment verified.
     APPOINTMENT_CANCEL_ACTION; crates/registry-platform-oidc/src/authorization_claims.rs,
     SchedulingPermission. */}
 
-The grant is re-checked inside the capacity transaction, after the caller's request has been read and
-immediately before the claim commits, so an expired or narrowed grant cannot commit capacity even when
-its token was valid at the door. A grant that does not cover the request answers
-`operation.not-authorized`. The audit journal records `authorization.allowed` or
-`authorization.refused` for that check as an audit reason, never as a problem code.
+The grant's bounds are matched once, at the service, before the capacity transaction opens. A grant
+that does not cover the request answers `operation.not-authorized` and nothing is written. Inside the
+transaction, immediately before the claim commits, exactly one fact is read again: the grant's own
+expiry, against the clock that commitment is decided under. A grant that expired between the door and
+the commit therefore cannot take capacity, and the attempt answers `operation.not-authorized` like any
+other authority refusal.
 
-{/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current();
-    crates/registry-scheduling/src/service.rs, require_permission(). */}
+The bounds themselves are not read again at that point, and this milestone has no revocation check, so
+a grant narrowed or withdrawn at the issuer after its token was minted keeps the authority its token
+carries until the token or the grant deadline passes. Keep grant deadlines short. Re-checking the full
+bounds inside the capacity transaction is a recorded deferral, not a promise this milestone keeps.
+
+The audit journal records `authorization.allowed` or `authorization.refused` for the commitment as an
+audit reason, never as a problem code.
+
+{/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current() checks grant_exp_unix and
+    nothing else; crates/registry-scheduling/src/service.rs, require_permission() and problem_of();
+    products/scheduling/contracts/security-invariant-matrix.yaml, SCHEDULING-SEC-03. */}
 
 ## Problem codes
 
