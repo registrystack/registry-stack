@@ -1,0 +1,189 @@
+---
+title: Registry Scheduling API
+description: Authority profiles, task grants, idempotency, problem codes, and route families for the generated Registry Scheduling OpenAPI operations.
+status: current
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-15"
+doc_type: reference
+locale: en
+standards_referenced:
+  - openapi
+---
+
+import ApiReferenceTable from '../../../../components/ApiReferenceTable.astro';
+
+Registry Scheduling serves one HTTP surface for the published catalogue, availability, holds, and
+appointments. Every call presents a bearer access token, and one of three authority profiles decides
+what that token must carry: a read scope for catalogue and owned-record reads, a separate explain scope
+for the diagnostic availability read, or a complete task grant for every commitment. The contract is
+unreleased and carries no frozen compatibility promise.
+
+[Open the Registry Scheduling API operations](../scheduling/) for every route, parameter, schema, and
+reachable problem code. This page holds the authority, revision, and recovery rules those operations
+assume.
+
+## Contract boundary
+
+Every request presents `Authorization: Bearer <token>` holding an RFC 9068 access token, `typ:
+at+jwt`, whose claims name the caller's actor kind in `registry_actor_kind` as `human`, `agent`, or
+`service`. Liveness and readiness are the only routes that take no token.
+
+{/* Evidence: crates/registry-scheduling/src/auth.rs, authenticate_mutate() and validate_compact_access_token;
+    crates/registry-platform-oidc/src/authorization_claims.rs, actor_kind(). */}
+
+The four caller-driven commitments carry an `Idempotency-Key` the caller chooses, bounded to 128
+bytes: creating a hold, creating an appointment, rescheduling one, and cancelling one. A retry under
+the same key with the same request returns the stored first answer, and the same key with a different
+request is refused with `idempotency.key-reused`. Releasing a hold carries no caller key: the hold's
+own identifier is the idempotency key, so a retried release replays the first answer without the
+caller holding anything back.
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, idempotency_key() and router();
+    crates/registry-scheduling/src/service.rs, release_hold();
+    crates/registry-scheduling-core/src/naming.rs, MAXIMUM_IDEMPOTENCY_KEY_BYTES. */}
+
+Observed revisions travel in request bodies, not in an `If-Match` header: an admission names the
+`policyRevision` it resolved the offering under, and a reschedule or cancel names the appointment
+revision it acted on. A stale revision is refused with `policy.changed`, `revision.mismatch`, or
+`precondition.failed`, and the caller reloads the catalogue and tries again.
+
+{/* Evidence: crates/registry-scheduling-core/src/model.rs, AdmissionRequest;
+    crates/registry-scheduling-core/src/admission.rs, check_duplicate();
+    products/scheduling/generated/registry-scheduling.openapi.json. */}
+
+A refusal answers `application/problem+json` with `type`, `title`, `status`, `detail`, `code`, and
+`traceId`. The `type` is the code with each dot replaced by a slash under
+`https://id.registrystack.org/problems/registry-scheduling/`, and `detail` is the fixed sentence that
+belongs to the code. No field repeats a submitted value. Every response, refusals included, carries
+`Cache-Control: no-store` and propagates or mints a `traceparent` value.
+
+{/* Evidence: crates/registry-platform-httpsec/src/server.rs, security_headers() and ProblemBody;
+    crates/registry-scheduling-core/src/problem.rs, ProblemCode. */}
+
+Availability pages list a slot only while it holds a free unit: a slot whose members are all
+committed, held, or closed leaves the page rather than appearing with zero free. A caller watching a
+slot disappear therefore reads the same fact as one reading `free: 0`.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, exact_time_slots(). */}
+
+## Authority profiles
+
+The three profiles are disjoint. A token carrying a product scope does not thereby gain a commitment
+path, and a task grant does not thereby gain a catalogue read.
+
+| Profile | Routes | The token must carry |
+| --- | --- | --- |
+| Catalogue read | `/v1/scheduling`, `/v1/services`, `/v1/offerings`, `/v1/resources`, `/v1/locations`, `/v1/availability`, one appointment read, its history | The configured read scope, `scheduling-read` by default, in `registry_scopes` |
+| Explain | `/v1/availability/explain` | The separately configured explain scope, `scheduling-explain` by default, which is never the read scope |
+| Commitment | Hold create and release, appointment create, reschedule, cancel | A complete task grant; no product scope |
+
+{/* Evidence: crates/registry-scheduling/src/auth.rs, authenticate_read(), authenticate_explain(), and
+    authenticate_mutate(); crates/registry-scheduling/src/http.rs, router(). */}
+
+The explain path is separately authorized because it can name the member-level cause
+`resource.unavailable`. The public availability path answers the same state as `capacity.exhausted`
+and names no member.
+
+{/* Evidence: crates/registry-scheduling-core/src/admission.rs, detailed_code();
+    products/scheduling/generated/registry-scheduling.openapi.json. */}
+
+## Task grants
+
+A commitment carries no product scope. Its authority is a task grant inside the access token: the six
+`registry_grant_*` members that make a grant detectable, plus `registry_purpose` and
+`registry_approver`, bound to the verified client and to this deployment's audience before the caller
+reaches the service. An incomplete grant set is refused as a credentials problem
+(`authentication.refused`), never honored partially.
+
+{/* Evidence: crates/registry-platform-oidc/src/authorization_claims.rs, grant_claims(), core_grant_names(),
+    and verify_context(); crates/registry-scheduling/src/auth.rs, verified_caller(). */}
+
+The grant's bounds carry one permission per location, and a permission names an offering's service, an
+offering's location, and the actions it allows:
+
+- `hold.create` and `hold.release`
+- `appointment.create`, `appointment.reschedule`, and `appointment.cancel`
+
+A permission matches an offering only when its service and location both equal the offering's own and
+the action is listed. The match is exact: a broader service or location never covers a narrower one,
+and the grant's client must equal the client the deployment verified.
+
+{/* Evidence: crates/registry-scheduling/src/service.rs, require_permission(), HOLD_CREATE_ACTION,
+    HOLD_RELEASE_ACTION, APPOINTMENT_CREATE_ACTION, APPOINTMENT_RESCHEDULE_ACTION, and
+    APPOINTMENT_CANCEL_ACTION; crates/registry-platform-oidc/src/authorization_claims.rs,
+    SchedulingPermission. */}
+
+The grant is re-checked inside the capacity transaction, after the caller's request has been read and
+immediately before the claim commits, so an expired or narrowed grant cannot commit capacity even when
+its token was valid at the door. A grant that does not cover the request answers
+`operation.not-authorized`. The audit journal records `authorization.allowed` or
+`authorization.refused` for that check as an audit reason, never as a problem code.
+
+{/* Evidence: crates/registry-scheduling/src/store.rs, check_grant_current();
+    crates/registry-scheduling/src/service.rs, require_permission(). */}
+
+## Problem codes
+
+Every Scheduling problem response carries one `code` from this closed catalogue, always answered with
+the HTTP status listed beside it.
+
+Two codes are reserved: `eligibility.unavailable` and `hook.unavailable` are defined, titled, and
+status-pinned because the reserved lifecycle-hook ABI `registry.scheduling-hook/v1` will produce them,
+and no path in this milestone answers them yet.
+
+{/* Evidence: crates/registry-scheduling-core/src/problem.rs, ProblemCode;
+    products/scheduling/generated/registry-scheduling.openapi.json,
+    x-registry-scheduling-reserved-problems. */}
+
+<ApiReferenceTable id="problem-codes" source="scheduling-api" />
+
+{/* Problem code table generated from docs/site/src/data/scheduling-api.yaml by
+    docs/site/scripts/generate-data.mjs. Run npm run generate from docs/site. */}
+
+{/* Evidence: products/scheduling/generated/registry-scheduling.openapi.json;
+    docs/site/src/data/scheduling-api.yaml. */}
+
+## Route families
+
+The served routes group into these families. A family name grants nothing on its own; authority is
+checked per route.
+
+| Family | Base paths | Authority profile |
+| --- | --- | --- |
+| Service description | `/v1/scheduling` | Catalogue read |
+| Catalogue | `/v1/services`, `/v1/offerings`, `/v1/resources`, `/v1/locations` | Catalogue read |
+| Availability | `/v1/availability`, `/v1/availability/explain` | Catalogue read; Explain |
+| Holds | `/v1/holds`, `/v1/holds/{holdId}` | Commitment |
+| Appointments | `/v1/appointments`, `/v1/appointments/{appointmentId}`, its `reschedule`, `cancel`, and `history` | Commitment for the mutations; Catalogue read for the reads |
+| Liveness and readiness | `/healthz`, `/readyz` | Any caller, without a token |
+
+{/* Evidence: crates/registry-scheduling/src/http.rs, router();
+    crates/registry-scheduling-core/src/naming.rs, SCHEDULING_PATH, SERVICES_PATH, OFFERINGS_PATH,
+    RESOURCES_PATH, LOCATIONS_PATH, AVAILABILITY_PATH, AVAILABILITY_EXPLAIN_PATH, HOLDS_PATH, and
+    APPOINTMENTS_PATH. */}
+
+## Source of truth
+
+The implementation is the source of truth, and the generated document is the published form of it.
+The product generator builds the OpenAPI document from the Rust-owned route inventory, authority
+profiles, wire schemas, and the exported problem catalogue, and the product check regenerates the
+document and refuses byte drift. A running Scheduling process serves the routes in that document, and
+does not serve the document itself.
+
+{/* Evidence: products/scheduling/scripts/{generate_openapi.py,check-checkpoint.sh};
+    products/scheduling/generated/registry-scheduling.openapi.json. */}
+
+The problem code table is generated from maintained data whose codes and statuses match the generated
+document. The route families table and the header rules are maintained by hand against the cited
+source.
+
+{/* Evidence: docs/site/src/data/scheduling-api.yaml;
+    products/scheduling/scripts/test_generate_openapi.py. */}
+
+## Next
+
+- [Registry Scheduling API operations](../scheduling/) for every route, parameter, and schema.
+- [schedulingctl command reference](../../cli/schedulingctl/) for the authoring and packaging commands
+  that produce the policy a deployment serves.
