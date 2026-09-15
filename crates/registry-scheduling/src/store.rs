@@ -1390,7 +1390,11 @@ impl PostgresStore {
         Ok(rows.len() as u64)
     }
 
-    /// Claim due outbox intents for dispatch, marking their attempt.
+    /// Claim due outbox intents for dispatch, marking their attempt. An
+    /// intent is due when its own time has come and the back-off a failed
+    /// attempt wrote has passed: without the second half a failing intent
+    /// would be re-claimed on every tick and burn its attempts ceiling in
+    /// seconds.
     pub async fn claim_due_intents(
         &self,
         now: DateTime<Utc>,
@@ -1404,6 +1408,7 @@ impl PostgresStore {
                  WHERE outbox_id IN (\
                      SELECT outbox_id FROM scheduling_outbox \
                      WHERE delivery_state='pending' AND due_at <= $1 \
+                     AND next_attempt_at <= $1 \
                      ORDER BY due_at LIMIT $2 FOR UPDATE SKIP LOCKED) \
                  RETURNING outbox_id, purpose, claim_id, appointment_revision, due_at, attempts, payload",
                 &[&now, &limit, &now],
