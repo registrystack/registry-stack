@@ -422,8 +422,14 @@ fn grant_claims() -> Value {
 }
 
 fn agent_token() -> String {
+    agent_token_for("principal-agent")
+}
+
+/// A second booking agent, identical in scope and grant and different only in
+/// subject, so what it may see is decided by ownership alone.
+fn agent_token_for(subject: &str) -> String {
     let mut claims = json!({
-        "sub": "principal-agent",
+        "sub": subject,
         "azp": CLIENT,
         "registry_scopes": "scheduling-read scheduling-explain",
         "registry_actor_kind": "service",
@@ -1645,4 +1651,128 @@ async fn a_records_swap_waits_for_the_capacity_transaction_holding_the_pool() {
     swap.await
         .expect("the swap task runs to completion")
         .expect("the swap commits once the pool is free");
+}
+
+#[tokio::test]
+async fn a_history_cursor_is_re_authorized_against_the_caller_of_the_page() {
+    let fx = fixture().await;
+    let (appointment_id, revision) = booked(&fx, 90, 200, "cursor-actor-1").await;
+    let next = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, _) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "cursor-actor-2",
+            json!({
+                "observedRevision": revision,
+                "admission": admission(&fx, OFFERING, next),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "the reschedule commits");
+
+    let (status, page) = fx
+        .get(
+            &format!("/v1/appointments/{appointment_id}/history?limit=1"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let cursor = page["nextCursor"]
+        .as_str()
+        .expect("two history events page in two")
+        .to_owned();
+
+    // The cursor carries no actor, so the second page is safe only because
+    // the listing re-runs its ownership check against whoever presents it.
+    let stranger = agent_token_for("principal-stranger");
+    let (status, problem) = fx
+        .get(
+            &format!("/v1/appointments/{appointment_id}/history?limit=1&cursor={cursor}"),
+            &stranger,
+        )
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "a stranger holding the token is still not the owner"
+    );
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    // The owner continues the same listing normally.
+    let (status, page) = fx
+        .get(
+            &format!("/v1/appointments/{appointment_id}/history?limit=1&cursor={cursor}"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
+}
+
+/// Write a runtime configuration whose migration database is a port nothing
+/// listens on, so `scheduling migrate` fails at the connection and nowhere
+/// else.
+fn unreachable_deployment(root: &std::path::Path) -> std::path::PathBuf {
+    let package = root.join("package");
+    std::fs::create_dir_all(&package).expect("a package directory");
+    std::fs::write(
+        package.join(registry_scheduling_core::AUTHORED_POLICY_FILE),
+        POLICY,
+    )
+    .expect("the authored policy");
+    let secret_name = format!("SCHEDULING_CLOSED_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    std::env::set_var(
+        &secret_name,
+        "postgres://scheduling:scheduling@127.0.0.1:1/scheduling_runtime",
+    );
+    let document = json!({
+        "apiVersion": registry_scheduling_core::SCHEDULING_RUNTIME_API_VERSION,
+        "kind": registry_scheduling_core::SCHEDULING_RUNTIME_KIND,
+        "package": {"root": package},
+        "listener": {"bind": "127.0.0.1:8199", "tlsTermination": "development-loopback"},
+        "secretProviders": {"environment": {}},
+        "database": {
+            "runtimeUrlRef": format!("secret:env/{secret_name}"),
+            "migrationUrlRef": format!("secret:env/{secret_name}"),
+            "testOnlyPlaintext": true,
+        },
+        "authentication": {"oidc": {
+            "issuer": ISSUER,
+            "audience": AUDIENCE,
+            "allowedClients": [CLIENT],
+        }},
+        "audit": {"path": root.join("audit.ndjson"), "hashKeyRef": "secret:env/UNUSED"},
+        "destinations": {},
+        "retention": {"attemptReceiptDays": 7},
+    });
+    let operator = root.join("runtime.yaml");
+    std::fs::write(
+        &operator,
+        serde_norway::to_string(&document).expect("a serializable configuration"),
+    )
+    .expect("the runtime configuration");
+    operator
+}
+
+#[tokio::test]
+async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
+    let root = tempfile::tempdir().expect("a temporary deployment root");
+    let operator = unreachable_deployment(root.path());
+    let failure = registry_scheduling::runtime::migrate_from_path(&operator)
+        .await
+        .expect_err("an unreachable database fails the migration");
+    let message = failure.to_string();
+    assert!(
+        message.contains("schema migration"),
+        "{message} does not name the startup step that failed"
+    );
+    assert!(
+        message.to_ascii_lowercase().contains("connect"),
+        "{message} does not name why the database was unusable"
+    );
+    assert!(
+        !message.contains("scheduling:scheduling"),
+        "the startup failure repeats the database credentials"
+    );
 }
