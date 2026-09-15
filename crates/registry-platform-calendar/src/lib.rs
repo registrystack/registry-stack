@@ -49,9 +49,9 @@ pub enum CalendarEvaluationError {
     InvalidWarningOffset,
     #[error("reminders[].workingDaysBefore must be between 1 and 3650")]
     InvalidReminderOffset,
-    #[error("the calculated local due time does not exist in the calendar timezone")]
+    #[error("the calculated local time does not exist in the calendar timezone")]
     NonexistentLocalTime,
-    #[error("the calculated local due time is ambiguous in the calendar timezone")]
+    #[error("the calculated local time is ambiguous in the calendar timezone")]
     AmbiguousLocalTime,
     #[error("working-day calendar arithmetic overflowed")]
     Overflow,
@@ -208,6 +208,22 @@ mod tests {
         assert_eq!(
             local_interval("2026-11-01", "01:30", "02:00", "America/New_York"),
             Err(CalendarEvaluationError::AmbiguousLocalTime)
+        );
+    }
+
+    /// The crate serves every product's calendar, so a gap or fold refusal
+    /// names the instant it could not convert and no caller's authoring
+    /// vocabulary: a Casework deadline and a Scheduling opening pattern read
+    /// the same sentence.
+    #[test]
+    fn a_gap_or_fold_refusal_names_no_caller_s_vocabulary() {
+        assert_eq!(
+            CalendarEvaluationError::NonexistentLocalTime.to_string(),
+            "the calculated local time does not exist in the calendar timezone"
+        );
+        assert_eq!(
+            CalendarEvaluationError::AmbiguousLocalTime.to_string(),
+            "the calculated local time is ambiguous in the calendar timezone"
         );
     }
 
