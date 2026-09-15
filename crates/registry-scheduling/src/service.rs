@@ -316,10 +316,7 @@ impl SchedulingService {
         now: DateTime<Utc>,
     ) -> Result<PageDocument<AvailabilityEntry>, ServiceError> {
         let limit = page_limit(limit);
-        let offering = self
-            .policy
-            .offering(offering_id)
-            .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
+        let offering = self.published_offering(offering_id)?;
         let from = start.unwrap_or(now);
         let span = TimeDelta::days(MAXIMUM_AVAILABILITY_SPAN_DAYS);
         let to = match end {
@@ -402,10 +399,7 @@ impl SchedulingService {
         start: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<registry_scheduling_core::ExplainDocument, ServiceError> {
-        let offering = self
-            .policy
-            .offering(offering_id)
-            .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
+        let offering = self.published_offering(offering_id)?;
         let probe = AdmissionRequest {
             offering: offering.id.clone(),
             start,
@@ -505,10 +499,7 @@ impl SchedulingService {
         request: &AdmissionRequest,
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<registry_scheduling_core::HoldDocument>, ServiceError> {
-        let offering = self
-            .policy
-            .offering(&request.offering)
-            .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
+        let offering = self.published_offering(&request.offering)?;
         let grant = self
             .require_permission(caller, offering, HOLD_CREATE_ACTION)
             .await?;
@@ -615,14 +606,14 @@ impl SchedulingService {
     ) -> Result<CommitmentAnswer<AppointmentDocument>, ServiceError> {
         match (&request.hold, &request.admission) {
             (Some(_), Some(_)) | (None, None) => {
-                return Err(ServiceError::Problem(ProblemCode::PreconditionFailed));
+                return Err(ServiceError::Problem(ProblemCode::RequestInvalid));
             }
             _ => {}
         }
         let answer = match &request.hold {
             Some(hold) => {
                 let hold_id = Uuid::parse_str(hold)
-                    .map_err(|_| ServiceError::Problem(ProblemCode::PreconditionFailed))?;
+                    .map_err(|_| ServiceError::Problem(ProblemCode::RequestInvalid))?;
                 self.confirm_appointment(caller, idempotency_key, hold_id, now)
                     .await
             }
@@ -695,10 +686,7 @@ impl SchedulingService {
         request: &AdmissionRequest,
         now: DateTime<Utc>,
     ) -> Result<CommitmentAnswer<ClaimRow>, ServiceError> {
-        let offering = self
-            .policy
-            .offering(&request.offering)
-            .ok_or(ServiceError::Problem(ProblemCode::PreconditionFailed))?;
+        let offering = self.published_offering(&request.offering)?;
         let grant = self
             .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
             .await?;
@@ -1008,6 +996,20 @@ impl SchedulingService {
             requires_capabilities: offering.requires_capabilities.clone(),
             prerequisites: offering.prerequisites.clone(),
         }
+    }
+
+    /// The offering the deployed policy publishes under `offering_id`.
+    ///
+    /// An offering the policy does not publish is not a precondition the
+    /// caller can satisfy by reloading and retrying, which is what
+    /// `precondition.failed` invites: it does not exist, and the offering
+    /// listing is where a caller learns what does. That listing is readable by
+    /// every caller holding the reads scope, so naming the absence discloses
+    /// nothing the listing would not.
+    fn published_offering(&self, offering_id: &str) -> Result<&OfferingPolicy, ServiceError> {
+        self.policy
+            .offering(offering_id)
+            .ok_or(ServiceError::Problem(ProblemCode::RequestNotFound))
     }
 
     /// A grant that covers this offering's service, location, and action, or
