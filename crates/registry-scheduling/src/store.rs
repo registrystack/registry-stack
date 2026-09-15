@@ -183,6 +183,7 @@ pub enum SupplyContext<'p> {
         window: &'p registry_scheduling_core::PublishedWindow,
         lead_time_minutes: u32,
         horizon_days: u32,
+        channels: &'p [registry_scheduling_core::Channel],
     },
 }
 
@@ -1765,6 +1766,7 @@ fn evaluate(
             window,
             lead_time_minutes,
             horizon_days,
+            channels,
         } => evaluate_window_admission(
             &registry_scheduling_core::WindowContext {
                 offering,
@@ -1773,6 +1775,7 @@ fn evaluate(
                 horizon_days: *horizon_days,
                 snapshot,
                 policy_revision: u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX),
+                channels,
                 now: commitment.now,
             },
             request,

@@ -22,11 +22,12 @@ use registry_scheduling_core::{
     admission_request_hash, evaluate_exact_time_admission, evaluate_window_admission,
     location_closure_intervals, location_open_intervals, type_uri, AdmissionRequest,
     AppointmentDocument, AppointmentHistoryEntryDocument, AppointmentStateDocument,
-    AvailabilityEntry, CancelAppointmentRequest, CreateAppointmentRequest, ExactTimeContext,
-    ExactTimeOffering, LedgerKind, LedgerSnapshot, OfferingDocument, OfferingPolicy, PageDocument,
-    PoolMember, ProblemCode, PublishedWindow, ReminderDocument, RescheduleAppointmentRequest,
-    ResourceDocument, SchedulingFacts, SchedulingMode, SchedulingModeDocument, SchedulingPolicy,
-    SchedulingServiceDocument, ServiceDocument, WindowContext, WindowDocument,
+    AvailabilityEntry, CancelAppointmentRequest, Channel, CreateAppointmentRequest,
+    ExactTimeContext, ExactTimeOffering, LedgerKind, LedgerSnapshot, OfferingDocument,
+    OfferingPolicy, PageDocument, PoolMember, ProblemCode, PublishedWindow, ReminderDocument,
+    RescheduleAppointmentRequest, ResourceDocument, SchedulingFacts, SchedulingMode,
+    SchedulingModeDocument, SchedulingPolicy, SchedulingServiceDocument, ServiceDocument,
+    WindowContext, WindowDocument,
 };
 use serde_json::{json, Value};
 use sha2::{Digest as _, Sha256};
@@ -350,6 +351,7 @@ impl SchedulingService {
                 window,
                 lead_time_minutes,
                 horizon_days,
+                ..
             } => {
                 let snapshot = self.store.window_snapshot(&window.id, now).await?;
                 window_entries(
@@ -454,6 +456,7 @@ impl SchedulingService {
                 window,
                 lead_time_minutes,
                 horizon_days,
+                channels,
             } => {
                 let snapshot = self.store.window_snapshot(&window.id, now).await?;
                 evaluate_window_admission(
@@ -464,6 +467,7 @@ impl SchedulingService {
                         horizon_days,
                         snapshot: &snapshot,
                         policy_revision: self.revision(),
+                        channels: &channels,
                         now,
                     },
                     &probe,
@@ -1278,6 +1282,7 @@ enum ResolvedSupply {
         window: PublishedWindow,
         lead_time_minutes: u32,
         horizon_days: u32,
+        channels: Vec<Channel>,
     },
 }
 
@@ -1336,6 +1341,7 @@ impl ResolvedSupply {
                     window: window.clone(),
                     lead_time_minutes: arrival.lead_time_minutes,
                     horizon_days: arrival.horizon_days,
+                    channels: policy.channels.clone(),
                 })
             }
             _ => Err(operator_gap("one scheduling mode")),
@@ -1359,10 +1365,12 @@ impl ResolvedSupply {
                 window,
                 lead_time_minutes,
                 horizon_days,
+                channels,
             } => SupplyContext::Window {
                 window,
                 lead_time_minutes: *lead_time_minutes,
                 horizon_days: *horizon_days,
+                channels: channels.as_slice(),
             },
         }
     }
