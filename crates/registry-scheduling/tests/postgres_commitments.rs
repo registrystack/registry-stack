@@ -1776,3 +1776,122 @@ async fn a_database_that_refuses_at_startup_names_the_step_and_the_cause() {
         "the startup failure repeats the database credentials"
     );
 }
+
+/// A booking agent whose grant names another location, so its bounds cover no
+/// action on the test policy's offering.
+fn agent_token_outside_its_bounds() -> String {
+    let mut grant = grant_claims();
+    grant["registry_grant_bounds"] = json!({
+        "type": "scheduling",
+        "permissions": [{
+            "service": "registry-update",
+            "location": "south-counter",
+            "actions": ["hold.create"],
+        }],
+    });
+    let mut claims = json!({
+        "sub": "principal-elsewhere",
+        "azp": CLIENT,
+        "registry_scopes": "scheduling-read",
+        "registry_actor_kind": "service",
+    });
+    let object = claims.as_object_mut().unwrap();
+    object.extend(
+        grant
+            .as_object()
+            .unwrap()
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
+    token(claims)
+}
+
+/// The pending journal keyed by the reason each record carries.
+async fn audit_by_reason(fx: &Fixture) -> std::collections::BTreeMap<String, Value> {
+    fx.store
+        .pending_audit(100)
+        .await
+        .expect("the pending audit journal")
+        .into_iter()
+        .map(|(_, record)| {
+            let reason = record["reason"]
+                .as_str()
+                .expect("an audit record names its reason")
+                .to_owned();
+            (reason, record)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_permission_refused_before_the_transaction_writes_its_audit_row() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+
+    // A grant that covers another location is authority for nothing here.
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &agent_token_outside_its_bounds(),
+            "outside-bounds",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    // Readable availability is not authority to book, and the standing
+    // reader carries no task grant at all.
+    let (status, problem) = fx
+        .post(
+            "/v1/holds",
+            &fx.reader,
+            "no-grant",
+            admission(&fx, OFFERING, slot),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(problem["code"], "operation.not-authorized");
+
+    let journal = audit_by_reason(&fx).await;
+    assert_eq!(
+        journal.keys().cloned().collect::<Vec<_>>(),
+        vec![
+            "authorization.no-grant".to_owned(),
+            "authorization.refused".to_owned()
+        ],
+        "a permission refused before the transaction leaves no journal trail"
+    );
+
+    let bounds_refusal = &journal["authorization.refused"];
+    assert_eq!(bounds_refusal["outcome"], "denied");
+    assert_eq!(bounds_refusal["actorKind"], "agent");
+    assert_eq!(bounds_refusal["operation"], "hold.create");
+    assert!(
+        bounds_refusal["grantPseudonym"].is_string(),
+        "a refusal under a present grant names the grant"
+    );
+    let grantless_refusal = &journal["authorization.no-grant"];
+    assert_eq!(grantless_refusal["outcome"], "denied");
+    assert_eq!(grantless_refusal["actorKind"], "service");
+    assert_eq!(grantless_refusal["operation"], "hold.create");
+    assert!(
+        grantless_refusal["grantPseudonym"].is_null(),
+        "a refusal carrying no grant names none"
+    );
+    assert!(
+        grantless_refusal["purpose"].is_null(),
+        "a refusal carrying no grant records no purpose"
+    );
+    // The journal carries pseudonyms and the operation, never the caller's
+    // raw identity and never the bound that failed.
+    for record in journal.values() {
+        let rendered = record.to_string();
+        for raw in ["principal-elsewhere", "principal-read", "north-counter"] {
+            assert!(
+                !rendered.contains(raw),
+                "the refusal audit record repeats {raw} in the clear"
+            );
+        }
+    }
+}
