@@ -4,10 +4,16 @@
 //!
 //! These types are the contract between the runtime and every client, so they
 //! live in the source-neutral core beside the model they project, the way the
-//! Casework DTOs live in `registry-casework-core`. Every document is
-//! camelCase on the wire and refuses unknown fields, so an undocumented
-//! addition to a response is a compatibility event a caller notices, not a
-//! field a lenient parser silently drops.
+//! Casework DTOs live in `registry-casework-core`. Every document is camelCase
+//! on the wire, and the direction it travels decides how strictly it is read.
+//!
+//! A request document is read by the runtime and refuses a member it does not
+//! declare: an undeclared member is either a caller mistake or a reach for a
+//! field the store owns, and either way it must be answered, not ignored. An
+//! answer document is read by a client that may be older than the deployment
+//! answering it, and carries the opposite rule: a member added to an answer is
+//! ignored, so an additive server change is not an outage for every client
+//! compiled before it.
 //!
 //! The projections are deliberate: `because` review reasons are authoring
 //! material and never published; occupied intervals (with buffers) are the
@@ -23,7 +29,7 @@ use crate::model::AdmissionRequest;
 
 /// What `GET /v1/scheduling` answers: which deployment and which policy.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SchedulingServiceDocument {
     pub scheduling_id: String,
     pub policy_revision: u64,
@@ -32,7 +38,7 @@ pub struct SchedulingServiceDocument {
 
 /// One service in the catalogue.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ServiceDocument {
     pub id: String,
     pub label: String,
@@ -40,7 +46,7 @@ pub struct ServiceDocument {
 
 /// One offering in the catalogue, the public view of the authored policy.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct OfferingDocument {
     pub id: String,
     pub service: String,
@@ -77,14 +83,14 @@ pub enum SchedulingModeDocument {
 
 /// One authored reminder offset, as the catalogue publishes it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ReminderDocument {
     pub minutes_before: u32,
 }
 
 /// A published arrival window in the catalogue.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct WindowDocument {
     pub id: String,
     pub revision: u64,
@@ -96,7 +102,7 @@ pub struct WindowDocument {
 /// One backing resource in the resource listing: a concrete pool member,
 /// because a pool is its members, never an independent counter.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ResourceDocument {
     pub resource_id: String,
     pub pool: String,
@@ -107,7 +113,7 @@ pub struct ResourceDocument {
 /// One location in the location listing, with the IANA timezone identifier
 /// its published openings expand in.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LocationDocument {
     pub location_id: String,
     pub timezone: String,
@@ -119,8 +125,7 @@ pub struct LocationDocument {
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
+    rename_all_fields = "camelCase"
 )]
 pub enum AvailabilityEntry {
     /// A grid slot and how many pool members are still free across it.
@@ -142,7 +147,7 @@ pub enum AvailabilityEntry {
 
 /// One page of a bounded listing, with the opaque cursor that continues it.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct PageDocument<T> {
     pub items: Vec<T>,
     pub next_cursor: Option<String>,
@@ -152,7 +157,7 @@ pub struct PageDocument<T> {
 /// the same admission request shape a direct create carries: a hold is an
 /// admission ask that reserves instead of committing.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct HoldDocument {
     pub hold_id: String,
     pub offering: String,
@@ -185,7 +190,7 @@ impl AppointmentStateDocument {
 
 /// A confirmed appointment.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AppointmentDocument {
     pub appointment_id: String,
     pub offering: String,
@@ -232,7 +237,7 @@ pub struct CancelAppointmentRequest {
 
 /// One attributable step in an appointment's history.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AppointmentHistoryEntryDocument {
     pub event_id: String,
     pub kind: String,
@@ -247,7 +252,7 @@ pub struct AppointmentHistoryEntryDocument {
 /// a refused start would have said, including the one detail the public path
 /// never names.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ExplainDocument {
     pub offering: String,
     pub start: DateTime<Utc>,
@@ -276,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_documents_round_trip_and_refuse_unknown_fields() {
+    fn catalogue_documents_round_trip() {
         let offering = OfferingDocument {
             id: "registry-update-30".to_owned(),
             service: "registry-update".to_owned(),
@@ -303,10 +308,153 @@ mod tests {
         assert_eq!(json["leadTimeMinutes"], 120);
         let parsed: OfferingDocument = serde_json::from_value(json).unwrap();
         assert_eq!(parsed, offering);
-        assert!(serde_json::from_str::<OfferingDocument>(
-            &serde_json::to_string(&offering)
-                .unwrap()
-                .replace("\"reminders\"", "\"reminders\":{\"x\":1},\"stray\"",)
+    }
+
+    /// One answer document as a deployment ahead of this build would send
+    /// it: the same members, plus one this build has never heard of.
+    ///
+    /// An answer document that refused it would turn an additive change on
+    /// the server into a failed exchange for every client compiled before
+    /// that change, so the member is ignored and the rest still parses.
+    fn tolerates_a_later_member<T>(document: &T)
+    where
+        T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let mut json = serde_json::to_value(document).expect("an answer document serializes");
+        json.as_object_mut()
+            .expect("an answer document is a JSON object")
+            .insert("laterMember".to_owned(), Value::from(1));
+        let parsed: T = serde_json::from_value(json)
+            .expect("an answer document tolerates a member a later deployment added");
+        assert_eq!(&parsed, document);
+    }
+
+    #[test]
+    fn answer_documents_tolerate_a_member_a_later_deployment_added() {
+        let window = WindowDocument {
+            id: "household-morning-window".to_owned(),
+            revision: 3,
+            start: utc(10, 8),
+            end: utc(10, 10),
+            units: 12,
+        };
+        let service = ServiceDocument {
+            id: "registry-update".to_owned(),
+            label: "Registry record update".to_owned(),
+        };
+        tolerates_a_later_member(&SchedulingServiceDocument {
+            scheduling_id: "counter-scheduling".to_owned(),
+            policy_revision: 4,
+            policy_digest: "sha256:0f".to_owned(),
+        });
+        tolerates_a_later_member(&service);
+        tolerates_a_later_member(&ReminderDocument {
+            minutes_before: 1440,
+        });
+        tolerates_a_later_member(&window);
+        tolerates_a_later_member(&OfferingDocument {
+            id: "registry-update-30".to_owned(),
+            service: "registry-update".to_owned(),
+            label: "30-minute counter update".to_owned(),
+            mode: SchedulingModeDocument::ArrivalWindow,
+            location: "north-counter".to_owned(),
+            lead_time_minutes: 120,
+            horizon_days: 60,
+            cancellation_cutoff_minutes: 240,
+            duration_minutes: None,
+            buffer_before_minutes: None,
+            buffer_after_minutes: None,
+            start_increment_minutes: None,
+            max_recipients: None,
+            window: Some(window.clone()),
+            reminders: vec![ReminderDocument {
+                minutes_before: 1440,
+            }],
+            requires_capabilities: Vec::new(),
+            prerequisites: Vec::new(),
+        });
+        tolerates_a_later_member(&ResourceDocument {
+            resource_id: "station-1".to_owned(),
+            pool: "counters".to_owned(),
+            capabilities: vec!["sign-language".to_owned()],
+            available: true,
+        });
+        tolerates_a_later_member(&LocationDocument {
+            location_id: "north-counter".to_owned(),
+            timezone: "Europe/Paris".to_owned(),
+        });
+        tolerates_a_later_member(&AvailabilityEntry::Slot {
+            start: utc(5, 2),
+            end: utc(5, 3),
+            free: 2,
+        });
+        tolerates_a_later_member(&AvailabilityEntry::Window {
+            window: "household-morning-window".to_owned(),
+            start: utc(10, 8),
+            end: utc(10, 10),
+            remaining: 1,
+            channel_remaining: Some(0),
+        });
+        tolerates_a_later_member(&PageDocument {
+            items: vec![service],
+            next_cursor: None,
+        });
+        tolerates_a_later_member(&HoldDocument {
+            hold_id: "0b2bb6b6-3f3a-4c66-9a5a-2fbd8c72d1ee".to_owned(),
+            offering: "registry-update-30".to_owned(),
+            start: utc(5, 2),
+            end: utc(5, 3),
+            resource: Some("station-1".to_owned()),
+            units: 1,
+            expires_at: utc(5, 1),
+            policy_revision: 1,
+        });
+        tolerates_a_later_member(&AppointmentDocument {
+            appointment_id: "6e97f6a3-8524-4a13-9db8-ad0c4eb4d64b".to_owned(),
+            offering: "registry-update-30".to_owned(),
+            start: utc(5, 2),
+            end: utc(5, 3),
+            resource: Some("station-1".to_owned()),
+            units: 1,
+            channel: None,
+            revision: 2,
+            state: AppointmentStateDocument::Confirmed,
+            policy_revision: 1,
+            created_at: utc(4, 9),
+            cancelled_at: None,
+        });
+        tolerates_a_later_member(&AppointmentHistoryEntryDocument {
+            event_id: "b31c0f4e-cc7f-4ba8-88f2-9c1a9102f0a1".to_owned(),
+            kind: "rescheduled".to_owned(),
+            revision: 2,
+            occurred_at: utc(4, 10),
+            actor: Some("hmac-sha256:v2:8f0a".to_owned()),
+            detail: serde_json::json!({"start": "2026-10-05T03:00:00Z"}),
+        });
+        tolerates_a_later_member(&ExplainDocument {
+            offering: "registry-update-30".to_owned(),
+            start: utc(5, 2),
+            public_code: Some("capacity.exhausted".to_owned()),
+            detailed_code: Some("resource.unavailable".to_owned()),
+            explanation: Some("every capable member is unavailable".to_owned()),
+        });
+    }
+
+    #[test]
+    fn request_documents_refuse_a_member_they_do_not_declare() {
+        // The runtime reads these, and a member it does not declare is either
+        // a caller mistake or an attempt to reach a field the store owns.
+        // Tolerating one would let it pass unread and unanswered.
+        assert!(serde_json::from_str::<CreateAppointmentRequest>(
+            r#"{"hold":"0b2bb6b6-3f3a-4c66-9a5a-2fbd8c72d1ee","laterMember":1}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<RescheduleAppointmentRequest>(
+            r#"{"observedRevision":2,"admission":{},"laterMember":1}"#
+        )
+        .is_err());
+        assert!(serde_json::from_str::<CancelAppointmentRequest>(
+            r#"{"observedRevision":2,"laterMember":1}"#
         )
         .is_err());
     }
