@@ -223,16 +223,20 @@ fn run(cli: Cli) -> Result<Value> {
 }
 
 /// A completed report may still describe a refusal: an authoring check that
-/// found something when the caller passed `--deny-findings`, or a fixture run
-/// with failing cases, which always fails the build. The report is the
-/// evidence; the exit code is the signal.
+/// found something when the caller passed `--deny-findings`, a value whose
+/// text is outside its grammar (never gated behind `--deny-findings`, because
+/// there is nothing to opt into), or a fixture run with failing cases, which
+/// always fails the build. The report is the evidence; the exit code is the
+/// signal.
 fn report_is_refusal(report: &Value, deny_findings: bool) -> bool {
     if report["command"] == "check" {
-        return deny_findings && report["status"] == "incomplete";
+        return report["status"] == "invalid"
+            || (deny_findings && report["status"] == "incomplete");
     }
-    report["fixtures"]
-        .as_array()
-        .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"))
+    report["authoringStatus"] == "invalid"
+        || report["fixtures"]
+            .as_array()
+            .is_some_and(|fixtures| fixtures.iter().any(|fixture| fixture["status"] == "failed"))
 }
 
 fn usage_failure(message: String) -> Value {
@@ -373,12 +377,20 @@ fn human_lead(report: &Value) -> String {
         report["status"].as_str(),
         report["authoringStatus"].as_str(),
     ) {
+        ("check", Some("invalid"), _) => {
+            "Authoring check refused: a value's text is outside the grammar its field requires."
+                .to_owned()
+        }
         ("check", Some("incomplete"), _) => {
             "Authoring check completed with incomplete inputs.".to_owned()
         }
         ("check", Some("complete"), _) => "Authoring check passed with complete inputs.".to_owned(),
         ("test", _, _) if failed_fixtures => {
             "Offline synthetic fixtures reported failures.".to_owned()
+        }
+        ("test", _, Some("invalid")) => {
+            "Offline synthetic fixtures were not run: a value's text is outside the grammar its field requires."
+                .to_owned()
         }
         ("test", _, Some("incomplete")) => {
             "Offline synthetic fixtures passed with incomplete authored inputs.".to_owned()
@@ -651,6 +663,67 @@ mod tests {
         assert!(stderr.is_empty());
         assert_eq!(report["status"], "complete");
         assert_eq!(report["ok"], true);
+    }
+
+    /// A value whose text is outside its grammar (a clock that is not
+    /// `HH:MM`) is not unfinished authoring: no `--deny-findings` switch
+    /// governs it, because there is nothing to opt into. `check` refuses it
+    /// unconditionally, and the `version: 0` case above must keep exiting
+    /// zero without `--deny-findings` so the two families stay separated.
+    #[test]
+    fn a_malformed_value_refuses_check_regardless_of_deny_findings() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let policy_path = project.join("scheduling.yaml");
+        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
+            "startTime: \"09:00\"",
+            "startTime: \"9:00\"",
+            1,
+        );
+        std::fs::write(&policy_path, broken).unwrap();
+
+        let (exit, report, stderr) = run_json(&["check", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert_eq!(report["status"], "invalid");
+        assert_eq!(report["ok"], false);
+        assert!(report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| {
+                finding["path"] == "openings[0].startTime" && finding["reason"] == "malformed-value"
+            }));
+
+        // --deny-findings changes nothing here: the refusal does not depend
+        // on it.
+        let (exit, report, stderr) =
+            run_json(&["check", "--deny-findings", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert_eq!(report["status"], "invalid");
+        assert_eq!(report["ok"], false);
+    }
+
+    /// A malformed policy has no business running fixtures against it:
+    /// `test` refuses the same way `check` does, before it ever reads the
+    /// fixtures directory.
+    #[test]
+    fn a_malformed_value_refuses_test_without_running_fixtures() {
+        let (_root, project) = initialized("standalone-exact-time");
+        let policy_path = project.join("scheduling.yaml");
+        let broken = std::fs::read_to_string(&policy_path).unwrap().replacen(
+            "startTime: \"09:00\"",
+            "startTime: \"9:00\"",
+            1,
+        );
+        std::fs::write(&policy_path, broken).unwrap();
+
+        let (exit, report, stderr) = run_json(&["test", project.to_str().unwrap()]);
+        assert_eq!(exit, ExitCode::from(DOMAIN_REFUSAL_EXIT));
+        assert!(stderr.is_empty());
+        assert_eq!(report["authoringStatus"], "invalid");
+        assert_eq!(report["ok"], false);
+        assert_eq!(report["fixtures"].as_array().unwrap().len(), 0);
     }
 
     #[test]
