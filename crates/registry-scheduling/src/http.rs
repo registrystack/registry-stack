@@ -732,11 +732,24 @@ mod tests {
 
     /// The edge under test, without a service behind it: the boundary layers
     /// and the fallbacks are the surface these tests pin.
+    ///
+    /// The identified-resource routes are carried under their own templates,
+    /// reading their segment with the extractor the real handlers use, so a
+    /// segment the extractor refuses is refused here exactly as it is in the
+    /// assembled router.
     fn edge_router() -> Router {
         async fn echo(Json(_): Json<CancelAppointmentRequest>) -> StatusCode {
             StatusCode::OK
         }
-        http_edge(Router::new().route("/v1/echo", post(echo)))
+        async fn identified(Path(_): Path<Uuid>) -> StatusCode {
+            StatusCode::NO_CONTENT
+        }
+        http_edge(
+            Router::new()
+                .route("/v1/echo", post(echo))
+                .route(HOLD_ROUTE, delete(identified))
+                .route(APPOINTMENT_ROUTE, get(identified)),
+        )
     }
 
     #[tokio::test]
@@ -809,6 +822,34 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
         let body = body_json(response).await;
         assert_eq!(body["code"], "request.unsupported-media-type");
+    }
+
+    #[tokio::test]
+    async fn a_path_segment_that_is_not_an_identifier_is_a_request_problem() {
+        // The two operations whose only caller-controlled input is the path
+        // segment. The segment is read before the handler runs, so a segment
+        // that is not an identifier never reaches authentication and never
+        // reaches the store: the edge answers it, and the OpenAPI document
+        // declares that answer for every operation carrying a path parameter.
+        for (method, uri) in [
+            ("DELETE", "/v1/holds/not-an-identifier"),
+            ("GET", "/v1/appointments/not-an-identifier"),
+        ] {
+            let response = send(edge_router(), traced_request(method, uri)).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                response.headers().get(CONTENT_TYPE).unwrap(),
+                "application/problem+json"
+            );
+            let body = body_json(response).await;
+            assert_eq!(body["status"], 400);
+            assert_eq!(body["code"], "request.invalid");
+            assert_eq!(
+                body["type"],
+                "https://id.registrystack.org/problems/registry-scheduling/request/invalid"
+            );
+            assert_eq!(body["traceId"], TRACE_ID);
+        }
     }
 
     #[tokio::test]
