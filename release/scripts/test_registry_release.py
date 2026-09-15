@@ -1716,6 +1716,8 @@ class RegistryReleaseTest(TestCase):
                 "relay-client-contracts",
                 "relay-v2-contracts",
                 "casework-postgres",
+                "scheduling-contracts",
+                "scheduling-postgres",
             },
             set(rust_result["needs"]),
         )

@@ -58,7 +58,9 @@ jobs:
       relay_client_contracts: ${{ steps.filter.outputs.relay_client_contracts }}
       breg_contracts: ${{ steps.filter.outputs.breg_contracts }}
       casework_postgres: ${{ steps.filter.outputs.casework_postgres }}
+      scheduling_postgres: ${{ steps.filter.outputs.scheduling_postgres }}
       evidence_contracts: ${{ steps.filter.outputs.evidence_contracts }}
+      scheduling_contracts: ${{ steps.filter.outputs.scheduling_contracts }}
       release_tool: ${{ steps.filter.outputs.release_tool }}
       release_source_proof: ${{ steps.filter.outputs.release_source_proof }}
       docs: ${{ steps.filter.outputs.docs }}
@@ -702,6 +704,80 @@ jobs:
           CASEWORK_SOURCE_RETENTION_TEST_DATABASE_URL: postgresql://casework:casework_test@localhost:${{ job.services.postgres.ports['5432'] }}/casework_source_retention
         run: cargo test --locked --profile ci -p registry-casework --features postgres-test --test source_retention_postgres
 
+  scheduling-contracts:
+    name: Scheduling product contracts
+    needs: changes
+    if: needs.changes.outputs.scheduling_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Scheduling contract consistency
+        run: products/scheduling/scripts/check-contracts.sh
+
+  scheduling-postgres:
+    name: Scheduling PostgreSQL transactions
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.scheduling_postgres == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17.11@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_DB: scheduling
+          POSTGRES_USER: scheduling
+          POSTGRES_PASSWORD: scheduling_test
+        options: >-
+          --health-cmd "pg_isready -U scheduling -d scheduling"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+      - name: Rust cache
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the Scheduling authoring tool
+        run: cargo build --locked --profile ci -p registry-schedulingctl
+      - name: Verify Scheduling product contracts and offline authoring journeys
+        env:
+          SCHEDULINGCTL_BIN: ${{ github.workspace }}/target/ci/schedulingctl
+        run: products/scheduling/scripts/check-checkpoint.sh
+      - name: Verify commitment ledger transactions
+        env:
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling
+        run: cargo test --locked --profile ci -p registry-scheduling --features postgres-test --test postgres_commitments
+      - name: Create isolated authoring-apply test database
+        env:
+          POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
+        run: docker exec "$POSTGRES_CONTAINER_ID" createdb -U scheduling scheduling_records_apply
+      - name: Verify offline authoring record application
+        env:
+          SCHEDULING_TEST_DATABASE_URL: postgresql://scheduling:scheduling_test@localhost:${{ job.services.postgres.ports['5432'] }}/scheduling_records_apply
+        run: cargo test --locked --profile ci -p registry-schedulingctl --features postgres-test --test records_apply_postgres
+
   breg-contracts:
     name: Base Registry Engine product contracts (${{ matrix.lane }})
     needs: changes
@@ -860,6 +936,8 @@ jobs:
       - breg-contracts
       - identifiers
       - casework-postgres
+      - scheduling-postgres
+      - scheduling-contracts
     runs-on: ubuntu-slim
     env:
       RUST_JOB_RESULTS: ${{ toJSON(needs) }}
@@ -1813,6 +1891,8 @@ jobs:
       - breg-contracts
       - identifiers
       - casework-postgres
+      - scheduling-postgres
+      - scheduling-contracts
       - release-tool
       - release-source-proof
       - evidence-tutorials

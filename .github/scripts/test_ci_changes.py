@@ -251,6 +251,7 @@ class CiChangesTest(unittest.TestCase):
             "discovery-contracts",
             "relay-v2-contracts",
             "breg-contracts",
+            "scheduling-contracts",
             "evidence-tutorials",
             "docs",
             "client-bindings",
@@ -264,14 +265,17 @@ class CiChangesTest(unittest.TestCase):
 
         self.assertEqual(expected, direct)
         slots = sum(self.static_matrix_slots(self.workflow_jobs[name]) for name in direct)
-        self.assertLessEqual(slots, 14)
-        self.assertEqual(14, slots)
+        self.assertLessEqual(slots, 15)
+        self.assertEqual(15, slots)
 
     def test_deferred_ci_work_keeps_its_selector_and_explicit_status_guard(
         self,
     ) -> None:
         selectors = {
             "casework-postgres": "needs.changes.outputs.casework_postgres == 'true'",
+            "scheduling-postgres": (
+                "needs.changes.outputs.scheduling_postgres == 'true'"
+            ),
             "platform-fuzz": "needs.changes.outputs.platform == 'true'",
             "platform-coverage": "needs.changes.outputs.platform == 'true'",
             "rust-quality": "needs.changes.outputs.rust == 'true'",
@@ -336,6 +340,8 @@ class CiChangesTest(unittest.TestCase):
             "identifiers",
             "rust-result",
             "casework-postgres",
+            "scheduling-contracts",
+            "scheduling-postgres",
             "release-tool",
             "release-tool-required",
             "release-source-proof",
@@ -368,6 +374,8 @@ class CiChangesTest(unittest.TestCase):
                 "breg-contracts",
                 "identifiers",
                 "casework-postgres",
+                "scheduling-postgres",
+                "scheduling-contracts",
             ),
             "release-tool-required": ("changes", "release-tool"),
             "release-source-proof-required": ("changes", "release-source-proof"),
@@ -390,6 +398,8 @@ class CiChangesTest(unittest.TestCase):
                 "breg-contracts",
                 "identifiers",
                 "casework-postgres",
+                "scheduling-postgres",
+                "scheduling-contracts",
                 "release-tool",
                 "release-source-proof",
                 "evidence-tutorials",
@@ -445,7 +455,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(28, len(final_needs))
+        self.assertEqual(30, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]

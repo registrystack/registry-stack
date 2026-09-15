@@ -95,6 +95,7 @@ RELAY_V2_PACKAGES = frozenset(SHARDS["relay-v2"])
 RELAY_CLIENT_PACKAGES = frozenset(SHARDS["relay-client"])
 BREG_PACKAGES = frozenset(SHARDS["breg"])
 CASEWORK_PACKAGES = frozenset(SHARDS["casework"])
+SCHEDULING_PACKAGES = frozenset(SHARDS["scheduling"])
 STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 
 # These are the cross-product semantic commitments implemented independently by
@@ -690,6 +691,8 @@ def classify(
                 seeds.update(BREG_PACKAGES)
             elif path.startswith("products/casework/"):
                 seeds.update(CASEWORK_PACKAGES)
+            elif path.startswith("products/scheduling/"):
+                seeds.update(SCHEDULING_PACKAGES)
             elif path.startswith("products/identifiers/"):
                 # The catalog gate compiles its focused Relay V2 exporter.
                 # Catalog-only tooling does not require the full Rust matrix.
@@ -941,7 +944,9 @@ def classify(
             for path in paths
         ),
         "evidence_contracts": bool(affected & EVIDENCE_PACKAGES),
+        "scheduling_contracts": bool(affected & SCHEDULING_PACKAGES),
         "casework_postgres": bool(affected & CASEWORK_PACKAGES),
+        "scheduling_postgres": bool(affected & SCHEDULING_PACKAGES),
         "release_tool": release_tool,
         "release_source_proof": release_source_proof,
         "docs": docs,
