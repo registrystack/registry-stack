@@ -2320,3 +2320,148 @@ async fn one_caller_cannot_outrun_the_hold_ceiling_across_two_pools() {
     assert_eq!(problem["code"], "capacity.exhausted");
     assert_eq!(active_holds(&fx).await, 2);
 }
+
+/// How many rows each table the retention sweep must not touch currently
+/// holds, in one reading, so a sweep can be shown to have left every one of
+/// them exactly as it found them.
+async fn committed_row_counts(fx: &Fixture) -> Vec<(&'static str, i64)> {
+    let mut counts = Vec::new();
+    for table in [
+        "scheduling_claims",
+        "scheduling_history",
+        "scheduling_outbox",
+        "scheduling_audit_outbox",
+    ] {
+        let count: i64 = fx
+            .admin
+            .query_one(&format!("SELECT count(*) FROM {table}"), &[])
+            .await
+            .unwrap_or_else(|_| panic!("count {table}"))
+            .get(0);
+        counts.push((table, count));
+    }
+    counts
+}
+
+/// What the retention sweep erases, and just as much what it does not. The
+/// deployment advertises one retention period, for idempotency receipts, and
+/// the sweep enforces that one plus the fifteen minutes the listing contract
+/// gives a cursor. Appointments, their history, the delivery outbox and the
+/// audit journal have no retention period in this milestone and the sweep
+/// passes over them, by decision rather than omission; this test is what
+/// stops the single configured knob from quietly growing into a promise to
+/// erase committed scheduling data.
+#[tokio::test]
+async fn the_retention_sweep_erases_its_two_tables_and_leaves_the_rest_standing() {
+    let fx = fixture().await;
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let booking = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+    let (status, appointment) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "retention-1",
+            booking.clone(),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let appointment_id = appointment["appointmentId"].as_str().unwrap().to_owned();
+    let (status, page) = fx.get("/v1/services?limit=1", &fx.reader).await;
+    assert_eq!(status, StatusCode::OK);
+    let cursor = page["nextCursor"]
+        .as_str()
+        .expect("the first page mints a cursor")
+        .to_owned();
+    let committed = committed_row_counts(&fx).await;
+    assert!(
+        committed.iter().all(|(_, count)| *count > 0),
+        "the booking wrote to every table the sweep must not touch: {committed:?}"
+    );
+
+    // Long past the cursor's fifteen minutes and the receipt period the
+    // fixture deploys.
+    let after = Utc::now() + TimeDelta::days(8);
+    assert_eq!(
+        fx.store
+            .erase_expired_cursors(after)
+            .await
+            .expect("the cursor retention pass runs"),
+        1,
+        "the one expired cursor is erased"
+    );
+    assert_eq!(
+        fx.store
+            .erase_expired_attempts(after)
+            .await
+            .expect("the receipt retention pass runs"),
+        1,
+        "the one expired receipt is erased"
+    );
+
+    // A cursor is erased outright, so what the caller is told is that the
+    // token no longer names a listing. The row is gone, so nothing
+    // distinguishes a cursor swept past its expiry from one that never
+    // existed; a caller that waited is told to restart the listing either
+    // way.
+    let (status, problem) = fx
+        .get(&format!("/v1/services?limit=1&cursor={cursor}"), &fx.reader)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(problem["code"], "cursor.invalid");
+    let cursors: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM scheduling_cursors", &[])
+        .await
+        .expect("count the cursors")
+        .get(0);
+    assert_eq!(cursors, 0, "an erased cursor leaves no row behind");
+
+    // A receipt is tombstoned, not deleted: the row keeps the key and the
+    // request it answered and drops only the answer, so the key stays spent.
+    let attempt = fx
+        .admin
+        .query_one(
+            "SELECT count(*), count(receipt), count(erased_at) FROM scheduling_attempts",
+            &[],
+        )
+        .await
+        .expect("read the swept attempt row");
+    assert_eq!(attempt.get::<_, i64>(0), 1, "the attempt row is kept");
+    assert_eq!(attempt.get::<_, i64>(1), 0, "the answer is dropped");
+    assert_eq!(attempt.get::<_, i64>(2), 1, "the row is stamped erased");
+    let (status, problem) = fx
+        .post("/v1/appointments", &fx.agent, "retention-1", booking)
+        .await;
+    assert_eq!(status, StatusCode::GONE);
+    assert_eq!(problem["code"], "idempotency.expired");
+
+    // Everything the deployment committed is still there, and the
+    // appointment still reads back.
+    assert_eq!(
+        committed_row_counts(&fx).await,
+        committed,
+        "the sweep erased no committed scheduling data"
+    );
+    let (status, fetched) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &fx.agent)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(fetched["state"], "confirmed");
+
+    // Running the sweep again erases nothing: both passes are idempotent, so
+    // a tick that overlaps the previous one cannot double-count its work.
+    assert_eq!(
+        fx.store
+            .erase_expired_cursors(after)
+            .await
+            .expect("the cursor retention pass runs"),
+        0
+    );
+    assert_eq!(
+        fx.store
+            .erase_expired_attempts(after)
+            .await
+            .expect("the receipt retention pass runs"),
+        0
+    );
+}
