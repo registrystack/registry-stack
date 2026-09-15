@@ -3,7 +3,7 @@
 //! The operator runtime configuration document and the policy package
 //! identity it verifies.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -207,6 +207,16 @@ impl std::fmt::Debug for DatabaseConfig {
 pub struct OidcConfig {
     #[serde(default)]
     pub allowed_clients: Vec<String>,
+    /// The assertion authorities each client may exchange a subject token
+    /// from, keyed by client identifier.
+    ///
+    /// A deployment that performs no token exchange leaves this empty. Once a
+    /// client is listed, a token it exchanged is accepted only for one of that
+    /// client's declared authorities, so an assertion minted by an unrelated
+    /// authority the issuer happens to federate cannot become a booking
+    /// credential here.
+    #[serde(default)]
+    pub assertion_issuers: BTreeMap<String, Vec<String>>,
     pub issuer: String,
     pub audience: String,
     #[serde(default)]
@@ -227,6 +237,14 @@ pub struct OidcConfig {
 /// spellings it admits is derived, never authored, so no deployment can widen
 /// it to an ordinary JWT.
 const SCHEDULING_ACCESS_TOKEN_TYPE: &str = "at+jwt";
+
+/// Bounds on the authored assertion-issuer map, matching the Casework
+/// runtime's. They keep one operator document from becoming an unbounded
+/// verifier input.
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENTS: usize = 64;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES: usize = 128;
+pub(crate) const MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT: usize = 16;
+pub(crate) const MAXIMUM_ASSERTION_ISSUER_BYTES: usize = 512;
 
 fn default_scope_claim() -> String {
     "registry_scopes".to_owned()
@@ -510,6 +528,7 @@ impl RuntimeConfig {
         {
             return Err(RuntimeConfigError::InvalidOidc);
         }
+        self.validate_assertion_issuers()?;
         // An empty client list admits every client the issuer verifies, so a
         // deployment that simply forgot the field would accept a token minted
         // for an unrelated application in the same realm. Development loopback
@@ -545,6 +564,36 @@ impl RuntimeConfig {
         #[cfg(not(feature = "postgres-test"))]
         if self.database.test_only_plaintext {
             return Err(RuntimeConfigError::PlaintextDatabase);
+        }
+        Ok(())
+    }
+
+    /// Refuse an assertion-issuer map with too many clients, an oversized
+    /// client key or issuer string, too many issuers listed for one client, or
+    /// a repeated issuer within one client's list. This runs at configuration
+    /// load, before any verifier is built, so an operator sees the refusal
+    /// without the runtime ever starting.
+    fn validate_assertion_issuers(&self) -> Result<(), RuntimeConfigError> {
+        let assertion_issuers = &self.authentication.oidc.assertion_issuers;
+        if assertion_issuers.len() > MAXIMUM_ASSERTION_ISSUER_CLIENTS {
+            return Err(RuntimeConfigError::InvalidOidc);
+        }
+        for (client, issuers) in assertion_issuers {
+            if client.is_empty()
+                || client.len() > MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES
+                || issuers.len() > MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT
+            {
+                return Err(RuntimeConfigError::InvalidOidc);
+            }
+            let mut seen = BTreeSet::new();
+            for issuer in issuers {
+                if issuer.is_empty()
+                    || issuer.len() > MAXIMUM_ASSERTION_ISSUER_BYTES
+                    || !seen.insert(issuer)
+                {
+                    return Err(RuntimeConfigError::InvalidOidc);
+                }
+            }
         }
         Ok(())
     }
@@ -643,6 +692,7 @@ impl RuntimeConfig {
         )
         .with_scope_claim(self.authentication.oidc.scope_claim.clone())
         .with_allowed_clients(self.authentication.oidc.allowed_clients.clone())
+        .with_assertion_issuers(self.authentication.oidc.assertion_issuers.clone())
     }
 }
 
@@ -1084,6 +1134,66 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             .remove("allowedClients");
         let operator = write_operator(root.path(), document);
         RuntimeConfig::load(&operator).expect("development loopback stays permissive");
+    }
+
+    #[test]
+    fn a_declared_assertion_authority_binds_the_client_that_may_exchange_from_it() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let mut document = operator_value(&package, "development-loopback");
+        document["authentication"]["oidc"]["assertionIssuers"] = serde_json::json!({
+            "scheduling-booking-agent": ["https://authority.example.test"]
+        });
+        let operator = write_operator(root.path(), document);
+        let config = RuntimeConfig::load(&operator).expect("an assertion authority is declarable");
+        assert_eq!(
+            config.verifier_profile().assertion_issuers,
+            BTreeMap::from([(
+                "scheduling-booking-agent".to_owned(),
+                vec!["https://authority.example.test".to_owned()]
+            )]),
+            "the declared assertion authorities never reached the verifier"
+        );
+    }
+
+    #[test]
+    fn an_assertion_issuer_map_outside_its_bounds_is_refused() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        write_policy(&package);
+        let oversized_client = "c".repeat(MAXIMUM_ASSERTION_ISSUER_CLIENT_BYTES + 1);
+        let oversized_issuer = format!("https://{}", "a".repeat(MAXIMUM_ASSERTION_ISSUER_BYTES));
+        let too_many_clients: serde_json::Map<String, serde_json::Value> = (0
+            ..=MAXIMUM_ASSERTION_ISSUER_CLIENTS)
+            .map(|index| {
+                (
+                    format!("client-{index}"),
+                    serde_json::json!(["https://a.test"]),
+                )
+            })
+            .collect();
+        let too_many_issuers: Vec<String> = (0..=MAXIMUM_ASSERTION_ISSUERS_PER_CLIENT)
+            .map(|index| format!("https://authority-{index}.test"))
+            .collect();
+        for refused in [
+            serde_json::json!({"": ["https://a.test"]}),
+            serde_json::json!({oversized_client: ["https://a.test"]}),
+            serde_json::json!({"client": [""]}),
+            serde_json::json!({"client": [oversized_issuer]}),
+            serde_json::json!({"client": ["https://a.test", "https://a.test"]}),
+            serde_json::Value::Object(too_many_clients),
+            serde_json::json!({"client": too_many_issuers}),
+        ] {
+            let mut document = operator_value(&package, "development-loopback");
+            document["authentication"]["oidc"]["assertionIssuers"] = refused.clone();
+            let operator = write_operator(root.path(), document);
+            let outcome = RuntimeConfig::load(&operator);
+            assert!(
+                matches!(outcome, Err(RuntimeConfigError::InvalidOidc)),
+                "an assertion-issuer map outside its bounds was accepted: {refused}"
+            );
+        }
     }
 
     #[test]

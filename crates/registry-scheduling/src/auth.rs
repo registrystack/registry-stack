@@ -27,6 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use registry_platform_authcommon::validate_compact_access_token;
 use registry_platform_oidc::{
     actor_kind, grant_claims, ClaimNames, JwksFetcher, TokenVerifier, TokenVerifierConfig,
+    ASSERTION_ISSUER_CLAIM,
 };
 use thiserror::Error;
 
@@ -39,6 +40,8 @@ pub struct SchedulingAuthenticator {
     audience: String,
     reads_scope: String,
     explain_scope: String,
+    /// Whether the deployment declared any assertion authority at all.
+    binds_assertion_issuers: bool,
 }
 
 impl SchedulingAuthenticator {
@@ -56,6 +59,7 @@ impl SchedulingAuthenticator {
             audience: oidc.audience.clone(),
             reads_scope: oidc.reads_scope.clone(),
             explain_scope: oidc.explain_scope.clone(),
+            binds_assertion_issuers: !oidc.assertion_issuers.is_empty(),
         }
     }
 
@@ -100,6 +104,19 @@ impl SchedulingAuthenticator {
             tracing::debug!(error = %error, "the Scheduling bearer credential did not verify");
             AuthenticationError::Refused
         })?;
+        // An exchanged token names the authority whose assertion produced it.
+        // The platform applies no rule while the deployment's map is empty, so
+        // an empty map would trust every authority the issuer federates.
+        // Refuse the exchange instead: a deployment that means to accept one
+        // says which authorities, and which client may present them.
+        if !self.binds_assertion_issuers
+            && verified.claims.extra.contains_key(ASSERTION_ISSUER_CLAIM)
+        {
+            tracing::debug!(
+                "an exchanged credential arrived at a deployment that declared no assertion authority"
+            );
+            return Err(AuthenticationError::Profile);
+        }
         let kind = actor_kind(&verified.claims, &self.claim_names)
             .map_err(|_| AuthenticationError::Claims)?;
         let grant = grant_claims(&verified.claims, &self.claim_names, unix_now())
@@ -170,7 +187,7 @@ mod tests {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
     use chrono::Utc;
     use jsonwebtoken::{Algorithm, EncodingKey, Header};
-    use registry_platform_oidc::{ActorKind, JwksFetcherConfig};
+    use registry_platform_oidc::{ActorKind, JwksFetcherConfig, ASSERTION_ISSUER_CLAIM};
     use serde_json::json;
 
     const ISSUER: &str = "https://task-token.test";
@@ -181,6 +198,7 @@ mod tests {
     fn oidc() -> OidcConfig {
         OidcConfig {
             allowed_clients: vec![CLIENT.to_owned()],
+            assertion_issuers: std::collections::BTreeMap::new(),
             issuer: ISSUER.to_owned(),
             audience: AUDIENCE.to_owned(),
             jwks_uri: None,
@@ -206,6 +224,12 @@ mod tests {
     }
 
     fn authenticator() -> SchedulingAuthenticator {
+        authenticator_with(oidc())
+    }
+
+    /// Build the authenticator the way the runtime does, so the verifier and
+    /// the authenticator read the same deployment settings.
+    fn authenticator_with(oidc: OidcConfig) -> SchedulingAuthenticator {
         let verifier = TokenVerifierConfig::access_token_profile(
             ISSUER,
             vec![AUDIENCE.to_owned()],
@@ -213,8 +237,9 @@ mod tests {
             vec!["at+jwt".to_owned()],
         )
         .with_scope_claim("registry_scopes")
-        .with_allowed_clients(vec![CLIENT.to_owned()]);
-        SchedulingAuthenticator::new(&oidc(), verifier, keys())
+        .with_allowed_clients(vec![CLIENT.to_owned()])
+        .with_assertion_issuers(oidc.assertion_issuers.clone());
+        SchedulingAuthenticator::new(&oidc, verifier, keys())
     }
 
     /// Sign an access token, filling in the claims a real token always
@@ -396,6 +421,47 @@ mod tests {
         assert!(matches!(
             authenticator().authenticate_read(&credential).await,
             Err(AuthenticationError::Claims)
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_exchanged_token_is_refused_until_its_authority_is_declared() {
+        const AUTHORITY: &str = "https://authority.example.test";
+        let credential = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling-read",
+            "registry_actor_kind": "service",
+            ASSERTION_ISSUER_CLAIM: AUTHORITY,
+        }));
+        assert!(
+            matches!(
+                authenticator().authenticate_read(&credential).await,
+                Err(AuthenticationError::Profile)
+            ),
+            "an exchanged token was accepted by a deployment that declared no assertion authority"
+        );
+
+        let mut declared = oidc();
+        declared.assertion_issuers =
+            std::collections::BTreeMap::from([(CLIENT.to_owned(), vec![AUTHORITY.to_owned()])]);
+        authenticator_with(declared.clone())
+            .authenticate_read(&credential)
+            .await
+            .expect("a declared authority's exchanged token reads");
+
+        // The platform still refuses an authority the client may not exchange
+        // from once the map is populated.
+        let other = token(json!({
+            "sub": "principal-1",
+            "azp": CLIENT,
+            "registry_scopes": "scheduling-read",
+            "registry_actor_kind": "service",
+            ASSERTION_ISSUER_CLAIM: "https://unrelated.example.test",
+        }));
+        assert!(matches!(
+            authenticator_with(declared).authenticate_read(&other).await,
+            Err(AuthenticationError::Refused)
         ));
     }
 

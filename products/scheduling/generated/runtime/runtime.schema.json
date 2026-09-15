@@ -131,6 +131,26 @@
           },
           "type": "array"
         },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "default": {},
+          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier.\n\nA deployment that performs no token exchange leaves this empty. Once a\nclient is listed, a token it exchanged is accepted only for one of that\nclient's declared authorities, so an assertion minted by an unrelated\nauthority the issuer happens to federate cannot become a booking\ncredential here.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "type": "object"
+        },
         "audience": {
           "type": "string"
         },
