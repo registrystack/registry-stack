@@ -35,7 +35,11 @@ tokio = { workspace = true, features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]
-registry-scheduling = { workspace = true, features = ["postgres-test"] }
+# The database suites reach the runtime's plaintext test connection through
+# this crate's own `postgres-test` feature, which their `required-features`
+# already demand. Asking for it here instead would turn it on for every build
+# holding both crates, and the runtime's own database suite would then be
+# compiled and run by shards that have no server to offer it.
 tokio-postgres.workspace = true
 
 [[test]]
