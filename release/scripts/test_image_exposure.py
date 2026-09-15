@@ -13,8 +13,8 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
-from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("image_exposure.py")
@@ -688,7 +688,7 @@ class ReportTest(unittest.TestCase):
 
     def test_analyze_executable_runs_binutils_and_builds_the_report(self) -> None:
         tools = self.fake_tools()
-        with mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
+        with unittest.mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
             report = MODULE.analyze_executable(
                 self.executable, image="relay", executable="/usr/local/bin/relay"
             )
@@ -707,7 +707,7 @@ class ReportTest(unittest.TestCase):
             with self.subTest(tool=tool):
                 shutil.rmtree(self.root / "tools", ignore_errors=True)
                 tools = self.fake_tools(**{f"{tool}_status": 3})
-                with mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
+                with unittest.mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
                     with self.assertRaisesRegex(
                         MODULE.ExposureError, f"{tool} .*synthetic failure"
                     ):
@@ -719,7 +719,7 @@ class ReportTest(unittest.TestCase):
 
     def test_objdump_failure_is_reported_over_its_truncated_output(self) -> None:
         tools = self.fake_tools(objdump_status=3, objdump_output=False)
-        with mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
+        with unittest.mock.patch.dict(os.environ, {"PATH": self.search_path(tools)}):
             with self.assertRaisesRegex(
                 MODULE.ExposureError, "objdump failed with exit status 3: .*synthetic failure"
             ):
@@ -730,7 +730,7 @@ class ReportTest(unittest.TestCase):
                 )
 
     def test_missing_binutils_are_refused(self) -> None:
-        with mock.patch.object(MODULE.shutil, "which", return_value=None):
+        with unittest.mock.patch.object(MODULE.shutil, "which", return_value=None):
             with self.assertRaisesRegex(MODULE.ExposureError, "objdump.*readelf"):
                 MODULE.require_binutils()
 
