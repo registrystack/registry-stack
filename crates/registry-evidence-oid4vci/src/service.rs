@@ -160,7 +160,12 @@ pub struct DeliveryService {
     authorizer: Arc<dyn OfferAuthorizer>,
     issuer: Arc<dyn CredentialIssuer>,
     metrics: Arc<Metrics>,
+    /// Where every deadline in this process is read against.
+    clock: Clock,
 }
+
+/// How a handler reads the current second.
+type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 
 impl std::fmt::Debug for DeliveryService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -204,7 +209,28 @@ impl DeliveryService {
             authorizer,
             issuer,
             metrics,
+            clock: Arc::new(now),
         }
+    }
+
+    /// Read every deadline against a clock the caller supplies.
+    ///
+    /// Every deadline this service holds is a whole Unix second, so a test that
+    /// needs one to have passed has to be able to say when it passed. Sleeping
+    /// past a configured window leaves that to where the boundary fell, and an
+    /// entry created just before one holds almost none of the window it was
+    /// given. A serving process never comes through here: [`Self::load`] reads
+    /// the system clock, and no configuration key reaches this.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn with_clock(mut self, clock: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.clock = Arc::new(clock);
+        self
+    }
+
+    /// The current second, as every deadline in this process is judged against.
+    fn now(&self) -> i64 {
+        (self.clock)()
     }
 
     /// Validate a configuration without taking what a serving process holds.
@@ -404,7 +430,7 @@ async fn cleanup_expired(service: Arc<DeliveryService>, mut stopped: watch::Rece
     loop {
         tokio::select! {
             _ = interval.tick() => {
-                let expired = service.store.sweep(now());
+                let expired = service.store.sweep(service.now());
                 service.metrics.record_cleanup(expired);
                 service
                     .metrics
@@ -555,7 +581,7 @@ async fn create_offer(
         &code,
         transaction_code.as_ref().map(|code| code.as_str()),
         prepared,
-        now(),
+        service.now(),
     ) {
         return store_response(&service, &error, Outcome::StoreSaturated);
     }
@@ -625,7 +651,7 @@ async fn token(
         &code,
         transaction_code.as_ref().map(|code| code.as_str()),
         &access_token,
-        now(),
+        service.now(),
     ) {
         return store_response(&service, &error, Outcome::CodeClaimRefused);
     }
@@ -675,7 +701,7 @@ async fn nonce(State(service): State<Arc<DeliveryService>>, body: Bytes) -> Resp
     service.metrics.record_outcome(Outcome::NonceMinted);
     value_response(
         StatusCode::OK,
-        &json!({"c_nonce": service.nonces.mint(now())}),
+        &json!({"c_nonce": service.nonces.mint(service.now())}),
     )
 }
 
@@ -708,7 +734,10 @@ async fn credential(
         return unauthorized("a bearer access token is required");
     };
     let access_token = Zeroizing::new(access_token.to_owned());
-    let prepared = match service.store.claim_access_token(&access_token, now()) {
+    let prepared = match service
+        .store
+        .claim_access_token(&access_token, service.now())
+    {
         Ok(prepared) => prepared,
         Err(StoreError::Unknown) => {
             service.metrics.record_outcome(Outcome::TokenClaimRefused);
@@ -718,7 +747,7 @@ async fn credential(
     };
     stage.mark_claimed();
     service.metrics.record_outcome(Outcome::TokenClaimed);
-    let expired = service.store.sweep(now());
+    let expired = service.store.sweep(service.now());
     service.metrics.record_cleanup(expired);
     service
         .metrics
@@ -874,7 +903,7 @@ fn holder_key_from_proof(
             "the proof does not carry a nonce",
         ));
     };
-    match service.nonces.verify(&nonce, now()) {
+    match service.nonces.verify(&nonce, service.now()) {
         Ok(()) => {}
         Err(NonceError::Expired) => {
             return Err(ProofRefusal::nonce(
@@ -901,7 +930,7 @@ fn holder_key_from_proof(
         max_age: PROOF_MAX_AGE,
         max_future_skew: PROOF_MAX_FUTURE_SKEW,
     };
-    let claims = validate_oid4vci_proof_jwt(proof, &policy, now())
+    let claims = validate_oid4vci_proof_jwt(proof, &policy, service.now())
         .map_err(|_| ProofRefusal::new("invalid_proof", "the proof was not accepted"))?;
     holder_public_key(&claims.holder_jwk).ok_or(ProofRefusal::new(
         "invalid_proof",
@@ -972,6 +1001,7 @@ fn bearer_credential(headers: &HeaderMap) -> Option<&str> {
     (!credential.is_empty()).then_some(credential)
 }
 
+/// The system clock, which is the reading a serving process takes.
 fn now() -> i64 {
     Utc::now().timestamp()
 }

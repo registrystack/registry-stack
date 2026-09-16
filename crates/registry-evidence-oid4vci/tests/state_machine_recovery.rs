@@ -8,7 +8,10 @@
 
 use std::{
     fs,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicI64, Ordering},
+        Arc, Mutex,
+    },
     time::Duration,
 };
 
@@ -309,6 +312,36 @@ struct Harness {
     issuer: Arc<RecordingIssuer>,
 }
 
+/// The clock a test runs the service on: the wall-clock second a deployment
+/// reads, plus an offset the test moves forward.
+///
+/// Every deadline the store holds is a whole Unix second, so a test that
+/// expires state by sleeping is asking the wall clock to land where the test
+/// needs it. An entry created just before a boundary holds almost none of its
+/// configured window, and a loaded machine spends the rest. Moving the reading
+/// forward instead puts the deadline that must have passed behind the service
+/// by construction, and leaves everything created afterwards its whole window.
+#[derive(Clone, Default)]
+struct TestClock(Arc<AtomicI64>);
+
+impl TestClock {
+    /// The reading the service takes right now.
+    fn now(&self) -> i64 {
+        chrono::Utc::now().timestamp() + self.0.load(Ordering::SeqCst)
+    }
+
+    /// Move every later reading forward by whole seconds.
+    fn advance(&self, seconds: i64) {
+        self.0.fetch_add(seconds, Ordering::SeqCst);
+    }
+
+    /// The reading function a service built on this clock holds.
+    fn reading(&self) -> impl Fn() -> i64 + Send + Sync + 'static {
+        let clock = self.clone();
+        move || clock.now()
+    }
+}
+
 fn loaded_config() -> DeliveryConfig {
     let directory = tempfile::tempdir().expect("a temporary deployment directory");
     let path = directory.path().join("oid4vci.yaml");
@@ -316,29 +349,54 @@ fn loaded_config() -> DeliveryConfig {
     DeliveryConfig::load(&path).expect("the reference deployment loads before test mutation")
 }
 
-fn server_with_issuer(
+fn service_with_issuer(
     mut config: DeliveryConfig,
     issuer: Arc<dyn CredentialIssuer>,
-) -> Arc<TestServer> {
+) -> DeliveryService {
     // The listener belongs to a real deployment. axum-test binds its own
     // random loopback port, while every published identifier remains the
     // deployment's exact configured value.
     config.listener.port = 8090;
-    let service = Arc::new(DeliveryService::with_halves(
-        config,
-        Arc::new(StubAuthorizer),
-        issuer,
-    ));
+    DeliveryService::with_halves(config, Arc::new(StubAuthorizer), issuer)
+}
+
+fn served(service: DeliveryService) -> Arc<TestServer> {
     Arc::new(
         TestServer::builder()
             .http_transport()
-            .build(build_app(service)),
+            .build(build_app(Arc::new(service))),
     )
+}
+
+fn server_with_issuer(
+    config: DeliveryConfig,
+    issuer: Arc<dyn CredentialIssuer>,
+) -> Arc<TestServer> {
+    served(service_with_issuer(config, issuer))
+}
+
+fn server_with_issuer_on_clock(
+    config: DeliveryConfig,
+    issuer: Arc<dyn CredentialIssuer>,
+    clock: &TestClock,
+) -> Arc<TestServer> {
+    served(service_with_issuer(config, issuer).with_clock(clock.reading()))
 }
 
 fn harness(config: DeliveryConfig) -> Harness {
     let issuer = Arc::new(RecordingIssuer::new());
     let server = server_with_issuer(config, Arc::clone(&issuer) as Arc<dyn CredentialIssuer>);
+    Harness { server, issuer }
+}
+
+/// A harness whose service reads the test's clock rather than the wall clock.
+fn harness_on_clock(config: DeliveryConfig, clock: &TestClock) -> Harness {
+    let issuer = Arc::new(RecordingIssuer::new());
+    let server = server_with_issuer_on_clock(
+        config,
+        Arc::clone(&issuer) as Arc<dyn CredentialIssuer>,
+        clock,
+    );
     Harness { server, issuer }
 }
 
@@ -419,6 +477,13 @@ fn private_jwk() -> String {
 }
 
 fn proof_jwt(private_key: &str, nonce: &str) -> String {
+    proof_jwt_at(private_key, nonce, chrono::Utc::now().timestamp())
+}
+
+/// A proof dated by a reading the caller chose, for the tests that run the
+/// service on their own clock: a wallet dates its proof by the clock the
+/// service reads it against, so a test that moves that clock moves both.
+fn proof_jwt_at(private_key: &str, nonce: &str, issued_at: i64) -> String {
     let private = PrivateJwk::parse(private_key).expect("the holder key parses");
     let header = json!({
         "alg": "ES256",
@@ -427,7 +492,7 @@ fn proof_jwt(private_key: &str, nonce: &str) -> String {
     });
     let claims = json!({
         "aud": "https://wallet.example.org",
-        "iat": chrono::Utc::now().timestamp(),
+        "iat": issued_at,
         "nonce": nonce,
     });
     let signing_input = format!(
@@ -1100,15 +1165,17 @@ async fn offer_saturation_fails_closed_without_evicting_a_live_exchange() {
 async fn token_saturation_does_not_spend_the_offer_that_could_not_be_exchanged() {
     let mut config = loaded_config();
     config.store.maximum_offers = 1;
-    // Store deadlines use whole seconds. This leaves the recovered offer at
-    // least four seconds for the credential exchange even near a boundary.
-    config.store.offer_lifetime_seconds = 5;
-    config.store.access_token_lifetime_seconds = 60;
-    config.store.nonce_lifetime_seconds = 30;
-    let harness = harness(config);
+    // The held token has to outlive the reading that expires the first offer's
+    // ledger, so its window is set above the offer window rather than near it.
+    config.store.access_token_lifetime_seconds = 900;
+    let offer_lifetime = config.store.offer_lifetime_seconds as i64;
+    let clock = TestClock::default();
+    let harness = harness_on_clock(config, &clock);
 
     let held_token = access_token(&harness.server).await;
-    tokio::time::sleep(Duration::from_millis(5_100)).await;
+    // Past the offer window, so the redeemed offer's ledger is expired however
+    // the seconds fell and the single ledger slot is free for the offer below.
+    clock.advance(offer_lifetime + 1);
 
     let preserved_code = offered_code(&create_offer(&harness.server, false).await);
     let saturated = harness
@@ -1133,7 +1200,11 @@ async fn token_saturation_does_not_spend_the_offer_that_could_not_be_exchanged()
         .server
         .post(CREDENTIAL_PATH)
         .add_header("authorization", format!("Bearer {held_token}"))
-        .json(&credential_body(vec![proof_jwt(&private_jwk(), &nonce)]))
+        .json(&credential_body(vec![proof_jwt_at(
+            &private_jwk(),
+            &nonce,
+            clock.now(),
+        )]))
         .await;
     assert_eq!(released.status_code(), StatusCode::OK);
 
@@ -1262,11 +1333,14 @@ async fn unknown_redeemed_and_locked_codes_share_one_value_free_error() {
 async fn expiry_cleanup_preserves_live_state_and_releases_expired_state() {
     let mut cleanup_config = loaded_config();
     cleanup_config.store.maximum_offers = 2;
-    cleanup_config.store.offer_lifetime_seconds = 1;
-    let cleanup = harness(cleanup_config);
+    let offer_lifetime = cleanup_config.store.offer_lifetime_seconds as i64;
+    let cleanup_clock = TestClock::default();
+    let cleanup = harness_on_clock(cleanup_config, &cleanup_clock);
 
     let expired_code = offered_code(&create_offer(&cleanup.server, false).await);
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    // Past the configured offer window, so this offer is expired however the
+    // seconds fell, and the two created below hold a whole window each.
+    cleanup_clock.advance(offer_lifetime + 1);
     let expired = cleanup
         .server
         .post(TOKEN_PATH)
@@ -1292,13 +1366,19 @@ async fn expiry_cleanup_preserves_live_state_and_releases_expired_state() {
         .await;
     assert_eq!(live.status_code(), StatusCode::OK);
 
-    let mut token_config = loaded_config();
-    token_config.store.access_token_lifetime_seconds = 1;
-    let token_expiry = harness(token_config);
+    let token_config = loaded_config();
+    let access_token_lifetime = token_config.store.access_token_lifetime_seconds as i64;
+    let token_clock = TestClock::default();
+    let token_expiry = harness_on_clock(token_config, &token_clock);
     let expired_token = access_token(&token_expiry.server).await;
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    // Past the configured access token window, on the same reading.
+    token_clock.advance(access_token_lifetime + 1);
     let nonce = minted_nonce(&token_expiry.server).await;
-    let request = credential_body(vec![proof_jwt(&private_jwk(), &nonce)]);
+    let request = credential_body(vec![proof_jwt_at(
+        &private_jwk(),
+        &nonce,
+        token_clock.now(),
+    )]);
     let expired_token_response = token_expiry
         .server
         .post(CREDENTIAL_PATH)
@@ -1321,18 +1401,24 @@ async fn expiry_cleanup_preserves_live_state_and_releases_expired_state() {
     );
     assert_eq!(token_expiry.issuer.call_count(), 0);
 
-    let mut nonce_config = loaded_config();
-    nonce_config.store.access_token_lifetime_seconds = 5;
-    nonce_config.store.nonce_lifetime_seconds = 1;
-    let nonce_expiry = harness(nonce_config);
+    let nonce_config = loaded_config();
+    let nonce_lifetime = nonce_config.store.nonce_lifetime_seconds as i64;
+    let nonce_clock = TestClock::default();
+    let nonce_expiry = harness_on_clock(nonce_config, &nonce_clock);
     let token = access_token(&nonce_expiry.server).await;
     let nonce = minted_nonce(&nonce_expiry.server).await;
-    tokio::time::sleep(Duration::from_millis(1_100)).await;
+    // Past the nonce window and well inside the longer access token window, so
+    // the refusal below is the nonce and the token is still there to claim.
+    nonce_clock.advance(nonce_lifetime + 1);
     let expired_nonce_response = nonce_expiry
         .server
         .post(CREDENTIAL_PATH)
         .add_header("authorization", format!("Bearer {token}"))
-        .json(&credential_body(vec![proof_jwt(&private_jwk(), &nonce)]))
+        .json(&credential_body(vec![proof_jwt_at(
+            &private_jwk(),
+            &nonce,
+            nonce_clock.now(),
+        )]))
         .await;
     assert_eq!(
         expired_nonce_response.status_code(),
@@ -1345,11 +1431,14 @@ async fn expiry_cleanup_preserves_live_state_and_releases_expired_state() {
         .server
         .post(CREDENTIAL_PATH)
         .add_header("authorization", format!("Bearer {token}"))
-        .json(&credential_body(vec![proof_jwt(
+        .json(&credential_body(vec![proof_jwt_at(
             &private_jwk(),
             &fresh_nonce,
+            nonce_clock.now(),
         )]))
         .await;
+    // A live token that was already claimed for the refused request, so
+    // correcting the nonce does not restore it.
     assert_eq!(retry.status_code(), StatusCode::UNAUTHORIZED);
     assert_eq!(nonce_expiry.issuer.call_count(), 0);
 }
