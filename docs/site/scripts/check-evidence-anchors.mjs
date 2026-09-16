@@ -5,6 +5,7 @@
 // line references they carry are inside those files, and the symbols they name are
 // present in at least one path the same anchor cites.
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -602,6 +603,35 @@ function mdxPages(directory) {
   return pages.sort();
 }
 
+// Every top-level directory the repository tracks, checked against REPOSITORY_ROOTS. A
+// citation into a directory the list omits parses as no citation at all, so its anchor is
+// checked against nothing and the gap stays silent until a page happens to cite it. Git,
+// not a directory listing, is what says which directories the repository keeps: a listing
+// also carries build output and local tooling, and which of those are present differs
+// between a clean CI checkout and a working machine, so a listing would fail for reasons
+// that are not drift. `git ls-tree` reads the tree object HEAD already carries, so it also
+// works in the shallow, single-commit checkout CI runs this script from.
+export function checkRepositoryRoots({ repoRoot = resolve(scriptDir, '../../..') } = {}) {
+  const tracked = execFileSync('git', ['ls-tree', '-d', '--name-only', 'HEAD'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+    .split('\n')
+    .filter((name) => name !== '');
+  // The roots are regular expression source, so a dot-directory carries its escape.
+  const named = new Set(REPOSITORY_ROOTS.map((root) => root.replaceAll('\\', '')));
+  const missing = tracked.filter((name) => !named.has(name));
+  if (missing.length === 0) {
+    return [];
+  }
+  const directories = missing.length === 1 ? 'directory' : 'directories';
+  return [
+    `the repository tracks the top-level ${directories} ${missing.join(', ')}, which ` +
+      'REPOSITORY_ROOTS in check-evidence-anchors.mjs does not name; a citation into one parses ' +
+      'as no citation at all, so add it to REPOSITORY_ROOTS',
+  ];
+}
+
 export function checkEvidenceAnchors({
   repoRoot = resolve(scriptDir, '../../..'),
   docsRoot,
@@ -856,12 +886,14 @@ export function parseArguments(args) {
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   try {
     const options = parseArguments(process.argv.slice(2));
+    const rootErrors = checkRepositoryRoots();
     const result = checkEvidenceAnchors(options);
+    const errors = [...rootErrors, ...result.errors];
     const counts =
       `${result.anchors} anchors, ${result.paths} cited paths, and ${result.symbols} cited symbols checked; ` +
       `${result.lineRefs} line-range citations found`;
-    if (result.errors.length > 0) {
-      console.error(result.errors.join('\n'));
+    if (errors.length > 0) {
+      console.error(errors.join('\n'));
       console.error(`Evidence anchor check failed: ${counts}.`);
       process.exitCode = 1;
     } else {

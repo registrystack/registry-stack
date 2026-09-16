@@ -9,8 +9,8 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 
 import {
-  REPOSITORY_ROOTS,
   checkEvidenceAnchors,
+  checkRepositoryRoots,
   extractAnchors,
   extractSymbols,
   parseAnchor,
@@ -886,24 +886,35 @@ test('root CI runs the anchor check on every pull request and gates the branch o
 });
 
 test('names every top-level directory the repository tracks as a citation root', () => {
-  // A citation root the list does not name parses as no citation at all, so the anchor
-  // carrying it is checked against nothing. Git is what says which directories the
-  // repository keeps: a listing of the checkout also carries build output and local
-  // tooling, and which of those are present differs between a clean CI checkout and a
-  // working machine, so a listing would fail for reasons that are not drift.
-  const tracked = execFileSync('git', ['ls-tree', '-d', '--name-only', 'HEAD'], {
-    cwd: repositoryRoot,
-    encoding: 'utf8',
-  })
-    .split('\n')
-    .filter((name) => name !== '');
-  assert.ok(tracked.length > 0);
-  // The roots are regular expression source, so a dot-directory carries its escape.
-  const named = new Set(REPOSITORY_ROOTS.map((root) => root.replaceAll('\\', '')));
-  assert.deepEqual(
-    tracked.filter((name) => !named.has(name)),
-    [],
-  );
+  // checkRepositoryRoots carries the git-versus-REPOSITORY_ROOTS comparison itself; this
+  // test runs it against the real checkout so a directory the repository has grown that
+  // REPOSITORY_ROOTS does not yet name fails here the same way it fails in CI.
+  assert.deepEqual(checkRepositoryRoots(), []);
+});
+
+function gitCheckout(t, { directory }) {
+  const root = mkdtempSync(resolve(tmpdir(), 'registry-evidence-roots-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  write(root, `${directory}/file.txt`, 'tracked\n');
+  execFileSync('git', ['init', '--quiet'], { cwd: root });
+  execFileSync('git', ['config', 'user.email', 'tests@example.invalid'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'Evidence Anchor Tests'], { cwd: root });
+  execFileSync('git', ['add', '.'], { cwd: root });
+  execFileSync('git', ['commit', '--quiet', '-m', 'tracked directory'], { cwd: root });
+  return root;
+}
+
+test('passes a checkout whose tracked top-level directories are all named in REPOSITORY_ROOTS', (t) => {
+  const root = gitCheckout(t, { directory: 'crates' });
+  assert.deepEqual(checkRepositoryRoots({ repoRoot: root }), []);
+});
+
+test('fails closed when a tracked top-level directory is missing from REPOSITORY_ROOTS', (t) => {
+  const root = gitCheckout(t, { directory: 'unlisted-root' });
+  const errors = checkRepositoryRoots({ repoRoot: root });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /unlisted-root/);
+  assert.match(errors[0], /REPOSITORY_ROOTS/);
 });
 
 test('reads a citation into a top-level directory beside the crates and products', (t) => {
