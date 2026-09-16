@@ -301,6 +301,8 @@ pub struct BRegRetainedApplication {
     proposal_version: BRegProposalVersion,
     effect_digest: Option<BRegEffectDigest>,
     applied_at: String,
+    reason_present: bool,
+    reason: Option<String>,
 }
 
 impl BRegRetainedApplication {
@@ -324,6 +326,16 @@ impl BRegRetainedApplication {
     pub fn applied_at(&self) -> &str {
         &self.applied_at
     }
+
+    #[must_use]
+    pub const fn reason_present(&self) -> bool {
+        self.reason_present
+    }
+
+    #[must_use]
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
 }
 
 impl fmt::Debug for BRegRetainedApplication {
@@ -334,6 +346,8 @@ impl fmt::Debug for BRegRetainedApplication {
             .field("proposal_version", &self.proposal_version)
             .field("effect_digest", &"<redacted>")
             .field("applied_at", &"<redacted>")
+            .field("reason_present", &self.reason_present)
+            .field("reason", &"<redacted>")
             .finish()
     }
 }
@@ -387,6 +401,7 @@ impl fmt::Debug for BRegLifecycleReceiptApplication {
 pub struct BRegErasedApplication {
     application_identifier: String,
     proposal_version: BRegProposalVersion,
+    reason_present: bool,
 }
 
 impl BRegErasedApplication {
@@ -399,6 +414,12 @@ impl BRegErasedApplication {
     pub const fn proposal_version(&self) -> BRegProposalVersion {
         self.proposal_version
     }
+
+    /// Whether the applier recorded a remark whose text erasure removed.
+    #[must_use]
+    pub const fn reason_present(&self) -> bool {
+        self.reason_present
+    }
 }
 
 impl fmt::Debug for BRegErasedApplication {
@@ -407,6 +428,7 @@ impl fmt::Debug for BRegErasedApplication {
             .debug_struct("BRegErasedApplication")
             .field("application_identifier", &"<redacted>")
             .field("proposal_version", &self.proposal_version)
+            .field("reason_present", &self.reason_present)
             .finish()
     }
 }
@@ -590,9 +612,6 @@ fn decode_decisions(value: Value) -> Result<Vec<BRegRequestDecision>, BRegLifecy
                 .remove("reasonPresent")
                 .and_then(|v| v.as_bool())
                 .ok_or(BRegLifecycleDecodeError::Profile)?;
-            if kind == BRegRequestDecisionKind::Approve && reason_present {
-                return Err(BRegLifecycleDecodeError::Profile);
-            }
             let reason = match object.remove("reason") {
                 None => None,
                 Some(Value::String(reason))
@@ -1401,6 +1420,7 @@ impl BRegLifecycleAuthority {
                         BRegLifecycleActionBody::ApproveRequest {
                             proposal_version,
                             effect_digest,
+                            reason: None,
                         }
                     }
                     BRegLifecycleOperation::RejectRequest => {
@@ -1420,6 +1440,7 @@ impl BRegLifecycleAuthority {
                     BRegLifecycleOperation::ApplyRequest => BRegLifecycleActionBody::ApplyRequest {
                         proposal_version,
                         effect_digest,
+                        reason: None,
                     },
                     _ => return Err(BRegLifecyclePromotionError::Binding),
                 }
@@ -1674,8 +1695,8 @@ impl BRegLifecycleAction {
         &self.body
     }
 
-    /// Return a copy carrying a reason for rejection or requested revision.
-    /// Empty text is permitted; all text is preserved exactly for explicit retry.
+    /// Return a copy carrying a reason on a decision or apply body. Empty text
+    /// is permitted; all text is preserved exactly for explicit retry.
     /// Validation performs no token acquisition or I/O.
     pub fn with_reason(&self, reason: impl Into<String>) -> Result<Self, BRegLifecycleActionError> {
         let reason = reason.into();
@@ -1684,10 +1705,10 @@ impl BRegLifecycleAction {
         }
         let mut action = self.clone();
         match &mut action.body {
-            BRegLifecycleActionBody::RejectRequest { reason: value, .. }
-            | BRegLifecycleActionBody::RequestRevision { reason: value, .. } => {
-                *value = Some(reason)
-            }
+            BRegLifecycleActionBody::ApproveRequest { reason: value, .. }
+            | BRegLifecycleActionBody::RejectRequest { reason: value, .. }
+            | BRegLifecycleActionBody::RequestRevision { reason: value, .. }
+            | BRegLifecycleActionBody::ApplyRequest { reason: value, .. } => *value = Some(reason),
             _ => return Err(BRegLifecycleActionError::Reason),
         }
         Ok(action)
@@ -1831,6 +1852,7 @@ pub enum BRegLifecycleActionBody {
     ApproveRequest {
         proposal_version: BRegProposalVersion,
         effect_digest: BRegEffectDigest,
+        reason: Option<String>,
     },
     RejectRequest {
         proposal_version: BRegProposalVersion,
@@ -1849,6 +1871,7 @@ pub enum BRegLifecycleActionBody {
     ApplyRequest {
         proposal_version: BRegProposalVersion,
         effect_digest: BRegEffectDigest,
+        reason: Option<String>,
     },
 }
 
@@ -1870,6 +1893,7 @@ fn recovery_action_body(
         BRegLifecycleOperation::ApproveRequest => BRegLifecycleActionBody::ApproveRequest {
             proposal_version,
             effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+            reason: recovery_reason(reason)?,
         },
         BRegLifecycleOperation::RejectRequest => BRegLifecycleActionBody::RejectRequest {
             proposal_version,
@@ -1888,6 +1912,7 @@ fn recovery_action_body(
         BRegLifecycleOperation::ApplyRequest => BRegLifecycleActionBody::ApplyRequest {
             proposal_version,
             effect_digest: effect_digest.ok_or(BRegLifecyclePromotionError::Binding)?,
+            reason: recovery_reason(reason)?,
         },
     };
     if body.to_value() != supplied {
@@ -1916,12 +1941,22 @@ impl BRegLifecycleActionBody {
         match self {
             Self::SubmitRequest | Self::CancelRequest => json!({}),
             Self::ReviseRequest { rebase } => json!({"rebase": rebase}),
-            Self::RejectRequest {
+            Self::ApproveRequest {
+                proposal_version,
+                effect_digest,
+                reason,
+            }
+            | Self::RejectRequest {
                 proposal_version,
                 effect_digest,
                 reason,
             }
             | Self::RequestRevision {
+                proposal_version,
+                effect_digest,
+                reason,
+            }
+            | Self::ApplyRequest {
                 proposal_version,
                 effect_digest,
                 reason,
@@ -1933,17 +1968,6 @@ impl BRegLifecycleActionBody {
                 }
                 body
             }
-            Self::ApproveRequest {
-                proposal_version,
-                effect_digest,
-            }
-            | Self::ApplyRequest {
-                proposal_version,
-                effect_digest,
-            } => json!({
-                "proposalVersion": proposal_version,
-                "effectDigest": effect_digest,
-            }),
         }
     }
 }
@@ -2312,7 +2336,7 @@ fn decode_retained_application(
     let mut object = exact_object(
         value,
         &["applicationId", "proposalVersion", "appliedAt"],
-        &["effectDigest"],
+        &["effectDigest", "reasonPresent", "reason"],
     )?;
     let application_identifier = take_string(&mut object, "applicationId")?;
     validate_canonical_uuid(&application_identifier)?;
@@ -2324,11 +2348,29 @@ fn decode_retained_application(
     let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
     let applied_at = take_string(&mut object, "appliedAt")?;
     validate_timestamp(&applied_at)?;
+    let reason_present = match object.remove("reasonPresent") {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        Some(_) => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let reason = match object.remove("reason") {
+        None => None,
+        Some(Value::String(reason))
+            if reason_present
+                && !reason.contains('\0')
+                && reason.chars().count() <= MAX_BREG_REVIEW_REASON_CHARACTERS =>
+        {
+            Some(reason)
+        }
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
     Ok(BRegRetainedApplication {
         application_identifier,
         proposal_version,
         effect_digest,
         applied_at,
+        reason_present,
+        reason,
     })
 }
 
@@ -2366,7 +2408,11 @@ fn decode_receipt_application(
 fn decode_erased_application(
     value: Value,
 ) -> Result<BRegErasedApplication, BRegLifecycleDecodeError> {
-    let mut object = exact_object(value, &["applicationId", "proposalVersion"], &[])?;
+    let mut object = exact_object(
+        value,
+        &["applicationId", "proposalVersion"],
+        &["reasonPresent"],
+    )?;
     let application_identifier = take_string(&mut object, "applicationId")?;
     validate_canonical_uuid(&application_identifier)?;
     let proposal_version = BRegProposalVersion::from_value(
@@ -2374,9 +2420,15 @@ fn decode_erased_application(
             .remove("proposalVersion")
             .ok_or(BRegLifecycleDecodeError::Profile)?,
     )?;
+    let reason_present = match object.remove("reasonPresent") {
+        None => false,
+        Some(Value::Bool(value)) => value,
+        Some(_) => return Err(BRegLifecycleDecodeError::Profile),
+    };
     Ok(BRegErasedApplication {
         application_identifier,
         proposal_version,
+        reason_present,
     })
 }
 

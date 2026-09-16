@@ -1053,11 +1053,7 @@ impl SourceAdapter for BregAdapter {
         if let Some(reason) = input.reason {
             action = action
                 .with_reason(reason)
-                .map_err(|_| match action.operation() {
-                    BRegLifecycleOperation::ApproveRequest
-                    | BRegLifecycleOperation::ApplyRequest => SourceAdapterError::ReasonUnsupported,
-                    _ => SourceAdapterError::Invalid,
-                })?;
+                .map_err(|_| SourceAdapterError::Invalid)?;
         }
         let key = BRegIdempotencyKey::parse(input.idempotency_key)
             .map_err(|_| SourceAdapterError::Invalid)?;

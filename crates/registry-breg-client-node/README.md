@@ -161,9 +161,10 @@ bytes contain the original request values and idempotency key, but no token or
 metadata authority, and their diagnostic representation is redacted. The
 `...Json` variants preserve values outside the JavaScript safe-integer range.
 
-Use `action.withReason(text)` on a promoted `reject_request` or
-`request_revision` action to add optional reviewer text. It returns a copy and
-validates before network effects. The original action omits the reason. Text
+Use `action.withReason(text)` on a promoted `approve_request`,
+`reject_request`, `request_revision`, or `apply_request` action to add optional
+recorded text. It returns a copy and validates before network effects. The
+original action omits the reason. Text
 is preserved exactly, allows an empty string, and is limited to 4096 Unicode
 characters with NUL refused. Reuse the same action and idempotency key for an
 explicit retry.

@@ -82,11 +82,6 @@ class ReviewReasonTests(unittest.TestCase):
             for operation, record in FIXTURE["records"].items():
                 action, = client.lifecycle_actions(authority, record)
                 before = len(requests)
-                if operation in ("approve_request", "apply_request"):
-                    with self.assertRaises(BaseRegistryClientError) as error:
-                        action.with_reason("not permitted")
-                    self.assertEqual(error.exception.kind, "invalid_request")
-                    continue
                 for invalid in ("📝" * 4097, "\0"):
                     with self.assertRaises(BaseRegistryClientError) as error:
                         action.with_reason(invalid)

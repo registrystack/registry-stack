@@ -360,9 +360,15 @@ async fn annotate_request_records(
                 "applicationId": application.application_id().as_str(),
                 "proposalVersion": application.version().get(),
                 "appliedAt": application.applied_at().as_str(),
+                "reasonPresent": application.reason_present(),
             });
             if may_disclose_effect_digests(entity, request) {
                 application_metadata["effectDigest"] = json!(application.effect_digest().as_str());
+            }
+            if may_disclose_decision_reasons(entity, request) {
+                if let Some(reason) = application.reason() {
+                    application_metadata["reason"] = json!(reason);
+                }
             }
             metadata.insert("application".to_owned(), application_metadata);
         }

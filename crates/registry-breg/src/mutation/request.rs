@@ -176,6 +176,7 @@ impl MutationCoordinator {
         let RequestActionBody::Apply {
             proposal_version,
             effect_digest,
+            ..
         } = &input.action
         else {
             return Err(MutationError::InvalidRequest);
@@ -1014,6 +1015,7 @@ impl MutationCoordinator {
                         action: RequestActionBody::Apply {
                             proposal_version: proposal.version().get(),
                             effect_digest: proposal.effect_digest().as_str().to_owned(),
+                            reason: None,
                         },
                         response_fields: input.response_fields.clone(),
                         target_authority: apply_authority,
@@ -1056,6 +1058,7 @@ impl MutationCoordinator {
         if let RequestActionBody::Apply {
             proposal_version,
             effect_digest,
+            ..
         } = &input.action
         {
             if workflow.state() == RequestState::Applied {
@@ -1265,6 +1268,7 @@ impl MutationCoordinator {
             RequestActionBody::Approve {
                 proposal_version,
                 effect_digest,
+                ..
             }
             | RequestActionBody::Reject {
                 proposal_version,
@@ -1326,6 +1330,7 @@ impl MutationCoordinator {
             RequestActionBody::Apply {
                 proposal_version,
                 effect_digest,
+                ..
             } => {
                 let applied = self
                     .apply_approved_request(
@@ -1434,6 +1439,7 @@ impl MutationCoordinator {
                 action: RequestActionBody::Apply {
                     proposal_version,
                     effect_digest: effect_digest.clone(),
+                    reason: None,
                 },
                 response_fields: input.response_fields.clone(),
                 target_authority: apply_authority,
@@ -1983,6 +1989,7 @@ impl MutationCoordinator {
                     links,
                 )
                 .map_err(workflow_error)?,
+                input.action.reason().map(str::to_owned),
             )
             .map_err(workflow_error)?
             .into_workflow();
@@ -2820,6 +2827,7 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
         RequestActionBody::Approve {
             proposal_version,
             effect_digest,
+            ..
         }
         | RequestActionBody::Reject {
             proposal_version,
@@ -2834,6 +2842,7 @@ fn action_binding_json(input: &RequestActionInput<'_>) -> Result<Value, Mutation
         | RequestActionBody::Apply {
             proposal_version,
             effect_digest,
+            ..
         } => json!({
             "operation": action_operation(&input.action), "proposalVersion": proposal_version, "effectDigest": effect_digest,
         }),
@@ -3539,6 +3548,7 @@ mod owner_gate_tests {
             RequestActionBody::Approve {
                 proposal_version: 1,
                 effect_digest: String::new(),
+                reason: None,
             },
             RequestActionBody::Reject {
                 proposal_version: 1,
@@ -3553,6 +3563,7 @@ mod owner_gate_tests {
             RequestActionBody::Apply {
                 proposal_version: 1,
                 effect_digest: String::new(),
+                reason: None,
             },
         ] {
             assert!(

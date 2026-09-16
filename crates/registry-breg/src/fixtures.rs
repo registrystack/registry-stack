@@ -5214,7 +5214,12 @@ fn assert_request_application_shape(value: &Value) -> Result<(), FixtureError> {
     if application.keys().any(|key| {
         !matches!(
             key.as_str(),
-            "id" | "applicationId" | "proposalVersion" | "effectDigest" | "appliedAt"
+            "id" | "applicationId"
+                | "proposalVersion"
+                | "effectDigest"
+                | "appliedAt"
+                | "reasonPresent"
+                | "reason"
         )
     }) || !application.contains_key("proposalVersion")
     {

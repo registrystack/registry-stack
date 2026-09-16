@@ -5090,10 +5090,11 @@ fn parse_request_action_body(
             Ok(RequestActionBody::Submit)
         }
         Operation::ApproveRequest if request_stage.is_some() => {
-            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
             Ok(RequestActionBody::Approve {
                 proposal_version,
                 effect_digest,
+                reason,
             })
         }
         Operation::RejectRequest if request_stage.is_some() => {
@@ -5124,10 +5125,11 @@ fn parse_request_action_body(
             Ok(RequestActionBody::Cancel)
         }
         Operation::ApplyRequest if request_stage.is_none() => {
-            let (proposal_version, effect_digest) = parse_bound_proposal_action(object)?;
+            let (proposal_version, effect_digest, reason) = parse_reasoned_proposal_action(object)?;
             Ok(RequestActionBody::Apply {
                 proposal_version,
                 effect_digest,
+                reason,
             })
         }
         _ => Err(()),

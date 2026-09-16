@@ -492,11 +492,12 @@ Build the approval from the claim response, because a decision names the binding
 of you and the registry profile you decide under:
 
 ```sh
-python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["item"]; json.dump({"displayedBinding": item["binding"], "sourceProfileId": "reviewer", "operation": "approve"}, open("tutorial-work/approve.json", "w"), indent=2)'
+python3 -c 'import json; item = json.load(open("tutorial-work/claimed.json"))["item"]; json.dump({"displayedBinding": item["binding"], "sourceProfileId": "reviewer", "operation": "approve", "reason": "Licence record and site register verified."}, open("tutorial-work/approve.json", "w"), indent=2)'
 approve_match=$(python3 -c 'import json; actions = json.load(open("tutorial-work/claimed.json"))["item"]["actions"]; print(next(action["ifMatch"] for action in actions if action["operation"] == "approve"))')
 ```
 
-Approve:
+Approve. The `reason` is optional and travels with the decision: the registry records it beside
+the approval, exactly as it records a rejection's explanation.
 
 ```sh
 curl --silent --show-error \
@@ -701,7 +702,8 @@ Among its lines, with identifiers and timestamps that vary per run:
           {
             "decidedAt": "2026-09-12T12:42:56.622404Z",
             "kind": "approve",
-            "reasonPresent": false,
+            "reason": "Licence record and site register verified.",
+            "reasonPresent": true,
             "stageId": "review"
           }
         ],
@@ -717,8 +719,10 @@ Among its lines, with identifiers and timestamps that vary per run:
                 ]
 ```
 
-The request is `applied`, its one decision was an `approve` in stage `review`, and `resultLinks`
-names the licence revision the application wrote: revision 2 of the record `first-record` created.
+The request is `applied`, its one decision was an `approve` in stage `review` carrying the remark
+you recorded with it, and `resultLinks` names the licence revision the application wrote: revision 2
+of the record `first-record` created. An `apply` decision accepts a `reason` the same way, and the
+registry records it on the application beside `applicationId` and `appliedAt`.
 The report's closing `next command` offers `--step approve`, which no longer applies to a request
 the registry has applied; the rest of the report is omitted here.
 

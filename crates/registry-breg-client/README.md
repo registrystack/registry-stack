@@ -150,11 +150,11 @@ whole-field JSON Patch paths, operation counts, I-JSON values, and encoded body
 size before token acquisition or HTTP I/O. The client never generates an
 idempotency key and never retries a mutation.
 
-For rejection and requested revision, `action.with_reason("Please correct the submitted values.")?`
-returns a copy carrying optional reviewer text. Node uses `action.withReason(text)`
+For every decision and the apply step, `action.with_reason("Please correct the submitted values.")?`
+returns a copy carrying optional recorded text. Node uses `action.withReason(text)`
 and Python uses `action.with_reason(text)`. Text is preserved exactly, including
 empty strings and whitespace; the limit is 4096 Unicode characters and NUL is
-refused. Other lifecycle actions refuse reasons. Existing actions omit `reason`.
+refused. Submit, revise, and cancel refuse reasons. Existing actions omit `reason`.
 Persist the prepared action after adding its reason, and reuse the same action
 and idempotency key for an explicit retry.
 

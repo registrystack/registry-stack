@@ -1952,7 +1952,8 @@ fn apply_metadata_fixture() -> Value {
         "required": ["proposalVersion", "effectDigest"],
         "properties": {
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
-            "effectDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the immutable proposal effects displayed to the actor."}
+            "effectDigest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Digest of the immutable proposal effects displayed to the actor."},
+            "reason": {"type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$", "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}
         }
     });
     metadata["entities"][0]["operations"][2]["operation"] = json!("apply_request");
@@ -2012,7 +2013,9 @@ async fn prepared_lifecycle_recovers_original_apply_after_action_disappears() {
         .client
         .lifecycle_actions(&authority, &original_record)
         .unwrap()
-        .remove(0);
+        .remove(0)
+        .with_reason("Applied after the registrar's sign-off.")
+        .unwrap();
     let prepared = fixture
         .client
         .prepare_lifecycle_action(&authority, &original_record, &action, &key("attempt-apply"))

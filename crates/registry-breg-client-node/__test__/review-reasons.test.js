@@ -35,26 +35,22 @@ test('review reasons preserve text on explicit retry and refuse invalid inputs b
     for (const operation of Object.keys(fixture.records)) {
       const [action] = client.lifecycleActions(authority, fixture.records[operation]);
       const before = requests.length;
-      if (['approve_request', 'apply_request'].includes(operation)) {
-        assert.throws(() => action.withReason('not permitted'), error => error.kind === 'invalid_request');
-      } else {
-        for (const invalid of [null, 1, {}, '📝'.repeat(4097), '\0', '\ud800']) {
-          assert.throws(() => action.withReason(invalid), error => error.kind === 'invalid_request');
-        }
-        assert.equal(action.withReason('📝'.repeat(4096)).body.reason, '📝'.repeat(4096));
-        assert.equal(action.withReason('').body.reason, '');
-        assert.ok(!Object.hasOwn(action.body, 'reason'));
-        assert.equal(requests.length, before);
-        const reason = '  Please correct the values.\nเหตุผล 📝  ';
-        const decision = action.withReason(reason);
-        assert.equal(JSON.parse(decision.bodyJson).reason, reason);
-        await client.executeLifecycleAction(decision, `decision-${operation}`);
-        await client.executeLifecycleAction(decision, `decision-${operation}`);
-        assert.equal(JSON.parse(requests.at(-1).body).reason, reason);
-        assert.equal(requests.at(-1).body, requests.at(-2).body);
-        assert.equal(requests.at(-1).headers['idempotency-key'], requests.at(-2).headers['idempotency-key']);
-        assert.equal(requests.at(-1).headers['if-match'], requests.at(-2).headers['if-match']);
+      for (const invalid of [null, 1, {}, '📝'.repeat(4097), '\0', '\ud800']) {
+        assert.throws(() => action.withReason(invalid), error => error.kind === 'invalid_request');
       }
+      assert.equal(action.withReason('📝'.repeat(4096)).body.reason, '📝'.repeat(4096));
+      assert.equal(action.withReason('').body.reason, '');
+      assert.ok(!Object.hasOwn(action.body, 'reason'));
+      assert.equal(requests.length, before);
+      const reason = '  Please correct the values.\nเหตุผล 📝  ';
+      const decision = action.withReason(reason);
+      assert.equal(JSON.parse(decision.bodyJson).reason, reason);
+      await client.executeLifecycleAction(decision, `decision-${operation}`);
+      await client.executeLifecycleAction(decision, `decision-${operation}`);
+      assert.equal(JSON.parse(requests.at(-1).body).reason, reason);
+      assert.equal(requests.at(-1).body, requests.at(-2).body);
+      assert.equal(requests.at(-1).headers['idempotency-key'], requests.at(-2).headers['idempotency-key']);
+      assert.equal(requests.at(-1).headers['if-match'], requests.at(-2).headers['if-match']);
     }
   } finally {
     await new Promise(resolve => server.close(resolve));

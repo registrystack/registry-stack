@@ -196,6 +196,7 @@ pub enum RequestActionBody {
     Approve {
         proposal_version: u32,
         effect_digest: String,
+        reason: Option<String>,
     },
     Reject {
         proposal_version: u32,
@@ -214,13 +215,17 @@ pub enum RequestActionBody {
     Apply {
         proposal_version: u32,
         effect_digest: String,
+        reason: Option<String>,
     },
 }
 
 impl RequestActionBody {
     pub fn reason(&self) -> Option<&str> {
         match self {
-            Self::Reject { reason, .. } | Self::RequestRevision { reason, .. } => reason.as_deref(),
+            Self::Approve { reason, .. }
+            | Self::Reject { reason, .. }
+            | Self::RequestRevision { reason, .. }
+            | Self::Apply { reason, .. } => reason.as_deref(),
             _ => None,
         }
     }

@@ -153,7 +153,7 @@ pub(crate) async fn install(
          ALTER TABLE registry_internal.registry_request_decisions
              ADD CONSTRAINT registry_request_decision_reason_bound CHECK (
                  (reason IS NULL OR (char_length(reason) <= 4096 AND reason_present))
-                 AND (NOT reason_present OR decision IN ('reject','request_revision'))
+                 AND (NOT reason_present OR decision IN ('approve','reject','request_revision'))
              );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_applications (
              request_entity_id text NOT NULL,
@@ -167,6 +167,15 @@ pub(crate) async fn install(
              FOREIGN KEY (request_entity_id, request_id, proposal_version)
                  REFERENCES registry_internal.registry_request_proposals
          );
+         ALTER TABLE registry_internal.registry_request_applications
+             ADD COLUMN IF NOT EXISTS reason text,
+             ADD COLUMN IF NOT EXISTS reason_present boolean NOT NULL DEFAULT false;
+         ALTER TABLE registry_internal.registry_request_applications
+             DROP CONSTRAINT IF EXISTS registry_request_application_reason_bound;
+         ALTER TABLE registry_internal.registry_request_applications
+             ADD CONSTRAINT registry_request_application_reason_bound CHECK (
+                 reason IS NULL OR (char_length(reason) <= 4096 AND reason_present)
+             );
          CREATE TABLE IF NOT EXISTS registry_internal.registry_request_evidence_uses (
              application_id uuid NOT NULL REFERENCES
                  registry_internal.registry_request_applications(application_id)
@@ -664,7 +673,8 @@ pub(crate) async fn load(
     let application = if let Some(application) = transaction
         .query_opt(
             "SELECT proposal_version, application_id, effect_digest, applied_by,
-                to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
+                to_char(applied_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                reason, reason_present
          FROM registry_internal.registry_request_applications
          WHERE request_entity_id = $1 AND request_id = $2",
             &[&entity_id, &record_id],
@@ -708,6 +718,8 @@ pub(crate) async fn load(
                 TrustedTimestamp::from_server_clock(application.get::<_, String>(4))
                     .map_err(|_| MutationError::Unavailable)?,
                 result_links,
+                application.get(5),
+                application.get(6),
             )
             .map_err(|_| MutationError::Unavailable)?,
         )
@@ -1059,8 +1071,8 @@ pub(crate) async fn save(
             .execute(
                 "INSERT INTO registry_internal.registry_request_applications
                  (request_entity_id, request_id, proposal_version, application_id,
-                  effect_digest, applied_by, applied_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::text::timestamptz)
+                  effect_digest, applied_by, applied_at, reason, reason_present)
+             VALUES ($1, $2, $3, $4, $5, $6, $7::text::timestamptz, $8, $9)
              ON CONFLICT (request_entity_id, request_id, proposal_version) DO NOTHING",
                 &[
                     &entity_id,
@@ -1070,6 +1082,8 @@ pub(crate) async fn save(
                     &application.effect_digest().as_str(),
                     &application.applied_by().as_str(),
                     &application.applied_at().as_str(),
+                    &application.reason(),
+                    &application.reason_present(),
                 ],
             )
             .await
@@ -1229,7 +1243,7 @@ async fn verify_existing_application(
     let row = transaction
         .query_opt(
             "SELECT application_id, effect_digest, applied_by,
-                    applied_at = $4::text::timestamptz AS same_time
+                    applied_at = $4::text::timestamptz AS same_time, reason, reason_present
              FROM registry_internal.registry_request_applications
              WHERE request_entity_id = $1 AND request_id = $2 AND proposal_version = $3",
             &[&entity_id, &record_id, &version, &applied_at],
@@ -1241,6 +1255,8 @@ async fn verify_existing_application(
         && row.get::<_, String>(1) == effect_digest
         && row.get::<_, String>(2) == applied_by
         && row.get::<_, bool>(3)
+        && row.get::<_, Option<String>>(4).as_deref() == application.reason()
+        && row.get::<_, bool>(5) == application.reason_present()
     {
         Ok(())
     } else {

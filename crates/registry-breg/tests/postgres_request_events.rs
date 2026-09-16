@@ -140,7 +140,6 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     let invalid = migration.transaction().await.expect("transaction starts");
     let overlong_reason = "é".repeat(4097);
     for (transition, state, reason) in [
-        ("approve", "approved", "unsupported approval explanation"),
         ("reject", "needs_changes", "mismatched transition state"),
         (
             "request_revision",
@@ -148,6 +147,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             "mismatched transition state",
         ),
         ("reject", "rejected", overlong_reason.as_str()),
+        ("apply", "approved", "mismatched transition state"),
     ] {
         let mut event = lifecycle_event(
             request_id,

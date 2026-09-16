@@ -33,7 +33,7 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
     .into_iter()
     .enumerate()
     {
-        for decision in [&revise, &reject] {
+        for decision in [&revise, &reject, &approve] {
             let response = send_action(
                 &app,
                 decision,
@@ -50,7 +50,7 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
             );
         }
     }
-    for decision in [&revise, &reject] {
+    for decision in [&revise, &reject, &approve] {
         let response = send_action(
             &app,
             decision,
@@ -61,15 +61,6 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
     }
-    let refused_approval = send_action(
-        &app,
-        &approve,
-        "reason-on-approval",
-        reviewer.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest, "reason": "not an approval input"}),
-    )
-    .await;
-    assert_eq!(refused_approval.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         reason_read(&app, &request.id, "submitter", submitter.clone())
             .await
@@ -304,7 +295,8 @@ async fn real_postgres_http_reviewer_reason_event_failure_rolls_back_decision_an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_http_no_reason_review_remains_compatible_and_apply_refuses_reason() {
+async fn real_postgres_http_no_reason_review_remains_compatible_and_reasoned_decisions_apply_and_are_read_back(
+) {
     let database = TestDatabase::create(8).await;
     let registry = Arc::new(reason_registry());
     let identity = install_registry(&database, &registry, "two-stage-change-request", false).await;
@@ -358,31 +350,67 @@ async fn real_postgres_http_no_reason_review_remains_compatible_and_apply_refuse
         &request.id,
         "correction-requests",
         "submitter",
-        submitter,
+        submitter.clone(),
         "no-reason-resubmit",
         "submit_request",
         None,
         |_| json!({}),
     )
     .await;
-    run_action(&app, &request.id, "correction-requests", "reviewer", reviewer,
-        "no-reason-approve", "approve_request", Some("review"), |action| json!({"proposalVersion":action.proposal_version,"effectDigest":action.effect_digest})).await;
+    let approval_note = "Favourable; re-verify the applicant next cycle.";
+    let approved = run_action(&app, &request.id, "correction-requests", "reviewer", reviewer,
+        "reasoned-approve", "approve_request", Some("review"), |action| json!({"proposalVersion":action.proposal_version,"effectDigest":action.effect_digest,"reason":approval_note})).await;
+    assert_eq!(approved["request"]["bregState"], "approved");
+    let owner = reason_read(&app, &request.id, "submitter", submitter.clone()).await;
+    assert_decision(
+        &owner.body["request"]["decisions"][0],
+        "approve",
+        Some(approval_note),
+    );
     let applier = claims("applier", APPLIER, Some("apply"));
     let ready = reason_read(&app, &request.id, "applier", applier.clone()).await;
     let apply = action(&ready.body, "apply_request", None);
-    let refused = send_action(&app, &apply, "reason-on-apply", applier.clone(),
-        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":"unsupported"})).await;
-    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
-    let applied = send_action(
-        &app,
-        &apply,
-        "no-reason-apply",
-        applier,
-        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest}),
-    )
-    .await;
+    let apply_note = "Applied following the registrar's sign-off.";
+    let applied = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":apply_note})).await;
     assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
     assert_eq!(applied.body["request"]["bregState"], "applied");
+    let final_read = reason_read(&app, &request.id, "submitter", submitter.clone()).await;
+    assert_eq!(final_read.body["request"]["bregState"], "applied");
+    assert_eq!(
+        final_read.body["request"]["application"]["reasonPresent"],
+        true
+    );
+    assert_eq!(
+        final_read.body["request"]["application"]["reason"],
+        apply_note
+    );
+    let hidden = reason_read(
+        &app,
+        &request.id,
+        "reason-hidden",
+        claims("submitter", SUBMITTER, None),
+    )
+    .await;
+    assert_eq!(hidden.body["request"]["application"]["reasonPresent"], true);
+    assert!(hidden.body["request"]["application"]
+        .get("reason")
+        .is_none());
+    assert!(!hidden.body.to_string().contains(apply_note));
+    let replayed_apply = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":apply_note})).await;
+    assert_eq!(replayed_apply.status, StatusCode::OK);
+    assert_eq!(replayed_apply.body, applied.body);
+    let changed_apply = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":"changed"})).await;
+    assert_eq!(changed_apply.status, StatusCode::CONFLICT);
+    let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
+    let approve_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    assert_eq!(approve_event["request"]["transition"], "approve");
+    assert_eq!(approve_event["request"]["reason"], approval_note);
+    let apply_event: Value = serde_json::from_str(&rows[2].get::<_, String>(0)).unwrap();
+    assert_eq!(apply_event["request"]["transition"], "apply");
+    assert_eq!(apply_event["request"]["reason"], apply_note);
     database.cleanup().await;
 }
 
@@ -429,6 +457,9 @@ fn reason_registry() -> registry_breg::CompiledRegistry {
     request["events"] = json!([{
         "id":"review-returned", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["reject","request_revision"], "toStates":["rejected","needs_changes"], "stages":["review"]}
+    }, {
+        "id":"review-decided", "trigger":"request_lifecycle", "projection":["reason"],
+        "when":{"kind":"request_lifecycle", "transitions":["approve","apply"], "toStates":["approved","applied"]}
     }]);
     let profiles = source["accessProfiles"].as_array_mut().unwrap();
     profiles.retain(|profile| profile["id"] != "final-reviewer");

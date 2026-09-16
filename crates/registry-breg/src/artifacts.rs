@@ -687,7 +687,10 @@ pub(crate) fn openapi_request_action_input_schema(operation: Operation) -> Value
     });
     if matches!(
         operation,
-        Operation::RejectRequest | Operation::RequestRevision
+        Operation::ApproveRequest
+            | Operation::RejectRequest
+            | Operation::RequestRevision
+            | Operation::ApplyRequest
     ) {
         proposal_binding["reason"] = review_reason_schema();
     }
@@ -3382,6 +3385,8 @@ fn request_review_target_schema() -> Value {
 }
 
 fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
+    // The read model's application object carries reason presence; an action
+    // receipt describes only the application the caller just executed.
     let required = if require_receipt_fields {
         json!([
             "applicationId",
@@ -3390,7 +3395,7 @@ fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
             "appliedAt"
         ])
     } else {
-        json!(["applicationId", "proposalVersion"])
+        json!(["applicationId", "proposalVersion", "reasonPresent"])
     };
     json!({
         "type": ["object", "null"],
@@ -3400,7 +3405,9 @@ fn request_application_metadata_schema(require_receipt_fields: bool) -> Value {
             "applicationId": {"type": "string", "format": "uuid"},
             "proposalVersion": {"type": "integer", "format": "int64", "minimum": 1, "maximum": u32::MAX},
             "effectDigest": effect_digest_schema(),
-            "appliedAt": {"type": "string", "format": "date-time"}
+            "appliedAt": {"type": "string", "format": "date-time"},
+            "reasonPresent": {"type": "boolean"},
+            "reason": review_reason_schema()
         }
     })
 }
@@ -3414,10 +3421,6 @@ fn request_decisions_schema() -> Value {
             "additionalProperties": false,
             "required": ["stageId", "kind", "decidedAt", "reasonPresent"],
             "allOf": [
-                {
-                    "if": {"properties": {"kind": {"const": "approve"}}},
-                    "then": {"properties": {"reasonPresent": {"const": false}}}
-                },
                 {
                     "if": {"properties": {"reasonPresent": {"const": false}}},
                     "then": {"not": {"required": ["reason"]}}
@@ -4559,13 +4562,7 @@ mod problem_contract_tests {
             for reason in [json!(""), json!(" สาเหตุ\n🙂 "), json!("🙂".repeat(4096))]
             {
                 body["reason"] = reason;
-                assert_eq!(
-                    validator.is_valid(&body),
-                    matches!(
-                        operation,
-                        Operation::RejectRequest | Operation::RequestRevision
-                    )
-                );
+                assert!(validator.is_valid(&body));
             }
             for reason in [
                 Value::Null,

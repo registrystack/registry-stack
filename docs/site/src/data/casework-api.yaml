@@ -21,7 +21,7 @@
     - ['`request.invalid`', '400', 'The path, query, or headers did not match the Casework contract.']
     - ['`request.method-not-allowed`', '405', 'The route does not accept that HTTP method.']
     - ['`request.not-found`', '404', 'The requested Casework route does not exist.']
-    - ['`request.reason-unsupported`', '422', 'The `reason` field was sent with `approve` or `apply`, which do not accept it on the BReg source.']
+    - ['`request.reason-unsupported`', '422', 'The `reason` field was sent with an action the selected source does not accept it on, refused before a durable attempt is prepared. The BReg source accepts a reason on every promoted decision and apply.']
     - ['`request.source-rejected`', '422', 'The source refused the promoted action body. Fix the decision request before trying again.']
     - ['`request.unprocessable`', '422', 'The request body does not match the Casework contract. `validation` names the member and the closed reason.']
     - ['`request.unsupported-media-type`', '415', 'A body without `Content-Type: application/json`.']
