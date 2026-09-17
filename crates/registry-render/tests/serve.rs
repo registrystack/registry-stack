@@ -1,6 +1,6 @@
-//! End-to-end serve tests: the real `render` binary serving real requests,
-//! spawning real supervised workers, writing a real keyed audit ledger.
-//! These tests are the DoD's serve-mode acceptance coverage.
+//! End-to-end serve tests: the real `registry-render` binary serving real
+//! requests, spawning real supervised workers, writing a real keyed audit
+//! ledger. These tests are the DoD's serve-mode acceptance coverage.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -91,7 +91,7 @@ fn start_server(runtime_path: &Path) -> Server {
 }
 
 fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_render"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_registry-render"));
     command
         .arg("serve")
         .arg("--runtime")
@@ -101,7 +101,7 @@ fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }
-    let mut child = command.spawn().expect("spawn render serve");
+    let mut child = command.spawn().expect("spawn registry-render serve");
     let port: u16 = std::fs::read_to_string(runtime_path)
         .unwrap()
         .lines()
@@ -356,7 +356,7 @@ fn api_key_with_stray_whitespace_is_refused_at_startup() {
     // Anything beyond one trailing line ending (here: a leading space) is a
     // startup error, not a silent permanent 401 with /health green.
     write_secret(&home.join("api.key"), &format!(" {API_KEY}"));
-    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["serve", "--runtime", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -428,7 +428,7 @@ fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
         &format!("directory: {}", audit.display()),
     );
     std::fs::write(&runtime, text).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["serve", "--runtime", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -641,7 +641,7 @@ fn audit_chain_verifies_from_the_cli() {
     );
     assert_eq!(reply.status, 200);
     drop(server);
-    let output = Command::new(env!("CARGO_BIN_EXE_render"))
+    let output = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["audit-verify", "--runtime", runtime.to_str().unwrap()])
         .output()
         .expect("run audit-verify");
@@ -707,7 +707,7 @@ fn tampered_bundle_refuses_to_serve() {
     let mut text = std::fs::read_to_string(&labels).unwrap();
     text.push_str("extra: tampered\n");
     std::fs::write(&labels, text).unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["serve", "--runtime", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -963,7 +963,7 @@ fn slow_renders_are_killed_and_the_service_recovers() {
     )
     .unwrap();
     // Seal the heavy bundle so serve accepts it.
-    let sealed = Command::new(env!("CARGO_BIN_EXE_render"))
+    let sealed = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["seal", "--bundle", bundle.to_str().unwrap()])
         .output()
         .unwrap();
@@ -1058,7 +1058,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
         "#let x = range(200000000).fold(0, (a, b) => a + b)\n#x\n",
     )
     .unwrap();
-    let sealed = Command::new(env!("CARGO_BIN_EXE_render"))
+    let sealed = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["seal", "--bundle", bundle.to_str().unwrap()])
         .output()
         .unwrap();
@@ -1075,7 +1075,7 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
         text.replace("shutdownGraceSeconds: 5", "shutdownGraceSeconds: 1"),
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_registry-render"))
         .args(["serve", "--runtime", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())

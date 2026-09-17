@@ -19,7 +19,7 @@ re-walking it reproduces them against the current pinned values.
 | --- | --- |
 | OpenFn CLI | 1.40.1 (`openfn execute`, kit-style flags: `--no-autoinstall --no-expand-adaptors --no-cache-steps`) |
 | Adaptor | `@openfn/language-common` 3.3.4 (`util.request`, `parseAs: "json"`) |
-| render | this repo's binary, `render serve` on loopback: sealed receipt bundle, API key + audit key in owner-only files |
+| registry-render | this repo's binary, `registry-render serve` on loopback: sealed receipt bundle, API key + audit key in owner-only files |
 | breg | v0.32.0 dev stack (`bregctl dev`: PostgreSQL + ThunderID issuer + registry, all loopback) |
 | job | `receipt-job.js` (this directory), notify.js idiom |
 
@@ -93,8 +93,8 @@ is the profile's, not the caller's.
 
 ## Audit ledger
 
-`render audit-verify` (after graceful shutdown; a live writer legitimately
-limits verification to sealed segments): **3 record(s) across 1
+`registry-render audit-verify` (after graceful shutdown; a live writer
+legitimately limits verification to sealed segments): **3 record(s) across 1
 segment(s)** — one per render attempt including the dead-lettered one.
 Every record carries `correlationId` = the job's `eventEffectId`, the
 golden `pdfSha256`, and the golden `dataSha256`, both as pinned in

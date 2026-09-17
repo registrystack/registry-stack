@@ -1,5 +1,6 @@
-//! The `render` CLI: init, check, validate, seal, compile, serve,
-//! healthcheck, audit-verify. Exit codes come from the problem model.
+//! The `registry-render` CLI: init, check, validate, seal, compile,
+//! serve, healthcheck, audit-verify. Exit codes come from the problem
+//! model.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -23,7 +24,7 @@ use crate::validate_data;
 
 /// Governed, byte-stable PDF documents from registry data.
 #[derive(Debug, Parser)]
-#[command(name = "render", version = version_string(), about)]
+#[command(name = "registry-render", version = version_string(), about)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -143,7 +144,7 @@ pub enum Command {
         #[arg(long = "key")]
         key_ref: Option<String>,
     },
-    /// Hidden: one supervised render (used by `render serve`).
+    /// Hidden: one supervised render (used by `registry-render serve`).
     #[command(hide = true, name = "__worker")]
     Worker,
 }
@@ -177,7 +178,7 @@ pub fn run(cli: Cli) -> i32 {
                     serde_json::to_string(&document).expect("problem json")
                 );
             } else {
-                eprintln!("render: {problem}");
+                eprintln!("registry-render: {problem}");
             }
             problem.exit_code()
         }
@@ -254,7 +255,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             let loaded = Bundle::load(&bundle).map_err(recovery_hint)?;
             if !loaded.manifest.is_sealed() && !json {
                 eprintln!(
-                    "note: bundle is unsealed; compile is fine, serve is not (run `render seal` when ready)"
+                    "note: bundle is unsealed; compile is fine, serve is not (run `registry-render seal` when ready)"
                 );
             }
             let document_spec = loaded.document(&document)?.clone();
@@ -491,9 +492,9 @@ pub fn flush() {
 fn recovery_hint(problem: RenderProblem) -> RenderProblem {
     if problem.kind == crate::ProblemKind::BundleTampered {
         let mut problem = problem;
-        problem
-            .detail
-            .push_str("; if these edits are yours, run `render seal` to re-seal the bundle");
+        problem.detail.push_str(
+            "; if these edits are yours, run `registry-render seal` to re-seal the bundle",
+        );
         problem
     } else {
         problem
@@ -549,7 +550,7 @@ fn watch_loop(
                     }
                 }
                 Err(problem) => {
-                    eprintln!("render: {problem}");
+                    eprintln!("registry-render: {problem}");
                 }
             }
             last_fingerprint = Some(fingerprint);

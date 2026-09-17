@@ -1,7 +1,7 @@
 # OpenFn standalone integration
 
-`render serve` is callable from a plain OpenFn job; no App Kit involved.
-This integration was walked end to end (real OpenFn CLI, real `render
+`registry-render serve` is callable from a plain OpenFn job; no App Kit involved.
+This integration was walked end to end (real OpenFn CLI, real `registry-render
 serve`, real breg dev registry with a least-privilege reader profile);
 [JOURNEY.md](JOURNEY.md) records the walk, the asserted hashes, and the
 dead-letter replay.
@@ -10,7 +10,7 @@ Deployment shape:
 
 1. Run the binary with a runtime file (sealed bundle, loopback bind, API
    key and audit key in owner-only files):
-   `render serve --runtime /etc/registry-render/runtime.yaml`
+   `registry-render serve --runtime /etc/registry-render/runtime.yaml`
 2. Put the API key *value* in the job's private configuration (kit
    precedent: `notification.json`), beside the breg reader token and the
    delivery adaptor's key.

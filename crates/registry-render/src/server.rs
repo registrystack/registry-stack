@@ -1,4 +1,4 @@
-//! `render serve`: the HTTP rendering API. One POST endpoint, one GET
+//! `registry-render serve`: the HTTP rendering API. One POST endpoint, one GET
 //! discovery endpoint, a private listener, API-key auth, bounded body,
 //! supervised worker renders, and an audit append before every render
 //! response — refusals included, whatever refusal class they are.
@@ -123,7 +123,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         renderer = crate::display_version(),
         bundle = %service.bundle.bundle_hash,
         config = %config_id,
-        "render serve starting"
+        "registry-render serve starting"
     );
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|err| {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
@@ -207,7 +207,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             "shutdown window elapsed with connections still open; abandoning them (their workers are killed)"
         ),
     }
-    tracing::info!("render serve stopped");
+    tracing::info!("registry-render serve stopped");
     Ok(0)
 }
 
@@ -826,7 +826,7 @@ fn insert_header(map: &mut header::HeaderMap, name: &str, value: &str) {
     }
 }
 
-/// `render healthcheck`: one plain HTTP GET against /health.
+/// `registry-render healthcheck`: one plain HTTP GET against /health.
 pub fn healthcheck(runtime_path: Option<&Path>) -> Result<i32, RenderProblem> {
     let runtime_path = runtime_path
         .map(Path::to_path_buf)

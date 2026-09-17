@@ -1,4 +1,4 @@
-//! `render check`: the plain-language preflight. Verifies structure and
+//! `registry-render check`: the plain-language preflight. Verifies structure and
 //! seal hashes, label-script font coverage, and per-locale label key sets.
 //! The rendered file closure is governed where a render exists to capture
 //! it: the golden suite pins each acceptance bundle's closure and proves
@@ -38,7 +38,7 @@ pub fn run(
     if seal && bundle.manifest.is_sealed() {
         return Err(RenderProblem::new(
             ProblemKind::InvalidArgument,
-            "bundle is already sealed; edit, then run `render seal` to re-seal",
+            "bundle is already sealed; edit, then run `registry-render seal` to re-seal",
         ));
     }
     check_script_coverage(&bundle)?;
@@ -47,7 +47,9 @@ pub fn run(
         Bundle::seal(bundle_dir)?;
         println!("sealed (bundle hashes written to manifest.yaml)");
     } else if !bundle.manifest.is_sealed() {
-        println!("note: bundle is unsealed; compile works, serve does not (run `render seal`)");
+        println!(
+            "note: bundle is unsealed; compile works, serve does not (run `registry-render seal`)"
+        );
     }
     for document in bundle.documents.values() {
         let labels = document
@@ -138,7 +140,7 @@ pub fn check_script_coverage(bundle: &Bundle) -> Result<(), RenderProblem> {
 /// missing from one locale fails only that locale's render, at template
 /// runtime — the worst place to discover it. `check` (and serve startup)
 /// name the divergence up front, so PAYLOAD.md's "a missing label key is a
-/// `render check` error, not a runtime surprise" holds.
+/// `registry-render check` error, not a runtime surprise" holds.
 pub fn check_label_key_sets(bundle: &Bundle) -> Result<(), RenderProblem> {
     let mut failures: Vec<String> = Vec::new();
     for document in bundle.documents.values() {

@@ -4,11 +4,11 @@
 // bridge envelope, check status, return a minimized final state.
 // Deterministic rendering makes the bridge's at-least-once redelivery safe:
 // a retry or dead-letter replay returns the same bytes. This exact shape was
-// walked end to end against a live `render serve` and a real breg dev
+// walked end to end against a live `registry-render serve` and a real breg dev
 // registry; see JOURNEY.md in this directory.
 //
 // Configuration (private job config, e.g. notification.json):
-//   renderUrl:     "http://127.0.0.1:3200"   (loopback to render serve)
+//   renderUrl:     "http://127.0.0.1:3200"   (loopback to registry-render serve)
 //   renderApiKey:  "<32+ byte API key>"      (the value; render's own
 //                                             runtime keeps its secret-file ref)
 //   breg: { baseUrl, apiKey, accessProfile } (least-privilege reader)

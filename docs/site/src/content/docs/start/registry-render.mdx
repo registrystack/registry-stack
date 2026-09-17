@@ -36,12 +36,12 @@ the output depends on the machine's wall clock.
 
 ## Three ways to run it
 
-Render runs as one `render` binary with subcommands, as a small HTTP service, and as a Rust
+Render runs as one `registry-render` binary with subcommands, as a small HTTP service, and as a Rust
 library:
 
-- **Offline, at a terminal.** `render compile` renders one document from a bundle directory and a
+- **Offline, at a terminal.** `registry-render compile` renders one document from a bundle directory and a
   data file, for branch printing, template authoring, and CI checks on the templates themselves.
-- **As a service.** `render serve` exposes one rendering endpoint behind a static API key, renders
+- **As a service.** `registry-render serve` exposes one rendering endpoint behind a static API key, renders
   in supervised worker processes it can kill at a timeout, and appends one value-free audit event
   per render before it answers.
 - **As a library.** The `registry_render` crate renders in process for embedding, with the same

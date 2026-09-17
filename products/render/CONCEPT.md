@@ -30,7 +30,8 @@ an Evidence definition; Render mints nothing and does nothing at scan time.
 
 ## Runtime anatomy
 
-One crate (`crates/registry-render`), one binary (`render`), following the
+One crate (`crates/registry-render`), one binary (`registry-render`),
+following the
 house product anatomy: `init`/`check`/`validate`/`seal`/`compile`/`serve`/
 `healthcheck`/`audit-verify`; a strict runtime YAML
 (`render.registrystack.org/v1alpha1`) for deployment-local bindings; the

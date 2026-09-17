@@ -32,13 +32,13 @@ stack is part of Render's byte contract:
 
 ```sh
 cargo build --release --locked -p registry-render
-target/release/render --version
+target/release/registry-render --version
 ```
 
 You know this worked when the version line names the release and the Typst pin:
 
 ```text
-render 0.32.0-dev (typst 0.15.1)
+registry-render 0.32.0-dev (typst 0.15.1)
 ```
 
 The version string appears in every audit event this service writes, so the binary you build now
@@ -49,7 +49,7 @@ is the provenance of everything you render in this tutorial.
 ## Scaffold a bundle
 
 ```sh
-target/release/render init render-work/bundle
+target/release/registry-render init render-work/bundle
 ```
 
 The command prints the scaffold's location and a suggested first render. You now have a bundle
@@ -61,7 +61,7 @@ renders in both.
 ## Render offline
 
 ```sh
-target/release/render compile \
+target/release/registry-render compile \
   --bundle render-work/bundle \
   --type letter \
   --data render-work/bundle/fixtures/data.json \
@@ -87,13 +87,13 @@ and the line, with exit code 12.
 ## Seal the bundle
 
 ```sh
-target/release/render seal --bundle render-work/bundle
-target/release/render check --bundle render-work/bundle
+target/release/registry-render seal --bundle render-work/bundle
+target/release/registry-render check --bundle render-work/bundle
 ```
 
-`render seal` writes a per-file sha256 for every governed file into the bundle's manifest, and
-`render check` verifies structure, hashes, label script coverage, and label key sets. You know both
-worked when check prints the document line and the bundle line:
+`registry-render seal` writes a per-file sha256 for every governed file into the bundle's
+manifest, and `registry-render check` verifies structure, hashes, label script coverage, and
+label key sets. You know both worked when check prints the document line and the bundle line:
 
 ```text
 document letter           v1  entry templates/letter.typ  labels [en]  pdf plain
@@ -148,7 +148,7 @@ Port 64123 is this tutorial's choice; any free loopback port works, because serv
 anything that is not loopback or private. Start it:
 
 ```sh
-target/release/render serve --runtime render-work/deploy/runtime.yaml &
+target/release/registry-render serve --runtime render-work/deploy/runtime.yaml &
 curl -s http://127.0.0.1:64123/health
 ```
 
@@ -245,7 +245,7 @@ ledger. The writer holds the active segment while the server runs, so verify aft
 every segment including the newest one is covered:
 
 ```sh
-target/release/render audit-verify --runtime render-work/deploy/runtime.yaml
+target/release/registry-render audit-verify --runtime render-work/deploy/runtime.yaml
 ```
 
 You know it worked when it counts your session:

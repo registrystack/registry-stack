@@ -45,7 +45,7 @@ tempfile = { workspace = true }
 tower = { workspace = true }
 
 [[bin]]
-name = "render"
+name = "registry-render"
 path = "src/main.rs"
 
 [lints]

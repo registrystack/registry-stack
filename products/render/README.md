@@ -13,9 +13,9 @@ Render is a **pure function**: data in, PDF out. Two secret files in serve
 mode (caller API key, audit chain key), no database, no outbound calls. It
 runs three ways with the same guarantees:
 
-- **CLI** — `render compile --bundle … --data … --issued-at … --out …`,
+- **CLI** — `registry-render compile --bundle … --data … --issued-at … --out …`,
   offline, zero config: branch printing, template authoring, CI.
-- **Service** — `render serve`: one POST endpoint (`/v1/render/{type}`),
+- **Service** — `registry-render serve`: one POST endpoint (`/v1/render/{type}`),
   API-key auth, supervised worker processes, a keyed hash-chained audit
   ledger appended before every response.
 - **Library** — `registry_render::render(bundle, document, request)` for
@@ -33,7 +33,7 @@ cargo run -p registry-render -- seal --bundle ./my-bundle     # when ready
 
 The scaffold compiles offline out of the box: the binary embeds a baseline
 Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
-(see `render init`'s note) and `render check` names the gap.
+(see `registry-render init`'s note) and `registry-render check` names the gap.
 
 ## Where to read next
 
@@ -95,4 +95,4 @@ exits 101):
   killed at the timeout, memory-capped on Linux, recycled on panic.
 - **Auditable**: one value-free event per service render (hashes, versions,
   caller fingerprint, trace/correlation ids — never data), appended before
-  the response, failing closed. `render audit-verify` proves the chain.
+  the response, failing closed. `registry-render audit-verify` proves the chain.

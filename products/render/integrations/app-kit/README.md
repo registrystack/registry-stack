@@ -16,7 +16,7 @@ brief must carry `agreed` rows for:
 - the reliance/verification wording printed next to the QR;
 - where the QR points (the host's public origin, the
   `registry-public-check` answer contract on the verify page);
-- who signs off each bundle version (`render seal` + review).
+- who signs off each bundle version (`registry-render seal` + review).
 
 ## Config (host, `taskDispatch` precedent)
 
@@ -39,14 +39,15 @@ from files at load, mirroring the kit's task-dispatch configuration:
 
 The bundle lives under `project/deployment/render/bundle/` so the kit's
 writes-stay-in-`project/` boundary holds; `deployment/local.py` supervises
-`render serve` beside breg and casework.
+`registry-render serve` beside breg and casework.
 
 ## Host route (one block, the established pattern)
 
 page → app-runtime hook → host `POST /api/documents/{type}/render` →
 session-authorized breg reads assemble `data` (the end user's token; no
-service account) → loopback call to `render serve` (Accept: application/pdf)
-→ stream the PDF to the browser, or upload as a breg attachment and store
+service account) → loopback call to `registry-render serve`
+(Accept: application/pdf) → stream the PDF to the browser, or upload as a
+breg attachment and store
 `pdfSha256`/`dataSha256` on the record. The verify URL (record-held
 unguessable token) is assembled by the host and passed as data; the QR is
 the template's job.

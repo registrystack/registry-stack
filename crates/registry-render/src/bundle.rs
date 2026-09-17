@@ -61,7 +61,7 @@ impl Bundle {
         if !manifest.is_sealed() {
             return Err(RenderProblem::new(
                 ProblemKind::BundleUnsealed,
-                "serve requires a sealed bundle; run `render seal` first",
+                "serve requires a sealed bundle; run `registry-render seal` first",
             ));
         }
         verify_hashes(root, &manifest)?;

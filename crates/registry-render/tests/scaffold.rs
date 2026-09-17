@@ -1,5 +1,5 @@
 //! Scaffold and CLI regression tests: the first-hour path, exercised as a
-//! user drives it — `render init`, first compile, validate without a
+//! user drives it — `registry-render init`, first compile, validate without a
 //! clock, the unsealed notice, edit-after-seal recovery, and verify-then-
 //! seal ordering.
 
@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn render_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_render"))
+    Command::new(env!("CARGO_BIN_EXE_registry-render"))
 }
 
 fn tempdir() -> PathBuf {
@@ -246,7 +246,7 @@ fn edit_after_seal_names_the_recovery_path() {
     );
     let stderr = String::from_utf8_lossy(&compiled.stderr);
     assert!(
-        stderr.contains("render seal"),
+        stderr.contains("registry-render seal"),
         "the drift message must point at recovery: {stderr}"
     );
     // …and recovery actually works.

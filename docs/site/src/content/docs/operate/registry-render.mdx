@@ -11,8 +11,8 @@ locale: en
 standards_referenced: []
 ---
 
-You have a sealed template bundle and callers that need PDFs, and you want `render serve`
-answering them. At the end of this page one `render` process serves your bundle on a private
+You have a sealed template bundle and callers that need PDFs, and you want `registry-render serve`
+answering them. At the end of this page one `registry-render` process serves your bundle on a private
 address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
 authentication with a per-render audit trail, and shuts down within a bounded window.
 
@@ -28,10 +28,10 @@ scaffolding, authoring, and sealing. This page starts from a sealed bundle direc
 
 ## What you provide
 
-- **One sealed bundle directory, mounted read-only.** `render seal` writes per-file sha256 hashes
-  into the bundle's `manifest.yaml`, and serve verifies the seal at startup and again in the
-  worker on every request, so a bundle that drifts while the service runs is refused, not
-  rendered. Treat the directory as content the deployment does not write.
+- **One sealed bundle directory, mounted read-only.** `registry-render seal` writes per-file
+  sha256 hashes into the bundle's `manifest.yaml`, and serve verifies the seal at startup and
+  again in the worker on every request, so a bundle that drifts while the service runs is
+  refused, not rendered. Treat the directory as content the deployment does not write.
 - **Two secrets in owner-only files: a caller API key and an audit chain key.** The API key is at
   least 32 bytes of ASCII material; serve trims exactly one trailing line ending from the file
   and refuses to start if the key carries any other whitespace, because a silently mis-armed key
@@ -59,10 +59,10 @@ stack is part of Render's byte contract:
 
 ```sh
 cargo build --release --locked -p registry-render
-target/release/render --version
+target/release/registry-render --version
 ```
 
-The version line names the release and the Typst pin, for example `render <version> (typst
+The version line names the release and the Typst pin, for example `registry-render <version> (typst
 0.15.1)`. Record it: every audit event carries the same string, and a stored PDF's provenance is
 this binary plus the bundle hash.
 
@@ -111,15 +111,15 @@ drop the renders it exists to protect, and startup refuses both ends.
 Start the process with the runtime file, and check both endpoints before sending traffic:
 
 ```sh
-target/release/render serve --runtime /etc/registry-render/runtime.yaml &
+target/release/registry-render serve --runtime /etc/registry-render/runtime.yaml &
 curl -s http://127.0.0.1:8080/health
 curl -s http://127.0.0.1:8080/ready
 ```
 
 `GET /health` answers with the bundle version and hash and the renderer version, so you can
 reconcile the running service against what you deployed. `GET /ready` includes the audit ledger:
-if the sink cannot answer, readiness fails. Both are value-free. `render healthcheck --runtime
-<file>` performs the same probe for a supervisor script.
+if the sink cannot answer, readiness fails. Both are value-free.
+`registry-render healthcheck --runtime <file>` performs the same probe for a supervisor script.
 
 {/* Evidence: crates/registry-render/src/server.rs, health and healthcheck;
     crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
@@ -140,7 +140,7 @@ grep -i x-registry headers.txt
 ```
 
 The body's `data` object must satisfy the document's JSON Schema; violations come back as
-problems with JSON pointers into the data, and `render validate` dry-runs that check without
+problems with JSON pointers into the data, and `registry-render validate` dry-runs that check without
 rendering.
 
 The default response is the PDF bytes with `X-Registry-Pdf-Sha256`,
@@ -166,7 +166,7 @@ The ledger is a keyed hash chain in sealed segments. Stop the process first: the
 active segment; once no writer holds it, the newest segment is verified too. Then:
 
 ```sh
-target/release/render audit-verify --runtime /etc/registry-render/runtime.yaml
+target/release/registry-render audit-verify --runtime /etc/registry-render/runtime.yaml
 ```
 
 The command prints the record and segment counts. If it reports zero records against a non-empty

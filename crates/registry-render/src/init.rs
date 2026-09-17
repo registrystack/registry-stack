@@ -1,4 +1,4 @@
-//! `render init`: scaffold a bundle that compiles offline in minutes —
+//! `registry-render init`: scaffold a bundle that compiles offline in minutes —
 //! zero edits, zero warnings, including for non-Latin label locales.
 
 use std::path::Path;
@@ -84,14 +84,14 @@ const FIXTURE_DATA: &str =
 const README: &str = r#"# Render bundle
 
 - `manifest.yaml` — document types, versions, labels, and (after
-  `render seal`) per-file hashes.
+  `registry-render seal`) per-file hashes.
 - `templates/` — Typst entry points. Author them with any upstream Typst
-  tooling; `render compile` (and `--watch`) run unsealed bundles with a
+  tooling; `registry-render compile` (and `--watch`) run unsealed bundles with a
   notice.
 - `schemas/` — the JSON Schema each request's `data` must satisfy.
 - `labels/` — one flat YAML string map per locale; seeded in English,
   localize at will. A script beyond Latin needs a font in `fonts/` (for
-  example Noto Naskh Arabic); `render check` names the gap.
+  example Noto Naskh Arabic); `registry-render check` names the gap.
 - `fonts/` — starter fonts (Noto Sans + Noto Naskh Arabic, OFL — the
   license is in `fonts/OFL.txt`); replace them with your own. The binary
   already embeds a Latin baseline.
@@ -99,9 +99,9 @@ const README: &str = r#"# Render bundle
   path at render time, so anything else you import goes here too.
 - `fixtures/data.json` — a valid first payload.
 
-Workflow: edit → `render compile --bundle . --type letter
+Workflow: edit → `registry-render compile --bundle . --type letter
 --data fixtures/data.json --issued-at … --out letter.pdf` (or `--watch`) →
-`render seal` when ready → `render serve` requires the sealed bundle.
+`registry-render seal` when ready → `registry-render serve` requires the sealed bundle.
 
 Before writing a template that prints registry data, agree the field list
 (the disclosure gate): what appears on paper leaves every access profile
@@ -224,7 +224,7 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
             .collect();
         if locale != "en" {
             eprintln!(
-                "note: labels/{locale}.yaml is seeded in English; localize it, and if {locale:?} needs a script beyond Latin add a font to fonts/ (render check names the gap)"
+                "note: labels/{locale}.yaml is seeded in English; localize it, and if {locale:?} needs a script beyond Latin add a font to fonts/ (registry-render check names the gap)"
             );
         }
         write_new(&dir.join(format!("labels/{locale}.yaml")), &seeded)?;
@@ -232,7 +232,7 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     write_new(&dir.join("fixtures/data.json"), FIXTURE_DATA)?;
     write_new(&dir.join("README.md"), README)?;
     println!(
-        "scaffolded {} — first render:\n  render compile --bundle {} --type letter --data fixtures/data.json --issued-at 2026-01-01T00:00:00Z --out letter.pdf",
+        "scaffolded {} — first render:\n  registry-render compile --bundle {} --type letter --data fixtures/data.json --issued-at 2026-01-01T00:00:00Z --out letter.pdf",
         dir.display(),
         dir.display()
     );

@@ -177,7 +177,7 @@ pub fn worker_main() -> i32 {
             }
         },
         Err(err) => {
-            eprintln!("render worker: cannot read request: {err}");
+            eprintln!("registry-render worker: cannot read request: {err}");
             return 11;
         }
     };
@@ -206,7 +206,7 @@ fn cap_address_space(limit: u64) {
             maximum: Some(limit),
         };
         if let Err(err) = rustix::process::setrlimit(Resource::As, lim) {
-            eprintln!("render worker: cannot set address-space limit: {err}");
+            eprintln!("registry-render worker: cannot set address-space limit: {err}");
         }
     }
     #[cfg(not(target_os = "linux"))]

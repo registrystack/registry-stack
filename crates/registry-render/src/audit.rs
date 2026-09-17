@@ -146,7 +146,7 @@ impl RenderAudit {
     }
 }
 
-/// `render audit-verify`: prove a retained ledger end to end.
+/// `registry-render audit-verify`: prove a retained ledger end to end.
 pub fn verify_chain(
     runtime_path: &Path,
     directory: &Path,

@@ -34,7 +34,7 @@ Rules worth internalizing:
 - **`labels` is bundle-owned content** — flat YAML string maps under
   `labels/<locale>.yaml`, listed in the manifest's `labels: [...]`. The
   template receives every declared table, so a bilingual document consumes
-  both. A key present in one locale and missing from another is a `render
+  both. A key present in one locale and missing from another is a `registry-render
   check` error, not a runtime surprise; a key no locale declares is a
   template error at compile time.
 - **`assets` values are the base64 text as received.** The template never
@@ -64,9 +64,10 @@ Rules worth internalizing:
 ## Authoring loop
 
 Edit templates freely with upstream tooling (tinymist/VS Code give live
-preview if you point them at the bundle). `render compile` runs unsealed
-bundles with a notice; `render seal` writes the manifest hashes; `render
-serve` requires the sealed bundle. `render check` verifies everything,
+preview if you point them at the bundle). `registry-render compile` runs
+unsealed bundles with a notice; `registry-render seal` writes the manifest
+hashes; `registry-render serve` requires the sealed bundle.
+`registry-render check` verifies everything,
 including that every label character is drawable by some bundle or baseline
 font — a successful render that prints tofu is wrong on paper, so coverage
 gaps are named at check time and warnings fail `--strict` at render time.
@@ -75,5 +76,5 @@ See `bundles/` for three complete working examples (bilingual RTL receipt,
 PDF/A certificate, ID-1 card with photo). Ground truth when in doubt:
 
 ```bash
-render compile … --emit-envelope env.json   # the exact injected bytes
+registry-render compile … --emit-envelope env.json   # the exact injected bytes
 ```

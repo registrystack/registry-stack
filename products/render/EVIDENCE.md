@@ -17,7 +17,7 @@ Pinned CLI: typst 0.15.1 (aarch64-apple-darwin, sha256
 
 Procedure (per bundle, all commands from the repo root):
 
-1. `target/debug/render compile --bundle <bundle> --type <doc> --data
+1. `target/debug/registry-render compile --bundle <bundle> --type <doc> --data
    fixtures/data.json [--asset photo=fixtures/photo.b64] --issued-at
    2026-09-16T10:32:00Z --emit-envelope env.json --out lib.pdf`
 2. typst CLI with the exact envelope bytes and matching world:
@@ -189,7 +189,7 @@ security and adopter-experience). Findings fixed in the same revision:
   edits (full label key set seeded, template bound to the declared
   locale), the QR package is vendored into every scaffold, a data fixture
   is written, the unsealed notice prints on compile, and edit-after-seal
-  names `render seal` as recovery.
+  names `registry-render seal` as recovery.
 - **OpenAPI drift** corrected (413 documented, unimplementable 429
   removed) and pinned by a serve test.
 - Dead code removed; font-order doc fixed to match the implementation
@@ -258,7 +258,7 @@ could express the finding. Behavior changes:
 - **`/health` reports bundle and renderer versions** (value-free).
 - **`--now` announces the instant it chose; `--json` failures are
   RFC 9457 problem documents on stderr; `validate` gained `--json`.**
-- **Label key sets must agree across locales** at `render check` and serve
+- **Label key sets must agree across locales** at `registry-render check` and serve
   startup — which caught both example bundles (receipt and card locales
   diverged; now aligned with real translations and re-sealed).
 - **File closures are pinned per bundle in `golden.json`** and every
@@ -268,7 +268,7 @@ could express the finding. Behavior changes:
   the second OS when the first fails.
 - **The Noto fonts ship with `OFL.txt`**; `load_fonts` loads only font
   files by extension so licenses can live beside fonts.
-- **`render init` scaffolds real starter fonts** (Noto Sans + Noto Naskh
+- **`registry-render init` scaffolds real starter fonts** (Noto Sans + Noto Naskh
   Arabic + OFL.txt) instead of an empty `fonts/`. They are embedded in the
   binary, which costs about 850 KiB: the price of a scaffold that renders
   Latin and Arabic offline with zero edits.
@@ -306,7 +306,7 @@ failing tests first:
 
 Also from that review: wrong methods on the render route answer the
 problem vocabulary with an audit event (the route takes any method; the
-old dead branch produced axum's bare 405), `render audit-verify` warns
+old dead branch produced axum's bare 405), `registry-render audit-verify` warns
 when zero records verify against a non-empty ledger (a running writer
 holds the active segment), the `load_fonts` doc comment matches the
 baseline-first order, and the README exit-code intro no longer claims an
