@@ -1,0 +1,207 @@
+views {
+  view evidence_index {
+    title 'Evidence / 01. Application architecture'
+    description '''
+      An application uses the native clients or HTTP API to request and verify a
+      minimum-disclosure assertion. Evidence is one process over one immutable bundle
+      and one operator-controlled trust domain. It can read a fixed HTTPS source or a
+      mounted read-only SQLite publication and writes only privacy-safe native audit.
+      Runtime bindings, audit storage and assertion signing are distinct from BReg
+      packages, PostgreSQL state and package signing. Signer configuration selects
+      Transit for production or evidence-grade assurance, or a local JWK for local
+      assurance, never both.
+    '''
+    include application, issuer, evidence, evidenceHttpSource, evidenceSqliteExtract, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey
+    global predicate evidence_application
+  }
+
+  view evidence_runtime of evidence {
+    title 'Evidence / 02. Runtime responsibilities'
+    description '''
+      Every nested responsibility runs in the same Rust process. The HTTP boundary
+      supports singular assertions, audience-scoped request batches and holder-bound
+      issuance batches without creating a credential lifecycle. Rust owns authority,
+      source effects, limits, validation, response construction, signing and audit.
+      Rhai receives only bounded deterministic inputs and cannot perform I/O.
+      Startup selects the external Transit path or the in-process local JWK path
+      according to assurance; the two signer kinds are mutually exclusive.
+    '''
+    include evidence.*, application, issuer, evidenceHttpSource, evidenceSqliteExtract, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey, evidenceVerifier
+  }
+
+  view evidence_audit_release {
+    title 'Evidence / 03. Audit and release boundaries'
+    description '''
+      Evidence has no integration event bus or webhook delivery surface. Its durable
+      events form the native accountability chain. A successfully authenticated denial
+      records actor kind, a requester-principal pseudonym and scoped pseudonyms for available
+      client, grant and delegated actor context before its generic 403. Source-access and
+      terminal events retain plain requirement and purpose identifiers; a refusal before
+      authority resolution omits them. Subject roles and selector profiles remain visible,
+      while task subject values are pseudonymized. Successful task-grant events
+      additionally attribute the approver by scoped pseudonym. Every physical source call has a durable access
+      record before credentials or data access. Final immutable response bytes are
+      serialized, with protected formats signed, before the terminal disclosure record,
+      then released byte-for-byte only after durable acceptance. An audit failure fails the operation
+      closed with a safe 503. A multi-subject request batch records each physical access
+      and exactly one terminal release or value-free terminal failure. Unavailable items can
+      appear as value-free outcomes inside that successful envelope; any other failure aborts
+      it. Holder-bound issuance uses its separate atomic batch response.
+    '''
+    include application, evidence.api, evidence.authority, evidence.acquisition, evidence.assertions, evidence.signing, evidence.audit, evidenceAuditStore, evidenceHttpSource, evidenceSqliteExtract
+  }
+
+  dynamic view evidence_assertion {
+    title 'Evidence / 04. An authorized assertion is released'
+    description '''
+      Illustrative successful production singular request using Transit signing. Complete
+      authority, request limits and exact selectors are resolved before the first source effect. Access
+      audit is durable before request preparation, credentials and the fixed source operation.
+      Source values remain transient. The kernel validates declared concepts and constructs
+      the unsigned payload; the response boundary signs protected formats and serializes the
+      exact final bytes before durable disclosure audit. Those same bytes,
+      and no source or selector material, are returned to the relying application.
+    '''
+    application -> evidence.api 'Sends an authenticated fixed-requirement request with a random nonce'
+    evidence.api -> evidence.api 'Validates the canonical nonce and holder-key shape before authentication'
+    evidence.api -> evidence.authority 'Fetches caller keys and verifies the token, principal, actor kind, required claims, admitted client and scopes'
+    evidence.authority -> evidence.authority 'Enforces the per-principal request budget before matching authority'
+    evidence.authority -> evidence.authority 'Matches exactly one grant entry and the requested response format'
+    evidence.authority -> evidence.authority 'Checks the selector-failure budget and resolves values only from authorized origins'
+    evidence.authority -> evidence.acquisition 'Dispatches the one authorized bundle-fixed acquisition plan'
+    evidence.acquisition -> evidence.audit 'Durably appends the source-access attempt'
+    evidence.audit -> evidenceAuditStore 'Syncs the privacy-safe access event'
+    evidence.acquisition -> evidence.scripts 'Builds and validates the bounded request parts'
+    evidence.acquisition -> evidenceHttpSource 'Performs the fixed bounded source request'
+    evidence.acquisition -> evidence.scripts 'Projects the response and extracts a closed lookup result'
+    evidence.acquisition -> evidence.scripts 'Derives only the declared concepts from authorized selectors and facts'
+    evidence.scripts -> evidence.assertions 'Returns declared typed values for payload construction'
+    evidence.assertions -> evidence.signing 'Supplies the validated payload for exact serialization and protected-format signing'
+    evidence.signing -> evidenceTransitSigner 'Signs with the governed active Transit key'
+    evidence.signing -> evidence.audit 'Submits the terminal disclosure-release record after serialization'
+    evidence.audit -> evidenceAuditStore 'Durably syncs the release gate without response bytes'
+    evidence.api -> application 'Releases the exact signed bytes and no retained server state'
+  }
+
+  dynamic view evidence_task_assertion {
+    title 'Evidence / 05. A task-bound assertion is authorized'
+    description '''
+      An institutional agent presents an access token containing issuer-signed task
+      context. Evidence verifies and matches every immutable bound locally before access
+      audit, credentials or source I/O. Every accepted token carries the configured requester-tag
+      and Evidence-audience claims. On the task path, Evidence trusts the exchange issuer to
+      copy Casework-signed template values into those claims; requester tags control admission
+      and the audience supplies relying-party context without becoming a grant member.
+      Audience-scoped requirements bind that audience; holder-bound requirements bind
+      the presented holder-key thumbprint. Each request
+      enforces the earlier token or grant expiry, and Evidence does not call Casework for current
+      status. In the maintained ThunderID setup, a still-live grant can be re-exchanged for
+      access tokens lasting at most 300 seconds until the Casework template deadline of at most
+      900 seconds; other production issuers may be stricter. Once admitted, the
+      request follows the fixed acquisition, derivation, signing and terminal audit path
+      shown in Evidence / 04.
+    '''
+    taskAgent -> evidence.api 'Presents a contextual token and fixed-requirement request'
+    evidence.api -> evidence.authority 'Verifies issuer, signature, admitted client, configured required scopes, actor kind and required requester-tag and Evidence-audience claims'
+    evidence.authority -> evidence.authority 'Extracts one complete unexpired task grant; the earlier token or grant expiry applies and a present invalid grant cannot fall back'
+    evidence.authority -> evidence.authority 'Matches principal, verified client and resource, trusted source issuer, purpose, exact requirement and every subject tuple against exactly one grant entry'
+    evidence.authority -> evidence.authority 'Uses requester tags for admission; binds the audience or presented holder-key thumbprint as the requirement declares'
+    evidence.authority -> evidence.authority 'Resolves selector values only from verified claims without a task-status lookup'
+    evidence.authority -> evidence.acquisition 'Dispatches the one completely authorized bundle-fixed plan'
+    evidence.acquisition -> evidence.audit 'Durably appends access before credentials or source I/O'
+    evidence.audit -> evidenceAuditStore 'Syncs plain requirement and purpose, scoped contextual pseudonyms and no raw identity, task subjects or selector values'
+    evidence.acquisition -> evidenceHttpSource 'Performs the fixed request, then follows the existing signed release path'
+  }
+
+  view evidence_interoperability {
+    title 'Evidence / 06. Runtime interoperability'
+    description '''
+      The SDKs call Evidence and verify through the portable verifier. An application may
+      search Registry Discovery first, but its accepted selection is inert metadata: the
+      application still establishes trust, credentials and native Evidence invocation.
+      Evidence can use Relay, BReg or another HTTPS API only as a fixed independently
+      authorized source; each product retains its own access and audit boundary. BReg\'s
+      reverse trial integration is a separate relying-party call. Authenticated
+      requester-scoped definitions reveal complete authorized request shapes, while the
+      public provider advertisement and JWKS grant neither access nor key trust.
+    '''
+    include application, taskAgent, issuer, evidence, evidenceClient, evidenceVerifier, evidenceDiscovery, evidenceRelay, evidenceHttpSource, evidenceSqliteExtract, evidenceTransitSigner, evidenceLocalSigningKey, breg
+    include taskAgent with { navigateTo evidence_task_assertion }
+    global predicate evidence_application
+    exclude breg -> issuer
+    exclude application -> breg
+    exclude taskAgent -> breg
+  }
+
+  view evidence_wallet_architecture {
+    title 'Evidence / 07. Wallet-delivery architecture'
+    description '''
+      The optional adapter is a separate process and the only component here that speaks
+      OID4VCI. An authorized application creates offers, while a wallet redeems them and
+      proves possession of its own key. The adapter calls Evidence through the client
+      library\'s restricted non-verifying holder-bound path because it forwards the signed
+      credential bytes unchanged. It caches authenticated definitions for at most 300
+      seconds. Before changing or restarting the backing Evidence bundle, operators stop
+      the adapter and discard outstanding exchanges, then restart it after Evidence is ready.
+    '''
+    include evidenceOfferClient, evidenceWallet, evidenceOid4vci, evidenceAuthorizationServer, evidenceNonVerifyingClient, evidence.api, evidence.publication
+  }
+
+  dynamic view evidence_wallet_delivery {
+    title 'Evidence / 08. Optional wallet delivery'
+    description '''
+      The separate OID4VCI adapter speaks the wallet protocol Evidence deliberately does
+      not. Offer creation requires an ordinary non-task access token; any complete,
+      partial, malformed or expired task grant is refused because the deferred exchange
+      cannot recheck task authority. Through its restricted non-verifying client, the adapter
+      resolves a holder-bound configuration from an authenticated catalog cached for at most
+      300 seconds and records that exact prepared request. The
+      offer is delivered to a wallet, which redeems its short-lived code, obtains a stateless
+      nonce and proves possession of its own key.
+      The adapter claims the wallet access token before proof validation and the issuance
+      request, then sends the public holder key to Evidence. Evidence performs all
+      authorization, source acquisition, derivation and signing. The adapter returns those
+      signed bytes unchanged. Its bounded, process-local exchange state is single-replica
+      and restart-invalidated; it has no Evidence
+      signing key, holder private key, status service or durable credential store.
+    '''
+    evidenceOfferClient -> evidenceAuthorizationServer 'Obtains an ordinary non-task access token for the adapter offer resource'
+    evidenceOfferClient -> evidenceOid4vci 'Creates a pre-authorized holder-bound offer'
+    opt 'Adapter catalog missing or expired' {
+      evidenceOid4vci -> evidenceNonVerifyingClient 'Uses the restricted holder-bound client without a verifier decision'
+      evidenceNonVerifyingClient -> evidenceAuthorizationServer 'Obtains or reuses the adapter token for this definitions call'
+      evidenceNonVerifyingClient -> evidence.publication 'Fetches authenticated definitions for the adapter'
+      evidenceNonVerifyingClient -> evidenceOid4vci 'Returns the bounded discovery document'
+      evidenceOid4vci -> evidenceOid4vci 'Derives and caches the catalog for at most 300 seconds'
+    }
+    evidenceOid4vci -> evidenceOid4vci 'Resolves one configuration and records the prepared offer from that catalog generation'
+    evidenceOid4vci -> evidenceOfferClient 'Returns the credential offer and optional transaction code'
+    evidenceOfferClient -> evidenceWallet 'Delivers the credential offer to the holder'
+    evidenceWallet -> evidenceOid4vci 'Redeems the pre-authorized code and receives an access token'
+    evidenceWallet -> evidenceOid4vci 'Obtains a nonce and submits a wallet-signed proof'
+    evidenceOid4vci -> evidenceOid4vci 'Claims the one-use token, then validates nonce, proof and public holder key'
+    evidenceOid4vci -> evidenceNonVerifyingClient 'Submits the proved holder keys for one prepared request'
+    evidenceNonVerifyingClient -> evidenceAuthorizationServer 'Obtains or reuses the adapter token for this issuance call'
+    evidenceNonVerifyingClient -> evidence.api 'Requests a holder-bound SD-JWT VC batch with the public keys'
+    evidence.api -> evidenceNonVerifyingClient 'Returns Evidence-signed credential bytes'
+    evidenceNonVerifyingClient -> evidenceOid4vci 'Returns the unverified bytes for forwarding'
+    evidenceOid4vci -> evidenceWallet 'Forwards the exact credential bytes unchanged'
+  }
+
+  view evidence_authoring_deployment {
+    title 'Evidence / 09. Authoring and deployment contracts'
+    description '''
+      An authoring project is compiled into a create-only candidate bundle and generated
+      contracts. A BReg source export can supply lookup-side schemas and adapter stubs,
+      but grants neither BReg access nor Evidence question authority. Evidence validates
+      the complete bundle and fixtures through the real binary. Operators independently
+      provision the closed runtime file, source credentials, audit material, TLS roots
+      and exactly one signer: Transit for production or evidence-grade, or a local JWK
+      artifact for local assurance. Bundle and runtime have separate digests, are mounted
+      read-only and change only by coordinated restart. evidencectl is adopter tooling beside
+      the runtime; it is not a control plane and does not hold production package-signing
+      or assertion-signing authority.
+    '''
+    include evidenceOperator, evidenceAuthoringProject, bregEvidenceExport, evidenceTooling, evidenceBundle, evidenceRuntimeConfig, evidenceContracts, evidence, evidenceAuditStore, evidenceTransitSigner, evidenceLocalSigningKey
+  }
+}

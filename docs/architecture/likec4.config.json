@@ -1,0 +1,20 @@
+{
+  "$schema": "https://likec4.dev/schemas/config.json",
+  "name": "registry-stack",
+  "title": "Registry Stack architecture",
+  "exclude": ["**/node_modules/**", "**/dist/**"],
+  "styles": {
+    "theme": {
+      "colors": {
+        "primary": "#000091",
+        "muted": "#666666"
+      }
+    },
+    "defaults": {
+      "border": "solid",
+      "relationship": {
+        "line": "solid"
+      }
+    }
+  }
+}

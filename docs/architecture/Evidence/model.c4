@@ -1,0 +1,197 @@
+// Evidence structure and its implemented integration boundaries.
+// Components inside evidence are responsibilities in one Rust process, not services.
+// Source links pin revision c02e470 on main, whose contracts were inspected.
+model {
+  evidenceOperator = actor 'Evidence operator' {
+    description 'Reviews one disclosure surface, compiles and checks deployment candidates, provisions process-local bindings and operates the audit chain.'
+  }
+  evidenceAuthoringProject = artifact 'Evidence authoring project' {
+    technology 'YAML / OpenAPI / JSON Schema / Rhai / fixtures'
+    description 'Declares fixed questions, source contracts, selectors, access policy, derivations and governed tests. It contains deployment meaning but no production secret material.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/OPERATOR-CONTRACT.md 'Authoring and promotion contract'
+  }
+  evidenceTooling = tool 'evidencectl' {
+    technology 'Authoring and operator CLI'
+    description 'Creates and checks authoring workspaces, compiles an explicit target into a create-only candidate, runs fixture and doctor checks, and prepares or verifies relying-party requests. Runtime evaluation, signing and bundle validation remain with the evidence binary.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidencectl/src/lib.rs 'CLI command boundary'
+  }
+  evidenceBundle = artifact 'Governed Evidence bundle' {
+    technology 'Immutable startup bundle'
+    description 'One atomic disclosure surface containing governed configuration, fixed source requests, schemas, codelists, Rhai scripts and fixture references. The process validates and captures it at startup; there is no upload, hot reload or override layer.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/bundle.rs 'Bundle loading and validation'
+  }
+  evidenceRuntimeConfig = artifact 'Evidence runtime configuration' {
+    technology 'Closed runtime.yaml'
+    description 'Binds only process-local listener, bundle and secret paths, durable audit storage, one assurance-compatible signer kind, private CAs, source extracts and explicit capability gates. It cannot change governed authority, source or disclosure meaning.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/contracts/runtime.schema.yaml 'Runtime contract'
+  }
+  evidenceContracts = artifact 'Evidence contract artifacts' {
+    technology 'Generated OpenAPI 3.1 / JSON Schema'
+    description 'Closed request, response, problem, audit and verification artifacts reproduced from the maintained source contracts. Generated artifacts describe wire shapes and confer no authority.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/contracts/README.md 'Contract source index'
+  }
+  evidenceAuditStore = database 'Evidence audit storage' {
+    technology 'Durable segmented keyed JSONL'
+    description 'Stores privacy-safe authorization-refusal, source-access and terminal release or failure records in a tamper-evident chain. Source-access and terminal events record the requirement and purpose identifiers in plain text; a refusal before authority resolution omits them. Records carry actor kind, a requester-principal pseudonym, scoped pseudonyms for available client, grant and delegated actor context, and successful task-grant approver attribution. Subject roles and selector profiles remain visible, but task subject values are pseudonymized. It stores no raw identity or task subjects, selector values, source facts, request nonce or signed response bytes.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/audit.rs 'Audit records and verification'
+  }
+  evidenceTransitSigner = external 'Transit signing proxy' {
+    technology 'Vault/OpenBao Transit / Unix socket'
+    description 'Production and evidence-grade deployments call a workload-local proxy for one pinned non-exportable ES256 Transit key. The provider public key must match the governed active JWK, and Evidence supplies no provider token.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-platform-crypto/src/lib.rs 'Transit signing provider'
+  }
+  evidenceLocalSigningKey = artifact 'Local signing key' {
+    #optional
+    technology 'Owner-only private JWK secret'
+    description 'Local assurance requires one private P-256 JWK that Evidence reads into its in-process signer and checks against the governed active public JWK. This mutually exclusive runtime signer kind is refused for production and evidence-grade assurance.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/runtime.rs 'Signer initialization'
+  }
+  evidenceHttpSource = external 'Authoritative HTTP source' {
+    technology 'Fixed HTTPS JSON operation'
+    description 'An independently authorized source such as an existing registry or integration layer. Evidence fixes origin, method, path authority, credentials, trust, projection and bounds; source access control remains independent.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/source.rs 'HTTP source executor'
+  }
+  evidenceSqliteExtract = artifact 'Published SQLite extract' {
+    #optional
+    technology 'Read-only immutable SQLite file'
+    description 'An optional source snapshot published and mounted by the source owner. Evidence executes one reviewed bundle-fixed statement after checking publication metadata and freshness; the file is source data, not Evidence storage.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/source_sqlite.rs 'SQLite source boundary'
+  }
+
+  evidence = service 'Evidence runtime' {
+    technology 'Rust / Axum / one process'
+    description 'Produces minimum-disclosure assertions, signed by default, from authorized fixed requests. One process serves one operator-controlled trust domain and persists no request nonce, source response, assertion or credential lifecycle state.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/runtime.rs 'Runtime orchestration'
+
+    api = component 'HTTP and format boundary' {
+      description 'Serves singular assertions, audience-scoped request batches and holder-bound issuance batches; requester-scoped definitions; packaged provider advertisement; JWKS; JWT VC issuer and OAuth protected-resource metadata; OpenAPI; JSON-LD catalog; health and readiness. An opt-in private listener serves metrics separately. Parsing and exact format negotiation fail closed before source access.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/server.rs 'Router and response boundary'
+    }
+    authority = component 'Authentication and authorization' {
+      description 'Fetches configured OIDC keys, verifies tokens, requires actor kind, derives the principal only from configured claims and optionally admits exact OAuth clients and scopes. Every token must carry the configured requester-tag and Evidence-audience claims. Request and selector-failure budgets apply before selector resolution. A task-bound agent path accepts one complete unexpired issuer-signed grant only when its principal, verified client and resource, trusted source issuer, purpose, Evidence requirement and subject tuples match exactly one configured grant entry; none is unauthorized and several are refused as ambiguous. The required issuer-copied audience supplies relying-party context, not a grant member. Audience-scoped requirements bind that audience; holder-bound requirements bind the presented holder-key thumbprint. A present invalid grant cannot fall back to standing authority, and Evidence makes no live task-status lookup.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/auth.rs 'Authentication context'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/selector.rs 'Authority matching and selector resolution'
+    }
+    acquisition = component 'Fixed source acquisition' {
+      description 'Executes bundle-declared single, search-then-fetch or search-then-fetch-set plans through bounded HTTP requests or reviewed SQLite statements. Rust owns source choice, networking, credentials, file access, projections and limits.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/source.rs 'Source boundary'
+    }
+    scripts = component 'Bounded Rhai adapters' {
+      description 'Runs deterministic prepare, extraction and requirement-specific derivation functions with fresh state and closed inputs. Rhai has no network, filesystem, credential, clock, signing or audit capability.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/rhai_runtime.rs 'Rhai capability boundary'
+    }
+    assertions = component 'Assertion kernel' {
+      description 'Validates closed lookup results and declared concept values, derives scoped subject bindings and constructs the unsigned Evidence payload without retaining source values.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/kernel.rs 'Evaluation and payload-construction kernel'
+    }
+    signing = component 'Response serialization and signing' {
+      description 'The runtime serializes the exact final flattened JWS, unsigned envelope or SD-JWT VC bytes. Protected formats are signed with the governed active ES256 identity through exactly one assurance-compatible signer kind selected at startup. Signing, serialization or format failure never falls back to an unsigned or partial response.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/signing.rs 'Signing implementation'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/runtime.rs 'Serialization and release path'
+    }
+    audit = component 'Durable audit release gates' {
+      description 'Durably accepts minimal contextual authorization refusals before their 403, access events before each physical source call, and terminal release after final serialization but before the exact bytes leave the process. Source-access and terminal events retain plain requirement and purpose identifiers; a refusal before authority resolution omits them. Requester principal and available client, grant, delegated actor, successful approver and task subjects are scoped pseudonyms. Audit failure changes the result to a safe 503.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/audit.rs 'Audit gates'
+    }
+    publication = component 'Discovery and key publication' {
+      description 'Returns authenticated requester-scoped complete request shapes, exact packaged public provider advertisement and catalog bytes, the configured public key set, and issuer and protected-resource metadata. Provider metadata and JWKS aid discovery; neither is a trust anchor or an access grant.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/discovery.rs 'Provider publication'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/runtime.rs 'Requester-scoped definitions'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence/src/server.rs 'Publication routes'
+    }
+  }
+
+  evidenceVerifier = library 'Evidence verifier library' {
+    technology 'Portable Rust library'
+    description 'Owns the Evidence payload and signed response formats and performs strict relying-party verification against independently trusted keys, nonce, audience, subjects and output expectations. It has no server or source access.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-verifier/src/verifier.rs 'Strict verifier'
+  }
+  evidenceClient = library 'Verifying Evidence client libraries' {
+    technology 'Rust / Node.js / Python SDKs'
+    description 'Prepare bounded requests, call the public HTTP contract and route every verification decision through the portable verifier. The bindings add no evaluation or trust semantics.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-client/src/lib.rs 'Relying-party SDK'
+  }
+  evidenceNonVerifyingClient = library 'Non-verifying holder-bound client' {
+    technology 'Rust library inside delivery front ends'
+    description 'Uses the same bounded request and HTTP machinery without making a relying-party verification decision. It is restricted to holder-bound definition discovery and issuance for a delivery front end that forwards Evidence-signed bytes unchanged.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-client/src/client.rs 'Non-verifying client boundary'
+  }
+  evidenceRelay = external 'Registry Relay' {
+    #optional
+    technology 'Optional fixed HTTP source'
+    description 'Can expose a protected read-only API that Evidence calls as an ordinary fixed source. Relay and Evidence enforce separate caller identities, authorization and audit boundaries.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-relay-v2/src/lib.rs 'Relay runtime boundary'
+  }
+  evidenceDiscovery = external 'Registry Discovery' {
+    #optional
+    technology 'Optional immutable index runtime'
+    description 'Serves an index built offline from operator-approved public provider advertisements. A relying application may persist an inert exact selection, but must separately trust and invoke Evidence through the native client.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-discovery-client/src/selection.rs 'Exact inert selections'
+  }
+  evidenceWallet = external 'Holder wallet' {
+    technology 'OID4VCI 1.0 Final client'
+    description 'Receives an SD-JWT VC and retains its private key. Wallet parsing, holding and presentation compatibility remains subject to the pinned profile and compatibility tests.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/evidence/contracts/oid4vci-profile.yaml 'Wallet compatibility profile'
+  }
+  evidenceOfferClient = external 'Authorized offer application' {
+    technology 'OIDC client / adopter-facing integration'
+    description 'Obtains an ordinary non-task access token for the adapter offer resource and creates a pre-authorized offer for a reviewed holder-bound request. Complete, partial, malformed or expired task grants cannot create this deferred wallet lifecycle. Its identity and authority are separate from the adapter client that later calls Evidence.'
+  }
+  evidenceOid4vci = service 'Evidence OID4VCI adapter' {
+    #optional
+    technology 'Optional independent Rust process'
+    description 'Provides credential offer, token, nonce and credential routes for holder-bound Evidence definitions. Through the non-verifying client it caches an authenticated definition catalog for at most 300 seconds; bundle changes require the profile\'s coordinated restart order. It carries bounded minutes-lived in-memory exchange state and holds a separate outbound OAuth client-assertion key, distinct from the Evidence signing key. It never signs credentials, never holds holder private keys and forwards Evidence bytes unchanged.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-oid4vci/src/lib.rs 'Wallet-delivery boundary'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-oid4vci/src/issuer.rs 'Adapter-owned catalog cache and client use'
+  }
+  evidenceAuthorizationServer = external 'OAuth authorization server' {
+    technology 'OAuth 2.0 / OIDC / JWT / JWKS'
+    description 'Issues independently configured tokens for offer creation and for the adapter client that calls Evidence. The two resource audiences, credentials and authorization decisions remain separate.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-oid4vci/src/authorizer.rs 'Offer authorization boundary'
+  }
+
+  evidenceOperator .call evidenceTooling 'Authors, checks and operates a deployment'
+  evidenceAuthoringProject .artifactFlow evidenceTooling 'Supplies explicit reviewed inputs'
+  bregEvidenceExport .artifactFlow evidenceTooling 'Optionally supplies a BReg lookup source export'
+  evidenceTooling .artifactFlow evidenceBundle 'Compiles a create-only checked candidate'
+  evidenceContracts .artifactFlow evidenceTooling 'Constrains authoring, requests and offline verification'
+  evidenceBundle .artifactFlow evidence 'Validated immutable load at startup'
+  evidenceRuntimeConfig .artifactFlow evidence 'Binds process-local resources at startup'
+  application .call evidenceClient 'Requests and verifies assertions'
+  application .call evidence.api 'Optionally calls the native HTTP API directly'
+  application .call evidence.publication 'Reads authorized request shapes or public metadata'
+  evidenceClient .call evidence.api 'Uses the native Evidence HTTP contract'
+  evidenceClient .call evidenceVerifier 'Delegates every verification decision'
+  evidence.api .call evidence.authority 'Authenticates and resolves complete authority'
+  evidence.authority .call issuer 'Fetches caller token keys from the configured JWKS URI'
+  evidence.authority .call evidence.audit 'Records contextual authorization refusal before response'
+  evidence.authority .call evidence.acquisition 'Dispatches only a completely authorized fixed plan'
+  evidence.acquisition .call evidence.audit 'Records durable access gate before each physical read'
+  evidence.acquisition .call evidenceHttpSource 'Executes a fixed authorized request'
+  evidence.acquisition .call evidenceSqliteExtract 'Reads through one reviewed statement'
+  evidence.acquisition .call evidenceRelay 'Optionally reads a protected fixed route'
+  evidence.acquisition .call evidence.scripts 'Prepares requests, extracts facts and runs declared derivation'
+  evidence.scripts .call evidence.assertions 'Returns only declared typed values'
+  evidence.assertions .call evidenceVerifier 'Uses the shared payload and format contract'
+  evidence.assertions .call evidence.signing 'Requests the selected protected serialization'
+  evidence.signing .call evidenceTransitSigner 'Production signing with the pinned provider key'
+  evidenceLocalSigningKey .artifactFlow evidence.signing 'Local assurance loads an in-process signing key'
+  evidence.signing .call evidence.audit 'Gates exact final bytes before release'
+  evidence.audit .call evidenceAuditStore 'Durably appends and syncs the keyed chain'
+  application .call evidenceDiscovery 'Searches an immutable provider index'
+  evidenceOfferClient .call evidenceAuthorizationServer 'Obtains an ordinary token for the offer resource server'
+  evidenceOfferClient .call evidenceOid4vci 'Creates a pre-authorized holder-bound offer' {
+    navigateTo evidence_wallet_delivery
+  }
+  evidenceOfferClient .artifactFlow evidenceWallet 'Delivers the credential offer to the holder'
+  evidenceNonVerifyingClient .call evidenceAuthorizationServer 'Obtains or reuses the adapter\'s separately scoped Evidence token' {
+    technology 'OAuth client credentials / private_key_jwt'
+    description 'The client token provider uses the adapter\'s registered key and acquires credentials lazily for actual definition or issuance calls. Reusing the adapter catalog needs no Evidence request or token acquisition.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-oid4vci/src/issuer.rs 'Adapter client and token provider'
+  }
+  evidenceOid4vci .call evidenceNonVerifyingClient 'Uses the holder-bound delivery client without making a verifier decision'
+  evidenceNonVerifyingClient .call evidence.publication 'Reads definitions for the adapter-owned catalog cache'
+  evidenceNonVerifyingClient .call evidence.api 'Requests a holder-bound signed batch'
+  evidenceWallet .call evidenceOid4vci 'Redeems an offer and submits proof of holder key possession'
+  evidenceOid4vci .artifactFlow evidenceWallet 'Returns Evidence-signed credential bytes unchanged'
+}
