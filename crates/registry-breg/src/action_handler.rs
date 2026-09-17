@@ -2,19 +2,16 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
+    contract::{FieldTypeSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
     data::{validate_field_value, FieldValue},
     model::*,
-    rhai_planner::{
-        self, CandidateChangeRequestMutation, CandidateChangeRequestValue,
-        ChangeRequestPlannerError,
-    },
+    rhai_planner::{self, ChangeRequestPlannerError},
 };
 #[cfg(feature = "postgres-test")]
 use std::collections::BTreeMap;
 
 use registry_platform_script::rhai as platform;
-use rhai::{Array, Dynamic, Map, AST};
+use rhai::{Dynamic, Map, AST};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 
@@ -92,7 +89,7 @@ pub struct ActionHandlerDiagnostic {
 }
 
 impl ActionHandlerDiagnostic {
-    fn new(kind: ActionHandlerError, message: &'static str) -> Self {
+    pub(crate) fn new(kind: ActionHandlerError, message: &'static str) -> Self {
         Self {
             kind,
             evidence_capability: None,
@@ -102,7 +99,7 @@ impl ActionHandlerDiagnostic {
         }
     }
 
-    fn at_slot(mut self, slot: &CompiledActionHandlerWrite) -> Self {
+    pub(crate) fn at_slot(mut self, slot: &CompiledActionHandlerWrite) -> Self {
         self.slot = Some(slot.id.clone());
         self
     }
@@ -547,9 +544,10 @@ fn execute_compiled_handler(
     {
         return Err(ActionHandlerError::Deadline.into());
     }
-    let mut remaining = action.maximum_snapshot_bytes as usize;
-    bound_result(&result, 0, &mut remaining)?;
-    let outcome = decode_result(action, handler, result)?;
+    let document = crate::action_outcome::rhai_document(result);
+    crate::action_outcome::bound_document(&document, action.maximum_snapshot_bytes)?;
+    let proposed = crate::action_outcome::decode_document(document)?;
+    let outcome = crate::action_outcome::validate_proposed_outcome(action, handler, proposed)?;
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
@@ -629,336 +627,4 @@ pub(crate) fn evaluate_with_cached_program(
         resolver,
         cancellation,
     )
-}
-
-fn bound_result(
-    value: &Dynamic,
-    depth: usize,
-    remaining: &mut usize,
-) -> Result<(), ActionHandlerError> {
-    if depth > rhai_planner::MAXIMUM_VALUE_DEPTH {
-        return Err(ActionHandlerError::Resource);
-    }
-    *remaining = remaining
-        .checked_sub(8)
-        .ok_or(ActionHandlerError::Resource)?;
-    if let Some(value) = value.read_lock::<rhai::ImmutableString>() {
-        *remaining = remaining
-            .checked_sub(value.len())
-            .ok_or(ActionHandlerError::Resource)?;
-    } else if let Some(values) = value.read_lock::<Array>() {
-        if values.len() > rhai_planner::MAXIMUM_ARRAY_ITEMS {
-            return Err(ActionHandlerError::Resource);
-        }
-        for value in values.iter() {
-            bound_result(value, depth + 1, remaining)?;
-        }
-    } else if let Some(values) = value.read_lock::<Map>() {
-        if values.len() > rhai_planner::MAXIMUM_MAP_ENTRIES {
-            return Err(ActionHandlerError::Resource);
-        }
-        for (key, value) in values.iter() {
-            *remaining = remaining
-                .checked_sub(key.len())
-                .ok_or(ActionHandlerError::Resource)?;
-            bound_result(value, depth + 1, remaining)?;
-        }
-    }
-    Ok(())
-}
-
-fn decode_result(
-    action: &CompiledAction,
-    handler: &CompiledActionHandler,
-    result: Dynamic,
-) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
-    let map = result.try_cast::<Map>().ok_or_else(|| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return a map containing either effects or refusal.",
-        )
-    })?;
-    if map.contains_key("effects") && map.contains_key("refusal") {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return either effects or refusal, never both.",
-        ));
-    }
-    if let Some(refusal) = map.get("refusal") {
-        rhai_planner::exact_keys(&map, &["refusal"], &[]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "A refusal outcome may contain only refusal.",
-            )
-        })?;
-        let refusal = refusal.read_lock::<Map>().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Return refusal as a map with code and an optional field.",
-            )
-        })?;
-        rhai_planner::exact_keys(&refusal, &["code"], &["field"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "A refusal requires code and may contain only an optional field; declare its label in the handler catalogue.",
-            )
-        })?;
-        let code = rhai_planner::dynamic_string(&refusal["code"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a string code from the handler's declared refusal catalogue.",
-            )
-        })?;
-        let label = handler.refusals.get(&code).cloned().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a code from the handler's declared refusal catalogue.",
-            )
-        })?;
-        let field = refusal
-            .get("field")
-            .map(rhai_planner::dynamic_string)
-            .transpose()
-            .map_err(|_| {
-                ActionHandlerDiagnostic::new(
-                    ActionHandlerError::Result,
-                    "Use a declared input ID as the refusal field, or omit field.",
-                )
-            })?;
-        if field
-            .as_ref()
-            .is_some_and(|field| !action.inputs.iter().any(|input| &input.id == field))
-        {
-            return Err(ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a declared input ID as the refusal field, or omit field.",
-            ));
-        }
-        return Ok(ActionHandlerOutcome::Refusal(ActionHandlerRefusal {
-            code,
-            label,
-            field,
-        }));
-    }
-    rhai_planner::exact_keys(&map, &["effects"], &[]).map_err(|_| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "An effects outcome must contain only effects.",
-        )
-    })?;
-    let results = map["effects"].read_lock::<Array>().ok_or_else(|| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return effects as a non-empty list of declared write slots.",
-        )
-    })?;
-    if results.is_empty() {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit at least one declared write slot, or return a declared refusal.",
-        ));
-    }
-    if results.len() > usize::from(action.maximum_targets) {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit no more effects than the action's target bound.",
-        ));
-    }
-    let mut effects = Vec::new();
-    let mut selected = BTreeSet::new();
-    for result in results.iter() {
-        let effect = result.clone().try_cast::<Map>().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Return each effect as a map with id and set or clear.",
-            )
-        })?;
-        let id = effect
-            .get("id")
-            .ok_or_else(|| {
-                ActionHandlerDiagnostic::new(
-                    ActionHandlerError::Result,
-                    "Give each effect an id from the handler's declared write slots.",
-                )
-            })
-            .and_then(|id| {
-                rhai_planner::dynamic_string(id).map_err(|_| {
-                    ActionHandlerDiagnostic::new(
-                        ActionHandlerError::Result,
-                        "Use a string id from the handler's declared write slots.",
-                    )
-                })
-            })?;
-        let slot =
-            handler
-                .writes
-                .iter()
-                .find(|slot| slot.id == id)
-                .ok_or(ActionHandlerDiagnostic {
-                    kind: ActionHandlerError::Ceiling,
-                    evidence_capability: None,
-                    slot: None,
-                    field: None,
-                    message: "Use an id from the handler's declared write slots.",
-                })?;
-        rhai_planner::exact_keys(&effect, &["id"], &["set", "clear"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "An effect may contain only id, set and clear; the declared slot fixes its target and operation.",
-            )
-            .at_slot(slot)
-        })?;
-        if !selected.insert(id.clone()) {
-            return Err(ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Emit each declared write slot at most once.",
-            )
-            .at_slot(slot));
-        }
-        let mutations = rhai_planner::decode_write_mutations_detailed(&slot.ceiling, &effect)
-            .map_err(|diagnostic| ActionHandlerDiagnostic {
-                kind: diagnostic.kind.into(),
-                evidence_capability: None,
-                slot: Some(slot.id.clone()),
-                field: diagnostic.field,
-                message: diagnostic.message,
-            })?;
-        let depends_on = mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                CandidateChangeRequestMutation::Set {
-                    value: CandidateChangeRequestValue::FromEffect { effect, .. },
-                    ..
-                } => Some(effect.clone()),
-                _ => None,
-            })
-            .collect();
-        let binding = match &slot.ceiling.target_from_field {
-            Some(from_field) => rhai_planner::CandidateChangeRequestTargetBinding::Existing {
-                from_field: from_field.clone(),
-            },
-            None => rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
-                effect: id.clone(),
-            },
-        };
-        effects.push(rhai_planner::CandidateChangeRequestEffect {
-            id,
-            target: rhai_planner::CandidateChangeRequestTarget {
-                entity_id: slot.ceiling.target_entity_id.clone(),
-                binding,
-            },
-            operation: slot.ceiling.operation,
-            mutations,
-            depends_on,
-        });
-    }
-    if effects
-        .iter()
-        .map(|effect| effect.mutations.len())
-        .sum::<usize>()
-        > usize::from(action.maximum_field_mutations)
-    {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit no more field mutations than the action's field-mutation bound.",
-        ));
-    }
-    for effect in &effects {
-        for mutation in &effect.mutations {
-            if let CandidateChangeRequestMutation::Set {
-                field,
-                value:
-                    CandidateChangeRequestValue::FromEffect {
-                        effect: id,
-                        target_entity_id,
-                    },
-            } = mutation
-            {
-                let diagnostic = |kind, message| ActionHandlerDiagnostic {
-                    kind,
-                    evidence_capability: None,
-                    slot: Some(effect.id.clone()),
-                    field: Some(field.clone()),
-                    message,
-                };
-                let source = effects
-                    .iter()
-                    .find(|effect| &effect.id == id)
-                    .ok_or_else(|| {
-                        diagnostic(
-                            ActionHandlerError::Result,
-                            "Emit the create slot named by fromEffect in the same outcome.",
-                        )
-                    })?;
-                if source.operation != Operation::Create
-                    || &source.target.entity_id != target_entity_id
-                {
-                    return Err(diagnostic(
-                        ActionHandlerError::Ceiling,
-                        "Use fromEffect only with an emitted create slot for the field's reference target.",
-                    ));
-                }
-            }
-        }
-    }
-    let effects = rhai_planner::order_candidates(effects)
-        .map_err(|kind| {
-            ActionHandlerDiagnostic::new(
-                kind.into(),
-                "Emit create references without a dependency cycle.",
-            )
-        })?
-        .into_iter()
-        .map(|effect| {
-            let slot = action
-                .effects
-                .iter()
-                .find(|slot| slot.id == effect.id)
-                .ok_or(ActionHandlerError::Ceiling)?;
-            let mutations = effect
-                .mutations
-                .into_iter()
-                .map(|mutation| match mutation {
-                    CandidateChangeRequestMutation::Clear { field } => {
-                        CompiledActionMutation::Clear { field }
-                    }
-                    CandidateChangeRequestMutation::Set { field, value } => {
-                        CompiledActionMutation::Set {
-                            field,
-                            value: match value {
-                                CandidateChangeRequestValue::Literal(value) => {
-                                    CompiledActionValue::Literal { value }
-                                }
-                                CandidateChangeRequestValue::FromRequestField { field: input } => {
-                                    CompiledActionValue::FromInput { input }
-                                }
-                                CandidateChangeRequestValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                } => CompiledActionValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                },
-                            },
-                        }
-                    }
-                })
-                .collect();
-            Ok(CompiledActionEffect {
-                id: effect.id,
-                target: slot.target.clone(),
-                operation: slot.operation,
-                mutations,
-                depends_on: effect.depends_on,
-            })
-        })
-        .collect::<Result<Vec<_>, ActionHandlerError>>()?;
-    if serde_json::to_vec(&effects)
-        .map_err(|_| ActionHandlerError::Result)?
-        .len()
-        > action.maximum_snapshot_bytes as usize
-    {
-        return Err(ActionHandlerError::Resource.into());
-    }
-    Ok(ActionHandlerOutcome::Effects(effects))
 }
