@@ -126,6 +126,7 @@ impl ProblemKind {
             "render-timeout" => Self::RenderTimeout,
             "render-panicked" => Self::RenderPanicked,
             "unauthorized" => Self::Unauthorized,
+            "body-too-large" => Self::BodyTooLarge,
             "rate-limited" => Self::RateLimited,
             "audit-failed" => Self::AuditFailed,
             "runtime-invalid" => Self::RuntimeInvalid,

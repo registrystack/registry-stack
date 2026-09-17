@@ -602,6 +602,48 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
 }
 
 #[test]
+fn oversized_bodies_are_refused_after_auth_as_problems() {
+    let (home, runtime, _) = deployment(
+        "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 1024\n  maxConcurrency: 2\n",
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    let oversized = "x".repeat(2048);
+    // Unauthenticated oversized bodies are 401s: auth runs first, and no
+    // unauthenticated body is ever buffered.
+    let anonymous = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[("Content-Type", "application/json")],
+        Some(&oversized),
+    );
+    assert_eq!(anonymous.status, 401);
+    // Authenticated: an RFC 9457 problem naming the ceiling.
+    let refused = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[
+            ("Authorization", &format!("Bearer {API_KEY}")),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&oversized),
+    );
+    assert_eq!(refused.status, 413);
+    let text = String::from_utf8_lossy(&refused.body);
+    assert!(text.contains("body-too-large"), "{text}");
+    assert!(text.contains("1024"), "{text}");
+    // The refusal is audited like every other.
+    drop(server);
+    let lines = audit_lines(&home);
+    assert!(
+        lines.iter().any(|l| l.contains("body-too-large") && l.contains("refused")),
+        "the 413 refusal is audited: {lines:?}"
+    );
+}
+
+#[test]
 fn slow_renders_are_killed_and_the_service_recovers() {
     // A compute-heavy bundle and a one-second budget: the supervisor kills
     // the worker, the refusal is audited, and the very next render works.

@@ -38,6 +38,8 @@ pub enum ProblemKind {
     RenderPanicked,
     /// The caller's API key is missing or wrong (HTTP 401).
     Unauthorized,
+    /// The request body exceeds the configured ceiling (HTTP 413).
+    BodyTooLarge,
     /// The caller exceeded a limit (HTTP 429/413 semantics).
     RateLimited,
     /// The audit ledger refused or failed (fail closed before responding).
@@ -69,6 +71,7 @@ impl ProblemKind {
             Self::RenderTimeout => 15,
             Self::RenderPanicked => 16,
             Self::Unauthorized => 17,
+            Self::BodyTooLarge => 22,
             Self::RateLimited => 18,
             Self::AuditFailed => 19,
             Self::RuntimeInvalid => 20,
@@ -93,6 +96,7 @@ impl ProblemKind {
             Self::RenderTimeout => 504,
             Self::RenderPanicked | Self::Internal => 500,
             Self::Unauthorized => 401,
+            Self::BodyTooLarge => 413,
             Self::RateLimited => 429,
             Self::AuditFailed | Self::RuntimeInvalid => 503,
         }
@@ -118,6 +122,7 @@ impl ProblemKind {
             Self::RenderTimeout => "render-timeout",
             Self::RenderPanicked => "render-panicked",
             Self::Unauthorized => "unauthorized",
+            Self::BodyTooLarge => "body-too-large",
             Self::RateLimited => "rate-limited",
             Self::AuditFailed => "audit-failed",
             Self::RuntimeInvalid => "runtime-invalid",
@@ -202,6 +207,7 @@ mod tests {
             ProblemKind::RenderTimeout,
             ProblemKind::RenderPanicked,
             ProblemKind::Unauthorized,
+            ProblemKind::BodyTooLarge,
             ProblemKind::RateLimited,
             ProblemKind::AuditFailed,
             ProblemKind::RuntimeInvalid,

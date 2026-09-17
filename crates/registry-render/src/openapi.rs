@@ -74,7 +74,7 @@ pub const OPENAPI_JSON: &str = r#"{
           "400": { "description": "Invalid request, data, or assets (problem+json with JSON pointers)" },
           "401": { "description": "Missing or wrong API key" },
           "422": { "description": "Compile failure, strict warnings, or oversized output" },
-          "413": { "description": "Request body over the configured limit" },
+          "413": { "description": "Request body over the configured limit (problem+json; audited, after authentication)" },
           "500": { "description": "Render panicked" },
           "503": { "description": "Audit failure (fail closed) or not ready" },
           "504": { "description": "Render timeout" }

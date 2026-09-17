@@ -124,11 +124,15 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|err| {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;
-    let service_for_drain = Arc::clone(&service);
-    let app = router(service)
-        .layer(axum::middleware::from_fn(lifecycle_log))
-        .layer(request_body_limit(runtime.limits.max_request_body_bytes));
-    let shutdown = async {
+    let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
+    let grace = Duration::from_secs(runtime.server.shutdown_grace_seconds);
+    let drain_service = Arc::clone(&service);
+    // The drain runs INSIDE the graceful-shutdown future: axum keeps
+    // serving while it is pending, so in-flight renders finish and their
+    // audit appends land before the listener closes. A render still holding
+    // a permit at the end of the grace period is abandoned — dropping its
+    // request future kills the worker (kill_on_drop).
+    let shutdown = async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
@@ -144,20 +148,25 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         {
             let _ = ctrl_c.await;
         }
+        let service = drain_service;
+        let drained = tokio::time::timeout(grace, async {
+            while service.concurrency.available_permits() < service.max_concurrency {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await;
+        if drained.is_err() {
+            tracing::warn!(
+                grace_seconds = grace.as_secs(),
+                "shutdown grace elapsed with renders in flight; abandoning them"
+            );
+        }
     };
-    let grace = Duration::from_secs(runtime.server.shutdown_grace_seconds);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown)
         .await
         .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("server: {err}")))?;
-    // Drain: wait for in-flight renders up to the grace period.
-    let service = service_for_drain;
-    let _ = tokio::time::timeout(grace, async {
-        while service.concurrency.available_permits() < service.max_concurrency {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-    })
-    .await;
+    tracing::info!("render serve stopped");
     Ok(0)
 }
 
@@ -173,11 +182,18 @@ fn init_tracing() {
 }
 
 fn router(service: Arc<Service>) -> Router {
-    // API routes authenticate before the body is buffered; health, ready,
-    // and the OpenAPI document stay anonymous.
+    // API routes authenticate before anything buffers the body. Inside
+    // auth: the body ceiling refuses as an audited RFC 9457 problem (with
+    // the tower stream limit as the backstop for chunked or under-declared
+    // bodies). Health, ready, and the OpenAPI document stay anonymous.
     let api = Router::new()
         .route("/v1/documents", get(documents))
         .route("/v1/render/{type}", post(render_route))
+        .layer(request_body_limit(service.limits.max_request_body_bytes))
+        .layer(axum::middleware::from_fn_with_state(
+            Arc::clone(&service),
+            refuse_oversized_bodies,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&service),
             require_bearer,
@@ -219,6 +235,43 @@ async fn require_bearer(
         ));
     }
     next.run(request).await
+}
+
+/// Post-auth body-ceiling refusal: a declared Content-Length beyond the
+/// configured limit gets an RFC 9457 problem and an audit event like every
+/// other refusal. The tower stream limit directly beneath this middleware
+/// backstops chunked or under-declared bodies.
+async fn refuse_oversized_bodies(
+    State(service): State<Arc<Service>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let limit = service.limits.max_request_body_bytes;
+    let too_large = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|declared| declared > limit);
+    if !too_large {
+        return next.run(request).await;
+    }
+    let problem = RenderProblem::new(
+        ProblemKind::BodyTooLarge,
+        format!("request body exceeds the configured limit of {limit} bytes"),
+    );
+    let target = sanitize_route_target(request.uri().path());
+    let event = RenderAuditEvent::refused(
+        &target,
+        &problem,
+        &service.caller_fingerprint,
+        correlation_id(request.headers()).as_deref(),
+        trace_id(request.headers()).as_deref(),
+    );
+    if let Err(audit_problem) = service.audit.append(event).await {
+        tracing::warn!(problem = %audit_problem, "413 audit append failed");
+    }
+    problem_response(&problem)
 }
 
 /// The audit event's document id for pre-auth refusals: the route's last
