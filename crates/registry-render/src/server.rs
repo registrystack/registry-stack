@@ -1,6 +1,7 @@
 //! `render serve`: the HTTP rendering API. One POST endpoint, one GET
 //! discovery endpoint, a private listener, API-key auth, bounded body,
-//! supervised worker renders, and an audit append before every response.
+//! supervised worker renders, and an audit append before every render
+//! response — refusals included, whatever refusal class they are.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -11,7 +12,7 @@ use std::time::Duration;
 use axum::extract::{Path as RoutePath, State};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{any, get};
 use axum::{Json, Router};
 use base64::Engine as _;
 use serde::Deserialize;
@@ -188,7 +189,9 @@ fn router(service: Arc<Service>) -> Router {
     // bodies). Health, ready, and the OpenAPI document stay anonymous.
     let api = Router::new()
         .route("/v1/documents", get(documents))
-        .route("/v1/render/{type}", post(render_route))
+        // `any`, not `post`: a wrong method must answer with the problem
+        // vocabulary (and an audit event), not axum's bare 405.
+        .route("/v1/render/{type}", any(render_route))
         .layer(request_body_limit(service.limits.max_request_body_bytes))
         .layer(axum::middleware::from_fn_with_state(
             Arc::clone(&service),
@@ -237,29 +240,42 @@ async fn require_bearer(
     next.run(request).await
 }
 
-/// Post-auth body-ceiling refusal: a declared Content-Length beyond the
-/// configured limit gets an RFC 9457 problem and an audit event like every
-/// other refusal. The tower stream limit directly beneath this middleware
-/// backstops chunked or under-declared bodies.
+/// Post-auth body-framing refusal, before any body byte is read (a healthy
+/// connection can still be answered here): a declared Content-Length beyond
+/// the configured limit, or a chunked body at all — this fixed-size JSON API
+/// has no chunked callers, and once a chunked stream trips the tower limit
+/// mid-body the connection is broken and no response can be delivered at
+/// all. Either refusal is an audited RFC 9457 problem. The tower stream
+/// limit directly beneath this middleware remains the last-ditch backstop;
+/// a mid-stream abort there closes the connection (documented residual).
 async fn refuse_oversized_bodies(
     State(service): State<Arc<Service>>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
     let limit = service.limits.max_request_body_bytes;
-    let too_large = request
-        .headers()
-        .get(header::CONTENT_LENGTH)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.parse::<usize>().ok())
-        .is_some_and(|declared| declared > limit);
-    if !too_large {
+    let problem = if request.headers().get(header::TRANSFER_ENCODING).is_some() {
+        Some(RenderProblem::new(
+            ProblemKind::InvalidArgument,
+            "request bodies must carry Content-Length; chunked transfer is not accepted",
+        ))
+    } else {
+        request
+            .headers()
+            .get(header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok())
+            .is_some_and(|declared| declared > limit)
+            .then(|| {
+                RenderProblem::new(
+                    ProblemKind::BodyTooLarge,
+                    format!("request body exceeds the configured limit of {limit} bytes"),
+                )
+            })
+    };
+    let Some(problem) = problem else {
         return next.run(request).await;
-    }
-    let problem = RenderProblem::new(
-        ProblemKind::BodyTooLarge,
-        format!("request body exceeds the configured limit of {limit} bytes"),
-    );
+    };
     let target = sanitize_route_target(request.uri().path());
     let event = RenderAuditEvent::refused(
         &target,
@@ -505,18 +521,41 @@ async fn render_route(
     RoutePath(document_type): RoutePath<String>,
     headers: HeaderMap,
     method: Method,
-    body: axum::body::Bytes,
+    body: Result<axum::body::Bytes, axum::extract::rejection::BytesRejection>,
 ) -> Response {
-    if method != Method::POST {
-        return problem_response(&RenderProblem::new(
-            ProblemKind::InvalidArgument,
-            "use POST",
-        ));
-    }
     let document_type = sanitize_document_type(&document_type);
     let trace = trace_id(&headers);
     let correlation = correlation_id(&headers);
     let caller = service.caller_fingerprint.clone();
+    if method != Method::POST {
+        return refuse(
+            &service,
+            &document_type,
+            RenderProblem::new(ProblemKind::InvalidArgument, "use POST"),
+            &caller,
+            correlation.as_deref(),
+            trace.as_deref(),
+        )
+        .await;
+    }
+    // The stream-side body limit (chunked or under-declared lengths) fails
+    // the extraction here; it gets the same audited problem the declared
+    // Content-Length path produces, never a plain-text 413.
+    let body = match body {
+        Ok(bytes) => bytes,
+        Err(rejection) => {
+            let problem = body_rejection_problem(&rejection);
+            return refuse(
+                &service,
+                &document_type,
+                problem,
+                &caller,
+                correlation.as_deref(),
+                trace.as_deref(),
+            )
+            .await;
+        }
+    };
     let outcome = handle_render(&service, &document_type, &body).await;
     let event = match &outcome {
         Ok(rendered) => RenderAuditEvent {
@@ -562,6 +601,41 @@ async fn render_route(
             Err(problem) => problem_response(&problem),
         },
         Err(problem) => problem_response(&problem),
+    }
+}
+
+/// Refuse one render call: audit the refusal (append-before-respond,
+/// failing closed), then answer with the problem document.
+async fn refuse(
+    service: &Service,
+    document_type: &str,
+    problem: RenderProblem,
+    caller: &str,
+    correlation: Option<&str>,
+    trace: Option<&str>,
+) -> Response {
+    let event = RenderAuditEvent::refused(document_type, &problem, caller, correlation, trace);
+    if let Err(audit_problem) = service.audit.append(event).await {
+        return problem_response(&audit_problem);
+    }
+    problem_response(&problem)
+}
+
+/// Map a failed body extraction to the problem vocabulary: the tower
+/// stream limit's rejection is the body ceiling; anything else is a
+/// malformed request.
+fn body_rejection_problem(rejection: &axum::extract::rejection::BytesRejection) -> RenderProblem {
+    let text = rejection.body_text();
+    if text.contains("length limit exceeded") {
+        RenderProblem::new(
+            ProblemKind::BodyTooLarge,
+            "request body exceeds the configured limit (chunked or under-declared length)",
+        )
+    } else {
+        RenderProblem::new(
+            ProblemKind::InvalidArgument,
+            format!("request body could not be read: {text}"),
+        )
     }
 }
 

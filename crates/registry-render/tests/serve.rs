@@ -688,6 +688,85 @@ fn oversized_bodies_are_refused_after_auth_as_problems() {
 }
 
 #[test]
+fn chunked_bodies_are_refused_upfront_as_problems() {
+    let (home, runtime, _) = deployment(
+        "limits:\n  renderTimeoutSeconds: 20\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 1024\n  maxConcurrency: 2\n",
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    // Chunked framing, oversized payload: once a chunked stream trips the
+    // limit mid-body the connection is broken and NO response can be
+    // delivered, so chunked must be refused up front — as an audited
+    // problem document on a healthy connection.
+    let body = "x".repeat(2048);
+    let mut stream = TcpStream::connect(("127.0.0.1", server.port)).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(60)))
+        .unwrap();
+    let head = format!(
+        "POST /v1/render/receipt HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {API_KEY}\r\nTransfer-Encoding: chunked\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes()).unwrap();
+    stream
+        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
+        .unwrap();
+    stream.write_all(body.as_bytes()).unwrap();
+    stream.write_all(b"\r\n0\r\n\r\n").unwrap();
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    let text = String::from_utf8_lossy(&raw);
+    assert!(
+        text.starts_with("HTTP/1.1 400"),
+        "chunked must be refused with a problem, not a plain or missing response: {text}"
+    );
+    assert!(
+        text.contains("invalid-argument") && text.contains("Content-Length"),
+        "chunked refusal names the fix: {text}"
+    );
+    drop(server);
+    let lines = audit_lines(&home);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("invalid-argument") && l.contains("refused")),
+        "the chunked refusal is audited: {lines:?}"
+    );
+}
+
+#[test]
+fn wrong_method_on_render_is_a_problem_and_audited() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    let reply = request(
+        server.port,
+        "GET",
+        "/v1/render/receipt",
+        &[("Authorization", &format!("Bearer {API_KEY}"))],
+        None,
+    );
+    assert_eq!(
+        reply.status,
+        400,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    let text = String::from_utf8_lossy(&reply.body);
+    assert!(text.contains("use POST"), "{text}");
+    drop(server);
+    let lines = audit_lines(&home);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains("invalid-argument") && l.contains("refused")),
+        "the method refusal is audited: {lines:?}"
+    );
+}
+
+#[test]
 fn slow_renders_are_killed_and_the_service_recovers() {
     // A compute-heavy bundle and a one-second budget: the supervisor kills
     // the worker, the refusal is audited, and the very next render works.
