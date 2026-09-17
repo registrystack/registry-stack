@@ -13,6 +13,10 @@
 //! backend. The Rhai evaluation path routes through the same two steps it
 //! always took, with the same diagnostics in the same order.
 //!
+//! The WASM outcome-byte decoder is compiled behind the non-default
+//! `wasm-executor-prototype` feature and is exercised only by the parity
+//! tests beside it; no request path constructs it yet.
+
 use std::collections::BTreeSet;
 
 use rhai::{Array, Dynamic, ImmutableString, Map};
@@ -110,6 +114,57 @@ pub(crate) fn rhai_document(value: Dynamic) -> ProposedValue {
         );
     }
     ProposedValue::Inexpressible
+}
+
+/// Decode parsed outcome JSON into the neutral outcome document. Total for
+/// the same reason as [`rhai_document`]: JSON numbers outside i64 decode to
+/// `Inexpressible` rather than failing the parse.
+#[cfg(feature = "wasm-executor-prototype")]
+#[cfg_attr(not(test), allow(dead_code))]
+fn json_document(value: Value) -> ProposedValue {
+    match value {
+        Value::Null => ProposedValue::Absent,
+        Value::Bool(value) => ProposedValue::Bool(value),
+        Value::Number(value) => value
+            .as_i64()
+            .map(ProposedValue::Int)
+            .unwrap_or(ProposedValue::Inexpressible),
+        Value::String(value) => ProposedValue::Str(value),
+        Value::Array(values) => {
+            ProposedValue::Array(values.into_iter().map(json_document).collect())
+        }
+        Value::Object(members) => ProposedValue::Object(
+            members
+                .into_iter()
+                .map(|(key, value)| (key, json_document(value)))
+                .collect(),
+        ),
+    }
+}
+
+/// Decode a WASM handler's outcome bytes into a proposal: reject repeated
+/// JSON members while parsing, then run the same shared output bound and
+/// document decode the Rhai path runs. Compiled under the prototype feature
+/// and exercised by the parity tests until the request path adopts it.
+#[cfg(feature = "wasm-executor-prototype")]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn decode_wasm_outcome(
+    bytes: &[u8],
+    maximum_snapshot_bytes: u32,
+) -> Result<ProposedActionOutcome, ActionHandlerDiagnostic> {
+    let value = registry_platform_script::json_check::check_no_duplicate_members(bytes).map_err(
+        |error| {
+            let message = if error.duplicate_path().is_some() {
+                "Return the handler outcome as a JSON object without duplicate members."
+            } else {
+                "Return the handler outcome as a valid JSON document."
+            };
+            ActionHandlerDiagnostic::new(ActionHandlerError::Result, message)
+        },
+    )?;
+    let document = json_document(value);
+    bound_document(&document, maximum_snapshot_bytes)?;
+    decode_document(document)
 }
 
 /// The shared output bound every backend's outcome must fit inside before it
@@ -777,3 +832,7 @@ fn member_string(value: &ProposedValue) -> Result<String, ChangeRequestPlannerEr
         _ => Err(ChangeRequestPlannerError::Result),
     }
 }
+
+#[cfg(all(test, feature = "wasm-executor-prototype"))]
+#[path = "tests/action_outcome_wasm_parity_tests.rs"]
+mod action_outcome_wasm_parity_tests;
