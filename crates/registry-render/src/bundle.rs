@@ -243,9 +243,10 @@ fn require_string_map(table: &Value, locale: &str) -> Result<Value, RenderProble
     }
 }
 
-/// Bundle fonts sorted by relative path, then the baseline set embedded in
-/// the binary. The order is part of byte stability: it decides font
-/// fallback, so it may never depend on filesystem iteration order.
+/// The binary's baseline set (`typst-assets` order) first, then bundle
+/// fonts sorted by relative path — the same book order the Typst CLI
+/// builds. The order is part of byte stability: it decides font fallback,
+/// so it may never depend on filesystem iteration order.
 pub fn load_fonts(root: &Path) -> Result<Vec<typst::text::Font>, RenderProblem> {
     let mut fonts = Vec::new();
     let fonts_dir = root.join("fonts");

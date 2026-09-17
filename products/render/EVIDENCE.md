@@ -97,10 +97,24 @@ pinned values updated as the reviewed diff):
 | certificate | `636daae8c1cd2fba01f0d0d60244073d468827fc993cc514b75868660e7552e8` |
 | beneficiary-card | `8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8` |
 
-`dataSha256` and bundle hashes are unchanged; the byte delta is the
-`/Creator`/XMP `CreatorTool` metadata only. The Typst pin bump burden
-improves with this change: a pin bump now changes golden bytes only when
-layout changes, not when the Typst version string does.
+Per-bundle deltas, attributed in order (the table above holds the pdf
+sha256 values; the current dataSha256/bundleHash values live in
+`golden.json`):
+
+- **certificate**: metadata only — `dataSha256` and bundle hash unchanged.
+- **receipt** and **beneficiary-card**: the creator fix changed the pdf
+  bytes as above, and two same-round bundle changes moved their
+  `dataSha256` and bundle hashes *again* — the label key sets were aligned
+  across locales (item 20) and `fonts/OFL.txt` was added and the bundles
+  re-sealed (item 28). Final envelope hashes: receipt
+  `d7a97980439a4345fd5222175e45170f52ba96f7a60e7e6a6e8470113b8d2a68`,
+  card `4fbfbe5210c369cfa8f3586f36bf0f3d3b8d78274d2b98dcc65e65b019ec6b0f`;
+  pdf bytes were not affected by either (labels only feed the envelope,
+  the license text is not read by templates).
+
+The Typst pin bump burden improves with this change: a pin bump now
+changes golden bytes only when layout changes, not when the Typst
+version string does.
 
 ## Implementation review round (2026-09-17)
 
@@ -221,3 +235,38 @@ could express the finding. Behavior changes:
 
 Test totals after the round: 55 (15 unit, 13 golden, 13 serve end-to-end,
 14 scaffold/CLI), all green with `--locked`.
+
+### Staff-engineer second pass (2026-09-17)
+
+A second review of the fix round found four completions, all fixed with
+failing tests first:
+
+- **SIGTERM exit is bounded.** The drain held the door but nothing
+  bounded connection teardown — executed proof: a render past a 3s grace
+  held exit open 57.5s. The stop signal is now broadcast once; the drain
+  gets one grace, connection teardown a second, and dropping the serve
+  future at the bound abandons stragglers (their workers are killed). A
+  unix test drives a beyond-grace render through SIGTERM.
+- **Chunked bodies are refused up front.** A chunked stream that trips the
+  stream limit mid-body cannot be answered at all (broken request stream),
+  so it produced a plain 413 and no audit event; chunked transfer is now
+  refused before the first body byte as an audited problem naming
+  Content-Length. SECURITY-MATRIX row 18 records the mid-stream residual.
+- **`today(offset)` honors fractional hours** at full-second precision —
+  `Duration::hours()` is f64 total hours, and rounding +5h30m to 6h
+  crossed midnight for an 18:15Z issuance.
+- The golden-record note above now attributes each bundle's delta
+  correctly (creator fix vs label alignment + OFL re-seal); the earlier
+  "dataSha256 unchanged" claim was false for receipt and card.
+
+Also from that review: wrong methods on the render route answer the
+problem vocabulary with an audit event (the route takes any method; the
+old dead branch produced axum's bare 405), `render audit-verify` warns
+when zero records verify against a non-empty ledger (a running writer
+holds the active segment), the `load_fonts` doc comment matches the
+baseline-first order, and the README exit-code intro no longer claims an
+"unmapped failure" code nothing emits (clap usage errors also exit 2; a
+panic exits 101).
+
+Test totals after the second pass: 59 (16 unit, 13 golden, 16 serve
+end-to-end, 14 scaffold/CLI), all green with `--locked`.

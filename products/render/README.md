@@ -51,8 +51,9 @@ Latin font set. Scripts beyond Latin (Arabic, Hebrew, …) need a bundle font
 
 Every CLI failure is one closed vocabulary (`ProblemKind`), and each kind
 has one stable exit code — scripts branch exactly. With `--json`, the same
-failure prints an RFC 9457 problem document on stderr. Codes 0 and 1 are
-success and "unmapped failure"; 2-22:
+failure prints an RFC 9457 problem document on stderr. 0 is success; the
+failure codes are 2-22 (clap's own usage errors also exit 2, and a panic
+exits 101):
 
 | Code | Kind | Meaning |
 |---|---|---|
