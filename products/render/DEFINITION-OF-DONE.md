@@ -73,7 +73,7 @@ mechanisms (small fixed page, QR) and is not a fourth project.
 | DX budget | `render init` scaffolds a bundle (manifest, template, schema, starter fonts, vendored QR package) that compiles offline without edits; templates are plain Typst usable with upstream tooling; example bundles double as golden fixtures; the payload contract is one documented page; errors per the validation row are the default path, not an opt-in. |
 | Domain neutrality | Production code, manifests, CLI options, and schemas contain no deployment-, program-, or client-specific terms; Arabic/French, receipt, certificate, and card vocabulary appears only in example bundles, fixtures, and docs. |
 | Operability | Startup runs the same verification as `check` before listening; graceful shutdown drains; structured value-free lifecycle logs (fixed dimensions: method class, route template, status, latency, trace id); no `/metrics` route in v1; `--version` reports `DISPLAY_VERSION` plus the Typst pin. |
-| App Kit journey | The kit's documents capability uses an `APP_DOCUMENTS_FILE` mapping to loopback destinations with credential files (taskDispatch precedent); the bundle lives under `project/deployment/render/bundle/`; the document field list and QR destination are `agreed` brief rows before the template is written; a staff user prints a receipt from a record, the PDF attaches to breg with matching sha256 fields, and the QR verify page resolves — walked end to end, `COMPLETED with 0 flags`. |
+| App Kit journey | The kit's documents capability uses an `APP_DOCUMENTS_FILE` mapping to loopback destinations with credential files (taskDispatch precedent); the bundle lives under `project/deployment/render/bundle/`; the document field list and QR destination are `agreed` brief rows before the template is written. Done only when a staff user prints a receipt from a record, the PDF attaches to breg with matching sha256 fields, and the QR verify page resolves, closed by a kit-gate record of `COMPLETED with 0 flags` produced in the App Kit repository. **Status: not yet walked** — the kit-side documents capability does not exist yet; ACCEPTANCE.md records the deferral and sizing, and `integrations/app-kit/README.md` is the stack-side contract that capability will implement. |
 | OpenFn journey | A job in the kit's tested idiom (bridge envelope destructured, config validated, `parseAs: "json"`, status checked, minimized return) reads record data back through a least-privilege breg reader profile whose readable fields equal the template data contract, renders via `Accept: application/json`, and delivers the PDF; a dead-letter replay produces byte-identical output. Walked end to end without the App Kit in the picture. |
 | Dependency policy | cargo-deny passes with a reviewed, explained Typst-tree delta (licenses/sources); `Cargo.lock` pins typst/typst-pdf/typst-kit/typst-assets; no git or vendored source dependencies. |
 | Verification evidence | Formatting, `cargo check/test/clippy -D warnings --locked`, dependency policy, golden-hash drift, closure drift (manifest hashes vs captured closure), value-free canary scans for audit and logs, and the two-OS golden job pass on one revision. Every security row above has a named threat, enforcement point, and executable negative test (security-invariant matrix in the product repo). |
@@ -93,24 +93,31 @@ CI must invoke:
 
 - the three coequal example bundles with golden sha256 fixtures, run on two
   OSes;
-- a security-invariant matrix mapping every security row to negative tests
+- the security-invariant matrix (`SECURITY-MATRIX.md`) mapping every
+  security row to an enforcement point and an executable negative test
   (path escape, asset abuse, timeout kill, panic recycle, unsealed serve,
   tampered bundle, audit tamper, 401 handling, value-free logs/audit canary
   scans);
 - the lib-mode equivalence record (merge-gate results, folded into the
   product docs) — see `EVIDENCE.md`;
-- the security-invariant matrix (`SECURITY-MATRIX.md`) mapping every
-  security row to enforcement points and negative tests;
 - drift checks: golden hashes, manifest closure, static OpenAPI;
 - worked-journey records for the App Kit print journey and the OpenFn
-  delivery journey (kit-gate style: `COMPLETED with 0 flags`).
+  delivery journey (kit-gate style: `COMPLETED with 0 flags`). The OpenFn
+  record exists (`integrations/openfn/JOURNEY.md`); the App Kit record is
+  produced when the kit-side capability exists.
 
-One new blocking gate is introduced — the two-OS golden-hash job. Invariant:
+One new gate is introduced — the two-OS golden-hash job. Invariant:
 byte-stability across machines as promised in the spec §5.3. Owner: the
-Render product. Removal/review condition: it stops being blocking if the
-spec deliberately narrows the byte-stability promise to same-machine
-reproducibility; until then it blocks Typst-pin upgrades that change output
-unreviewed.
+Render product. Scope: it runs on PRs that touch Render's paths, on merge
+queues, and on pushes to main through its own `paths:` filter; it is not
+(as of 2026-09-17) a branch-protection required context — making it one is
+a repository-settings decision that sits outside this tree, so until then
+a change that slips past the filter can merge without a golden run and a
+Typst-pin or lockfile bump must be treated as requiring one manually.
+Removal/review condition: the gate stops being required if the spec
+deliberately narrows the byte-stability promise to same-machine
+reproducibility; until then a Typst-pin upgrade that changes golden output
+is a reviewed diff, never a silent pass.
 
 Release follows the standard beta checklist (protected-main CI, exact
 source/version, manifests, checksums, digests, vulnerability decision, one
