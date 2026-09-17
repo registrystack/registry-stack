@@ -83,6 +83,11 @@ pub fn validate_bind(addr: std::net::SocketAddr) -> Result<(), RenderProblem> {
     }
 }
 
+/// The longest grace a runtime may declare. Shutdown waits the grace for
+/// renders in flight and then the same again for connections, so the bound
+/// keeps that sum representable as well as operationally sane.
+pub const MAX_SHUTDOWN_GRACE_SECONDS: u64 = 3600;
+
 fn default_shutdown_grace_seconds() -> u64 {
     30
 }
@@ -223,6 +228,18 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
             "maxRequestBodyBytes exceeds the 64 MiB hard ceiling",
         ));
     }
+    // Zero would drop renders in flight the moment SIGTERM arrives; a value
+    // past the hour is not a deployment intent, and the bounded wait the
+    // shutdown path computes from it must stay representable.
+    if !(1..=MAX_SHUTDOWN_GRACE_SECONDS).contains(&runtime.server.shutdown_grace_seconds) {
+        return Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            format!(
+                "shutdownGraceSeconds must be between 1 and {MAX_SHUTDOWN_GRACE_SECONDS}, found {}",
+                runtime.server.shutdown_grace_seconds
+            ),
+        ));
+    }
     let anchor = runtime_anchor(path);
     runtime.bundle.path = anchored(&anchor, &runtime.bundle.path);
     runtime.audit.directory = anchored(&anchor, &runtime.audit.directory);
@@ -317,6 +334,46 @@ mod tests {
         ] {
             let addr: SocketAddr = bind.parse().unwrap();
             validate_bind(addr).unwrap_or_else(|err| panic!("{bind} must be allowed: {err}"));
+        }
+    }
+
+    /// `load` on a runtime file written under a temporary directory, so the
+    /// checks that only `load` performs are exercised.
+    fn load_yaml(body: &str) -> Result<RenderRuntime, RenderProblem> {
+        let home = tempfile::tempdir().expect("deployment home");
+        let file = home.path().join("runtime.yaml");
+        std::fs::write(
+            &file,
+            format!(
+                "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: /a\n  integrityKeyRef: secret:file/audit.key\n{body}"
+            ),
+        )
+        .expect("runtime file");
+        load(&file).map(|(runtime, _)| runtime)
+    }
+
+    #[test]
+    fn shutdown_grace_outside_the_supported_range_is_refused() {
+        // A zero grace drops renders in flight on SIGTERM, and a grace past
+        // the hour overflows the bounded wait the shutdown path computes.
+        for grace in ["0", "3601", "10000000000000000000"] {
+            let err = load_yaml(&format!("server:\n  shutdownGraceSeconds: {grace}\n"))
+                .expect_err("out-of-range grace must be refused");
+            assert_eq!(err.kind, ProblemKind::RuntimeInvalid, "grace {grace}");
+            assert!(
+                err.detail.contains("shutdownGraceSeconds"),
+                "grace {grace}: {}",
+                err.detail
+            );
+        }
+    }
+
+    #[test]
+    fn shutdown_grace_at_the_range_ends_is_accepted() {
+        for grace in [1, 3600] {
+            let runtime = load_yaml(&format!("server:\n  shutdownGraceSeconds: {grace}\n"))
+                .expect("grace at the range end loads");
+            assert_eq!(runtime.server.shutdown_grace_seconds, grace);
         }
     }
 
