@@ -131,13 +131,22 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     // The stop signal is observed once and broadcast, so the drain and the
     // hard bound below race the same event.
     let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+    // The handler is installed here, not inside the task: a failure must
+    // refuse startup. Installing it in the task could only panic there,
+    // which ends the task alone and would leave a server that treats
+    // SIGTERM as an immediate exit with renders in flight.
+    #[cfg(unix)]
+    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|err| {
+            RenderProblem::new(
+                ProblemKind::Internal,
+                format!("cannot install the SIGTERM handler: {err}"),
+            )
+        })?;
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
-            let mut term =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("install SIGTERM handler");
             tokio::select! {
                 _ = ctrl_c => {},
                 _ = term.recv() => {},
