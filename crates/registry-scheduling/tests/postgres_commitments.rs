@@ -32,9 +32,10 @@ use registry_scheduling::runtime::{
     AuditPublisher,
 };
 use registry_scheduling::service::SchedulingService;
-use registry_scheduling::store::PostgresStore;
+use registry_scheduling::store::{CommitError, Commitment, PostgresStore, SupplyContext};
 use registry_scheduling_core::{
-    parse_policy_yaml, LocationRecord, PoolMember, ResourcePool, SchedulingFacts,
+    location_closure_intervals, location_open_intervals, parse_policy_yaml, AdmissionRequest,
+    LocationRecord, PartyCounts, PoolMember, ResourcePool, SchedulingFacts,
 };
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -1470,7 +1471,7 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     // reminder is not due with it.
     let now_due = fx
         .store
-        .claim_due_intents(Utc::now(), 100)
+        .claim_due_intents(Utc::now(), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs");
     assert_eq!(
@@ -1485,7 +1486,7 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     let due = Utc::now() + TimeDelta::days(1);
     let claimed: Vec<_> = fx
         .store
-        .claim_due_intents(due, 100)
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs")
         .into_iter()
@@ -1502,13 +1503,18 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
 
     // The send failed, so the intent goes back to pending behind a back-off.
     fx.store
-        .retry_intent(claimed[0].outbox_id, due + TimeDelta::minutes(5), 8)
+        .retry_intent(
+            claimed[0].outbox_id,
+            due + TimeDelta::minutes(5),
+            8,
+            claimed[0].attempts,
+        )
         .await
         .expect("the failed delivery is scheduled to retry");
 
     let early: Vec<_> = fx
         .store
-        .claim_due_intents(due + TimeDelta::seconds(2), 100)
+        .claim_due_intents(due + TimeDelta::seconds(2), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs")
         .into_iter()
@@ -1521,7 +1527,7 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
 
     let later: Vec<_> = fx
         .store
-        .claim_due_intents(due + TimeDelta::minutes(6), 100)
+        .claim_due_intents(due + TimeDelta::minutes(6), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs")
         .into_iter()
@@ -1607,7 +1613,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
 
     // The refusal rolled the whole swap back, so the records stand as they
     // were and the booking still occupies its slot.
-    let standing = fx.store.facts().await.expect("the records survive");
+    let (standing, _) = fx.store.facts().await.expect("the records survive");
     assert_eq!(
         standing
             .pool("north-counter")
@@ -1629,7 +1635,7 @@ async fn a_records_swap_refuses_to_strand_a_resource_an_active_claim_occupies() 
         )
         .await
         .expect("retiring an unoccupied resource commits");
-    let standing = fx.store.facts().await.expect("the records are readable");
+    let (standing, _) = fx.store.facts().await.expect("the records are readable");
     assert_eq!(
         standing.pool("two-counter").map(|pool| pool.members.len()),
         Some(0),
@@ -2021,7 +2027,7 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let due = Utc::now() + TimeDelta::days(1);
     let claimed = fx
         .store
-        .claim_due_intents(due, 100)
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs");
     let intent = |purpose: &str| {
@@ -2036,11 +2042,11 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     // rather than pretending a delivery happened. One send exhausted its
     // attempts. One was delivered, and one is still inside its back-off.
     fx.store
-        .hold_intent_local(intent("reminder"))
+        .hold_intent_local(intent("reminder"), 1)
         .await
         .expect("the reminder is held locally");
     fx.store
-        .retry_intent(intent("confirmation"), due, 0)
+        .retry_intent(intent("confirmation"), due, 0, 1)
         .await
         .expect("the confirmation exhausts its attempts");
 
@@ -2076,7 +2082,7 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let (second, _) = booked(&fx, 210, 320, "held-2").await;
     let pending = fx
         .store
-        .claim_due_intents(Utc::now(), 100)
+        .claim_due_intents(Utc::now(), 100, TimeDelta::minutes(10))
         .await
         .expect("the delivery sweep runs");
     let delivered = pending
@@ -2085,7 +2091,7 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
         .expect("the second commitment confirms at once")
         .outbox_id;
     fx.store
-        .mark_intent_delivered(delivered)
+        .mark_intent_delivered(delivered, 1)
         .await
         .expect("the confirmation is delivered");
     let held = fx
@@ -3007,4 +3013,697 @@ async fn an_arrival_window_allocates_its_units_and_holds_its_channel_ceiling() {
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{mismatch}");
     assert_eq!(mismatch["code"], "revision.mismatch");
+}
+
+// ---------------------------------------------------------------------------
+// Concurrency and ownership regressions
+// ---------------------------------------------------------------------------
+
+/// COR-3. Two lifecycle writers that accepted the same observed revision
+/// must not both commit. The observed revision and the active state guard
+/// the UPDATE itself, so one transition lands and the losing writer's whole
+/// transaction rolls back behind a revision mismatch, whatever order the
+/// two arrive in.
+#[tokio::test]
+async fn competing_cancellations_commit_exactly_one_transition() {
+    let fx = fixture().await;
+    let (appointment, revision) = booked(&fx, 300, 440, "race-cancel").await;
+    let cancel = |key: &'static str| {
+        let http = fx.http.clone();
+        let token = fx.agent.clone();
+        let uri = format!("/v1/appointments/{appointment}/cancel");
+        let body = json!({"observedRevision": revision, "reason": null});
+        tokio::spawn(async move {
+            send(
+                http,
+                "POST".into(),
+                uri,
+                token,
+                Some(key.into()),
+                Some(body),
+            )
+            .await
+        })
+    };
+    let (first, second) = tokio::join!(cancel("race-cancel-a"), cancel("race-cancel-b"));
+    let mut answers = [
+        first.expect("the first cancel answered"),
+        second.expect("the second cancel answered"),
+    ];
+    answers.sort_by_key(|(status, _)| *status);
+    assert_eq!(
+        answers[0].0,
+        StatusCode::OK,
+        "exactly one writer wins: {}",
+        answers[0].1
+    );
+    // The loser is refused whichever way it met the moved claim: a
+    // revision.mismatch when its fenced write lost the race, or a
+    // hold.released when its read landed after the winner committed. Both
+    // are coherent refusals of a superseded observation.
+    assert!(
+        answers[1].0 == StatusCode::PRECONDITION_FAILED || answers[1].0 == StatusCode::CONFLICT,
+        "exactly one writer loses: {}",
+        answers[1].1
+    );
+    assert!(answers[1].0.is_client_error());
+    // The ledger carries one coherent transition: one lifecycle event, one
+    // cancellation intent, and the revision the winner wrote.
+    let claim_id = Uuid::parse_str(&appointment).expect("a claim identifier");
+    let counts = fx
+        .admin
+        .query_one(
+            "SELECT \
+                (SELECT count(*) FROM scheduling_history WHERE claim_id=$1 AND revision=2), \
+                (SELECT count(*) FROM scheduling_outbox WHERE claim_id=$1 AND purpose='cancellation'), \
+                (SELECT revision FROM scheduling_claims WHERE claim_id=$1)",
+            &[&claim_id],
+        )
+        .await
+        .expect("read the committed transition");
+    assert_eq!(
+        counts.get::<_, i64>(0),
+        1,
+        "one history event at the next revision"
+    );
+    assert_eq!(counts.get::<_, i64>(1), 1, "one cancellation intent");
+    assert_eq!(
+        counts.get::<_, i64>(2),
+        2,
+        "the revision moved exactly once"
+    );
+}
+
+/// The same guard coordinates a reschedule against a cancellation: the two
+/// writers take different locks, but the claim row's own predicate decides,
+/// and the response the caller keeps is the one that actually landed.
+#[tokio::test]
+async fn a_reschedule_and_a_cancellation_commit_exactly_one_transition() {
+    let fx = fixture().await;
+    let (appointment, revision) = booked(&fx, 300, 440, "race-mixed").await;
+    let other = first_slot(&fx, OFFERING, 480, 620).await;
+    let reschedule = {
+        let http = fx.http.clone();
+        let token = fx.agent.clone();
+        let uri = format!("/v1/appointments/{appointment}/reschedule");
+        let body = json!({
+            "observedRevision": revision,
+            "admission": admission(&fx, OFFERING, other),
+        });
+        tokio::spawn(async move {
+            send(
+                http,
+                "POST".into(),
+                uri,
+                token,
+                Some("race-mixed-move".into()),
+                Some(body),
+            )
+            .await
+        })
+    };
+    let cancel = {
+        let http = fx.http.clone();
+        let token = fx.agent.clone();
+        let uri = format!("/v1/appointments/{appointment}/cancel");
+        let body = json!({"observedRevision": revision, "reason": null});
+        tokio::spawn(async move {
+            send(
+                http,
+                "POST".into(),
+                uri,
+                token,
+                Some("race-mixed-cancel".into()),
+                Some(body),
+            )
+            .await
+        })
+    };
+    let (moved, cancelled) = tokio::join!(reschedule, cancel);
+    let moved = moved.expect("the reschedule answered");
+    let cancelled = cancelled.expect("the cancel answered");
+    let successes = usize::from(moved.0.is_success()) + usize::from(cancelled.0.is_success());
+    assert_eq!(
+        successes, 1,
+        "exactly one transition commits: {moved:?} {cancelled:?}"
+    );
+    // Whichever won, the appointment's stored state and its history agree,
+    // and no two history events share a revision.
+    let claim_id = Uuid::parse_str(&appointment).expect("a claim identifier");
+    let duplicates = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM (SELECT revision FROM scheduling_history \
+             WHERE claim_id=$1 GROUP BY revision HAVING count(*) > 1) AS doubled",
+            &[&claim_id],
+        )
+        .await
+        .expect("read the history revisions");
+    assert_eq!(
+        duplicates.get::<_, i64>(0),
+        0,
+        "no two history events share a revision"
+    );
+}
+
+/// SEC-03. The task grant is re-checked against a fresh observation of the
+/// clock immediately before the final write: a grant that still stands at
+/// the door and lapses before the commit books nothing.
+#[tokio::test]
+async fn a_grant_that_lapses_before_the_commit_never_books() {
+    let fx = fixture().await;
+    // The pinned clock sits past the test token's grant expiry, while the
+    // request's own now, observed at the door, is still inside it.
+    let pinned = Utc::now() + TimeDelta::minutes(20);
+    fx.store.pin_clock(Arc::new(move || pinned));
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "lapsed-grant",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(problem["code"], "operation.not-authorized");
+    let committed = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE kind='booking'",
+            &[],
+        )
+        .await
+        .expect("read the claim ledger");
+    assert_eq!(
+        committed.get::<_, i64>(0),
+        0,
+        "a lapsed grant commits nothing"
+    );
+}
+
+/// A running process refuses a commitment even when the caller names the
+/// stored revision another process just published: the rules this process
+/// evaluates are not the rules that revision names, and the claim is
+/// refused rather than stamped with a policy it never saw.
+#[tokio::test]
+async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
+    let fx = fixture().await;
+    let moved = fx
+        .store
+        .apply_policy(
+            SCHEDULING_ID,
+            "a-policy-this-process-never-loaded",
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &[],
+        )
+        .await
+        .expect("publish a second policy revision");
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let mut admission_body = admission(&fx, OFFERING, slot);
+    admission_body["policyRevision"] = json!(u64::try_from(moved).expect("a bounded revision"));
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "stale-process-current-revision",
+            json!({"hold": null, "admission": admission_body}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
+    assert_eq!(problem["code"], "policy.changed");
+}
+
+/// A records replacement moves the records revision under the supply
+/// anchor: a commitment whose facts were resolved before the swap is
+/// refused whole, rather than naming a resource the deployment retired.
+#[tokio::test]
+async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
+    let fx = fixture().await;
+    let policy = parse_policy_yaml(POLICY).expect("the scheduling test policy");
+    let offering = policy.offering(OFFERING).expect("the test offering");
+    // The slot resolves while the station still stands: the swap retires it.
+    let slot = first_slot(&fx, OFFERING, 90, 200).await;
+    let (facts, resolved_under) = fx.store.facts().await.expect("resolve the standing facts");
+    let exceptions: Vec<_> = facts
+        .exceptions
+        .iter()
+        .filter(|exception| exception.location == offering.location)
+        .map(|exception| exception.borrowed())
+        .collect();
+    let timezone = facts
+        .location(&offering.location)
+        .expect("the seeded location")
+        .timezone
+        .clone();
+    let members: Vec<PoolMember> = facts
+        .pool(
+            &offering
+                .exact_time
+                .as_ref()
+                .expect("an exact-time offering")
+                .pool,
+        )
+        .expect("the seeded pool")
+        .members
+        .clone();
+    let open = location_open_intervals(&policy, &offering.location, &timezone, &exceptions)
+        .expect("resolve the openings");
+    let closures = location_closure_intervals(&facts, &offering.location, &timezone)
+        .expect("resolve the closures");
+    // The operator retires the station this offering books; nothing occupies
+    // it, so the swap commits.
+    let swapped = records_without(&["station-1"]);
+    fx.store
+        .replace_facts(&swapped, Uuid::new_v4(), operator_audit())
+        .await
+        .expect("the records swap commits");
+    let supply = SupplyContext::ExactTime {
+        exact: offering
+            .exact_time
+            .as_ref()
+            .expect("an exact-time offering"),
+        members: &members,
+        open: &open,
+        closures: &closures,
+    };
+    let request = AdmissionRequest {
+        offering: OFFERING.to_owned(),
+        start: slot,
+        party: PartyCounts {
+            recipients: 1,
+            attendees: 1,
+        },
+        channel: None,
+        duplicate_key: None,
+        policy_revision: fx.revision,
+        window_revision: None,
+        capabilities: Vec::new(),
+        prerequisites: Vec::new(),
+    };
+    let commitment = Commitment {
+        now: Utc::now(),
+        policy_revision: i64::try_from(fx.revision).expect("a bounded revision"),
+        facts_revision: resolved_under,
+        actor: "actor-pseudonym",
+        actor_issuer: ISSUER,
+        actor_subject: "principal-agent",
+        idempotency_key: "stale-facts",
+        request_hash: "sha256:stale-facts",
+        attempt_expires_at: Utc::now() + TimeDelta::days(7),
+        grant_exp_unix: None,
+        audit_event: Uuid::new_v4(),
+        audit_record: operator_audit(),
+    };
+    let outcome = fx
+        .store
+        .create_appointment(offering, &supply, &request, commitment)
+        .await;
+    assert!(
+        matches!(outcome, Err(CommitError::FactsStale)),
+        "a commitment resolving the pre-swap facts is refused: {outcome:?}"
+    );
+    let committed = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_claims WHERE kind='booking'",
+            &[],
+        )
+        .await
+        .expect("read the claim ledger");
+    assert_eq!(
+        committed.get::<_, i64>(0),
+        0,
+        "a stale facts resolution commits nothing"
+    );
+}
+
+/// The dispatch lease: a claimed intent is not claimable again until its
+/// lease passes, and an outcome write only lands for the attempt that owns
+/// the intent.
+#[tokio::test]
+async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_attempt() {
+    let fx = fixture().await;
+    let _ = booked(&fx, 90, 200, "lease-1").await;
+    let due = Utc::now() + TimeDelta::days(1);
+    let claimed: Vec<_> = fx
+        .store
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.purpose == "reminder")
+        .collect();
+    assert_eq!(
+        claimed.len(),
+        1,
+        "the commitment minted one reminder intent"
+    );
+    let row = &claimed[0];
+    assert_eq!(row.attempts, 1);
+
+    // Inside the lease a second dispatcher claims nothing of this intent.
+    let leased = fx
+        .store
+        .claim_due_intents(due + TimeDelta::minutes(9), 100, TimeDelta::minutes(10))
+        .await
+        .expect("the delivery sweep runs");
+    assert!(
+        leased
+            .iter()
+            .all(|intent| intent.outbox_id != row.outbox_id),
+        "a leased intent is not claimable again"
+    );
+
+    // Past the lease the intent is recoverable, as a new attempt.
+    let reclaimed: Vec<_> = fx
+        .store
+        .claim_due_intents(due + TimeDelta::minutes(11), 100, TimeDelta::minutes(10))
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.outbox_id == row.outbox_id)
+        .collect();
+    assert_eq!(reclaimed.len(), 1, "the lease passed, so the intent is due");
+    assert_eq!(
+        reclaimed[0].attempts, 2,
+        "the second attempt is counted once"
+    );
+
+    // The superseded attempt cannot settle the intent; the owning one can.
+    assert!(!fx
+        .store
+        .mark_intent_delivered(row.outbox_id, 1)
+        .await
+        .expect("the stale outcome write runs"));
+    let state: String = fx
+        .admin
+        .query_one(
+            "SELECT delivery_state FROM scheduling_outbox WHERE outbox_id=$1",
+            &[&row.outbox_id],
+        )
+        .await
+        .expect("read the intent")
+        .get(0);
+    assert_eq!(state, "pending", "an obsolete attempt changes nothing");
+    assert!(fx
+        .store
+        .mark_intent_delivered(row.outbox_id, 2)
+        .await
+        .expect("the owning outcome write runs"));
+}
+
+/// Suppression wins up to the send: a reminder claimed for dispatch whose
+/// appointment is then cancelled is skipped, its row is retained as
+/// accounting, and the in-flight attempt's outcome cannot land.
+#[tokio::test]
+async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
+    let fx = fixture().await;
+    let (appointment, revision) = booked(&fx, 300, 440, "suppress-1").await;
+    let due = Utc::now() + TimeDelta::days(1);
+    let claimed: Vec<_> = fx
+        .store
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.purpose == "reminder")
+        .collect();
+    assert_eq!(claimed.len(), 1);
+    let reminder = &claimed[0];
+
+    // The caller cancels while the claimed reminder is in flight.
+    let (status, _) = fx
+        .post(
+            &format!("/v1/appointments/{appointment}/cancel"),
+            &fx.agent,
+            "suppress-cancel",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The pre-send check skips the suppressed reminder.
+    assert!(
+        !fx.store
+            .intent_still_dispatchable(reminder.outbox_id, reminder.attempts)
+            .await
+            .expect("the liveness read runs"),
+        "a suppressed reminder is not sent"
+    );
+    // The in-flight attempt's outcome write cannot land either.
+    assert!(!fx
+        .store
+        .mark_intent_delivered(reminder.outbox_id, reminder.attempts)
+        .await
+        .expect("the stale outcome write runs"));
+    // The row survives as accounting, suppressed rather than deleted.
+    let state: String = fx
+        .admin
+        .query_one(
+            "SELECT delivery_state FROM scheduling_outbox WHERE outbox_id=$1",
+            &[&reminder.outbox_id],
+        )
+        .await
+        .expect("read the intent")
+        .get(0);
+    assert_eq!(state, "suppressed");
+
+    // The cancellation the caller made is still live for its own dispatch:
+    // suppression takes reminders, not the audit trail of the change.
+    let cancellation: Uuid = fx
+        .admin
+        .query_one(
+            "SELECT outbox_id FROM scheduling_outbox WHERE claim_id=$1 AND purpose='cancellation'",
+            &[&Uuid::parse_str(&appointment).expect("a claim identifier")],
+        )
+        .await
+        .expect("the cancellation intent is minted")
+        .get(0);
+    assert!(
+        fx.store
+            .intent_still_dispatchable(cancellation, 0)
+            .await
+            .expect("the liveness read runs"),
+        "the cancellation intent stays dispatchable"
+    );
+}
+
+/// An arrival-window offering explains its own start: the probe carries the
+/// window's current revision, so a free start explains as admitting and a
+/// full one as the public capacity refusal, never as a revision mismatch.
+#[tokio::test]
+async fn explain_answers_a_window_offering_rather_than_a_revision_mismatch() {
+    let start = Utc::now() + TimeDelta::hours(3);
+    let fx = fixture_publishing(
+        &policy_with_window(start),
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[WINDOW_ID.to_owned()],
+    )
+    .await;
+    let uri = format!(
+        "/v1/availability/explain?offering={WINDOW_OFFERING}&start={}",
+        stamp(start)
+    );
+    let (status, free) = fx.get(&uri, &fx.agent).await;
+    assert_eq!(status, StatusCode::OK, "{free}");
+    assert!(
+        free["publicCode"].is_null(),
+        "a free window start explains as admitting: {free}"
+    );
+
+    // Fill both published units; the same probe now explains the refusal a
+    // booking would receive.
+    for (key, channel) in [
+        ("explain-a", Some("assisted")),
+        ("explain-b", Some("public")),
+    ] {
+        let (status, booked_body) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                key,
+                arrival(&fx, start, channel),
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{booked_body}");
+    }
+    let (status, full) = fx.get(&uri, &fx.agent).await;
+    assert_eq!(status, StatusCode::OK, "{full}");
+    assert_eq!(full["publicCode"], "capacity.exhausted", "{full}");
+}
+
+/// A default availability request, with neither start nor end, mints a
+/// cursor its own continuation can use: the effective interval rides with
+/// the cursor instead of being re-derived from the next request's now.
+#[tokio::test]
+async fn a_default_availability_request_continues_its_own_cursor() {
+    let fx = fixture().await;
+    let (status, first) = fx
+        .get(
+            &format!("/v1/availability?offering={OFFERING}&limit=2"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let cursor = first["nextCursor"]
+        .as_str()
+        .expect("a limited availability page carries a cursor")
+        .to_owned();
+    let first_last = moment(&first["items"][0], "start");
+
+    // The continuation omits start and end exactly as the first page did.
+    let (status, second) = fx
+        .get(
+            &format!("/v1/availability?offering={OFFERING}&limit=2&cursor={cursor}"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert!(!second["items"]
+        .as_array()
+        .expect("a page of items")
+        .is_empty());
+    let second_first = moment(&second["items"][0], "start");
+    assert!(
+        second_first > first_last,
+        "the continuation resumes after the first page"
+    );
+
+    // A caller that narrows the range on continuation is asking a different
+    // listing, and the cursor refuses it.
+    let (status, _) = fx
+        .get(
+            &format!(
+                "/v1/availability?offering={OFFERING}&limit=2&start={}&cursor={cursor}",
+                stamp(Utc::now() + TimeDelta::minutes(90))
+            ),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // Explicit bounds continue as they always did: the same interval twice
+    // is the same listing.
+    let (status, bounded) = fx
+        .get(
+            &format!("{}&limit=2", availability_uri(OFFERING, 90, 620)),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{bounded}");
+    let bounded_cursor = bounded["nextCursor"]
+        .as_str()
+        .expect("a bounded window under a page limit pages");
+    let (status, _) = fx
+        .get(
+            &format!("/v1/availability?offering={OFFERING}&limit=2&cursor={bounded_cursor}"),
+            &fx.agent,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// A reschedule suppresses the reminder its obsolete revision minted and
+/// mints the replacement at the new revision: the obsolete row is retained
+/// as accounting, the replacement stays live for dispatch, and a reminder
+/// that names anything but the appointment's current revision is never
+/// sent, whether a swap marked it or not.
+#[tokio::test]
+async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement() {
+    let fx = fixture().await;
+    let (appointment, revision) = booked(&fx, 300, 440, "reschedule-remind").await;
+    let due = Utc::now() + TimeDelta::days(1);
+    let claimed: Vec<_> = fx
+        .store
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .await
+        .expect("the delivery sweep runs")
+        .into_iter()
+        .filter(|intent| intent.purpose == "reminder")
+        .collect();
+    assert_eq!(
+        claimed.len(),
+        1,
+        "the booking minted one reminder at revision 1"
+    );
+    let obsolete = &claimed[0];
+
+    // The caller moves the appointment clear of the old slot.
+    let later = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{appointment}/reschedule"),
+            &fx.agent,
+            "reschedule-remind-move",
+            json!({
+                "observedRevision": revision,
+                "admission": admission(&fx, OFFERING, later),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["revision"], 2, "the move wrote the next revision");
+
+    let claim_id = Uuid::parse_str(&appointment).expect("a claim identifier");
+    let rows = fx
+        .admin
+        .query(
+            "SELECT outbox_id, appointment_revision, delivery_state FROM scheduling_outbox \
+             WHERE claim_id=$1 AND purpose='reminder' ORDER BY created_at",
+            &[&claim_id],
+        )
+        .await
+        .expect("read the appointment's reminders");
+    assert_eq!(
+        rows.len(),
+        2,
+        "the obsolete reminder is retained beside its replacement"
+    );
+    let obsolete_state: String = rows[0].get(2);
+    assert_eq!(
+        obsolete_state, "suppressed",
+        "the claimed reminder is suppressed, not deleted"
+    );
+    let replacement: Uuid = rows[1].get(0);
+    assert_eq!(
+        rows[1].get::<_, i64>(1),
+        2,
+        "the replacement names the new revision"
+    );
+    assert_eq!(
+        rows[1].get::<_, String>(2),
+        "pending",
+        "the replacement is live for dispatch"
+    );
+
+    // The obsolete reminder is skipped, and the replacement is live.
+    assert!(!fx
+        .store
+        .intent_still_dispatchable(obsolete.outbox_id, obsolete.attempts)
+        .await
+        .expect("the liveness read runs"));
+    assert!(fx
+        .store
+        .intent_still_dispatchable(replacement, 0)
+        .await
+        .expect("the liveness read runs"));
+
+    // The revision clause decides on its own: a pending reminder that names
+    // an appointment revision other than the current one is not sent, even
+    // when nothing marked the row.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET appointment_revision=1 WHERE outbox_id=$1",
+            &[&replacement],
+        )
+        .await
+        .expect("age the replacement's revision");
+    assert!(
+        !fx.store
+            .intent_still_dispatchable(replacement, 0)
+            .await
+            .expect("the liveness read runs"),
+        "a reminder naming an obsolete revision is not sent"
+    );
 }

@@ -67,6 +67,12 @@ scheduling --runtime-config "$PWD/runtime.yaml" serve
 
 `migrate` applies the schema and binds the database to the policy's
 scheduling id, which every later start verifies before it writes anything.
+A `serve` that finds a schema older than the one its binary carries refuses
+at the readiness check rather than serving against it, so an upgrade runs
+`migrate` before it restarts the new runtime; the few minutes in between,
+an old runtime may still be serving, and its in-flight availability
+continuation cursors answer `cursor.invalid` once the new binary holds
+them, so a caller mid-pagination restarts that listing from its first page.
 `records apply` is the one attributable operator write of a deployment's
 environment records: the locations with their time zones, the resource pools
 and their members, and the dated exceptions such as closures. The policy

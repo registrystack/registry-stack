@@ -49,8 +49,10 @@ invariants:
       A token that passed the door commits capacity after the task grant behind
       it has expired.
     enforcementPoint: >-
-      check_grant_current inside the capacity transaction, immediately before
-      the claim commits, against the clock that commitment is decided under.
+      The grant's expiry re-checked inside the capacity transaction, after
+      every lock wait and immediately before the claim commits, against a
+      fresh observation of the store's clock rather than the request's own
+      entry time.
     refusal: >-
       Refuse with operation.not-authorized and write the authorization.refused
       audit row, leaving no claim behind.
@@ -63,7 +65,7 @@ invariants:
       deadline passes. See deferred entry SCHEDULING-DEF-01.
     negativeTest:
       path: crates/registry-scheduling/tests/postgres_commitments.rs
-      name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations
+      name: a_grant_that_lapses_before_the_commit_never_books
   - id: SCHEDULING-SEC-04
     state: enforced
     threat: >-

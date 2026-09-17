@@ -126,8 +126,10 @@ def violations(metadata: dict) -> list[str]:
 def load_metadata(repository_root: Path, fixture: Path | None) -> dict:
     if fixture:
         return json.loads(fixture.read_text(encoding="utf-8"))
+    # All-features resolution, so an optional dependency no supported build
+    # enables by default still cannot escape the forward-closure check.
     completed = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
+        ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1"],
         cwd=repository_root,
         check=True,
         capture_output=True,
