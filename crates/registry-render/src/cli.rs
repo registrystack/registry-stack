@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
+use base64::Engine as _;
 use clap::{Parser, Subcommand};
 
 /// The release version plus the Typst pin, computed once. Leaked on
@@ -17,7 +18,7 @@ fn version_string() -> &'static str {
 
 use crate::bundle::Bundle;
 use crate::problem::RenderProblem;
-use crate::render::{render, RenderRequest};
+use crate::render::RenderRequest;
 use crate::validate_data;
 
 /// Governed, byte-stable PDF documents from registry data.
@@ -95,6 +96,11 @@ pub enum Command {
         /// Refuse warnings (missing glyphs and friends).
         #[arg(long)]
         strict: bool,
+        /// Wall-clock budget for the render in seconds; the render is
+        /// killed at this bound (the same supervised-worker wall serve
+        /// uses).
+        #[arg(long = "timeout")]
+        timeout: Option<u64>,
         /// Keep rendering on bundle changes (authoring loop; unsealed
         /// bundles are fine, poll-based).
         #[arg(long)]
@@ -184,37 +190,74 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             now,
             assets,
             strict,
+            timeout,
             watch,
             out,
             json,
             emit_envelope,
         } => {
-            let request = read_request(
-                &data,
-                &locale,
-                &assets,
-                Some(parse_issued_at(issued_at, now)?),
-            )?;
-            if watch {
-                return watch_loop(&bundle, &document, &request, strict, &out);
+            let issued = parse_issued_at(issued_at, now)?;
+            if now {
+                // The loud opt-in the flag's help promises.
+                eprintln!(
+                    "note: --now resolves issuedAt to {} (wall clock; output is NOT byte-stable)",
+                    issued.to_rfc3339()
+                );
             }
-            let bundle = Bundle::load(&bundle).map_err(recovery_hint)?;
-            if !bundle.manifest.is_sealed() {
+            let request = read_request(&data, &locale, &assets, Some(issued))?;
+            let timeout = std::time::Duration::from_secs(
+                timeout.unwrap_or_else(crate::runtime::default_render_timeout_seconds),
+            );
+            if watch {
+                return watch_loop(&bundle, &document, &request, strict, timeout, &out);
+            }
+            let loaded = Bundle::load(&bundle).map_err(recovery_hint)?;
+            if !loaded.manifest.is_sealed() {
                 eprintln!(
                     "note: bundle is unsealed; compile is fine, serve is not (run `render seal` when ready)"
                 );
             }
-            let document = bundle.document(&document)?;
-            let rendered = render(&bundle, document, &request, strict)?;
+            let document_spec = loaded.document(&document)?.clone();
+            let rendered = compile_once(&bundle, &document, &request, strict, timeout)
+                .map_err(recovery_hint)?;
+            let pdf = base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &rendered.pdf_base64,
+            )
+            .map_err(|_| {
+                RenderProblem::new(
+                    crate::problem::ProblemKind::Internal,
+                    "worker returned an undecodable PDF",
+                )
+            })?;
             if let Some(path) = emit_envelope {
-                std::fs::write(&path, &rendered.envelope_bytes).map_err(|err| {
+                // Recompute the envelope beside the worker's authoritative
+                // hash; a mismatch would mean the two processes disagree
+                // about the injected bytes, which is an internal error.
+                let envelope = crate::envelope::build_envelope(&crate::envelope::EnvelopeInput {
+                    document_id: &document_spec.spec.id,
+                    document_version: document_spec.spec.version,
+                    labels: &document_spec.labels,
+                    locale: request.locale.as_deref(),
+                    issued_at: request.issued_at,
+                    data: &request.data,
+                    assets: &request.assets,
+                });
+                let bytes = crate::envelope::canonical_bytes(&envelope)?;
+                if crate::hash::sha256_hex(&bytes) != rendered.data_sha256 {
+                    return Err(RenderProblem::new(
+                        crate::problem::ProblemKind::Internal,
+                        "recomputed envelope does not match the worker's dataSha256",
+                    ));
+                }
+                std::fs::write(&path, &bytes).map_err(|err| {
                     RenderProblem::new(
                         crate::problem::ProblemKind::InvalidArgument,
                         format!("cannot write {}: {err}", path.display()),
                     )
                 })?;
             }
-            std::fs::write(&out, &rendered.pdf).map_err(|err| {
+            std::fs::write(&out, &pdf).map_err(|err| {
                 RenderProblem::new(
                     crate::problem::ProblemKind::InvalidArgument,
                     format!("cannot write {}: {err}", out.display()),
@@ -236,7 +279,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                 println!(
                     "wrote {} ({} bytes, pdf sha256 {}, data sha256 {})",
                     out.display(),
-                    rendered.pdf.len(),
+                    pdf.len(),
                     rendered.pdf_sha256,
                     rendered.data_sha256
                 );
@@ -354,6 +397,42 @@ pub(crate) fn read_request(
     })
 }
 
+/// One offline render through the same supervised worker serve uses, so the
+/// CLI shares serve's timeout semantics: `typst::compile` has no
+/// cancellation parameter, and the killable child process is the only true
+/// wall. This is also what keeps a pathological template from hanging an
+/// authoring loop or a CI job.
+fn compile_once(
+    bundle_dir: &Path,
+    document_id: &str,
+    request: &RenderRequest,
+    strict: bool,
+    timeout: std::time::Duration,
+) -> Result<crate::worker::WorkerRendered, RenderProblem> {
+    let worker_request = crate::worker::WorkerRequest {
+        bundle: bundle_dir.to_path_buf(),
+        document: document_id.to_owned(),
+        locale: request.locale.clone(),
+        data: request.data.clone(),
+        assets: request.assets.clone(),
+        issued_at: request.issued_at.to_rfc3339(),
+        strict,
+        require_sealed: false,
+        max_output_bytes: crate::render::DEFAULT_MAX_OUTPUT_BYTES,
+        memory_limit_bytes: 512 * 1024 * 1024,
+    };
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|err| {
+            RenderProblem::new(
+                crate::problem::ProblemKind::Internal,
+                format!("cannot start the render runtime: {err}"),
+            )
+        })?;
+    runtime.block_on(crate::worker::supervise(worker_request, timeout))
+}
+
 /// Flush stdout before exiting so summaries never interleave with stderr.
 pub fn flush() {
     let _ = std::io::stdout().flush();
@@ -377,11 +456,14 @@ fn recovery_hint(problem: RenderProblem) -> RenderProblem {
 /// The authoring loop: render now, then re-render whenever the bundle's
 /// files change. Poll-based on purpose — no filesystem-event dependency,
 /// works everywhere the CLI works, and the loop is for humans, not CI.
+/// Every iteration runs through the supervised worker, so one pathological
+/// edit costs its timeout, not the session.
 fn watch_loop(
     bundle_dir: &Path,
     document_id: &str,
     request: &RenderRequest,
     strict: bool,
+    timeout: std::time::Duration,
     out: &Path,
 ) -> Result<i32, RenderProblem> {
     eprintln!(
@@ -392,12 +474,17 @@ fn watch_loop(
     loop {
         let fingerprint = fingerprint_bundle(bundle_dir, out);
         if Some(&fingerprint) != last_fingerprint.as_ref() {
-            match Bundle::load(bundle_dir).and_then(|bundle| {
-                let document = bundle.document(document_id)?.clone();
-                render(&bundle, &document, request, strict)
-            }) {
+            match compile_once(bundle_dir, document_id, request, strict, timeout) {
                 Ok(rendered) => {
-                    std::fs::write(out, &rendered.pdf).map_err(|err| {
+                    let pdf = base64::engine::general_purpose::STANDARD
+                        .decode(&rendered.pdf_base64)
+                        .map_err(|_| {
+                            RenderProblem::new(
+                                crate::problem::ProblemKind::Internal,
+                                "worker returned an undecodable PDF",
+                            )
+                        })?;
+                    std::fs::write(out, &pdf).map_err(|err| {
                         RenderProblem::new(
                             crate::problem::ProblemKind::InvalidArgument,
                             format!("cannot write {}: {err}", out.display()),
@@ -406,7 +493,7 @@ fn watch_loop(
                     eprintln!(
                         "wrote {} ({} bytes, pdf sha256 {}, {} warning(s))",
                         out.display(),
-                        rendered.pdf.len(),
+                        pdf.len(),
                         rendered.pdf_sha256,
                         rendered.warnings.len()
                     );

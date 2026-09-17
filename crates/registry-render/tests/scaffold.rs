@@ -171,6 +171,43 @@ fn edit_after_seal_names_the_recovery_path() {
 }
 
 #[test]
+fn compile_is_bounded_by_a_timeout() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    // A compute-heavy template with a one-second budget: compile must be
+    // killed at the bound (the same supervised-worker wall serve uses),
+    // not run unbounded.
+    std::fs::write(
+        dir.join("templates/letter.typ"),
+        "#let x = range(20000000).fold(0, (a, b) => a + b)\n#x\n",
+    )
+    .unwrap();
+    let out = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        dir.join("letter.pdf").to_str().unwrap(),
+        "--timeout",
+        "1",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(registry_render::ProblemKind::RenderTimeout.exit_code()),
+        "compile must be bounded: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("timeout"), "{stderr}");
+}
+
+#[test]
 fn check_seal_refuses_to_seal_a_broken_bundle() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
