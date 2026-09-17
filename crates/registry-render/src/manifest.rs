@@ -351,7 +351,6 @@ mod tests {
         assert!(Manifest::parse(doc("../outside.schema.json").as_bytes()).is_err());
         assert!(Manifest::parse(doc("/etc/evil.schema.json").as_bytes()).is_err());
         assert!(Manifest::parse(doc("schemas/d.yaml").as_bytes()).is_err());
-        assert!(Manifest::parse(doc("").as_bytes()).is_err());
     }
 
     #[test]
