@@ -206,6 +206,24 @@ impl Manifest {
                     ),
                 ));
             }
+            // The schema gets the same containment rule as the entry: a
+            // schema outside the bundle would sit outside the seal.
+            if let Some(schema) = doc.schema.as_ref() {
+                let schema = schema.to_string_lossy();
+                if schema.is_empty()
+                    || !schema.ends_with(".json")
+                    || schema.contains("..")
+                    || schema.starts_with('/')
+                {
+                    return Err(RenderProblem::new(
+                        ProblemKind::ManifestInvalid,
+                        format!(
+                            "document {:?} schema must be a .json path inside the bundle",
+                            doc.id
+                        ),
+                    ));
+                }
+            }
             for locale in &doc.labels {
                 if locale.is_empty()
                     || !locale
@@ -320,6 +338,20 @@ mod tests {
         assert!(Manifest::parse(bad).is_err());
         let unknown = b"apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\nextra: 1\n";
         assert!(Manifest::parse(unknown).is_err());
+    }
+
+    #[test]
+    fn schema_path_is_validated_like_the_entry() {
+        // A schema outside the bundle sits outside the seal; the entry rule
+        // (no `..`, no absolute, correct suffix) applies to it too.
+        let doc = |schema: &str| {
+            format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: d\n    version: 1\n    entry: templates/d.typ\n    schema: {schema}\n")
+        };
+        assert!(Manifest::parse(doc("schemas/d.schema.json").as_bytes()).is_ok());
+        assert!(Manifest::parse(doc("../outside.schema.json").as_bytes()).is_err());
+        assert!(Manifest::parse(doc("/etc/evil.schema.json").as_bytes()).is_err());
+        assert!(Manifest::parse(doc("schemas/d.yaml").as_bytes()).is_err());
+        assert!(Manifest::parse(doc("").as_bytes()).is_err());
     }
 
     #[test]
