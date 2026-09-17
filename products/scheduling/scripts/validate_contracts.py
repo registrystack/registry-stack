@@ -7,10 +7,10 @@ the shape the product committed to:
 
 - every security invariant names a threat, an enforcement point, a
   refusal, and a negative test;
-- every cited test exists in the cited file, as a Rust test function or a
-  Python test method. That is source-reference consistency: it proves the
-  citation points at maintained source, not that the citation's runner
-  selects or compiles it.
+- every cited test exists in the cited file and is selectable by its runner.
+  Rust inventories compile the selected target with its required features;
+  citations may add features for gated library modules. Python inventories
+  use unittest discovery. Neither inventory executes test bodies.
 - the traceability document covers exactly the matrix's invariants;
 - every recorded decision cites evidence that exists;
 - every deferral names the tracked file that records it, and that file
@@ -23,8 +23,11 @@ in its own evidence note.
 
 from __future__ import annotations
 
+import json
 import re
+import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from typing import Callable
 
@@ -214,6 +217,112 @@ def validate(
     ]
 
 
+def runner_violations(root: Path, citations: list[dict]) -> list[str]:
+    """List tests, never execute them, caching each runner within this check."""
+    inventories: dict[tuple[str, ...], set[str]] = {}
+    failures: list[str] = []
+    for path, name, features in sorted({
+        (test["path"], test["name"], tuple(test.get("features", []))) for test in citations
+    }):
+        source = (root / path).resolve()
+        if not source.is_relative_to(root.resolve()) or not source.is_file():
+            failures.append(f"{path}: cited test source is missing or outside the repository")
+            continue
+        try:
+            if source.suffix == ".rs":
+                manifest = next(
+                    (parent / "Cargo.toml" for parent in source.parents
+                     if parent.is_relative_to(root.resolve())
+                     and (parent / "Cargo.toml").is_file()),
+                    None,
+                )
+                if manifest is None:
+                    raise ValueError("no Cargo manifest for cited test")
+                package = tomllib.loads(manifest.read_text(encoding="utf-8"))
+                command = ["cargo", "test", "--locked", "--manifest-path", str(manifest)]
+                relative = source.relative_to(manifest.parent)
+                targets = package.get("test", [])
+                target = next((target for target in targets if
+                    target.get("path", f"tests/{target['name']}.rs") == relative.as_posix()), None)
+                if target is not None or relative.parts[0] == "tests":
+                    if target is None and len(relative.parts) != 2:
+                        raise ValueError("cite the integration test target source")
+                    target = target or {"name": source.stem}
+                    command.extend(["--test", target["name"]])
+                    if target.get("required-features"):
+                        command.extend(["--features", ",".join(target["required-features"])])
+                else:
+                    command.append("--lib")
+                if features:
+                    command.extend(["--features", ",".join(features)])
+                command.extend(["--", "--list", "--format", "terse"])
+                key = tuple(command)
+                if key not in inventories:
+                    result = subprocess.run(command, cwd=root, check=True,
+                                            capture_output=True, text=True)
+                    inventories[key] = {
+                        line.removesuffix(": test") for line in result.stdout.splitlines()
+                        if line.endswith(": test")
+                    }
+                matches = [test for test in inventories[key]
+                           if test == name or test.endswith(f"::{name}")]
+            elif source.suffix == ".py":
+                # A separate interpreter keeps discovery imports and load_tests
+                # hooks out of the validator's own module namespace.
+                command = [sys.executable, "-c", PYTHON_TEST_INVENTORY, str(source)]
+                key = tuple(command)
+                if key not in inventories:
+                    result = subprocess.run(command, cwd=root, check=True,
+                                            capture_output=True, text=True)
+                    inventories[key] = set(json.loads(result.stdout))
+                matches = [test for test in inventories[key]
+                           if test == name or test.endswith(f".{name}")]
+            else:
+                raise ValueError("cited file is neither Rust nor Python")
+            if len(matches) != 1:
+                failures.append(f"{path}: {name} is not selectable as one test by its runner")
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            # Do not turn a failed build/import into an empty passing inventory.
+            failures.append(f"{path}: test inventory failed ({type(error).__name__})")
+    return failures
+
+
+PYTHON_TEST_INVENTORY = """\
+import inspect
+import json
+from pathlib import Path
+import sys
+import unittest
+
+source = Path(sys.argv[1]).resolve()
+loader = unittest.TestLoader()
+suite = loader.discover(str(source.parent), pattern=source.name)
+if loader.errors:
+    raise RuntimeError("unittest discovery failed")
+
+def names(suite):
+    for test in suite:
+        if isinstance(test, unittest.TestSuite):
+            yield from names(test)
+        else:
+            method = getattr(test, test._testMethodName)
+            if Path(inspect.getfile(method)).resolve() == source:
+                yield test.id()
+
+print(json.dumps(list(names(suite))))
+"""
+
+
+def cited_tests(value: object) -> list[dict]:
+    if isinstance(value, dict):
+        if "path" in value and "name" in value:
+            return [value]
+        return [test for child in value.values() for test in cited_tests(child)]
+    if isinstance(value, list):
+        return [test for child in value for test in cited_tests(child)]
+    return []
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[3]
     contracts = root / "products" / "scheduling" / "contracts"
@@ -246,6 +355,9 @@ def main() -> int:
             loaded["recorded-decisions.yaml"],
             resolve,
         )
+
+    if not failures:
+        failures = runner_violations(root, cited_tests(loaded))
 
     if failures:
         for failure in failures:

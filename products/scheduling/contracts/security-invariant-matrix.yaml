@@ -112,6 +112,7 @@ invariants:
     negativeTest:
       path: crates/registry-breg/src/task_grant/tests.rs
       name: a_scheduling_grant_is_refused_by_the_breg_binding
+      features: [runtime]
   - id: SCHEDULING-SEC-07
     state: enforced
     threat: >-
