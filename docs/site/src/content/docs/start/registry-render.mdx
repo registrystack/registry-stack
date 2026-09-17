@@ -23,7 +23,7 @@ The byte-stability promise is the product. A receipt rendered in September and r
 the same inputs in March is bit-for-bit identical, so a sha256 printed in an audit record still
 matches the paper in the folder, and a retry after a network failure can never deliver two
 different documents for one decision. [How Registry Render stays
-byte-stable](../explanation/render-determinism/) explains the mechanisms behind that promise.
+byte-stable](../../explanation/render-determinism/) explains the mechanisms behind that promise.
 
 Render holds no database and makes no outbound calls. Everything a template can read comes from two
 places: the sealed bundle on disk (templates, labels, schemas, fonts, vendored packages) and the
@@ -51,9 +51,9 @@ library:
     crates/registry-render/src/server.rs, serve;
     crates/registry-render/src/lib.rs, render_with_limits. */}
 
-[Render your first document](../tutorials/first-render-document/) walks one bundle from scaffold
+[Render your first document](../../tutorials/first-render-document/) walks one bundle from scaffold
 to a served PDF in one sitting. [Run Registry Render in serve
-mode](../operate/registry-render/) covers the deployment contract for the service.
+mode](../../operate/registry-render/) covers the deployment contract for the service.
 
 ## What it is not
 
@@ -73,6 +73,6 @@ no migration, no broker, no cache.
 
 ## Next
 
-- [Render your first document](../tutorials/first-render-document/)
-- [How Registry Render stays byte-stable](../explanation/render-determinism/)
-- [Run Registry Render in serve mode](../operate/registry-render/)
+- [Render your first document](../../tutorials/first-render-document/)
+- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
+- [Run Registry Render in serve mode](../../operate/registry-render/)
