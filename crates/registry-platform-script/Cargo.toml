@@ -8,8 +8,21 @@ repository.workspace = true
 readme = "README.md"
 publish = false
 
+[features]
+default = []
+# The WASM backend: the pinned Wasmtime runtime, the deterministic executor,
+# and the byte-transfer outcome checks. Non-default so every crate depending
+# on this one without the feature gains nothing.
+wasm = ["dep:serde", "dep:serde_json", "dep:wasmtime"]
+
 [lints]
 workspace = true
 
 [dependencies]
 rhai.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+# Pinned LTS Wasmtime release (line 48, EOL 2028-08-20). The non-default
+# `pulley` feature is required to select the pulley64 compilation target on a
+# host with a Cranelift backend; it rides along whenever the runtime is on.
+wasmtime = { version = "=48.0.2", features = ["pulley"], optional = true }

@@ -5739,6 +5739,9 @@ name = "registry-platform-script"
 version = "0.32.0"
 dependencies = [
  "rhai",
+ "serde",
+ "serde_json",
+ "wasmtime",
 ]
 
 [[package]]
