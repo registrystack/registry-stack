@@ -34,7 +34,12 @@ on two OSes via `.github/workflows/render-golden.yml`).
   capability is built there — every render-side behavior that journey
   exercises (loopback serve, sealed bundle, PDF bytes and hash headers,
   deterministic redelivery) is covered above by the serve suite and the
-  walked OpenFn journey.
+  walked OpenFn journey. A 2026-09-17 read-only sizing of the kit worktree
+  puts that capability at a multi-component change (config parser, render
+  route with session-token data assembly, sha256 attach fields, a new public
+  QR-verify surface with its own credential, a staff print page, deployment
+  supervision, and the kit's brief/skill/walkthrough anatomy) — kit-product
+  scope, not render-side work.
 - The docs-site CLI reference record (`docs/site/src/data/cli-reference.yaml`)
   covers released binaries; `render` joins it at roster entry per the
   release checklist.

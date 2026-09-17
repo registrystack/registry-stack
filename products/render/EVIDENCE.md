@@ -127,3 +127,13 @@ post-export size check, code-level asset caps).
 Test totals after the round: 36 (7 unit, 11 golden, 9 serve end-to-end,
 9 scaffold/CLI), all green with `--locked`; `cargo fmt --check`,
 `clippy -D warnings`, and `cargo deny check` pass on the same revision.
+
+## Two-OS golden gate: first proof (2026-09-17)
+
+PR #1113 run 35177001158 — `Registry Render golden gate` green on both
+`ubuntu-24.04` and `macos-14` (golden hashes, determinism suite, serve
+end-to-end), on revision `8e06eca6a`. The same PR registers
+`registry-render` in the CI classifier's Rust shard inventory (new
+`render` shard), so ordinary Rust-workspace routing also covers the
+crate; the classifier's own test suites (111 tests) pass with the new
+shard.

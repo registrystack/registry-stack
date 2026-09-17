@@ -78,6 +78,7 @@ SHARDS = {
         "registry-cli-docs",
         "registry-language-server",
     ),
+    "render": ("registry-render",),
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
