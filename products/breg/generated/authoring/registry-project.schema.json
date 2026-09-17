@@ -192,6 +192,13 @@
         "kind": {
           "$ref": "#/$defs/ActionHandlerKindSource"
         },
+        "module": {
+          "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "refusals": {
           "default": [],
           "items": {
@@ -200,7 +207,11 @@
           "type": "array"
         },
         "script": {
-          "type": "string"
+          "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "writes": {
           "items": {
@@ -211,7 +222,6 @@
       },
       "required": [
         "kind",
-        "script",
         "abi",
         "writes"
       ],
