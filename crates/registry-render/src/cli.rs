@@ -107,8 +107,9 @@ pub enum Command {
         #[arg(long = "timeout")]
         timeout: Option<u64>,
         /// Keep rendering on bundle changes (authoring loop; unsealed
-        /// bundles are fine, poll-based).
-        #[arg(long)]
+        /// bundles are fine, poll-based). Never returns, so it refuses
+        /// `--emit-envelope` rather than ignoring it.
+        #[arg(long, conflicts_with = "emit_envelope")]
         watch: bool,
         /// Output PDF path.
         #[arg(long)]

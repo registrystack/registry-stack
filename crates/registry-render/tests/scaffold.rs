@@ -80,6 +80,59 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
 }
 
 #[test]
+fn a_locale_listed_twice_is_refused_before_anything_is_written() {
+    let dir = tempdir();
+    // A repeated locale would scaffold the same label file twice and write
+    // a manifest listing it twice. Refuse the argument instead, before the
+    // directory is touched.
+    let init = run(&["init", dir.to_str().unwrap(), "--labels", "en,en"]);
+    assert_eq!(
+        init.status.code(),
+        Some(registry_render::ProblemKind::InvalidArgument.exit_code()),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert!(
+        !dir.join("manifest.yaml").exists(),
+        "a refused argument leaves no half-made bundle"
+    );
+}
+
+#[test]
+fn watch_and_emit_envelope_are_refused_together() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    // Watch never returns, so it would ignore the envelope request
+    // forever. Clap refuses the pair as a usage error.
+    let envelope = dir.join("envelope.json");
+    let compiled = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        dir.join("letter.pdf").to_str().unwrap(),
+        "--watch",
+        "--emit-envelope",
+        envelope.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        compiled.status.code(),
+        Some(2),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&compiled.stdout),
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    assert!(!envelope.exists(), "no envelope is written");
+}
+
+#[test]
 fn comma_separated_labels_flag_is_accepted() {
     let dir = tempdir();
     // `--labels en,fr` reads as two locales to a new operator; a comma is

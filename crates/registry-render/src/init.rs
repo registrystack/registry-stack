@@ -153,11 +153,20 @@ const STARTER_FONT_FILES: &[(&str, &[u8])] = &[
 ];
 
 pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
+    let mut seen = std::collections::BTreeSet::new();
     for locale in labels {
         if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
             return Err(RenderProblem::new(
                 ProblemKind::InvalidArgument,
                 format!("label locale must be kebab-case, got {locale:?}"),
+            ));
+        }
+        // A repeat would scaffold one label file twice and list the locale
+        // twice in the manifest; refuse it before anything is written.
+        if !seen.insert(locale) {
+            return Err(RenderProblem::new(
+                ProblemKind::InvalidArgument,
+                format!("label locale {locale:?} is listed more than once"),
             ));
         }
     }
