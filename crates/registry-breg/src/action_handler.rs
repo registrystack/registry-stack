@@ -327,6 +327,10 @@ pub fn evaluate_action_with_evidence(
     )
 }
 
+#[cfg(test)]
+#[path = "tests/action_handler_benchmark_tests.rs"]
+mod action_handler_benchmark_tests;
+
 pub(crate) fn evaluate_with_engine(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
@@ -334,6 +338,29 @@ pub(crate) fn evaluate_with_engine(
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
+    let source =
+        std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
+    let ast = compile_source_for_abi(source, &handler.abi)?;
+    execute_compiled_handler(
+        action,
+        handler,
+        &ast,
+        inputs,
+        deadline,
+        resolver,
+        cancellation,
+    )
+}
+
+/// Admission shared by every evaluation entry: the call deadline, the input
+/// snapshot ceiling, and the handler ABI/resolver rule.
+fn admit_handler<'a>(
+    action: &'a CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<&EvidenceResolver>,
+) -> Result<&'a CompiledActionHandler, ActionHandlerDiagnostic> {
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
@@ -355,9 +382,22 @@ pub(crate) fn evaluate_with_engine(
     {
         return Err(ActionHandlerError::Source.into());
     }
-    let source =
-        std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source_for_abi(source, &handler.abi)?;
+    Ok(handler)
+}
+
+/// Execute an admitted handler program: context construction, the per-call
+/// engine with its resolver registration shape, the bounded call, and result
+/// decoding. Shared by the fresh-compile path and the cached-program
+/// benchmark variant.
+fn execute_compiled_handler(
+    action: &CompiledAction,
+    handler: &CompiledActionHandler,
+    ast: &AST,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<EvidenceResolver>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let mut ctx = Map::new();
     ctx.insert(
         "inputs".into(),
@@ -475,7 +515,7 @@ pub(crate) fn evaluate_with_engine(
         .call_fn_with_options::<Dynamic>(
             CallFnOptions::new().eval_ast(false),
             &mut Scope::new(),
-            &ast,
+            ast,
             "handle",
             (Dynamic::from(ctx),),
         )
@@ -523,6 +563,81 @@ pub(crate) fn evaluate_with_engine(
         return Err(ActionHandlerError::Deadline.into());
     }
     Ok(outcome)
+}
+
+/// A handler program compiled once for repeated evaluation.
+///
+/// Benchmark variant, test-only and crate-private on purpose: the supported
+/// evaluation path compiles the handler source on every call, and AST reuse
+/// is not public API. The type does not exist outside test builds. A program
+/// is constructed only from a compiled action's own validated `script_bytes`
+/// through `compile_source_for_abi`, and every evaluation re-checks the
+/// handler's ABI and source bytes before the AST is used, so a program cannot
+/// drift from the action it was compiled for and no unvalidated AST can be
+/// supplied from outside. The Rhai profile and limits applied at compilation
+/// are crate constants shared by both paths.
+#[cfg(test)]
+pub(crate) struct CachedActionHandlerProgram {
+    abi: String,
+    script_bytes: Vec<u8>,
+    ast: AST,
+}
+
+#[cfg(test)]
+impl CachedActionHandlerProgram {
+    /// Compile through the same validated path `evaluate_with_engine` uses.
+    pub(crate) fn compile(action: &CompiledAction) -> Result<Self, ActionHandlerError> {
+        let Some(handler) = &action.handler else {
+            return Err(ActionHandlerError::Source);
+        };
+        if handler.abi != ACTION_HANDLER_ABI_V1 && handler.abi != ACTION_HANDLER_ABI_V2 {
+            return Err(ActionHandlerError::Source);
+        }
+        let source =
+            std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
+        let ast = compile_source_for_abi(source, &handler.abi)?;
+        Ok(Self {
+            abi: handler.abi.clone(),
+            script_bytes: handler.script_bytes.clone(),
+            ast,
+        })
+    }
+
+    /// The compiled program for `handler`, or a source error when the
+    /// handler's ABI or source bytes no longer match the compiled program.
+    fn bound_ast(&self, handler: &CompiledActionHandler) -> Result<&AST, ActionHandlerError> {
+        if self.abi != handler.abi || self.script_bytes != handler.script_bytes {
+            return Err(ActionHandlerError::Source);
+        }
+        Ok(&self.ast)
+    }
+}
+
+/// Benchmark variant of `evaluate_with_engine` that reuses a program compiled
+/// through `CachedActionHandlerProgram::compile`. Admission, per-call engine
+/// construction, context shape, limits, resolver registration path, and
+/// result decoding are identical; only the per-call compilation is replaced
+/// by the bound-program check. Test-only, like the program type.
+#[cfg(test)]
+pub(crate) fn evaluate_with_cached_program(
+    action: &CompiledAction,
+    program: &CachedActionHandlerProgram,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<EvidenceResolver>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
+    let ast = program.bound_ast(handler)?;
+    execute_compiled_handler(
+        action,
+        handler,
+        ast,
+        inputs,
+        deadline,
+        resolver,
+        cancellation,
+    )
 }
 
 fn bound_result(
