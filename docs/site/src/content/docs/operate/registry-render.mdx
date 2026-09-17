@@ -1,0 +1,194 @@
+---
+title: Run Registry Render in serve mode
+description: Build Registry Render, write its runtime configuration, provision its two secrets, start serve mode behind your TLS proxy, and verify its audit ledger.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-17"
+doc_type: how-to
+locale: en
+standards_referenced: []
+---
+
+You have a sealed template bundle and callers that need PDFs, and you want `render serve`
+answering them. At the end of this page one `render` process serves your bundle on a private
+address behind your TLS proxy, answers `GET /health` and `GET /ready`, renders under API-key
+authentication with a per-render audit trail, and shuts down within a bounded window.
+
+Registry Render is pre-release software for institutional pilots. There is no published installer
+yet, so this page builds the binary from source; release packaging follows the standard roster
+checklist.
+
+{/* Evidence: products/render/ACCEPTANCE.md;
+    products/render/DEFINITION-OF-DONE.md. */}
+
+[Rendering your first document](../../tutorials/first-render-document/) covers the bundle side:
+scaffolding, authoring, and sealing. This page starts from a sealed bundle directory.
+
+## What you provide
+
+- **One sealed bundle directory, mounted read-only.** `render seal` writes per-file sha256 hashes
+  into the bundle's `manifest.yaml`, and serve verifies the seal at startup and again in the
+  worker on every request, so a bundle that drifts while the service runs is refused, not
+  rendered. Treat the directory as content the deployment does not write.
+- **Two secrets in owner-only files: a caller API key and an audit chain key.** The API key is at
+  least 32 bytes of ASCII material; serve trims exactly one trailing line ending from the file
+  and refuses to start if the key carries any other whitespace, because a silently mis-armed key
+  would reject every caller while health stays green.
+- **One directory for the audit ledger.** The process appends a keyed hash-chained JSONL ledger
+  and refuses a directory it cannot make owner-only. One process writes one chain; plan the
+  directory accordingly.
+- **A TLS proxy or ingress in front of the listener.** The process serves plain HTTP, defaults to
+  `127.0.0.1:8080`, and refuses to start on a public or all-interfaces address. TLS termination,
+  HSTS, and client addresses stay with your proxy, and the listener reads no forwarded header.
+- **A host for one process.** Renders run in supervised worker processes that are killed at the
+  configured timeout and capped in address space on Linux, so one pathological template costs its
+  timeout, not the service.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
+    crates/registry-render/src/server.rs, normalize_api_key;
+    crates/registry-render/src/worker.rs, supervise and cap_address_space;
+    crates/registry-render/src/audit.rs, RenderAudit;
+    crates/registry-render/src/bundle.rs, load_sealed. */}
+
+## Build the binary
+
+From a Registry Stack checkout, build with the workspace lockfile, because the pinned compression
+stack is part of Render's byte contract:
+
+```sh
+cargo build --release --locked -p registry-render
+target/release/render --version
+```
+
+The version line names the release and the Typst pin, for example `render <version> (typst
+0.15.1)`. Record it: every audit event carries the same string, and a stored PDF's provenance is
+this binary plus the bundle hash.
+
+{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
+
+## Write the runtime configuration
+
+Serve mode reads one YAML file. Every field is a contract, and unknown fields are refused:
+
+```yaml
+apiVersion: render.registrystack.org/v1alpha1
+kind: RenderRuntime
+server:
+  bind: 127.0.0.1:8080
+  shutdownGraceSeconds: 30
+bundle:
+  path: /var/lib/registry-render/bundle
+auth:
+  apiKeyRef: secret:file/render-api-key
+limits:
+  renderTimeoutSeconds: 20
+  maxOutputBytes: 8388608
+  maxRequestBodyBytes: 8388608
+  maxConcurrency: 4
+audit:
+  directory: /var/lib/registry-render/audit
+  integrityKeyRef: secret:file/render-audit-key
+  maxSegmentBytes: 67108864
+```
+
+Secret references resolve against files beside the runtime file or named environment variables.
+Relative `bundle.path` and `audit.directory` values anchor to the runtime file's directory too, so
+the same file behaves identically wherever the process is launched from.
+The limits carry hard ceilings the runtime refuses to exceed: the output cap cannot exceed 8 MiB
+and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
+shutdown the process drains in-flight renders for one grace period, gives open connections a
+second one, and then abandons the rest; `shutdownGraceSeconds` is therefore the number to align
+with your stop timeout, not a decorative field.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime and validate_bind;
+    crates/registry-render/src/server.rs, serve. */}
+
+## Start and verify
+
+Start the process with the runtime file, and check both endpoints before sending traffic:
+
+```sh
+target/release/render serve --runtime /etc/registry-render/runtime.yaml &
+curl -s http://127.0.0.1:8080/health
+curl -s http://127.0.0.1:8080/ready
+```
+
+`GET /health` answers with the bundle version and hash and the renderer version, so you can
+reconcine the running service against what you deployed. `GET /ready` includes the audit ledger:
+if the sink cannot answer, readiness fails. Both are value-free. `render healthcheck --runtime
+<file>` performs the same probe for a supervisor script.
+
+{/* Evidence: crates/registry-render/src/server.rs, health and healthcheck;
+    crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
+
+## The rendering call
+
+Callers POST one JSON body to `/v1/render/{type}` with the API key and the issuance time:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/v1/render/<document-type> \
+  -H "Authorization: Bearer <api-key>" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/pdf" \
+  -o receipt.pdf \
+  -D headers.txt \
+  -d '{"issuedAt":"<issuance-time>","data":<document-data>}'
+grep -i x-registry headers.txt
+```
+
+The body's `data` object must satisfy the document's JSON Schema; violations come back as
+problems with JSON pointers into the data, and `render validate` dry-runs that check without
+rendering.
+
+The default response is the PDF bytes with `X-Registry-Pdf-Sha256`,
+`X-Registry-Data-Sha256`, and `X-Registry-Document-Version` headers; `Accept: application/json`
+returns the same facts plus the PDF as base64 for callers that cannot take binaries. Requests
+must declare `Content-Length`: chunked transfer is refused, because a chunked body that exceeds
+the limit mid-stream cannot be answered at all. `Idempotency-Key` is echoed and audited as an
+opaque correlation id; rendering is deterministic, so no deduplication exists or is needed.
+
+Failures are RFC 9457 problem documents with a closed vocabulary, on HTTP and in the CLI's exit
+codes, and every render response, success or refusal, is preceded by its audit event: if the
+ledger cannot be written, the response fails closed.
+
+{/* Evidence: crates/registry-render/src/server.rs, render_route and refuse_oversized_bodies;
+    crates/registry-render/src/problem.rs, ProblemKind;
+    crates/registry-render/src/audit.rs, append;
+    crates/registry-render/src/openapi.rs, OPENAPI_JSON. */}
+
+## Verify the ledger
+
+The ledger is a keyed hash chain in sealed segments. Stop the process first: the writer holds the
+active segment, and verification covers what has been sealed. Then:
+
+```sh
+target/release/render audit-verify --runtime /etc/registry-render/runtime.yaml
+```
+
+The command prints the record and segment counts. If it reports zero records against a non-empty
+ledger, it says so: either the process is still running, or the chain is not what you expect, and
+both are worth knowing before an audit depends on it. One event per render, value-free: hashes,
+versions, the caller's key fingerprint, and the trace and correlation ids, never data values or
+image bytes.
+
+{/* Evidence: crates/registry-render/src/audit.rs, verify_chain;
+    crates/registry-render/src/server.rs, RenderAuditEvent. */}
+
+## Upgrade discipline
+
+A Render binary is exact source plus the Typst pin plus the lockfile, and any change to the Typst
+pin, the compression stack, or a template changes output bytes by design. Treat every upgrade as
+a golden-hash review: the two-OS job in CI fails on any byte difference and the diff is the
+review. Never overwrite a deployment's bundle content without resealing, because the seal, not
+the directory listing, is what serve trusts.
+
+{/* Evidence: .github/workflows/render-golden.yml;
+    products/render/EVIDENCE.md. */}
+
+## Next
+
+- [Render your first document](../../tutorials/first-render-document/)
+- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
+- [Registry Render overview](../../start/registry-render/)
