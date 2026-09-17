@@ -125,6 +125,8 @@ pub(crate) mod stored_bytes;
 pub mod task_grant;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
+#[cfg(feature = "wasm-executor-prototype")]
+pub(crate) mod wasm_executor_probe;
 #[cfg(feature = "runtime")]
 pub mod webhook;
 
