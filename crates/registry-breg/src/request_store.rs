@@ -353,6 +353,7 @@ pub(crate) struct RequestWorkflowHeader {
     pub workflow_revision: i64,
     pub current_proposal_erased: bool,
     pub applier_reference: Option<String>,
+    pub application_reason_present: bool,
 }
 
 impl std::fmt::Debug for RequestWorkflowHeader {
@@ -365,6 +366,10 @@ impl std::fmt::Debug for RequestWorkflowHeader {
             .field("workflow_revision", &self.workflow_revision)
             .field("current_proposal_erased", &self.current_proposal_erased)
             .field("has_applier_reference", &self.applier_reference.is_some())
+            .field(
+                "application_reason_present",
+                &self.application_reason_present,
+            )
             .finish()
     }
 }
@@ -749,7 +754,8 @@ pub(crate) async fn load_header(
     let sql = format!(
         "SELECT s.owner_reference, s.state, s.proposal_version, s.workflow_revision,
                 COALESCE(s.detail_erased_at IS NOT NULL, false)
-                    OR COALESCE(p.erased_at IS NOT NULL, false), a.applied_by
+                    OR COALESCE(p.erased_at IS NOT NULL, false), a.applied_by,
+                a.reason_present
            FROM registry_internal.registry_request_state s
            LEFT JOIN registry_internal.registry_request_proposals p
              ON p.request_entity_id = s.request_entity_id
@@ -786,6 +792,9 @@ pub(crate) async fn load_header(
         workflow_revision,
         current_proposal_erased: row.get(4),
         applier_reference: row.get(5),
+        // The applications join is outer: a request without an application has
+        // no reason to record.
+        application_reason_present: row.get::<_, Option<bool>>(6).unwrap_or(false),
     })
 }
 
@@ -1531,6 +1540,7 @@ mod tests {
             workflow_revision: 9,
             current_proposal_erased: false,
             applier_reference: Some("private-applier-reference-canary".to_owned()),
+            application_reason_present: true,
         };
         let debug = format!("{header:?}");
         assert!(!debug.contains("private-owner-reference-canary"));
@@ -1836,9 +1846,13 @@ mod tests {
         .await
         .expect("exact reason is replayable");
         transaction.commit().await.expect("reason read commits");
+        migration.execute(
+            "UPDATE registry_internal.registry_request_decisions SET decision = 'approve', reason = $3, reason_present = true
+              WHERE request_entity_id = $1 AND request_id = $2",
+            &[&REQUEST_ENTITY, &request_id, &"approval reason"],
+        ).await.expect("an approval carries a reviewer explanation like any other decision");
         for (kind, text, present) in [
             ("request_revision", "界".repeat(4097), true),
-            ("approve", "reason".to_owned(), true),
             ("reject", "reason".to_owned(), false),
         ] {
             let error = migration.execute(
