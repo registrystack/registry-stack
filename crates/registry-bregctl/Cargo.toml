@@ -16,6 +16,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Forwarded so a WASM-prototype build of the compiler can also run through
+# bregctl; bregctl itself adds no WASM surface of its own.
+wasm-executor-prototype = ["registry-breg/wasm-executor-prototype"]
+
 [dependencies]
 anstream.workspace = true
 anstyle.workspace = true
