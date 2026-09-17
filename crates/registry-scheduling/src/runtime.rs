@@ -41,7 +41,7 @@ use crate::auth::SchedulingAuthenticator;
 use crate::config::{ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError};
 use crate::http::{router, HttpState};
 use crate::service::SchedulingService;
-use crate::store::{OutboxRow, PostgresStore, StoreError};
+use crate::store::{OutboxRow, PostgresStore, StoreError, REMINDER_SEND_TIMEOUT};
 
 /// How often each background loop wakes. The intervals are fixed constants,
 /// not configuration: they are internal mechanics of one deployment, not an
@@ -74,9 +74,6 @@ const INTENT_DISPATCH_LEASE_SECONDS: i64 = 600;
 const REMINDER_MAXIMUM_BODY_BYTES: usize = 16 * 1024;
 const REMINDER_MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
 const REMINDER_BEARER_MAXIMUM_BYTES: usize = 8192;
-/// The whole dispatch of one intent (resolve, connect, send, and the status
-/// line) shares one deadline.
-const REMINDER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[must_use]
 pub fn command() -> Command {

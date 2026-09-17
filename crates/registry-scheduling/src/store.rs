@@ -72,6 +72,9 @@ const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 /// the ASCII bytes of "SCHD".
 const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
 
+/// The send deadline must fit inside the remaining dispatch lease.
+pub(crate) const REMINDER_SEND_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The clock the store reads when it re-checks authorization currency.
 /// Production observes the system clock; the database suite pins one to
 /// cross an expiry boundary deterministically inside a transaction. The
@@ -974,6 +977,7 @@ impl PostgresStore {
                 json!({"kind": "hold", "claim": claim}),
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Hold(claim))
     }
@@ -1066,6 +1070,7 @@ impl PostgresStore {
                 json!({"kind": "booking", "claim": claim}),
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Booking(claim))
     }
@@ -1200,6 +1205,7 @@ impl PostgresStore {
                 json!({"kind": "booking", "claim": claim}),
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Booking(claim))
     }
@@ -1269,6 +1275,7 @@ impl PostgresStore {
                 Value::Null,
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Released)
     }
@@ -1406,6 +1413,7 @@ impl PostgresStore {
                 json!({"kind": "booking", "claim": moved}),
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Booking(moved))
     }
@@ -1452,6 +1460,16 @@ impl PostgresStore {
         }
         if appointment.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
+        }
+        let current_policy: i64 = transaction
+            .query_one(
+                "SELECT policy_revision FROM scheduling_meta WHERE singleton FOR SHARE",
+                &[],
+            )
+            .await?
+            .get(0);
+        if current_policy != commitment.policy_revision {
+            return Err(AdmissionRefusal::PolicyChanged.into());
         }
         if let Some(cutoff) = cancellation_cutoff_minutes {
             let earliest_cancel_end = appointment
@@ -1523,6 +1541,7 @@ impl PostgresStore {
                 json!({"kind": "booking", "claim": cancelled.clone()}),
             )
             .await?;
+        self.recheck_grant(&commitment)?;
         transaction.commit().await?;
         Ok(CommitOutcome::Cancelled(cancelled))
     }
@@ -1617,11 +1636,13 @@ impl PostgresStore {
     }
 
     /// Whether the attempt that claimed an intent still owns a dispatch it
-    /// should carry out: the row must still be pending at that attempt, and
-    /// a reminder must still describe its appointment's current revision.
-    /// A cancellation or reschedule suppresses the row, and a superseding
-    /// attempt means this one no longer speaks for the intent; either way
-    /// the send is skipped.
+    /// should carry out: the row must still be pending at that attempt, the
+    /// remaining lease must cover one more send deadline, and a reminder
+    /// must still describe its appointment's current revision. A
+    /// cancellation or reschedule suppresses the row, a superseding attempt
+    /// means this one no longer speaks for the intent, and a lease that
+    /// expired means another pass is entitled to reclaim the intent; any of
+    /// the three skips the send.
     pub async fn intent_still_dispatchable(
         &self,
         outbox_id: Uuid,
@@ -1630,15 +1651,23 @@ impl PostgresStore {
         let client = self.client().await?;
         let row = client
             .query_opt(
-                "SELECT 1 FROM scheduling_outbox AS o \
+                "SELECT o.next_attempt_at FROM scheduling_outbox AS o \
                  JOIN scheduling_claims AS c ON c.claim_id = o.claim_id \
-                 WHERE o.outbox_id=$1 AND o.attempts=$2 AND o.delivery_state='pending' \
+                 WHERE o.outbox_id=$1 AND o.attempts=$2 AND o.attempts > 0 \
+                   AND o.delivery_state='pending' \
                    AND (o.purpose <> 'reminder' \
                         OR (c.state='active' AND c.revision = o.appointment_revision))",
                 &[&outbox_id, &attempts],
             )
             .await?;
-        Ok(row.is_some())
+        let send_deadline = self
+            .observed_now()
+            .checked_add_signed(
+                TimeDelta::from_std(REMINDER_SEND_TIMEOUT)
+                    .map_err(|_| StoreError::Configuration)?,
+            )
+            .ok_or(StoreError::Configuration)?;
+        Ok(row.is_some_and(|row| row.get::<_, DateTime<Utc>>(0) > send_deadline))
     }
 
     /// The intents nothing will deliver without an operator, oldest first.
