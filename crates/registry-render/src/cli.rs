@@ -30,6 +30,11 @@ pub struct Cli {
     pub command: Command,
 }
 
+/// Return the public command tree for documentation and completion.
+pub fn command() -> clap::Command {
+    <Cli as clap::CommandFactory>::command()
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Scaffold a working starter bundle.
@@ -60,12 +65,18 @@ pub enum Command {
     },
     /// Dry-run request data against a document's schema, without rendering.
     Validate {
+        /// Bundle directory.
         #[arg(long)]
         bundle: PathBuf,
+        /// Document type id, as declared in the manifest.
         #[arg(long = "type")]
         document: String,
+        /// JSON file holding the bare `data` object.
         #[arg(long)]
         data: PathBuf,
+        /// Primary locale, recorded in the envelope; must be one the
+        /// document declares. The template receives every label table
+        /// either way.
         #[arg(long)]
         locale: Option<String>,
         /// Machine-readable result on stdout (failures: problem+json on
@@ -75,18 +86,24 @@ pub enum Command {
     },
     /// Write per-file hashes into the manifest, sealing the bundle.
     Seal {
+        /// Bundle directory (default: current directory).
         #[arg(long, default_value = ".")]
         bundle: PathBuf,
     },
     /// Render one document offline.
     Compile {
+        /// Bundle directory.
         #[arg(long)]
         bundle: PathBuf,
+        /// Document type id, as declared in the manifest.
         #[arg(long = "type")]
         document: String,
         /// JSON file holding the bare `data` object.
         #[arg(long)]
         data: PathBuf,
+        /// Primary locale, recorded in the envelope; must be one the
+        /// document declares. The template receives every label table
+        /// either way.
         #[arg(long)]
         locale: Option<String>,
         /// Issuance time; the document's claim, and the world clock.
@@ -125,16 +142,19 @@ pub enum Command {
     },
     /// Serve the HTTP rendering API (see the runtime YAML).
     Serve {
+        /// Runtime file naming the bundle, bind address, secrets, and limits.
         #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
         runtime: Option<PathBuf>,
     },
     /// Probe a running server's /health.
     Healthcheck {
+        /// Runtime file naming the server to probe.
         #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
         runtime: Option<PathBuf>,
     },
     /// Verify a sealed audit chain end to end.
     AuditVerify {
+        /// Runtime file naming the ledger directory and integrity key.
         #[arg(long, env = "REGISTRY_RENDER_RUNTIME")]
         runtime: Option<PathBuf>,
         /// Ledger directory (alternative to --runtime).

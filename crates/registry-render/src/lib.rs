@@ -41,6 +41,7 @@ pub mod worker;
 pub mod world;
 
 pub use bundle::{Bundle, LoadedDocument};
+pub use cli::command;
 pub use manifest::{DocumentSpec, Manifest, PdfStandardSpec};
 pub use problem::{ProblemKind, RenderProblem};
 pub use render::{decode_assets, validate_data, DEFAULT_MAX_OUTPUT_BYTES};

@@ -4703,6 +4703,7 @@ dependencies = [
  "registry-evidencectl",
  "registry-relay-v2",
  "registry-relayctl",
+ "registry-render",
  "serde",
  "serde_json",
 ]
