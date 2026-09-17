@@ -1,6 +1,9 @@
-//! `render check`: the plain-language preflight. Verifies structure,
-//! seals on request, proves label-script font coverage, and reports each
-//! document's dependency closure so review surfaces are exact.
+//! `render check`: the plain-language preflight. Verifies structure and
+//! seal hashes, label-script font coverage, and per-locale label key sets.
+//! The rendered file closure is governed where a render exists to capture
+//! it: the golden suite pins each acceptance bundle's closure and proves
+//! every file it reads is manifest-governed, and `compile --json` reports
+//! `deps` for authors reviewing their own bundles.
 
 use std::path::Path;
 

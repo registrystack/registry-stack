@@ -113,12 +113,58 @@ fn golden_hashes_match() {
             case.name,
             rendered.warnings
         );
-        assert!(
-            !rendered.deps.is_empty(),
-            "{} closure must be captured",
+        // Closure drift gate: the pinned file closure must match exactly,
+        // and every file it names must be governed by the manifest's seal
+        // (bundle files by their virtual path, package files by their
+        // packages/… spelling).
+        let pinned_deps: Option<Vec<String>> = pinned["deps"].as_array().map(|deps| {
+            deps.iter()
+                .map(|d| d.as_str().expect("dep string").to_owned())
+                .collect()
+        });
+        assert_eq!(
+            pinned_deps,
+            Some(rendered.deps.clone()),
+            "{} file closure drifted from the pinned closure — the template reads a \
+             different file set than the reviewed one",
             case.name
         );
+        let governed = manifest_hashes(&case.bundle);
+        for dep in &rendered.deps {
+            // Virtual request assets are scoped to the request and covered
+            // by dataSha256, not by the bundle's manifest.
+            if dep.starts_with("assets/") {
+                continue;
+            }
+            let governed_name = match dep.strip_prefix('@') {
+                // '@ns/name:ver/rest' -> 'packages/ns/name/ver/rest'
+                Some(package) => {
+                    let mut parts = package.splitn(3, '/');
+                    let ns = parts.next().expect("package namespace");
+                    let name_ver = parts.next().expect("package name:ver");
+                    let rest = parts.next().expect("package path");
+                    let (name, version) = name_ver
+                        .rsplit_once(':')
+                        .expect("package name and version");
+                    format!("packages/{ns}/{name}/{version}/{rest}")
+                }
+                None => dep.clone(),
+            };
+            assert!(
+                governed.contains_key(&governed_name),
+                "{} closure reads {}, which the manifest does not govern",
+                case.name,
+                governed_name
+            );
+        }
     }
+}
+
+/// The sealed manifest's per-file hash map, parsed by the crate's own model.
+fn manifest_hashes(bundle: &Path) -> std::collections::BTreeMap<String, String> {
+    let bytes = std::fs::read(bundle.join("manifest.yaml")).expect("manifest bytes");
+    let manifest = registry_render::manifest::Manifest::parse(&bytes).expect("manifest parses");
+    manifest.hashes.expect("example bundles are sealed")
 }
 
 #[test]
