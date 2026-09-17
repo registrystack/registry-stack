@@ -315,7 +315,7 @@ mod tests {
 
     fn ymd(datetime: Option<Datetime>) -> Option<(i32, u8, u8)> {
         let d = datetime?;
-        Some((d.year()?, d.month()? as u8, d.day()? as u8))
+        Some((d.year()?, d.month()?, d.day()?))
     }
 
     #[test]
