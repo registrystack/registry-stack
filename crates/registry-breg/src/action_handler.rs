@@ -375,6 +375,14 @@ fn admit_handler<'a>(
             "Evaluate a declared handler; fixed actions use their compiled effects directly.",
         ));
     };
+    if handler.kind != crate::model::CompiledActionHandlerKind::Rhai {
+        // This runtime executes the Rhai backend only; a handler tagged with
+        // any other backend is never interpreted as Rhai source.
+        return Err(ActionHandlerDiagnostic::new(
+            ActionHandlerError::Source,
+            "Evaluate a compiled Rhai handler; this runtime does not execute the declared handler backend.",
+        ));
+    }
     if handler.abi != ACTION_HANDLER_ABI_V1
         && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
     {

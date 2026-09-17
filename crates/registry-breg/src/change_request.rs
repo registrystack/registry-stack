@@ -211,6 +211,17 @@ fn compile_planner(
             "the planner ABI is not supported",
         ));
     }
+    if source.kind == crate::contract::ChangeRequestPlannerKindSource::Wasm {
+        // Refuse the declared backend explicitly before any Rhai-shaped
+        // validation could misreport the script: WASM planners are out of
+        // scope for this release and have no compiled representation.
+        errors.push(Diagnostic::error(
+            "change_request.planner.kind_unsupported",
+            format!("{planner_path}.kind"),
+            "WASM change-request planners are not supported in this release",
+        ));
+        return None;
+    }
     if !valid_planner_path(&source.script) {
         errors.push(Diagnostic::error(
             "change_request.planner.source_invalid",

@@ -501,15 +501,28 @@ pub struct ChangeRequestPlannerSource {
     pub writes: Vec<ChangeRequestPlannerWriteSource>,
 }
 
+/// The authored action-handler backend. The wasm backend is expressible so a
+/// declared WASM handler is refused by the compiler with a pinned diagnostic
+/// instead of an authoring parse error; no WASM handler is admitted yet.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum RhaiScriptKindSource {
+pub enum ActionHandlerKindSource {
     Rhai,
+    Wasm,
 }
 
-/// Retained Rust name for the reviewed change-request authoring contract.
-pub type ChangeRequestPlannerKindSource = RhaiScriptKindSource;
+/// The authored change-request planner backend. The wasm backend is
+/// expressible so a declared WASM planner is refused by the compiler with a
+/// pinned diagnostic; WASM planners stay unsupported. Retained Rust name for
+/// the reviewed change-request authoring contract.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeRequestPlannerKindSource {
+    Rhai,
+    Wasm,
+}
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -754,7 +767,7 @@ pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionHandlerSource {
-    pub kind: RhaiScriptKindSource,
+    pub kind: ActionHandlerKindSource,
     pub script: String,
     #[cfg_attr(
         feature = "schema",
