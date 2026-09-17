@@ -89,7 +89,7 @@ fn all_seven_actions_promote_and_synthesize_exact_bodies() {
 }
 
 #[test]
-fn review_reason_is_bounded_preserved_and_restricted_to_rejection_and_revision() {
+fn review_reason_is_bounded_preserved_and_accepted_on_every_decision_and_apply_body() {
     let metadata = BRegRequestMetadata::from_value(request_metadata(all_actions()), false).unwrap();
     let actions = metadata
         .promote_actions(&authority("case-worker"), &record_binding())
@@ -97,7 +97,10 @@ fn review_reason_is_bounded_preserved_and_restricted_to_rejection_and_revision()
     for action in actions {
         if !matches!(
             action.operation(),
-            BRegLifecycleOperation::RejectRequest | BRegLifecycleOperation::RequestRevision
+            BRegLifecycleOperation::ApproveRequest
+                | BRegLifecycleOperation::RejectRequest
+                | BRegLifecycleOperation::RequestRevision
+                | BRegLifecycleOperation::ApplyRequest
         ) {
             assert!(action.with_reason("explanation").is_err());
             assert!(action.with_reason("").is_err());
@@ -961,7 +964,6 @@ fn retained_decisions_preserve_disclosed_withheld_and_absent_reasons() {
         ("reason", json!("x".repeat(4097))),
         ("reason", json!("\0")),
         ("kind", json!("other")),
-        ("kind", json!("approve")),
         ("reasonPresent", json!(false)),
         ("actorReference", Value::Null),
         ("unknown", json!(true)),

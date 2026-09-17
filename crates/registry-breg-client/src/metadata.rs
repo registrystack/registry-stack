@@ -2740,7 +2740,13 @@ fn expected_lifecycle_schema(kind: crate::BRegLifecycleOperation) -> Value {
             "properties": {}
         }),
     };
-    if matches!(kind, Lifecycle::RejectRequest | Lifecycle::RequestRevision) {
+    if matches!(
+        kind,
+        Lifecycle::ApproveRequest
+            | Lifecycle::RejectRequest
+            | Lifecycle::RequestRevision
+            | Lifecycle::ApplyRequest
+    ) {
         schema["properties"]["reason"] = serde_json::json!({"type": "string", "maxLength": 4096, "pattern": r"^[^\u0000]*$", "description": "Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."});
     }
     schema

@@ -95,7 +95,7 @@ fn metadata() -> Value {
                 "fieldNames": "api", "queryParameters": [], "body": "change_request_action",
                 "contentType": "application/json", "ifMatchRequired": true,
                 "idempotencyKeyRequired": true, "mutationSemantics": "change_request_lifecycle",
-                "schema": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposalVersion","effectDigest"],"properties":{"proposalVersion":{"type":"integer","format":"int64","minimum":1,"maximum":4294967295_u64},"effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$","description":"Digest of the immutable proposal effects displayed to the actor."}}}
+                "schema": {"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","additionalProperties":false,"required":["proposalVersion","effectDigest"],"properties":{"proposalVersion":{"type":"integer","format":"int64","minimum":1,"maximum":4294967295_u64},"effectDigest":{"type":"string","pattern":"^sha256:[0-9a-f]{64}$","description":"Digest of the immutable proposal effects displayed to the actor."},"reason":{"type":"string","maxLength":4096,"pattern":"^[^\\u0000]*$","description":"Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused."}}}
             }
         }]
     })
@@ -192,10 +192,25 @@ async fn mount_recovery_metadata(server: &MockServer, response: ResponseTemplate
 }
 
 #[tokio::test]
-async fn apply_reason_is_a_typed_input_refusal_before_an_attempt_can_be_prepared() {
+async fn apply_reason_is_prepared_and_only_bounded_text_is_accepted() {
     let server = MockServer::start().await;
-    let result = prepare(&server, Some("not supported for application")).await;
-    assert!(matches!(result, Err(SourceAdapterError::ReasonUnsupported)));
+    prepare(&server, Some("applied after registrar sign-off"))
+        .await
+        .expect("reasoned apply prepares a source attempt");
+    for invalid in ["contains\0NUL".to_owned(), "📝".repeat(4097)] {
+        let fresh = MockServer::start().await;
+        let refused = prepare(&fresh, Some(&invalid)).await;
+        assert!(
+            matches!(refused, Err(SourceAdapterError::Invalid)),
+            "unbounded reason text is refused before an attempt is prepared"
+        );
+        assert!(fresh
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| request.method.as_str() == "GET"));
+    }
     assert!(server
         .received_requests()
         .await

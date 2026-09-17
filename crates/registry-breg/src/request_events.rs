@@ -55,7 +55,16 @@ pub async fn insert_request_lifecycle_events(
             !crate::request_workflow::valid_review_reason(reason)
                 || !matches!(
                     (event.transition, event.to_state),
-                    ("reject", "rejected") | ("request_revision", "needs_changes")
+                    // An approve that neither completes its stage quorum nor
+                    // clears the last stage leaves the request under review.
+                    ("approve", "submitted")
+                        // An approve whose proposal applies in the same transaction
+                        // emits its reason on the terminal applied state instead.
+                        | ("approve", "approved")
+                        | ("approve", "applied")
+                        | ("reject", "rejected")
+                        | ("request_revision", "needs_changes")
+                        | ("apply", "applied")
                 )
         })
     {

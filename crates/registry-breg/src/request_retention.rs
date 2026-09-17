@@ -133,6 +133,7 @@ pub struct RequestDetailErasure {
     pub proposal_snapshots: u64,
     pub target_snapshots: u64,
     pub decision_reasons: u64,
+    pub application_reasons: u64,
     pub idempotency_results: u64,
     pub request_revision_snapshots: u64,
     pub outbox_payloads: u64,
@@ -1204,6 +1205,11 @@ async fn count_request_detail_erasure(
                     AND request_id = $2
                     AND proposal_version = $3
                     AND reason IS NOT NULL),
+                (SELECT count(*) FROM registry_internal.registry_request_applications
+                  WHERE request_entity_id = $1
+                    AND request_id = $2
+                    AND proposal_version = $3
+                    AND reason IS NOT NULL),
                 (SELECT count(*) FROM registry_internal.registry_request_attachments
                   WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
                     AND erased_at IS NULL)",
@@ -1222,8 +1228,9 @@ async fn count_request_detail_erasure(
         request_revision_snapshots: count_to_u64(row.get(3))?,
         outbox_payloads: count_to_u64(row.get(4))?,
         decision_reasons: count_to_u64(row.get(5))?,
+        application_reasons: count_to_u64(row.get(6))?,
         current_intake_rows: u64::from(erase_current_intake),
-        attachment_references: count_to_u64(row.get(6))?,
+        attachment_references: count_to_u64(row.get(7))?,
     })
 }
 
@@ -1290,6 +1297,22 @@ async fn erase_request_detail_in_transaction(
     let decision_reasons = transaction
         .execute(
             "UPDATE registry_internal.registry_request_decisions
+                SET reason = NULL
+              WHERE request_entity_id = $1
+                AND request_id = $2
+                AND proposal_version = $3
+                AND reason IS NOT NULL",
+            &[
+                &scope.request_entity_id,
+                &scope.request_id,
+                &scope.proposal_version,
+            ],
+        )
+        .await
+        .map_err(map_retention_error)?;
+    let application_reasons = transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_applications
                 SET reason = NULL
               WHERE request_entity_id = $1
                 AND request_id = $2
@@ -1399,6 +1422,7 @@ async fn erase_request_detail_in_transaction(
         proposal_snapshots,
         target_snapshots,
         decision_reasons,
+        application_reasons,
         idempotency_results,
         request_revision_snapshots,
         outbox_payloads,
@@ -1448,6 +1472,7 @@ async fn append_retention_audit(
         .proposal_snapshots
         .checked_add(erasure.target_snapshots)
         .and_then(|count| count.checked_add(erasure.decision_reasons))
+        .and_then(|count| count.checked_add(erasure.application_reasons))
         .and_then(|count| count.checked_add(erasure.idempotency_results))
         .and_then(|count| count.checked_add(erasure.request_revision_snapshots))
         .and_then(|count| count.checked_add(erasure.outbox_payloads))

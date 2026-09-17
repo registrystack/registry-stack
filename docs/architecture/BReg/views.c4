@@ -1,0 +1,241 @@
+views {
+  view index {
+    title 'BReg / 01. Application architecture'
+    description '''
+      An application calls BReg under a declared access profile and obtains a token when
+      the profile requires authentication. Remote key resolution is optional; operators
+      can configure static JWKS instead.
+      The breg runtime serves one active package against PostgreSQL. The bregctl tool
+      prepares and activates packages using separate migration authority.
+      Open the runtime view for logical components and the interoperability views for
+      optional integrations. Arrows indicate use or data movement, not deployment order.
+    '''
+    include application, issuer, breg, postgres, operator, tooling, project, package
+    global predicate breg_issuer
+    global predicate breg_storage
+  }
+
+  view runtime of breg {
+    title 'BReg / 02. Runtime responsibilities'
+    description '''
+      All components inside breg run in one process. The configured HTTP API checks
+      caller authority before dispatching reads or mutations. Reads and writes use
+      the compiled model and PostgreSQL; audit gates account for response release
+      and mutation outcomes. A task profile may read under its presented grant without
+      a Casework status call. Its write path requires fresh external status before a
+      new governed mutation, later approval or application, and each database retry.
+      Event projection runs inside the write transaction; webhook delivery runs after
+      commit. These are logical responsibilities, not a proposed microservice decomposition.
+    '''
+    include breg.*, postgres, application, issuer, casework.api, receiver
+    exclude breg.webhooks -> casework.api
+    exclude issuer -> casework.api
+    exclude application -> casework.api
+    exclude application -> issuer
+  }
+
+  view events {
+    title 'BReg / 03. Events and delivery boundaries'
+    description '''
+      A package declares created, patched, tombstoned or request_lifecycle events.
+      Event projection and delivery intent commit with the owning record/request,
+      history and audit in one PostgreSQL transaction. A nonmatching event condition
+      permits the write without producing that event; capture failure rolls it back.
+      The in-process worker claims committed deliveries and sends authenticated
+      CloudEvents to the operator-bound receiver. An event has at most one webhook
+      destination, and production requires one; an external receiver may provide
+      fanout. Delivery is at least once with no global or per-record ordering. Consumers
+      use the record revision to detect stale or missing transitions.
+    '''
+    include application, breg.api, breg.writes, breg.events, breg.audit, postgres, breg.webhooks, receiver
+    include bindings .artifactFlow breg.webhooks
+  }
+
+  dynamic view event_delivery {
+    title 'BReg / 04. A write reaches its receiver'
+    description '''
+      An illustrative successful mutation whose declared event condition matches.
+      Record/request state, history, audit, idempotency result and event intent commit
+      together. The webhook worker can claim the event only after commit. HTTP response
+      release and webhook delivery then proceed independently, with no ordering between
+      them. A receiver may apply an effect before BReg finalizes the attempt, so redelivery
+      is possible and the receiver must deduplicate.
+    '''
+    application -> breg.api 'Sends an authenticated mutation'
+    breg.api -> breg.access 'Checks the caller and operation authority'
+    breg.api -> breg.writes 'Dispatches the configured operation'
+    breg.writes -> breg.audit 'Commits a durable attempt audit before protected I/O'
+    breg.audit -> postgres 'Commits the attempt in a separate transaction'
+    breg.writes -> postgres 'Begins transaction and changes governed state'
+    breg.writes -> breg.events 'Evaluates the declared trigger and projection'
+    breg.events -> postgres 'Inserts canonical event and pending delivery in the same transaction'
+    breg.writes -> breg.audit 'Appends the terminal mutation record in the write transaction'
+    breg.audit -> postgres 'Extends the audit chain before release'
+    breg.writes -> postgres 'Commits state, history, terminal audit, idempotency result and event intent'
+    parallel 'Independent after-commit paths' {
+      breg.api -> application 'Returns the committed response after terminal audit succeeds'
+      try 'Webhook delivery branch' {
+        breg.webhooks -> postgres 'Commits delivery lease and attempt audit before egress'
+        breg.webhooks -> receiver 'Sends signed CloudEvents 1.0 request'
+        receiver -> receiver 'Checks signature and freshness; deduplicates before effects'
+        receiver -> breg.webhooks 'Acknowledges with 2xx'
+        breg.webhooks -> postgres 'Atomically commits delivered state, audit and payload erasure'
+      }
+    }
+  }
+
+  dynamic view event_recovery {
+    title 'BReg / 05. Retry, dead letter and operator replay'
+    description '''
+      An illustrative delivery that exhausts its allowed attempts, followed by an
+      operator-requested replay while its payload is retained. The bregctl CLI embeds
+      the BReg-owned operator service and accesses PostgreSQL directly, through a
+      verified operator boundary. Automatic retries preserve
+      the event ID, body and delivery idempotency key. Operator replay requires the
+      expected generation and a matching destination binding. Replay keeps the event
+      and body but increments generation and changes the delivery idempotency key.
+      Expired or erased payloads cannot be replayed. No delivery ordering is promised;
+      consumers use the record revision to detect stale or missing transitions.
+    '''
+    breg.webhooks -> postgres 'Commits delivery lease and attempt audit before egress'
+    breg.webhooks -> receiver 'Sends event with captured policy and delivery key'
+    receiver -> breg.webhooks 'Returns non-2xx, or no acknowledgement arrives'
+    breg.webhooks -> postgres 'Records failure and schedules a bounded retry'
+    breg.webhooks -> receiver 'Retries with the same event, body and delivery key'
+    receiver -> breg.webhooks 'Fails again through the allowed attempt limit'
+    breg.webhooks -> postgres 'Atomically commits audit and dead-letter state'
+    operator -> tooling 'Requests replay for exact event, delivery and generation'
+    tooling -> postgres 'Invokes BReg operator service to audit and queue the next generation' {
+      notes 'Checks terminal dead-letter state, retained payload, compiled replay permission, matching destination binding and exact expected generation. This is local operator database access, not a public HTTP administration route.'
+    }
+    breg.webhooks -> postgres 'Claims the replayed pending delivery'
+    breg.webhooks -> receiver 'Sends the same event with a new delivery idempotency key'
+    receiver -> breg.webhooks 'Acknowledges replay with 2xx'
+    breg.webhooks -> postgres 'Atomically commits delivered state, audit and payload erasure'
+  }
+
+  view interoperability {
+    title 'BReg / 06. Runtime interoperability'
+    description '''
+      Each edge names an implemented runtime interface. Casework, Evidence, QGIS and
+      webhook receivers are optional and can be deployed independently. BReg retains
+      record visibility and write authority. Evidence owns assertion authorization
+      and signing; Casework owns human coordination. Its event receiver rereads BReg
+      because a notification is not current source state or an action grant.
+      BReg consuming Evidence is a trial integration. The two Evidence directions use
+      separate contracts and credentials. A deployment need not enable both.
+      Application authentication depends on the selected access profile. BReg contacts
+      the issuer for remote key resolution when configured. A task-grant deployment
+      also acquires a separately scoped service token before checking fresh Casework
+      status; static JWKS comes from configuration.
+    '''
+    include application, taskAgent, issuer, breg, postgres, casework, evidence, qgis, receiver
+    include
+      breg -> casework with {
+        title 'Sends event hints and checks task status'
+      }
+    global predicate breg_issuer
+    global predicate evidence_application
+    global predicate breg_storage
+    exclude application -> casework
+    exclude issuer -> casework
+    exclude casework -> issuer
+    exclude evidence -> issuer
+  }
+
+  view authoring_interoperability {
+    title 'BReg / 07. Authoring and contract interoperability'
+    description '''
+      Build-time dependencies and artifacts are separate from runtime service calls.
+      bregctl compiles an ordinary Registry project and generates its API and event
+      contracts. PublicSchema derivation, Manifest projection and Evidence source
+      export are optional. Registry Manifest is a compiler library. Production package
+      signing happens outside bregctl, through an independently held signing authority.
+      Exported descriptions and schemas confer no runtime privileges.
+    '''
+    include project, tooling, publicschema, contracts, manifest, catalog, bregEvidenceExport, signer, package
+  }
+
+  dynamic view breg_task_write {
+    title 'BReg / 08. A task-bound governed write'
+    description '''
+      This optional path applies only to access profiles that declare a task grant.
+      The exchanged token identifies the agent, requester client, BReg resource,
+      purpose, source issuer, deadline, approved subjects and complete bounds. BReg
+      requires the grant bounds to equal the compiled profile permissions; wider,
+      narrower and partial bounds are refused. The task profile permits governed
+      change-request work and reads, never direct target-record mutation. A new submission
+      checks the presented grant. Later approval or application checks the retained original
+      grant. All must complete before the original grant deadline, at most 900 seconds
+      after Casework task approval. After acquiring the applicable record or proposal lock,
+      each new mutation, later approval or application, and database retry obtains fresh
+      Casework status. Casework rereads BReg through its service reader for every status
+      check; a source failure makes the write unavailable. Revoked or expired authority
+      is refused. BReg and Casework do not share a distributed transaction. Submission
+      retains the original grant separately from later reviewers and binds it into write
+      idempotency and minimized audit.
+      An exact completed receipt can be recovered under current disclosure without
+      another status check; a different grant conflicts and cannot reapply the change.
+    '''
+    taskAgent -> breg.api 'Submits task-bound change-request work with an exchanged token'
+    breg.api -> breg.access 'Verifies token identity, actor kind, requester client and profile permissions'
+    breg.access -> breg.task_grants 'Binds profile source issuer, permitted client, required purpose, BReg audience, subjects and equal bounds'
+    breg.api -> breg.writes 'Dispatches the governed change-request submission'
+    breg.writes -> breg.audit 'Commits attempt audit in a separate transaction before protected I/O'
+    breg.audit -> postgres 'Persists the minimized attempt'
+    breg.writes -> postgres 'Locks current request state and checks idempotency or completed recovery'
+    alt {
+      when 'Exact completed receipt' {
+        breg.writes -> postgres 'Reauthorizes current disclosure and loads the existing receipt without status or mutation'
+        breg.api -> taskAgent 'Returns the original completed receipt'
+      }
+      else 'New submission' {
+        breg.writes -> breg.task_grants 'Checks the presented grant deadline and fresh status for this new submission'
+        breg.task_grants -> issuer 'Obtains the scoped status-service token when needed'
+        breg.task_grants -> casework.api 'Requests current status for the complete presented grant'
+        casework.api -> casework.task_grants 'Checks the registered service, BReg resource and retained task binding'
+        casework.task_grants -> casework.breg_adapter 'Requests current proposal identity and subject context'
+        casework.breg_adapter -> breg.api 'Rereads through the service reader; source failure fails the status check'
+        casework.api -> breg.task_grants 'Returns active status after the source reread'
+        breg.writes -> breg.audit 'Appends the terminal outcome within the proposal transaction'
+        breg.audit -> postgres 'Extends the audit chain'
+        breg.writes -> postgres 'Commits proposal state, original authority, idempotency and terminal audit atomically'
+        breg.api -> taskAgent 'Returns the committed proposal and receipt'
+      }
+    }
+    application -> breg.api 'Later submits human approval or application before the original deadline'
+    breg.api -> breg.writes 'Dispatches review of the frozen proposal'
+    breg.writes -> breg.audit 'Commits a new pre-I/O attempt audit for the review action'
+    breg.audit -> postgres 'Persists the minimized review attempt in a separate transaction'
+    breg.writes -> postgres 'Locks the proposal and loads its retained original grant'
+    breg.writes -> breg.task_grants 'Rechecks the retained grant deadline and fresh Casework status; database retries repeat this check'
+    breg.task_grants -> casework.api 'Checks the complete retained grant; Casework performs the same source reread'
+    casework.api -> breg.task_grants 'Returns active status after the source reread'
+    breg.writes -> postgres 'Commits the reviewed lifecycle transition and terminal audit'
+    breg.api -> application 'Returns the approved or applied result'
+  }
+
+  dynamic view breg_read {
+    title 'BReg / 09. A task-bound governed read'
+    description '''
+      A task profile may use read operations in its exact compiled permission bounds.
+      BReg verifies the presented token and binds the grant, including its subjects and
+      the earlier token or grant expiry. It does not call Casework status for a read, so
+      re-exchanged access tokens may continue to read after revocation until the original
+      grant deadline, at most 900 seconds after Casework task approval. The normal
+      authenticated-read gates still apply: a durable attempt audit commits before
+      protected record I/O, then a terminal audit commits after materialization and before
+      any response bytes are released. Audit failure makes the read unavailable.
+    '''
+    taskAgent -> breg.api 'Requests a task-bound read with an exchanged token'
+    breg.api -> breg.access 'Verifies token identity, actor kind, configured audience and profile permissions'
+    breg.access -> breg.task_grants 'Binds source issuer, client, purpose, subjects and equal compiled bounds; checks expiry locally'
+    breg.api -> breg.reads 'Dispatches the authorized read without a Casework status call'
+    breg.reads -> breg.audit 'Records the attempt before protected record I/O'
+    breg.audit -> postgres 'Commits the minimized attempt in a separate transaction'
+    breg.reads -> postgres 'Reads only permitted records, fields and history under RLS'
+    breg.reads -> breg.audit 'Records returned, empty, unresolved or refused terminal outcome'
+    breg.audit -> postgres 'Commits the terminal audit before response release'
+    breg.api -> taskAgent 'Returns the Registry Record response after the audit gate succeeds'
+  }
+}

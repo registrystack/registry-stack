@@ -1,0 +1,254 @@
+views {
+  view casework_architecture {
+    title 'Casework / 01. Application architecture'
+    description '''
+      Registry Casework has two standalone deployment profiles. Hosted decisions remain
+      entirely inside Casework. Source-backed work adds the BReg adapter while BReg keeps
+      current visibility and every registry mutation. One project may enable either surface
+      or both. A source-backed project may also enable bounded institutional task grants;
+      Casework signs short-lived task assertions while the external identity provider issues access
+      tokens and each resource retains authorization. Human users normally work through a
+      separately deployed application host; a Requester service calls the hosted API directly.
+      PostgreSQL owns coordination state and durable intent, while the external keyed journal
+      retains published audit records.
+    '''
+    include casework_staff, casework_app, casework_client, casework_requester, taskAgent, issuer, casework, casework_postgres, casework_audit_journal, breg
+    include
+      breg -> casework with {
+        title 'Sends event hints and checks task status'
+        description 'Each status check causes Casework to reread BReg through its bounded service reader; source failure fails the check.'
+      }
+    global predicate casework_storage
+    exclude breg -> issuer
+  }
+
+  view casework_runtime of casework {
+    title 'Casework / 02. Runtime roles and responsibilities'
+    description '''
+      All nested components run in one process. Ordinary authentication selects one Casework
+      profile; Staff, Supervisor and Administrator also require the configured human-identity claim.
+      Current directory membership is enforced by the coordination, hosted and task-grant
+      components for their operations. It never supplies source authority. Optional task-grant
+      machine routes use separate actor-kind, client, audience and
+      scope checks without selecting a human profile. Source-backed item assembly performs a
+      caller-scoped source read under the explicitly selected source profile. The BReg adapter is
+      the implemented instance of the source-neutral contract. Its private_key_jwt service reader
+      has an exact resource and scopes independent of human callers. Routing values exist only
+      while an observation is evaluated. Stored routing explains the matched authored rule without
+      retaining predicate values. Clock calculations pin policy and holiday inputs; workers reread
+      the source and fence occurrence, revision and calculation generations before recording an
+      effect.
+    '''
+    include casework.*, casework_postgres, casework_audit_journal, breg, taskAgent
+    include
+      breg -> casework.api with {
+        title 'Sends event hints and checks task status'
+        description 'Each status check causes Casework to reread BReg through its bounded service reader; source failure fails the check.'
+      }
+  }
+
+  dynamic view casework_task_approval {
+    #optional #taskAuthority
+    title 'Casework / 03. A human approves bounded institutional work'
+    description '''
+      This optional path applies only to source-backed items and stops after the immutable grant
+      is recorded; assertion exchange and resource use are separate. Preview and approval require
+      an eligible current human holder, one selected Casework profile, one selected source profile
+      and current source visibility. The template fixes the task bounds; Casework derives proposal
+      identity and subject values from the source. The officer reviews the fixed agent, client,
+      resource, scopes, purpose, bounds, subjects and lifetime, plus requester tags and relying-party
+      audience for Evidence tasks.
+      The caller supplies only an exact template id and version. Missing task authority,
+      stale item revision, changed binding, undisclosed facts, ineligible team or profile, and
+      retired policy refuse approval. An exact idempotent retry, while the item revision, holding
+      and source context remain unchanged, returns the original grant without extending its deadline.
+      The template lifetime is capped at 900 seconds. Revocation is available to a currently eligible
+      officer without requiring item ownership or another source read. Loss of holder eligibility,
+      including release or reassignment; template retirement; source denial, concealment or moved
+      binding; an ineligible Draft or terminal Rejected, Applied or Canceled source request; and a
+      changed proposal or subject permanently invalidate an unexpired grant. Expiry makes the grant
+      inactive. Source-item erasure makes it unavailable without recording invalidation. Temporary
+      source failure refuses the current check without permanent invalidation.
+    '''
+    casework_staff -> casework_app 'Reviews task templates for a currently held source item'
+    casework_app -> casework.api 'Requests eligible templates with both selected profiles'
+    casework.api -> casework.access 'Authenticates the selected human profile and human-identity claim'
+    casework.api -> casework.task_grants 'Checks current holding and directory eligibility, then requests fixed template bounds for source-derived proposal identity and subjects'
+    casework.task_grants -> casework.breg_adapter 'Reads the exact proposal and governed subject fields'
+    casework.breg_adapter -> breg.api 'Reads under the human bearer and selected BReg profile'
+    breg.api -> casework.breg_adapter 'Returns current proposal identity and disclosed subject facts'
+    casework.task_grants -> casework.api 'Returns only eligible immutable template previews'
+    casework.api -> casework_app 'Presents fixed task bounds and any Evidence requester tags and relying-party audience'
+    casework_staff -> casework_app 'Explicitly approves one template version'
+    casework_app -> casework.api 'Sends template id and version with If-Match and idempotency key'
+    casework.api -> casework.access 'Reauthenticates the selected human profile and human-identity claim'
+    casework.api -> casework.task_grants 'Rechecks current holding, directory eligibility, revision and template'
+    casework.task_grants -> casework.breg_adapter 'Rereads the current proposal and subject context'
+    casework.breg_adapter -> breg.api 'Rereads under the human bearer and selected BReg profile'
+    breg.api -> casework.breg_adapter 'Returns the current proposal identity and disclosed subject facts'
+    casework.task_grants -> casework_postgres 'Atomically records a new grant or loads the original grant for an unchanged idempotent retry'
+    casework.task_grants -> casework.api 'Returns the immutable grant without extending its deadline'
+    casework.api -> casework_app 'Returns the grant id and original deadline'
+  }
+
+  dynamic view casework_source_event {
+    title 'Casework / 04. A source event becomes current work'
+    description '''
+      A BReg request-lifecycle event is a signed invalidation and ordered revision hint.
+      The adapter verifies its bounded CloudEvents envelope, signature, source, type and body,
+      then discards source values and reasons. PostgreSQL deduplicates the hint and records
+      synchronization intent. A worker later reads BReg with the configured service reader.
+      The authoritative response, not the event, determines the occurrence, source binding,
+      queue and clocks. Commit rechecks source generation and monotonic physical revision;
+      at the same revision a changed strong representation ETag refreshes the occurrence.
+      Periodic discovery and readback use the same path to repair missed events.
+    '''
+    breg.webhooks -> casework.api 'Sends a signed lifecycle hint after BReg commit'
+    casework.api -> casework.coordination 'Constructs a bounded EventRequest and delegates intake'
+    casework.coordination -> casework.breg_adapter 'Calls verify_transition through the injected SourceAdapter'
+    casework.breg_adapter -> casework.coordination 'Returns a verified value-free subject, revision and dedupe hint'
+    casework.coordination -> casework_postgres 'Records deduplicated synchronization intent'
+    casework.workers -> casework_postgres 'Claims a bounded pending subject lease'
+    casework.workers -> casework.breg_adapter 'Calls read_authoritative through the injected SourceAdapter'
+    casework.breg_adapter -> breg.api 'Reads current work with the bounded service-reader profile'
+    breg.api -> casework.breg_adapter 'Returns current request state, binding and configured projection'
+    casework.workers -> casework_postgres 'Commits the observation, routing result and clock state under generation and revision fences'
+  }
+
+  dynamic view casework_source_action {
+    title 'Casework / 05. A human action reaches its source'
+    description '''
+      The item must be held by this Staff actor at the expected Casework revision. Casework
+      first rereads BReg under the human bearer and explicit source profile, so current source
+      visibility and advertised operations control the action. The adapter compares the exact
+      displayed source revision, proposal version, integrity and binding generation, then
+      prepares an inert exact-action capsule without writing. Casework durably reserves the
+      actor, both profiles, request hash, idempotency key, displayed binding and recovery
+      evidence before the source POST. Recovery evidence contains no bearer or source content.
+      A successful receipt leaves the item synchronizing until authoritative readback confirms
+      current source state. Approval and application remain separate source operations. A reason
+      unsupported by the selected approve or apply operation is refused before reservation. After
+      reservation, only a validated problem from the actual initial POST can definitively close the
+      attempt as a rejected request, missing record, unauthorized reviewer or no-longer-offered
+      action. Transport failures, malformed problems and other inconclusive outcomes remain uncertain.
+    '''
+    casework_staff -> casework_app 'Confirms an advertised action for the claimed item'
+    casework_app -> casework.api 'Sends both profiles, If-Match, displayed binding and idempotency key'
+    casework.api -> casework.access 'Authenticates the selected human profile and human-identity claim'
+    casework.api -> casework.coordination 'Checks current directory membership, claim ownership, item revision and actor-private draft'
+    casework.coordination -> casework.breg_adapter 'Requests caller view and prepares the exact current action'
+    casework.breg_adapter -> breg.api 'Rereads under the human bearer and selected BReg profile'
+    breg.api -> casework.breg_adapter 'Returns current binding and source-advertised operations'
+    casework.coordination -> casework_postgres 'Atomically reserves pending attempt, history, audit intent and synchronizing state'
+    casework.coordination -> casework.breg_adapter 'Executes only the durably saved exact-action capsule'
+    casework.breg_adapter -> breg.api 'Posts the promoted lifecycle action with its original source idempotency key'
+    breg.api -> casework.breg_adapter 'Returns a validated source receipt'
+    casework.coordination -> casework_postgres 'Commits completed attempt, receipt, history, audit intent and readback request'
+  }
+
+  dynamic view casework_attempt_recovery {
+    title 'Casework / 06. Ambiguity and exact-attempt recovery'
+    description '''
+      Once source execution may have started, loss of a validated response is ambiguous.
+      Casework records the attempt as uncertain and never invents a replacement action. Only
+      the same actor and Casework profile can recover the exact capsule, using the same source
+      profile and idempotency key under the same actor\'s current human bearer after current source
+      visibility succeeds.
+      A recovery response that is not a valid receipt remains uncertain, including a later
+      refusal that cannot prove the original POST failed. Recovery leases fence concurrent
+      callers. Even a validated refusal during recovery cannot prove that the initial POST did
+      not commit. A valid receipt completes the attempt, queues authoritative readback and exits
+      this sequence. The steps below follow the still-uncertain branch. If the source can no
+      longer reveal the outcome, a Casework operator may preview and apply a settlement only
+      after the execution lease expires and the source owner has confirmed applied or
+      not-applied. That local settlement makes no BReg call and records its reason and decider
+      in the same transaction as the state change.
+    '''
+    casework.breg_adapter -> casework.coordination 'Returns timeout, transport failure or invalid outcome after execution may have begun'
+    casework.coordination -> casework_postgres 'Commits uncertain attempt, synchronizing item, history and audit intent'
+    casework.api -> casework.coordination 'Same actor requests recovery by attempt or original key'
+    casework.coordination -> casework_postgres 'Loads the actor-bound capsule and acquires an expired execution lease'
+    casework.coordination -> casework.breg_adapter 'Requests recovery of the exact prepared action'
+    casework.breg_adapter -> breg.api 'Replays through the maintained BReg client with the original idempotency key'
+    breg.api -> casework.breg_adapter 'Does not return a conclusive valid receipt'
+    casework.breg_adapter -> casework.coordination 'Reports the exact attempt outcome as still uncertain'
+    casework.coordination -> casework_postgres 'Releases the recovery lease while retaining the uncertain attempt'
+    casework_operator -> casework_cli 'After source-owner confirmation, previews one expired uncertain attempt settlement'
+    casework_cli -> casework_postgres 'Checks exact attempt, lease and item state without writing'
+    casework_operator -> casework_cli 'Applies the reviewed applied or not-applied settlement'
+    casework_cli -> casework_postgres 'Atomically fences the old executor and records state, history and audit intent'
+  }
+
+  dynamic view casework_hosted_decision {
+    title 'Casework / 07. A hosted decision returns a bounded result'
+    description '''
+      This path starts no BReg service. A Requester can create only a kind declared for its
+      selected profile. The body supplies an opaque correlation reference and schema-validated
+      display data; it cannot choose a person, team, outcomes, callback or external fetch.
+      Acceptance pins the kind version, policy digest, display, queue and outcome vocabulary.
+      A current human team member claims and decides under that pinned policy. The terminal
+      event and protected raw actor accountability commit together, but the Requester feed
+      receives only the declared outcome and stable opaque per-person actor reference. A current
+      Supervisor for the queue can resolve one event through a separate audited route until accountability
+      expiry. Requesters can add and page bounded notes while an item is active, or cancel their
+      own item with a reason; cancellation produces a terminal event with no actor reference.
+      Terminal payload and accountability retention are independent; idempotency
+      tombstones preserve only request hashes and hashed bindings after payload expiry.
+    '''
+    casework_requester -> casework.api 'Creates a declared hosted kind with an idempotency key'
+    casework.api -> casework.access 'Selects the Requester profile and issuer-qualified owner'
+    casework.api -> casework.hosted 'Validates bounded display data against the declared kind'
+    casework.hosted -> casework_postgres 'Commits item, pinned policy snapshot, history, audit intent and replay response'
+    casework_staff -> casework_app 'Claims the visible hosted item and records a declared outcome'
+    casework_app -> casework.api 'Sends revision-fenced claim and decision requests'
+    casework.api -> casework.hosted 'Rechecks current team membership and pinned deciding profile'
+    casework.hosted -> casework_postgres 'Atomically commits terminal event, stable opaque actor ref, protected accountability and audit intent'
+    casework_requester -> casework.api 'Pages its own terminal feed'
+    casework.api -> casework_requester 'Returns outcome and stable opaque per-person actor ref without raw human identity or reason'
+    casework_supervisor -> casework_app 'Requests accountability for one retained terminal event'
+    casework_app -> casework.api 'Calls the separate accountability route'
+    casework.api -> casework.hosted 'Requests accountability for one terminal event'
+    casework.hosted -> casework_postgres 'Checks Supervisor authority for a team serving the queue and records the audited read'
+  }
+
+  view casework_interoperability {
+    title 'Casework / 08. Runtime interoperability'
+    description '''
+      The BReg adapter is optional and is the only implemented source protocol. Its service
+      reader uses its own private_key_jwt client, exact reader profile, resource and scopes to
+      discover, refresh and recheck bounded coordination facts; it cannot review or apply.
+      Human caller reads and Casework-coordinated actions forward the ephemeral human bearer to
+      BReg under an explicit source profile; Casework never stores that credential. Optional
+      task grants create a parallel institutional-agent path outside the adapter: Casework signs
+      a bounded assertion but does not issue the exchanged OAuth token or lend human authority.
+      BReg remains the source of current record visibility, advertised operations and mutations.
+      Signed webhook events accelerate synchronization but grant no visibility or action. Hosted
+      decisions and the directory remain usable in a source-free deployment. Both runtimes keep
+      separate data, packages, database roles, audit records and authorization decisions.
+    '''
+    include casework_app, casework_client, taskAgent, issuer, casework.api, casework.access, casework.coordination, casework.task_grants, casework.breg_adapter, casework_postgres, breg.api, breg.webhooks, breg.task_grants
+  }
+
+  view casework_authoring_operations {
+    title 'Casework / 09. Authoring and operator artifacts'
+    description '''
+      caseworkctl checks one source-neutral project, including any optional immutable task
+      templates, and packages only its policy plus exact imported source descriptions. For the
+      implemented BReg adapter, source add invokes the same-version public bregctl only to check
+      the registry project and explain change requests. caseworkctl previews exact additions,
+      checks a staged copy, then atomically writes the authored BReg event, reader profile and
+      development client files itself only when apply is requested. That authoring composition
+      activates no package and provisions no authority. Production selection is an operator
+      action: install the reviewed Casework package, supply runtime bindings and secrets, add
+      task authority only when those templates are enabled, apply migrations with caseworkctl db
+      migrate or the casework binary\'s migrate entry point, then start or roll out the runtime
+      with its serve entry point. The caseworkctl dev command can run a retained local service over
+      a BReg development session with token and task-exchange helpers. Doctor checks configuration,
+      database, source, issuer and directory readiness, but source-reader readiness cannot attest that
+      BReg webhook delivery is wired end to end. Retention erasure and uncertain-attempt
+      settlement are separate preview-then-apply operator operations against Casework data.
+    '''
+    include casework_operator, casework_project, casework_cli, tooling, project, casework_package, casework_runtime_config, casework, casework_postgres
+    global predicate casework_storage
+  }
+}

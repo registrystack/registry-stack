@@ -360,9 +360,15 @@ async fn annotate_request_records(
                 "applicationId": application.application_id().as_str(),
                 "proposalVersion": application.version().get(),
                 "appliedAt": application.applied_at().as_str(),
+                "reasonPresent": application.reason_present(),
             });
             if may_disclose_effect_digests(entity, request) {
                 application_metadata["effectDigest"] = json!(application.effect_digest().as_str());
+            }
+            if may_disclose_decision_reasons(entity, request) {
+                if let Some(reason) = application.reason() {
+                    application_metadata["reason"] = json!(reason);
+                }
             }
             metadata.insert("application".to_owned(), application_metadata);
         }
@@ -840,6 +846,9 @@ fn erased_terminal_request_metadata(
                 json!({
                     "applicationId": application_id,
                     "proposalVersion": header.proposal_version,
+                    // Erasure removes the applier's explanation and keeps its
+                    // presence, as it does for a decision.
+                    "reasonPresent": header.application_reason_present,
                 }),
             );
         }
@@ -2628,6 +2637,7 @@ mod tests {
                 workflow_revision: 9,
                 current_proposal_erased: true,
                 applier_reference: Some("applier-ref".to_owned()),
+                application_reason_present: false,
             },
             Some(RetainedHistoryMetadata {
                 value: json!({
@@ -2660,6 +2670,45 @@ mod tests {
     }
 
     #[test]
+    fn erased_terminal_metadata_keeps_application_reason_presence_without_text() {
+        let value = erased_terminal_request_metadata(
+            &crate::request_store::RequestWorkflowHeader {
+                owner_reference: "owner-ref".to_owned(),
+                state: "applied".to_owned(),
+                proposal_version: 2,
+                workflow_revision: 9,
+                current_proposal_erased: true,
+                applier_reference: Some("applier-ref".to_owned()),
+                application_reason_present: true,
+            },
+            Some(RetainedHistoryMetadata {
+                value: json!({
+                    "proposals": [{
+                        "proposalVersion": 2,
+                        "detailErased": true,
+                        "resultLinkCount": 0,
+                        "resultLinks": []
+                    }],
+                    "nextAfterProposalVersion": Value::Null,
+                }),
+                current_effect_digest: Some("sha256:effect".to_owned()),
+                current_application_id: Some("00000000-0000-4000-8000-0000000000aa".to_owned()),
+            }),
+            true,
+            true,
+            json!([]),
+        );
+        assert_eq!(
+            value["application"],
+            json!({
+                "applicationId": "00000000-0000-4000-8000-0000000000aa",
+                "proposalVersion": 2,
+                "reasonPresent": true,
+            })
+        );
+    }
+
+    #[test]
     fn erased_terminal_metadata_withholds_effect_digest_for_anonymous_claims() {
         let value = erased_terminal_request_metadata(
             &crate::request_store::RequestWorkflowHeader {
@@ -2669,6 +2718,7 @@ mod tests {
                 workflow_revision: 9,
                 current_proposal_erased: true,
                 applier_reference: Some("applier-ref".to_owned()),
+                application_reason_present: false,
             },
             Some(RetainedHistoryMetadata {
                 value: json!({

@@ -444,10 +444,10 @@ record reference plus explicitly configured routing and display reference
 fields, requests no reviewer reason fields, and carries no decision or
 application operation.
 Human review and application calls use the person's token and explicitly
-selected BReg profile. BReg `reject` and `request_correction` actions accept a
-bounded reason. `approve` and `apply` do not; Casework refuses a reason on those
-actions as `request.reason-unsupported` before preparing a durable source
-attempt.
+selected BReg profile. Every promoted decision action and the apply action
+accept a bounded reason, and the registry records the remark beside the action
+it executes. A source that does not accept a reason on an action is refused as
+`request.reason-unsupported` before preparing a durable source attempt.
 
 Synchronization orders observations by the physical BReg record revision. At
 the same revision, a changed HTTP representation ETag refreshes the existing
