@@ -3202,6 +3202,119 @@ async fn a_grant_that_lapses_before_the_commit_never_books() {
     );
 }
 
+/// Every mutation must roll back its tentative writes when authorization
+/// expires after its admission-time check but before the final commit check.
+#[tokio::test]
+async fn every_mutation_rechecks_expiry_after_its_writes() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    for operation in [
+        "hold",
+        "create",
+        "confirm",
+        "release",
+        "reschedule",
+        "cancel",
+    ] {
+        let fx = fixture().await;
+        let slot = first_slot(&fx, OFFERING, 480, 620).await;
+        let (method, uri, body) = match operation {
+            "hold" => (
+                "POST",
+                "/v1/holds".to_owned(),
+                Some(admission(&fx, OFFERING, slot)),
+            ),
+            "create" => (
+                "POST",
+                "/v1/appointments".to_owned(),
+                Some(json!({"hold": null, "admission": admission(&fx, OFFERING, slot)})),
+            ),
+            "confirm" | "release" => {
+                let (status, hold) = fx
+                    .post(
+                        "/v1/holds",
+                        &fx.agent,
+                        "setup",
+                        admission(&fx, OFFERING, slot),
+                    )
+                    .await;
+                assert_eq!(status, StatusCode::CREATED, "{hold}");
+                let id = hold["holdId"].as_str().expect("a hold identifier");
+                if operation == "confirm" {
+                    (
+                        "POST",
+                        "/v1/appointments".to_owned(),
+                        Some(json!({"hold": id, "admission": null})),
+                    )
+                } else {
+                    ("DELETE", format!("/v1/holds/{id}"), None)
+                }
+            }
+            "reschedule" | "cancel" => {
+                let (id, revision) = booked(&fx, 300, 440, "setup").await;
+                if operation == "reschedule" {
+                    (
+                        "POST",
+                        format!("/v1/appointments/{id}/reschedule"),
+                        Some(json!({
+                            "observedRevision": revision,
+                            "admission": admission(&fx, OFFERING, slot),
+                        })),
+                    )
+                } else {
+                    (
+                        "POST",
+                        format!("/v1/appointments/{id}/cancel"),
+                        Some(json!({
+                            "observedRevision": revision, "reason": null,
+                        })),
+                    )
+                }
+            }
+            _ => unreachable!(),
+        };
+        // Compare all transactional business effects, not just the status.
+        // A refusal may add its own refused receipt and denied audit event.
+        let state = "SELECT jsonb_build_array( \
+            (SELECT jsonb_agg(to_jsonb(c) ORDER BY claim_id) FROM scheduling_claims c), \
+            (SELECT jsonb_agg(to_jsonb(h) ORDER BY event_id) FROM scheduling_history h), \
+            (SELECT jsonb_agg(to_jsonb(o) ORDER BY outbox_id) FROM scheduling_outbox o), \
+            (SELECT count(*) FROM scheduling_attempts WHERE status_code BETWEEN 200 AND 299))";
+        let before: Value = fx
+            .admin
+            .query_one(state, &[])
+            .await
+            .expect("snapshot before mutation")
+            .get(0);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let valid = Utc::now();
+        fx.store.pin_clock(Arc::new(move || {
+            if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                valid
+            } else {
+                valid + TimeDelta::minutes(20)
+            }
+        }));
+        let (status, problem) = fx
+            .request(method, &uri, &fx.agent, Some("expires-after-writes"), body)
+            .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{operation}: {problem}");
+        assert_eq!(problem["code"], "operation.not-authorized", "{operation}");
+        assert!(
+            calls.load(Ordering::SeqCst) >= 2,
+            "{operation} observes the final clock"
+        );
+        let after: Value = fx
+            .admin
+            .query_one(state, &[])
+            .await
+            .expect("snapshot after refusal")
+            .get(0);
+        assert_eq!(after, before, "{operation} rolls back all business writes");
+    }
+}
+
 /// A running process refuses a commitment even when the caller names the
 /// stored revision another process just published: the rules this process
 /// evaluates are not the rules that revision names, and the claim is
@@ -3232,6 +3345,41 @@ async fn a_stale_process_refuses_even_a_request_under_the_current_revision() {
         .await;
     assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
     assert_eq!(problem["code"], "policy.changed");
+}
+
+#[tokio::test]
+async fn a_stale_process_cannot_cancel_under_its_cached_cutoff() {
+    let fx = fixture().await;
+    let (id, revision) = booked(&fx, 480, 620, "before-policy-change").await;
+    fx.store
+        .apply_policy(
+            SCHEDULING_ID,
+            "policy-with-a-different-cancellation-cutoff",
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &[],
+        )
+        .await
+        .expect("publish the replacement policy");
+    let (status, problem) = fx
+        .post(
+            &format!("/v1/appointments/{id}/cancel"),
+            &fx.agent,
+            "stale-policy-cancellation",
+            json!({"observedRevision": revision, "reason": null}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
+    assert_eq!(problem["code"], "policy.changed");
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT state, revision FROM scheduling_claims WHERE claim_id=$1",
+            &[&Uuid::parse_str(&id).expect("appointment id")],
+        )
+        .await
+        .expect("read unchanged appointment");
+    assert_eq!(row.get::<_, String>(0), "active");
+    assert_eq!(row.get::<_, i64>(1), i64::try_from(revision).unwrap());
 }
 
 /// A records replacement moves the records revision under the supply
@@ -3413,6 +3561,31 @@ async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_attempt() {
         .expect("the owning outcome write runs"));
 }
 
+#[tokio::test]
+async fn an_expired_dispatch_lease_cannot_start_a_send() {
+    let fx = fixture().await;
+    let _ = booked(&fx, 90, 200, "expired-dispatch").await;
+    let due = Utc::now() + TimeDelta::days(1);
+    let rows = fx
+        .store
+        .claim_due_intents(due, 1, TimeDelta::minutes(10))
+        .await
+        .expect("claim one intent");
+    let row = rows.first().expect("a due intent");
+    for (remaining, dispatchable) in [(6, true), (5, false), (0, false), (-1, false)] {
+        let now = due + TimeDelta::minutes(10) - TimeDelta::seconds(remaining);
+        fx.store.pin_clock(Arc::new(move || now));
+        assert_eq!(
+            fx.store
+                .intent_still_dispatchable(row.outbox_id, row.attempts)
+                .await
+                .expect("check dispatch eligibility"),
+            dispatchable,
+            "remaining lease seconds: {remaining}"
+        );
+    }
+}
+
 /// Suppression wins up to the send: a reminder claimed for dispatch whose
 /// appointment is then cancelled is skipped, its row is retained as
 /// accounting, and the in-flight attempt's outcome cannot land.
@@ -3480,9 +3653,13 @@ async fn a_suppressed_reminder_is_skipped_and_keeps_its_accounting() {
         .await
         .expect("the cancellation intent is minted")
         .get(0);
+    fx.store
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .await
+        .expect("lease the cancellation before dispatch");
     assert!(
         fx.store
-            .intent_still_dispatchable(cancellation, 0)
+            .intent_still_dispatchable(cancellation, 1)
             .await
             .expect("the liveness read runs"),
         "the cancellation intent stays dispatchable"
@@ -3677,6 +3854,10 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
         "the replacement is live for dispatch"
     );
 
+    fx.store
+        .claim_due_intents(due, 100, TimeDelta::minutes(10))
+        .await
+        .expect("lease the replacement before dispatch");
     // The obsolete reminder is skipped, and the replacement is live.
     assert!(!fx
         .store
@@ -3685,7 +3866,7 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
         .expect("the liveness read runs"));
     assert!(fx
         .store
-        .intent_still_dispatchable(replacement, 0)
+        .intent_still_dispatchable(replacement, 1)
         .await
         .expect("the liveness read runs"));
 
@@ -3701,7 +3882,7 @@ async fn a_reschedule_suppresses_the_obsolete_reminder_and_mints_its_replacement
         .expect("age the replacement's revision");
     assert!(
         !fx.store
-            .intent_still_dispatchable(replacement, 0)
+            .intent_still_dispatchable(replacement, 1)
             .await
             .expect("the liveness read runs"),
         "a reminder naming an obsolete revision is not sent"
