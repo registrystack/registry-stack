@@ -27,25 +27,6 @@ pub struct LoadedDocument {
     pub schema: Option<Value>,
 }
 
-impl LoadedDocument {
-    /// Compile the document's JSON Schema (draft 2020-12) into a validator.
-    pub fn schema_validator(&self) -> Result<Option<jsonschema::JSONSchema>, RenderProblem> {
-        match &self.schema {
-            None => Ok(None),
-            Some(schema) => jsonschema::JSONSchema::options()
-                .with_draft(jsonschema::Draft::Draft202012)
-                .compile(schema)
-                .map(Some)
-                .map_err(|err| {
-                    RenderProblem::new(
-                        ProblemKind::ManifestInvalid,
-                        format!("document schema does not compile: {err}"),
-                    )
-                }),
-        }
-    }
-}
-
 /// A loaded bundle. `Bundle::load` accepts unsealed bundles (for compile and
 /// authoring); `Bundle::load_sealed` is what `serve` uses.
 #[derive(Debug, Clone)]
