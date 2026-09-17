@@ -1,0 +1,30 @@
+views {
+  view composition {
+    title 'Product composition'
+    description '''
+      An optional composition of three independently deployed products. Casework
+      coordinates source-owned BReg work while BReg retains visibility and mutation
+      authority. Signed BReg events prompt authoritative readback. Casework can also
+      host decisions without a registry source. When configured for institutional
+      tasks, Casework approves bounded agent authority and BReg checks current task
+      status before new task-bound writes and later approval or application, which
+      must finish before the original grant deadline. Ordinary BReg profiles have no
+      Casework status dependency. BReg task reads and task-bound Evidence requests check expiry
+      locally; issuer re-exchange may keep them usable until the original grant
+      deadline, at most 900 seconds after Casework approval.
+      Evidence can read a fixed authorized
+      BReg lookup and returns minimum-disclosure assertions, signed by default, under its own
+      authority. A BReg action may consume Evidence with separate credentials and
+      relying-party trust; that direction is a trial integration. These connections
+      do not share database authority or make the products depend on a combined
+      deployment. Open a runtime to inspect its internal responsibilities.
+      Open the institutional task agent for the credential and deadline overview.
+    '''
+    include breg, casework, evidence, taskAgent
+    include taskAgent with { navigateTo task_authority }
+    include
+      breg -> casework with {
+        title 'Sends event hints and checks task status'
+      }
+  }
+}

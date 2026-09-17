@@ -1,0 +1,80 @@
+specification {
+  tag optional
+  tag trial
+  tag taskAuthority
+  element actor {
+    notation 'Person'
+    style {
+      shape person
+      color muted
+    }
+  }
+  element service {
+    notation 'Independently deployed runtime'
+    style {
+      color primary
+    }
+  }
+  element component {
+    notation 'Logical responsibility inside a runtime'
+    style {
+      color primary
+    }
+  }
+  element external {
+    notation 'External system or application'
+    style {
+      color muted
+    }
+  }
+  element database {
+    notation 'Persistent storage'
+    style {
+      shape storage
+      color muted
+    }
+  }
+  element artifact {
+    notation 'Configuration, package or publication'
+    style {
+      shape document
+      color muted
+    }
+  }
+  element tool {
+    notation 'Command-line authoring or operator tool'
+    style {
+      color muted
+      shape rectangle
+      border dashed
+    }
+  }
+  element library {
+    notation 'Library executing in its consumer process'
+    style {
+      color primary
+      shape component
+    }
+  }
+  element credential {
+    #taskAuthority
+    notation 'Credential or immutable authorization record'
+    style {
+      shape document
+      color muted
+    }
+  }
+  relationship call {
+    notation 'Synchronous call or library use'
+    line solid
+  }
+  relationship event {
+    notation 'Asynchronous event delivery'
+    line dashed
+  }
+  relationship artifactFlow {
+    notation 'Artifact or credential movement'
+    line dotted
+    color muted
+  }
+}

@@ -1,0 +1,27 @@
+// Shared labels for relationships merged in structural views.
+global {
+  predicateGroup evidence_application {
+    include
+      application -> evidence with {
+        title 'Requests assertions and reads metadata'
+      }
+  }
+  predicateGroup breg_issuer {
+    include
+      breg -> issuer with {
+        title 'Resolves token keys and obtains task-status credentials'
+      }
+  }
+  predicateGroup breg_storage {
+    include
+      breg -> postgres with {
+        title 'Reads and writes with the runtime role'
+      }
+  }
+  predicateGroup casework_storage {
+    include
+      casework -> casework_postgres with {
+        title 'Persists coordination state and audit intent'
+      }
+  }
+}
