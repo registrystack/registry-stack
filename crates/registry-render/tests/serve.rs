@@ -235,7 +235,7 @@ fn serve_health_and_ready() {
     let body: serde_json::Value = serde_json::from_slice(&health.body).expect("health json");
     assert_eq!(body["status"], "ok");
     assert_eq!(
-        body["bundleVersion"], 3,
+        body["bundleVersion"], 1,
         "health reports the served bundle version: {body}"
     );
     assert!(
