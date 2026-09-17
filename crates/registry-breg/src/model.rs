@@ -544,10 +544,21 @@ pub struct CompiledActionRequirement {
     pub equals_input: Option<String>,
 }
 
+/// The compiled action-handler backend tag, owned by the handler alone. The
+/// wasm backend is expressible on the wire so a future compiler can tag WASM
+/// packages without another wire change; this compiler never produces it and
+/// the runtime refuses to execute it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledActionHandlerKind {
+    Rhai,
+    Wasm,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionHandler {
-    pub kind: CompiledChangeRequestPlannerKind,
+    pub kind: CompiledActionHandlerKind,
     pub source_module: Option<String>,
     #[serde(skip)]
     pub script_path: String,

@@ -155,6 +155,14 @@
       ],
       "type": "object"
     },
+    "ActionHandlerKindSource": {
+      "description": "The authored action-handler backend. The wasm backend is expressible so a\ndeclared WASM handler is refused by the compiler with a pinned diagnostic\ninstead of an authoring parse error; no WASM handler is admitted yet.",
+      "enum": [
+        "rhai",
+        "wasm"
+      ],
+      "type": "string"
+    },
     "ActionHandlerRefusalSource": {
       "additionalProperties": false,
       "properties": {
@@ -182,7 +190,7 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/RhaiScriptKindSource"
+          "$ref": "#/$defs/ActionHandlerKindSource"
         },
         "refusals": {
           "default": [],
@@ -980,6 +988,14 @@
       ],
       "type": "object"
     },
+    "ChangeRequestPlannerKindSource": {
+      "description": "The authored change-request planner backend. The wasm backend is\nexpressible so a declared WASM planner is refused by the compiler with a\npinned diagnostic; WASM planners stay unsupported. Retained Rust name for\nthe reviewed change-request authoring contract.",
+      "enum": [
+        "rhai",
+        "wasm"
+      ],
+      "type": "string"
+    },
     "ChangeRequestPlannerSource": {
       "additionalProperties": false,
       "properties": {
@@ -987,7 +1003,7 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/RhaiScriptKindSource"
+          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
         },
         "requestFields": {
           "default": [],
@@ -3696,12 +3712,6 @@
         "rowBoundaries"
       ],
       "type": "object"
-    },
-    "RhaiScriptKindSource": {
-      "enum": [
-        "rhai"
-      ],
-      "type": "string"
     },
     "RowBoundarySource": {
       "additionalProperties": false,

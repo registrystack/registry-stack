@@ -192,7 +192,7 @@ fn compile_handler(
     errors: &mut Vec<Diagnostic>,
 ) -> Option<(crate::model::CompiledActionHandler, CompiledEffectSet)> {
     use crate::model::{
-        CompiledActionHandler, CompiledActionHandlerWrite, CompiledChangeRequestPlannerKind,
+        CompiledActionHandler, CompiledActionHandlerKind, CompiledActionHandlerWrite,
         CompiledChangeRequestPlannerLimits, CompiledChangeRequestPlannerWrite,
         CompiledChangeRequestReferenceSources,
     };
@@ -206,6 +206,25 @@ fn compile_handler(
             format!("{path}.abi"),
             "the action handler ABI is not supported",
         ));
+    }
+    if source.kind == crate::contract::ActionHandlerKindSource::Wasm {
+        // Refuse the declared backend explicitly, before any Rhai-shaped
+        // validation could misreport the script: no WASM handler backend is
+        // admitted by this compiler, and the Evidence-enabled v2 ABI is out of
+        // scope for WASM in this release in any case.
+        let (code, message) = if source.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+            (
+                "action.handler.wasm_abi_unsupported",
+                "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
+            )
+        } else {
+            (
+                "action.handler.kind_unsupported",
+                "this compiler admits only Rhai action handlers",
+            )
+        };
+        errors.push(Diagnostic::error(code, format!("{path}.kind"), message));
+        return None;
     }
     if !crate::change_request::valid_planner_path(&source.script) {
         errors.push(Diagnostic::error(
@@ -559,7 +578,7 @@ fn compile_handler(
         .collect();
     Some((
         CompiledActionHandler {
-            kind: CompiledChangeRequestPlannerKind::Rhai,
+            kind: CompiledActionHandlerKind::Rhai,
             source_module: collected.source_module.clone(),
             script_path: source.script.clone(),
             abi: source.abi.clone(),

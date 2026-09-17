@@ -242,7 +242,7 @@ fn frozen_package_loads_and_runs_its_rhai_handler() {
         .expect("the action declares a handler");
     assert_eq!(
         handler.kind,
-        registry_breg::model::CompiledChangeRequestPlannerKind::Rhai
+        registry_breg::model::CompiledActionHandlerKind::Rhai
     );
     assert_eq!(handler.abi, registry_breg::contract::ACTION_HANDLER_ABI_V1);
     assert_eq!(handler.script_path, "scripts/register-person.rhai");
