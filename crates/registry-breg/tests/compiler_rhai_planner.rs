@@ -358,6 +358,18 @@ fn rhai_planner_authoring_refuses_closed_contract_violations() {
         "entities[id=person-name-change-request].changeRequest.planner.abi"
     );
 
+    let mut wasm_planner = base.clone();
+    wasm_planner["entities"][1]["changeRequest"]["planner"]["kind"] = json!("wasm");
+    let wasm_diagnostics = compile_diagnostics(&wasm_planner, vec![owned_asset()]);
+    let wasm = wasm_diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "change_request.planner.kind_unsupported")
+        .expect("a WASM planner kind is refused explicitly");
+    assert_eq!(
+        wasm.path,
+        "entities[id=person-name-change-request].changeRequest.planner.kind"
+    );
+
     let mut unknown_request_field = base.clone();
     unknown_request_field["entities"][1]["changeRequest"]["planner"]["requestFields"]
         .as_array_mut()
