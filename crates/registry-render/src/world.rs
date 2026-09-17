@@ -302,8 +302,15 @@ mod tests {
     fn test_world(issued: chrono::DateTime<chrono::Utc>) -> RenderWorld {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        RenderWorld::new(&root, Vec::new(), "main.typ", BTreeMap::new(), issued, "null".to_owned())
-            .unwrap()
+        RenderWorld::new(
+            &root,
+            Vec::new(),
+            "main.typ",
+            BTreeMap::new(),
+            issued,
+            "null".to_owned(),
+        )
+        .unwrap()
     }
 
     fn ymd(datetime: Option<Datetime>) -> Option<(i32, u8, u8)> {
@@ -314,7 +321,9 @@ mod tests {
     #[test]
     fn today_follows_the_issued_instant_with_and_without_offset() {
         use chrono::TimeZone;
-        let issued = chrono::Utc.with_ymd_and_hms(2026, 9, 16, 22, 30, 0).unwrap();
+        let issued = chrono::Utc
+            .with_ymd_and_hms(2026, 9, 16, 22, 30, 0)
+            .unwrap();
         let world = test_world(issued);
         // No offset: UTC of issuance.
         assert_eq!(
@@ -339,7 +348,11 @@ mod tests {
     #[test]
     fn today_with_an_absurd_offset_returns_none_without_panicking() {
         let world = test_world(chrono::Utc::now());
-        assert!(world.today(Some(Duration::construct(i64::MAX / 2, 0, 0, 0, 0))).is_none());
-        assert!(world.today(Some(Duration::construct(i64::MIN / 2, 0, 0, 0, 0))).is_none());
+        assert!(world
+            .today(Some(Duration::construct(i64::MAX / 2, 0, 0, 0, 0)))
+            .is_none());
+        assert!(world
+            .today(Some(Duration::construct(i64::MIN / 2, 0, 0, 0, 0)))
+            .is_none());
     }
 }

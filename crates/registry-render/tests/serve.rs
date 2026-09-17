@@ -239,7 +239,9 @@ fn serve_health_and_ready() {
         "health reports the served bundle version: {body}"
     );
     assert!(
-        body["rendererVersion"].as_str().is_some_and(|v| v.contains("typst")),
+        body["rendererVersion"]
+            .as_str()
+            .is_some_and(|v| v.contains("typst")),
         "health reports the renderer version plus pin: {body}"
     );
     assert_eq!(
@@ -586,15 +588,29 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
     );
     let server = start_server(&runtime);
     let bearer = format!("Bearer {API_KEY}");
-    let auth = [("Authorization", bearer.as_str()), ("Content-Type", "application/json")];
+    let auth = [
+        ("Authorization", bearer.as_str()),
+        ("Content-Type", "application/json"),
+    ];
 
     // Content drift after startup: the per-request seal check catches it.
     let labels = home.join("bundle/labels/ar.yaml");
     let mut text = std::fs::read_to_string(&labels).unwrap();
     text.push_str("extra: tampered\n");
     std::fs::write(&labels, text).unwrap();
-    let tampered = request(server.port, "POST", "/v1/render/receipt", &auth, Some(&receipt_body()));
-    assert_eq!(tampered.status, 400, "{}", String::from_utf8_lossy(&tampered.body));
+    let tampered = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &auth,
+        Some(&receipt_body()),
+    );
+    assert_eq!(
+        tampered.status,
+        400,
+        "{}",
+        String::from_utf8_lossy(&tampered.body)
+    );
     assert!(
         String::from_utf8_lossy(&tampered.body).contains("bundle-tampered"),
         "{}",
@@ -607,8 +623,19 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
     let manifest = std::fs::read_to_string(&manifest_path).unwrap();
     let stripped = manifest.split("hashes:").next().unwrap().to_owned();
     std::fs::write(&manifest_path, stripped).unwrap();
-    let unsealed = request(server.port, "POST", "/v1/render/receipt", &auth, Some(&receipt_body()));
-    assert_eq!(unsealed.status, 400, "{}", String::from_utf8_lossy(&unsealed.body));
+    let unsealed = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &auth,
+        Some(&receipt_body()),
+    );
+    assert_eq!(
+        unsealed.status,
+        400,
+        "{}",
+        String::from_utf8_lossy(&unsealed.body)
+    );
     assert!(
         String::from_utf8_lossy(&unsealed.body).contains("bundle-unsealed"),
         "the worker must refuse an unsealed bundle per request: {}",
@@ -653,7 +680,9 @@ fn oversized_bodies_are_refused_after_auth_as_problems() {
     drop(server);
     let lines = audit_lines(&home);
     assert!(
-        lines.iter().any(|l| l.contains("body-too-large") && l.contains("refused")),
+        lines
+            .iter()
+            .any(|l| l.contains("body-too-large") && l.contains("refused")),
         "the 413 refusal is audited: {lines:?}"
     );
 }

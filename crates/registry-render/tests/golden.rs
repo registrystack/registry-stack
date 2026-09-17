@@ -143,9 +143,8 @@ fn golden_hashes_match() {
                     let ns = parts.next().expect("package namespace");
                     let name_ver = parts.next().expect("package name:ver");
                     let rest = parts.next().expect("package path");
-                    let (name, version) = name_ver
-                        .rsplit_once(':')
-                        .expect("package name and version");
+                    let (name, version) =
+                        name_ver.rsplit_once(':').expect("package name and version");
                     format!("packages/{ns}/{name}/{version}/{rest}")
                 }
                 None => dep.clone(),

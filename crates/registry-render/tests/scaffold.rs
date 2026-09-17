@@ -239,7 +239,9 @@ fn now_is_loud_about_the_resolved_issued_at() {
     assert!(out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--now") && stderr.contains("issuedAt") && stderr.contains("NOT byte-stable"),
+        stderr.contains("--now")
+            && stderr.contains("issuedAt")
+            && stderr.contains("NOT byte-stable"),
         "--now must announce the nondeterministic instant it chose: {stderr}"
     );
 }
@@ -272,12 +274,13 @@ fn json_failures_are_problem_documents() {
         serde_json::from_slice(&out.stderr).expect("stderr is one JSON problem document");
     assert_eq!(problem["title"], "data-invalid", "{problem}");
     assert_eq!(
-        problem["type"],
-        "https://render.registrystack.org/problems/data-invalid",
+        problem["type"], "https://render.registrystack.org/problems/data-invalid",
         "{problem}"
     );
     assert!(
-        problem["pointers"].as_array().is_some_and(|p| !p.is_empty()),
+        problem["pointers"]
+            .as_array()
+            .is_some_and(|p| !p.is_empty()),
         "schema pointers survive into the JSON failure: {problem}"
     );
 }

@@ -246,7 +246,8 @@ mod tests {
     use std::net::SocketAddr;
 
     fn runtime_yaml(body: &str) -> RenderRuntime {
-        let text = format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\n{body}");
+        let text =
+            format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\n{body}");
         serde_norway::from_str(&text).expect("runtime parses")
     }
 

@@ -308,12 +308,10 @@ pub fn render_with_limits(
                 format!("PDF export failed: {detail}"),
             )
         })?,
-        Err(_) => {
-            return Err(RenderProblem::new(
-                ProblemKind::RenderPanicked,
-                "the renderer hit an internal error while exporting the PDF; the worker is recycled",
-            ))
-        }
+        Err(_) => return Err(RenderProblem::new(
+            ProblemKind::RenderPanicked,
+            "the renderer hit an internal error while exporting the PDF; the worker is recycled",
+        )),
     };
 
     if strict && !warnings.is_empty() {

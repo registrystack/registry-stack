@@ -170,7 +170,10 @@ pub fn run(cli: Cli) -> i32 {
                     "pointers": problem.pointers,
                     "locations": problem.locations,
                 });
-                eprintln!("{}", serde_json::to_string(&document).expect("problem json"));
+                eprintln!(
+                    "{}",
+                    serde_json::to_string(&document).expect("problem json")
+                );
             } else {
                 eprintln!("render: {problem}");
             }

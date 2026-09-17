@@ -287,10 +287,12 @@ pub fn load_fonts(root: &Path) -> Result<Vec<typst::text::Font>, RenderProblem> 
             // Only font files load; license texts commonly live beside the
             // fonts they govern (the example bundles ship OFL.txt).
             let is_font_file = path.is_file()
-                && path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "woff" | "woff2"));
+                && path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+                    matches!(
+                        e.to_ascii_lowercase().as_str(),
+                        "ttf" | "otf" | "ttc" | "woff" | "woff2"
+                    )
+                });
             if is_font_file {
                 files.push(path);
             }

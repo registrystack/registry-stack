@@ -205,7 +205,8 @@ fn router(service: Arc<Service>) -> Router {
         .merge(api)
         .fallback(not_found)
         .with_state(service)
-        .layer(security_headers(CspBuilder::restrictive()))}
+        .layer(security_headers(CspBuilder::restrictive()))
+}
 
 /// Authentication as a layer: it runs before the handler (and so before
 /// the body extractor buffers anything), and every refusal is audited —
