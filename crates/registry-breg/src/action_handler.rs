@@ -13,7 +13,8 @@ use crate::{
 #[cfg(feature = "postgres-test")]
 use std::collections::BTreeMap;
 
-use rhai::{Array, CallFnOptions, Dynamic, Map, Scope, AST};
+use registry_platform_script::rhai as platform;
+use rhai::{Array, Dynamic, Map, AST};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 
@@ -511,14 +512,7 @@ fn execute_compiled_handler(
             (Instant::now() >= deadline).then_some(Dynamic::UNIT)
         });
     }
-    let result = engine
-        .call_fn_with_options::<Dynamic>(
-            CallFnOptions::new().eval_ast(false),
-            &mut Scope::new(),
-            ast,
-            "handle",
-            (Dynamic::from(ctx),),
-        )
+    let result = platform::call_with_fresh_scope(&engine, ast, "handle", (Dynamic::from(ctx),))
         .map_err(|error| {
             let kind = if Instant::now() >= deadline
                 || cancellation
@@ -528,12 +522,9 @@ fn execute_compiled_handler(
                 ActionHandlerError::Deadline
             } else if poisoned.load(std::sync::atomic::Ordering::Acquire) {
                 ActionHandlerError::Evidence
-            } else if matches!(
-                *error,
-                rhai::EvalAltResult::ErrorTooManyOperations(..)
-                    | rhai::EvalAltResult::ErrorStackOverflow(..)
-                    | rhai::EvalAltResult::ErrorDataTooLarge(..)
-            ) {
+            } else if platform::classify_failure(&error)
+                == platform::RhaiFailureCategory::ResourceExhausted
+            {
                 ActionHandlerError::Resource
             } else {
                 ActionHandlerError::Execution

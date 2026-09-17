@@ -4815,6 +4815,7 @@ dependencies = [
  "registry-platform-httpsec",
  "registry-platform-httputil",
  "registry-platform-oidc",
+ "registry-platform-script",
  "registry-platform-testing",
  "reqwest",
  "rhai",

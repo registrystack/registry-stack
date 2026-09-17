@@ -7,10 +7,8 @@ use std::{collections::BTreeSet, time::Instant};
 #[cfg(feature = "postgres-test")]
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use rhai::{
-    module_resolvers::DummyModuleResolver, Array, CallFnOptions, Dynamic, Engine, EvalAltResult,
-    ImmutableString, Map, Position, Scope, AST,
-};
+use registry_platform_script::rhai as platform;
+use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, AST};
 use serde_json::{Map as JsonMap, Number, Value};
 
 use crate::{
@@ -32,6 +30,26 @@ pub const MAXIMUM_STRING_BYTES: usize = 16_384;
 pub const MAXIMUM_ARRAY_ITEMS: usize = 256;
 pub const MAXIMUM_MAP_ENTRIES: usize = 256;
 pub const MAXIMUM_VALUE_DEPTH: usize = 64;
+
+/// The bounded Rhai execution profile every planner and handler evaluation
+/// runs under: the constants above, applied by the platform script adapter.
+/// The `join` helper registration and the per-call deadline wiring are added
+/// by `engine` below; every other setting is exactly this profile.
+const SCRIPT_PROFILE: platform::RhaiProfile = platform::RhaiProfile {
+    limits: platform::RhaiLimits {
+        operations: MAXIMUM_OPERATIONS,
+        call_levels: MAXIMUM_CALL_DEPTH,
+        expression_depth: MAXIMUM_EXPRESSION_DEPTH,
+        modules: 0,
+        string_bytes: MAXIMUM_STRING_BYTES,
+        array_items: MAXIMUM_ARRAY_ITEMS,
+        map_entries: MAXIMUM_MAP_ENTRIES,
+    },
+    base: platform::RhaiBaseEngine::Standard,
+    disabled_symbols: &["import", "export", "eval", "print", "debug"],
+    allow_anonymous_fn: false,
+    maximum_source_bytes: MAXIMUM_SOURCE_BYTES,
+};
 
 #[cfg(feature = "postgres-test")]
 static TEST_PLANNER_INVOCATIONS: AtomicUsize = AtomicUsize::new(0);
@@ -221,30 +239,13 @@ pub(crate) fn compile_entrypoint_detailed(
     source: &str,
     entrypoint: &str,
 ) -> Result<AST, EntrypointCompileError> {
-    if source.len() > MAXIMUM_SOURCE_BYTES {
-        return Err(EntrypointCompileError::SourceBound);
-    }
-    let engine = engine(None);
-    let ast = engine
-        .compile(source)
-        .map_err(|error| EntrypointCompileError::Parse(error.position()))?;
-    let mut names = BTreeSet::new();
-    let mut entrypoints = 0usize;
-    for function in ast.iter_functions() {
-        if !names.insert(function.name) {
-            return Err(EntrypointCompileError::Entrypoint);
+    platform::compile_entrypoint(&SCRIPT_PROFILE, source, entrypoint, &[1]).map_err(|error| {
+        match error {
+            platform::RhaiCompileError::SourceBound => EntrypointCompileError::SourceBound,
+            platform::RhaiCompileError::Parse(position) => EntrypointCompileError::Parse(position),
+            platform::RhaiCompileError::Entrypoint => EntrypointCompileError::Entrypoint,
         }
-        if function.name == entrypoint {
-            if function.params.len() != 1 || function.access != rhai::FnAccess::Public {
-                return Err(EntrypointCompileError::Entrypoint);
-            }
-            entrypoints += 1;
-        }
-    }
-    if entrypoints != 1 {
-        return Err(EntrypointCompileError::Entrypoint);
-    }
-    Ok(ast)
+    })
 }
 
 pub fn plan_change_request_effects(
@@ -268,23 +269,13 @@ pub fn plan_change_request_effects(
     let ctx = planner_context(planner, request_fields)?;
     #[cfg(feature = "postgres-test")]
     TEST_PLANNER_INVOCATIONS.fetch_add(1, Ordering::Relaxed);
-    let result = engine
-        .call_fn_with_options::<Dynamic>(
-            CallFnOptions::new().eval_ast(false),
-            &mut Scope::new(),
-            &ast,
-            "plan",
-            (ctx,),
-        )
-        .map_err(|error| {
+    let result =
+        platform::call_with_fresh_scope(&engine, &ast, "plan", (ctx,)).map_err(|error| {
             if Instant::now() >= deadline {
                 ChangeRequestPlannerError::Deadline
-            } else if matches!(
-                *error,
-                rhai::EvalAltResult::ErrorTooManyOperations(..)
-                    | rhai::EvalAltResult::ErrorStackOverflow(..)
-                    | rhai::EvalAltResult::ErrorDataTooLarge(..)
-            ) {
+            } else if platform::classify_failure(&error)
+                == platform::RhaiFailureCategory::ResourceExhausted
+            {
                 ChangeRequestPlannerError::Resource
             } else {
                 ChangeRequestPlannerError::Execution
@@ -376,29 +367,9 @@ fn declarative_candidate(
 }
 
 pub(crate) fn engine(deadline: Option<Instant>) -> Engine {
-    let mut engine = Engine::new();
-    engine.set_module_resolver(DummyModuleResolver::new());
-    engine.on_print(|_| {});
-    engine.on_debug(|_, _, _| {});
-    engine
-        .set_max_operations(MAXIMUM_OPERATIONS)
-        .set_max_call_levels(MAXIMUM_CALL_DEPTH)
-        .set_max_expr_depths(MAXIMUM_EXPRESSION_DEPTH, MAXIMUM_EXPRESSION_DEPTH)
-        .set_max_modules(0)
-        .set_max_string_size(MAXIMUM_STRING_BYTES)
-        .set_max_array_size(MAXIMUM_ARRAY_ITEMS)
-        .set_max_map_size(MAXIMUM_MAP_ENTRIES)
-        .set_allow_anonymous_fn(false)
-        .disable_symbol("import")
-        .disable_symbol("export")
-        .disable_symbol("eval")
-        .disable_symbol("print")
-        .disable_symbol("debug");
-    engine.register_fn("join", join_strings);
-    if let Some(deadline) = deadline {
-        engine.on_progress(move |_| (Instant::now() >= deadline).then_some(Dynamic::UNIT));
-    }
-    engine
+    platform::build_engine(&SCRIPT_PROFILE, deadline, |engine| {
+        engine.register_fn("join", join_strings);
+    })
 }
 
 fn join_strings(
