@@ -1,0 +1,16 @@
+{
+  "name": "registry-architecture",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.22.3"
+  },
+  "scripts": {
+    "dev": "likec4 serve --port 5184",
+    "check": "likec4 validate && likec4 format --check",
+    "build": "likec4 build --output ./dist --base ./ --title \"Registry Stack architecture\""
+  },
+  "devDependencies": {
+    "likec4": "1.59.3"
+  }
+}

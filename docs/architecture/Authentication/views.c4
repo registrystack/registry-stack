@@ -1,0 +1,159 @@
+views {
+  view authentication {
+    title 'Authentication / 01. Identity and token trust'
+    description '''
+      Applications obtain tokens from an independently configured OAuth issuer. Each
+      product verifies issuer, audience and keys, then applies its own client admission
+      and authorization rules.
+      BReg and Evidence require an explicit human, agent or service actor kind for
+      every authenticated token. Principal, OAuth client, delegated actor and human
+      approver are distinct identifiers. Casework human profiles require the configured
+      human-identity claim; coordination checks current team and queue authority.
+      Casework Requester and task-machine
+      endpoints have separate rules. BReg may allow anonymous profiles.
+      BReg and Casework support static JWKS; Evidence fetches the configured JWKS URI.
+      A shared issuer creates no shared permissions. The task exchange view covers
+      the optional Casework-approved path. Local development uses pinned stock
+      ThunderID; production issuer configuration remains independent of the products.
+    '''
+    include application, issuer, breg, casework, evidence
+    exclude casework.breg_adapter -> breg.api
+    exclude breg.webhooks -> casework.api
+    exclude evidence.acquisition -> breg.api
+    exclude breg.writes -> evidence.api
+    exclude breg.task_grants -> casework.api
+    exclude breg.task_grants -> issuer
+    exclude issuer -> casework.api
+    global predicate evidence_application
+  }
+
+  dynamic view task_token_exchange {
+    title 'Authentication / 02. Exchange an approved task'
+    description '''
+      This path starts with a source-backed task already approved by an eligible
+      human in Casework. The agent uses its own registered principal and client key.
+      The maintained issuer registration restricts client-credentials bootstrap to
+      assertion lookup. Casework requires that scope, the registered agent identity,
+      one audience and no grant claims; human routes require the human-identity claim.
+      Casework rechecks the immutable grant,
+      current eligibility and authoritative source context before signing.
+      The OAuth issuer verifies that assertion against registered Casework trust and
+      derives the source issuer from its verified iss. Casework signs a task assertion;
+      the OAuth issuer signs the access token. Key retrieval is shown when needed.
+      This is the initial exchange used by the maintained CLI, separate from its
+      standing service-token cache. The issuer also permits existing-token re-exchange
+      without Casework; the revocation view shows the resulting read window.
+      Neither re-exchange nor a later token expiry extends the original grant deadline.
+      The final step illustrates direct BReg use. Evidence uses the same exchange
+      pattern with its own destination, scopes and exact requirement bounds.
+      Human approval, BReg writes and Evidence evaluation have separate detailed views.
+    '''
+    taskAgent -> issuer 'Authenticates with its own private-key JWT for Casework bootstrap'
+    issuer -> taskAgent 'Returns a token registered only for Casework assertion lookup'
+    taskAgent -> casework.api 'Requests an assertion for the approved grant ID'
+    casework.api -> casework.access 'Checks agent kind, one audience, admitted client and assert scope; refuses profile headers, act and grant claims'
+    casework.api -> casework.task_grants 'Matches the template agent tuple and current grant'
+    casework.task_grants -> casework.breg_adapter 'Rereads the approved proposal and governed subject fields'
+    casework.breg_adapter -> breg.api 'Uses the separate bounded service-reader identity and profile'
+    breg.api -> casework.breg_adapter 'Returns current proposal identity and disclosed subject facts'
+    casework.breg_adapter -> casework.task_grants 'Returns source context to compare with the immutable grant'
+    casework.task_grants -> casework.task_grants 'Rechecks eligibility, revocation and deadline after source I/O'
+    casework.task_grants -> casework.api 'Signs original task context and registry_approver; expiry is at most 60 s and no later than the grant'
+    casework.api -> taskAgent 'Returns the signed assertion and original grant deadline'
+    taskAgent -> issuer 'Exchanges the assertion for the fixed BReg resource and approved scopes'
+    issuer -> casework.api 'Resolves registered assertion keys when needed'
+    issuer -> taskAgent 'Returns a task-bound token with verified source-issuer provenance'
+    taskAgent -> breg.api 'Calls the declared task profile with the exchanged token'
+  }
+
+  view task_authority {
+    #optional #taskAuthority
+    title 'Authentication / 03. Credentials and task deadlines'
+    description '''
+      Three credentials carry different authority: bootstrap access token, Casework task
+      assertion and exchanged access token. The approved grant is a retained Casework
+      record, not another bearer token. Casework limits a grant to 900 seconds and each
+      assertion to 60 seconds, capped at the original grant deadline. The maintained
+      ThunderID setup issues 300-second access tokens; other issuer registrations own
+      their token lifetimes and exchange policy. Every resource request checks both token
+      and grant expiry. Existing-token re-exchange can preserve read access after
+      revocation until the original grant deadline. BReg new writes, later approval and
+      application also need current Casework status and must finish before that deadline.
+      Dotted arrows show credential and context movement; the exchange view supplies order.
+    '''
+    include * where kind is credential
+    include taskAgent, issuer, casework.task_grants, breg.task_grants, evidence.authority
+    include taskAgent with { description 'Uses its own client key and task credentials.' }
+    include issuer with { description 'Exchanges task context; preserves the grant deadline.' }
+    include casework.task_grants with { description 'Records approval; rechecks eligibility and source before signing.' }
+    include breg.task_grants with { description 'Reads check expiry locally. New writes and later approval/application also need live status.' }
+    include evidence.authority with { description 'Checks one grant entry and local expiry. No Casework status call.' }
+    include
+      bootstrapToken with {
+        description 'Registered for assertion lookup. Carries no task grant.'
+        navigateTo task_token_exchange
+      }
+    include
+      approvedTask with {
+        description 'Immutable approval state caps all later task use.'
+        navigateTo casework_task_approval
+      }
+    include
+      taskAssertion with {
+        description 'Carries approved context and approver pseudonym. Expiry cannot exceed the grant deadline.'
+        navigateTo task_token_exchange
+      }
+    include
+      taskAccessToken with {
+        description 'Each use checks token and grant expiry. Re-exchange preserves the original deadline.'
+        navigateTo task_revocation
+      }
+    exclude taskAgent -> issuer
+    exclude breg.task_grants -> issuer
+    exclude evidence.authority -> issuer
+    autoLayout LeftRight
+  }
+
+  dynamic view task_revocation {
+    #optional #taskAuthority
+    title 'Authentication / 04. Revocation and remaining reads'
+    description '''
+      Illustrative requests after a human revokes an approved task. Revocation prevents
+      new Casework assertions and causes fresh BReg write-status checks to fail. Later
+      approval and application also check the retained original grant. A mutation that
+      passed status before revocation is a separate transaction and may still commit.
+      In the maintained ThunderID setup, an agent can re-exchange a still-valid task
+      access token without Casework. Each BReg task read and task-bound Evidence request must
+      satisfy all current local authorization, token-expiry, grant-expiry and audit
+      checks; neither calls Casework status. Reads can therefore continue until the
+      original registry_grant_exp, at most 900 seconds after approval, rather than only
+      until the current 300-second token expires. Re-exchange cannot extend that deadline.
+      Other issuer registrations may disallow this renewal. The source-read and write
+      views cover the full request gates. Casework grant descriptions distinguish
+      persisted invalidation, expiry and erasure.
+    '''
+    casework_app -> casework.api 'An eligible human requests revocation of the exact grant'
+    casework.api -> casework.task_grants 'Checks current revoker eligibility and persists revocation'
+    casework.api -> casework_app 'Confirms the revoked grant'
+    taskAgent -> issuer 'Re-exchanges a still-valid task access token with its registered client'
+    issuer -> taskAgent 'Returns a token with the same source issuer and registry_grant_exp'
+    taskAgent -> breg.api 'Attempts a new governed task write'
+    breg.api -> breg.writes 'Dispatches through the governed write path'
+    breg.writes -> breg.task_grants 'Requires current grant authority for this mutation'
+    breg.task_grants -> casework.api 'Requests fresh status for the revoked grant'
+    casework.api -> breg.task_grants 'Returns inactive status without grant detail'
+    breg.api -> taskAgent 'Refuses the new mutation'
+    taskAgent -> breg.api 'Reads within the exact task profile while token and grant remain live'
+    breg.api -> taskAgent 'Releases the authorized, audited read without a status call' {
+      navigateTo breg_read
+    }
+    taskAgent -> evidence.api 'Requests its authorized requirement while token and grant remain live'
+    evidence.api -> taskAgent 'Releases the assertion after local authorization and audit gates' {
+      navigateTo evidence_task_assertion
+    }
+    taskAgent -> breg.api 'Retries a read at or after the original grant deadline'
+    breg.api -> taskAgent 'Refuses expired task context'
+    taskAgent -> evidence.api 'Retries at or after the original grant deadline'
+    evidence.api -> taskAgent 'Refuses expired task context'
+  }
+}

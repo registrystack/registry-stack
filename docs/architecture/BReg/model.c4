@@ -1,0 +1,128 @@
+// Application structure and public integration boundaries.
+// Components inside breg are responsibilities in one Rust runtime, not services.
+// Source links pin the inspected revision c02e470 on main.
+model {
+  application = external 'Application' {
+    description 'An institutional application using product HTTP APIs or maintained Rust, Node.js and Python clients. The active BReg package determines available records, actions, routes and fields. As an Evidence relying party, the application separately chooses credentials, pins verification trust and verifies assertions.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/metadata.md 'Application metadata contract'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-evidence-client/README.md 'Relying-party verification contract'
+  }
+  operator = actor 'Registry operator' {
+    description 'Activates reviewed packages with the migration database role and operates delivery recovery with bregctl.'
+  }
+  project = artifact 'Registry project' {
+    technology 'Governed configuration'
+    description 'Declares entities, relationships, routes, access profiles, actions and events. Domain names and event payloads belong to each project.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/contract.rs 'RegistryProject contract'
+  }
+  tooling = tool 'bregctl' {
+    technology 'Authoring and operator CLI'
+    description 'Checks and compiles a project, generates contracts, tests and packages a candidate, applies migrations and verifies activation. It also lists and replays webhook deliveries through the BReg operator service using the runtime database connection. Production signing uses an external signer and detached signatures.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/README.md 'Operator lifecycle'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-bregctl/src/webhook_lifecycle.rs 'Delivery status and replay commands'
+  }
+  package = artifact 'Registry package' {
+    description 'Verified configuration and generated contract closure. Production activation enforces the configured signature policy and matching database identity.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/package.rs 'Package verification'
+  }
+  postgres = database 'BReg PostgreSQL' {
+    technology 'Registry-owned database'
+    description 'Holds configured records, change requests, immutable proposal-bound task authority, revision history, the audit chain, transactional events and delivery state. Runtime access and migration authority use separate roles.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/postgres/mod.rs 'Database services'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/request_store.rs 'Retained proposal authority'
+  }
+  breg = service 'breg runtime' {
+    technology 'Rust / Axum'
+    description 'Loads one verified Registry package and serves the configured PostgreSQL-backed registry. Nested components are logical responsibilities in this process.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/startup.rs 'Runtime assembly and startup'
+
+    api = component 'Configured HTTP API' {
+      description 'Serves package-defined records, lookups, actions and change requests, plus caller-filtered metadata, schemas and OpenAPI.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/api/mod.rs 'Router'
+    }
+    access = component 'Authentication and access' {
+      description 'Verifies tokens and resolves compiled profile permissions, actor kind, requester client, trusted native-agent identity, row restrictions and field permissions. A task grant must match the profile source issuer, a permitted requester client, one of its required purposes and exactly its compiled bounds, plus BReg\'s configured audience; approved grant subjects supply its row context. Client-selected identifiers do not grant authority.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/auth.rs 'Authentication'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/api/mod.rs 'Runtime profile and task-grant checks'
+    }
+    task_grants = component 'Task grant verification' {
+      #optional #taskAuthority
+      description 'For access profiles that declare a task grant, binds the presented authority for reads and new submissions, then preserves submitted authority separately from later reviewers. Each read checks exact task bounds and the earlier token or grant expiry without Casework status. Issuer re-exchange may renew the token, so revocation alone does not end read access before the original grant deadline, at most 900 seconds after Casework approval. New task-bound mutations, later approval or application and database retries require fresh source status and an unexpired grant. The grant never authorizes direct target-record mutation or widens the profile permissions.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/TASK_GRANTS.md 'Task-grant contract and recovery'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/task_grant.rs 'Status verification client'
+    }
+    reads = component 'Record and history reads' {
+      description 'Executes bounded, authorized queries and historical reads using the compiled model. For authenticated reads, a separately committed attempt audit precedes protected I/O and a terminal audit gates response release. Responses use the Registry Record contract.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/postgres/read.rs 'Record reads and audit release gate'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/postgres/history_read.rs 'Historical queries'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/postgres/revision_read.rs 'Revision reads'
+    }
+    writes = component 'Governed mutations' {
+      description 'Applies configured record operations, immediate actions and reviewed change requests. Coordinates separately committed pre-I/O attempt audit, transactional writes, retained original task authority, grant-bound idempotency, history, terminal audit and declared events. A task-grant profile permits reads and governed change-request work, never direct mutation of target records.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/mutation.rs 'Mutation kernel'
+    }
+    events = component 'Event projection' {
+      description 'Builds declared record-change or request-lifecycle events and their permitted field projections inside the owning database transaction.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/outbox.rs 'Record events'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/request_events.rs 'Request lifecycle events'
+    }
+    webhooks = component 'Webhook delivery' {
+      description 'Claims committed deliveries and sends authenticated CloudEvents to explicitly bound destinations, with bounded retries, retained delivery status and operator replay.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/webhook.rs 'Delivery worker'
+    }
+    audit = component 'Audit release gates' {
+      description 'Persists the database-owned audit chain and gates relevant I/O and response release. Grant-bearing refusals and terminal outcomes include minimized authorization context with keyed pseudonyms, source issuer and deadline, never subjects, bounds or purpose value. Audit records have a separate purpose from integration event payloads.'
+      link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/audit.rs 'Audit chain and release gates'
+    }
+  }
+  receiver = external 'Webhook receiver' {
+    #optional
+    technology 'HTTPS / CloudEvents'
+    description 'Verifies the signed request and its freshness, deduplicates delivery attempts and acknowledges with a 2xx response. The operator binds the destination separately from the package.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/docs/site/src/content/docs/operate/breg-webhooks.mdx 'Receiver contract and recovery'
+  }
+  bindings = artifact 'Runtime configuration' {
+    description 'Binds database roles, issuer verification, contextual claim names, trusted native-agent identities, optional source-keyed task-status endpoints and service credentials, logical event destinations, network/TLS policy and secret references. It also binds optional S3 attachment storage and attachment verification, Evidence provider endpoints, credentials and trust, audit and cursor keys, and an optional metrics listener. The package names destinations and task-grant sources; operators supply their locations and credentials.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/event_destination.rs 'Destination activation'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/runtime_config.rs 'Runtime bindings'
+  }
+
+  application .call issuer 'Obtains a token for authenticated profiles'
+  application .call breg.api 'Uses configured APIs and metadata' {
+    technology 'HTTPS / JSON / profile-dependent authentication'
+  }
+  operator .call tooling 'Activates and operates a registry'
+  project .artifactFlow tooling 'Supplies governed declarations'
+  tooling .artifactFlow package 'Packages the checked candidate'
+  tooling .call postgres 'Applies and verifies with the migration role; lists and replays deliveries with the runtime connection'
+  package .artifactFlow breg 'Verified load at startup'
+  bindings .artifactFlow breg 'Activates deployment bindings at startup'
+  bindings .artifactFlow breg.webhooks 'Activates event destinations and delivery policy' {
+    #optional
+  }
+  breg.api .call breg.access 'Checks caller and operation authority'
+  breg.access .call breg.task_grants 'Binds optional task authority to the selected profile' {
+    #taskAuthority
+  }
+  breg.access .call issuer 'Fetches keys when remote JWKS is configured'
+  breg.api .call breg.reads 'Dispatches authorized reads' {
+    navigateTo breg_read
+  }
+  breg.api .call breg.writes 'Dispatches authorized mutations'
+  breg.reads .call postgres 'Reads permitted records and history'
+  breg.writes .call breg.task_grants 'Checks fresh status before new task-bound changes' {
+    #taskAuthority
+  }
+  breg.writes .call postgres 'Commits governed state, history and retained task authority'
+  breg.writes .call breg.events 'Projects declared events in transaction'
+  breg.events .call postgres 'Persists event and delivery intent atomically'
+  breg.reads .call breg.audit 'Commits attempt audit before protected I/O and terminal audit before response release'
+  breg.writes .call breg.audit 'Commits attempt audit before protected I/O and records terminal mutation outcomes'
+  breg.audit .call postgres 'Persists the audit chain'
+  breg.webhooks .call postgres 'Claims committed deliveries and records outcomes'
+  breg.webhooks .event receiver 'Delivers after commit' {
+    #optional
+    technology 'CloudEvents / HMAC-SHA256 / HTTPS'
+    navigateTo event_delivery
+  }
+}

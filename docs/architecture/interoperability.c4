@@ -1,0 +1,75 @@
+// Optional integrations retain their own authorization and deployment boundaries.
+// Authoring artifacts are kept out of the runtime interoperability view.
+model {
+  qgis = external 'QGIS or spatial client' {
+    #optional
+    technology 'Optional / GeoJSON'
+    description 'Reads permitted collections through the in-process /v1/gis adapter with profile-dependent authentication, including anonymous profiles. Advertised collections require direct list authority, a readable primary CRS84 Point and an explicit bbox capability. The operator supplies publicOrigin; bbox predicates require PostGIS. This interface does not establish full OGC API Features conformance.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/SPATIAL-QUERIES.md 'Spatial query contract'
+  }
+  publicschema = artifact 'PublicSchema snapshot' {
+    #optional
+    technology 'Optional authoring / LinkML'
+    description 'Pinned offline reference models resolved through registry-linkml. bregctl maps an authored selection into an ordinary Registry project; the running registry performs no PublicSchema lookup.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-bregctl/src/init_from_model/mod.rs 'Project derivation'
+  }
+  manifest = library 'Registry Manifest core' {
+    technology 'Linked into bregctl and breg / optional projection output'
+    description 'Validates and renders a classified one-way projection of the configured model. The library is always linked into bregctl and breg; generation of the projection is optional. The runtime consumes the compiled projection for caller-filtered metadata. It is not another deployed service.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/manifest_adapter.rs 'Manifest projection'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-manifest-core/src/lib.rs 'Registry Manifest library'
+  }
+  catalog = artifact 'Portable catalogue' {
+    technology 'Registry Manifest / DCAT JSON-LD'
+    description 'Generated metadata for the selected publication profile and classification ceiling. Describes the permitted slice and grants no runtime access.'
+  }
+  contracts = artifact 'Generated API contracts' {
+    technology 'OpenAPI 3.1 / JSON Schema'
+    description 'Package-generated routes, record schemas and fingerprinted event payload schemas. Exact domain events and interoperability fields come from the compiled project.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/artifacts.rs 'Contract generation'
+  }
+  bregEvidenceExport = artifact 'Evidence source export' {
+    #optional
+    technology 'Optional authoring / YAML, JSON Schema, Rhai'
+    description 'Lookup source, selector and fact schemas, and prepare/extract scripts for import into an Evidence project. The export grants no BReg access and includes no credentials or Evidence question authority.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/evidence_source.rs 'Source export'
+  }
+  signer = external 'External package signer' {
+    technology 'Production signing authority'
+    description 'Reviews and signs the exact signing-input.json outside bregctl. The CLI consumes detached signatures and accepts no private package-signing key.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/README.md 'Package signing lifecycle'
+  }
+
+  casework.breg_adapter .call breg.api 'Reads work and invokes source-authorized actions' {
+    #optional
+    technology 'HTTPS / BReg client / scoped bearer'
+    navigateTo casework_source_action
+  }
+  breg.webhooks .event casework.api 'Sends signed lifecycle invalidation hints' {
+    #optional
+    technology 'CloudEvents 1.0 binary / HMAC-SHA256 / HTTPS'
+    navigateTo casework_source_event
+  }
+  evidence.acquisition .call breg.api 'Reads a fixed, authorized lookup' {
+    #optional
+    technology 'HTTPS / configured source authentication'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/products/breg/EVIDENCE.md 'BReg as an Evidence source'
+  }
+  breg.writes .call evidence.api 'Consumes a verified assertion (trial)' {
+    #optional #trial
+    technology 'Evidence client / signed JWS'
+    description 'Uses the separately configured provider and credential. Verifies the signed response through registry-evidence-client, backed by registry-evidence-verifier, and retains a bounded relying-party record. Evidence remains a separate runtime with its own authority.'
+    link https://github.com/registrystack/registry-stack/blob/c02e470085f48eae0204ba8400f9f919c5d05500/crates/registry-breg/src/action_evidence_client.rs 'BReg as a relying party'
+  }
+  qgis .call breg.api 'Reads permitted spatial collections' {
+    #optional
+    technology 'HTTPS / GeoJSON / profile-dependent authentication'
+  }
+  publicschema .artifactFlow project 'Optional project derivation through bregctl'
+  tooling .artifactFlow manifest 'Supplies a permitted publication slice'
+  manifest .artifactFlow catalog 'Renders portable metadata'
+  tooling .artifactFlow contracts 'Generates API and event schemas'
+  tooling .artifactFlow bregEvidenceExport 'Exports an already-granted lookup'
+  tooling .artifactFlow signer 'Supplies exact signing input'
+  signer .artifactFlow package 'Supplies detached signatures for assembly'
+}
