@@ -38,6 +38,7 @@ members = [
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-record",
+    "crates/registry-render",
     "crates/registry-breg-client",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
@@ -97,6 +98,7 @@ registry-language-server = { path = "crates/registry-language-server", version =
 registry-linkml = { path = "crates/registry-linkml", version = "0.32.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.32.0" }
 registry-record = { path = "crates/registry-record", version = "0.32.0" }
+registry-render = { path = "crates/registry-render", version = "0.32.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.32.0" }
 registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.32.0" }
 registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.32.0" }
@@ -203,6 +205,13 @@ tree-sitter-yaml = { version = "0.7.2" }
 tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+# Typst library-mode rendering. Pinned minor: output bytes and world semantics
+# move with every typst release, so upgrades are reviewed golden-hash diffs.
+typst = { version = "0.15.1" }
+typst-pdf = { version = "0.15.1" }
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+comemo = { version = "0.5" }
+ttf-parser = { version = "0.25" }
 ulid = { version = "1" }
 ureq = { version = "2" }
 url = { version = "2" }

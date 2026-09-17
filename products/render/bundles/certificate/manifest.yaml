@@ -1,0 +1,22 @@
+apiVersion: render.registrystack.org/v1alpha1
+kind: RenderBundle
+bundleVersion: 1
+documents:
+- id: certificate
+  version: 1
+  entry: templates/certificate.typ
+  schema: schemas/certificate.schema.json
+  labels:
+  - en
+  pdfStandard: a-4
+hashes:
+  fixtures/data.json: 46b9d921d0f9f1fbcba4a1f9ad1acb3b60bfdcb6e7d567736368f171d3df9738
+  labels/en.yaml: a7c74d341a024e41428f041b1ae93d0686413923905195b7869b5c0d74792747
+  packages/preview/zebra/0.1.0/LICENSE: f0f6fec86b9678afa492dc078f81b8576bf25f0a1ca22be9f40e78b731fdf988
+  packages/preview/zebra/0.1.0/README.md: d420f30d5c82f6fdd1f8ecaf58f98eaf6320670ab0ce626976c15f853cb57b6a
+  packages/preview/zebra/0.1.0/src/generic.typ: 9fb67e4684d1d35b81bb895b5e637286ef56a28c9fbc3715e53af30aa9efb5d4
+  packages/preview/zebra/0.1.0/src/lib.typ: 5e2eb89b3fa143cb7f6458153ff95f44f81e2179adba150c3558c75b40283b46
+  packages/preview/zebra/0.1.0/src/zebra.wasm: 9c4c9501d950d13505263d52da39d844d1c312d3c5ccc436a8f35602fd834975
+  packages/preview/zebra/0.1.0/typst.toml: ece9c7e0e324a9566845a7e89dcda7b424d6c038b6ce8446d0b00b8f685c17af
+  schemas/certificate.schema.json: f27c0c341f2ad02a56b031b7be05891422e398377491f4af75668a16cba387a0
+  templates/certificate.typ: 0f75915946dd918318a2c13559a1619e080be205351662f62216da467d6a74e5

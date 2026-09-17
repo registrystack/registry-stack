@@ -1,0 +1,8 @@
+{
+  "reference": "CERT-2026-000118",
+  "recipient-name": "Coopérative Agricole de la Vallée",
+  "registry-identifier": "REG-MR-11-004417",
+  "recorded-date": "2026-03-02",
+  "valid-until": "2029-03-01",
+  "verify-url": "https://verify.example.org/c/CERT-2026-000118?t=44c1a8f02e9b7d5a3c8e6f1b0d9a2e75"
+}

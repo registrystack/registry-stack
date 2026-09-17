@@ -1,0 +1,27 @@
+apiVersion: render.registrystack.org/v1alpha1
+kind: RenderBundle
+bundleVersion: 1
+documents:
+- id: receipt
+  version: 3
+  entry: templates/receipt.typ
+  schema: schemas/receipt.schema.json
+  labels:
+  - ar
+  - fr
+hashes:
+  fixtures/data.json: 8eb219433cc85c0ea5f8db1ae57d541429e9c10959da2cb5c1d638e69a2974d8
+  fonts/NotoNaskhArabic-Bold.ttf: 04017b0ccdd1156dcde3bc386734c1b03165261762f16a025c8afc9088ae76e9
+  fonts/NotoNaskhArabic-Regular.ttf: 6f0a92031367b2f5a2078fe9d24f3433122b61a0bad57c423aad8f3c39aa2e6e
+  fonts/NotoSans-Bold.ttf: 1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913
+  fonts/NotoSans-Regular.ttf: 478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823
+  labels/ar.yaml: ffc1fe7d7c4ea2db2e6ff8ceb84fa1ddc21a8a5cbc0964469514c4ffbb2dba9c
+  labels/fr.yaml: 7d195222b2ec0c0f151aebb749828aeee2d15b2ea21fe2102b7410d24fa4cf69
+  packages/preview/zebra/0.1.0/LICENSE: f0f6fec86b9678afa492dc078f81b8576bf25f0a1ca22be9f40e78b731fdf988
+  packages/preview/zebra/0.1.0/README.md: d420f30d5c82f6fdd1f8ecaf58f98eaf6320670ab0ce626976c15f853cb57b6a
+  packages/preview/zebra/0.1.0/src/generic.typ: 9fb67e4684d1d35b81bb895b5e637286ef56a28c9fbc3715e53af30aa9efb5d4
+  packages/preview/zebra/0.1.0/src/lib.typ: 5e2eb89b3fa143cb7f6458153ff95f44f81e2179adba150c3558c75b40283b46
+  packages/preview/zebra/0.1.0/src/zebra.wasm: 9c4c9501d950d13505263d52da39d844d1c312d3c5ccc436a8f35602fd834975
+  packages/preview/zebra/0.1.0/typst.toml: ece9c7e0e324a9566845a7e89dcda7b424d6c038b6ce8446d0b00b8f685c17af
+  schemas/receipt.schema.json: f61dde0d248f0aef4ba160a4faaa0a01bbd926f9da46dde3dd3918368c6c944f
+  templates/receipt.typ: f06949812268961af900544c28efc193f28e8c8edc4f2fbd00016798c4ce650c
