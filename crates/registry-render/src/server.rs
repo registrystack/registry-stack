@@ -69,7 +69,10 @@ pub fn serve(runtime_path: Option<&Path>) -> Result<i32, RenderProblem> {
 async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     init_tracing();
     let (runtime, config_id) = runtime::load(runtime_path)?;
-    let api_key = runtime::resolve_secret(runtime_path, &runtime.auth.api_key_ref)?;
+    let api_key = normalize_api_key(runtime::resolve_secret(
+        runtime_path,
+        &runtime.auth.api_key_ref,
+    )?)?;
     if api_key.len() < MIN_API_KEY_ENTROPY_BYTES {
         return Err(RenderProblem::new(
             ProblemKind::RuntimeInvalid,
@@ -358,6 +361,28 @@ async fn documents(State(service): State<Arc<Service>>, headers: HeaderMap) -> R
         "typstPin": crate::TYPST_PIN,
     });
     Json(body).into_response()
+}
+
+/// Exactly one trailing line ending is trimmed from the caller API key (the
+/// newline every editor and `echo` appends — the same normalization the
+/// platform applies to fingerprint files). Anything beyond that is a startup
+/// error: a silently mis-armed key would refuse every caller while `/health`
+/// stays green.
+fn normalize_api_key(raw: Vec<u8>) -> Result<Vec<u8>, RenderProblem> {
+    let refuse = |detail: String| RenderProblem::new(ProblemKind::RuntimeInvalid, detail);
+    let text = String::from_utf8(raw)
+        .map_err(|_| refuse("caller API key must be ASCII text".to_owned()))?;
+    let text = registry_platform_authcommon::trim_one_line_ending(text);
+    if text.is_empty() {
+        return Err(refuse("caller API key is empty".to_owned()));
+    }
+    if text.chars().any(char::is_whitespace) {
+        return Err(refuse(
+            "caller API key contains whitespace beyond one trailing line ending; fix the key file"
+                .to_owned(),
+        ));
+    }
+    Ok(text.into_bytes())
 }
 
 fn authorized(service: &Service, headers: &HeaderMap) -> bool {

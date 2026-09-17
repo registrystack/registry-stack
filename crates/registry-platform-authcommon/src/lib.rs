@@ -435,7 +435,10 @@ fn read_bounded_fingerprint_file(path: &Path) -> Result<String, CredentialFinger
     Ok(contents)
 }
 
-fn trim_one_line_ending(mut value: String) -> String {
+/// Strip exactly one trailing line ending (`\n`, `\r\n`, or `\r`) — the
+/// newline a file write or `echo` appends, and nothing more. Shared by every
+/// secret-reading surface so "key in a file" behaves identically everywhere.
+pub fn trim_one_line_ending(mut value: String) -> String {
     if value.ends_with("\r\n") {
         value.truncate(value.len() - 2);
     } else if value.ends_with('\n') || value.ends_with('\r') {

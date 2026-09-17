@@ -239,6 +239,71 @@ fn serve_health_and_ready() {
 }
 
 #[test]
+fn api_key_file_with_one_trailing_newline_is_trimmed() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    // Key files written by an editor or `echo` end with one line ending;
+    // serve must trim it, not arm a key nobody can present.
+    write_secret(&home.join("api.key"), &format!("{API_KEY}\r\n"));
+    let server = start_server(&runtime);
+    let reply = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[
+            ("Authorization", &format!("Bearer {API_KEY}")),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&receipt_body()),
+    );
+    assert_eq!(
+        reply.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+}
+
+#[test]
+fn api_key_with_stray_whitespace_is_refused_at_startup() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    // Anything beyond one trailing line ending (here: a leading space) is a
+    // startup error, not a silent permanent 401 with /health green.
+    write_secret(&home.join("api.key"), &format!(" {API_KEY}"));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let code = wait_for_exit(&mut child);
+    assert_eq!(
+        code,
+        registry_render::ProblemKind::RuntimeInvalid.exit_code(),
+        "stray whitespace in the key file must refuse startup"
+    );
+}
+
+fn wait_for_exit(child: &mut Child) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        match child.try_wait().expect("wait") {
+            Some(status) => return status.code().unwrap_or(-1),
+            None if Instant::now() > deadline => {
+                let _ = child.kill();
+                panic!("server did not exit");
+            }
+            None => std::thread::sleep(Duration::from_millis(100)),
+        }
+    }
+}
+
+#[test]
 fn unauthorized_requests_are_refused_and_audited() {
     let (home, runtime, _) = deployment(
         DEFAULT_LIMITS,
@@ -491,17 +556,7 @@ fn tampered_bundle_refuses_to_serve() {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let code = loop {
-        match child.try_wait().expect("wait") {
-            Some(status) => break status.code().unwrap_or(-1),
-            None if Instant::now() > deadline => {
-                let _ = child.kill();
-                panic!("tampered server did not exit");
-            }
-            None => std::thread::sleep(Duration::from_millis(100)),
-        }
-    };
+    let code = wait_for_exit(&mut child);
     assert_eq!(
         code,
         registry_render::ProblemKind::BundleTampered.exit_code()
