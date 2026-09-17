@@ -564,6 +564,44 @@ fn tampered_bundle_refuses_to_serve() {
 }
 
 #[test]
+fn bundle_drift_after_serve_starts_is_refused_per_render() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    let bearer = format!("Bearer {API_KEY}");
+    let auth = [("Authorization", bearer.as_str()), ("Content-Type", "application/json")];
+
+    // Content drift after startup: the per-request seal check catches it.
+    let labels = home.join("bundle/labels/ar.yaml");
+    let mut text = std::fs::read_to_string(&labels).unwrap();
+    text.push_str("extra: tampered\n");
+    std::fs::write(&labels, text).unwrap();
+    let tampered = request(server.port, "POST", "/v1/render/receipt", &auth, Some(&receipt_body()));
+    assert_eq!(tampered.status, 400, "{}", String::from_utf8_lossy(&tampered.body));
+    assert!(
+        String::from_utf8_lossy(&tampered.body).contains("bundle-tampered"),
+        "{}",
+        String::from_utf8_lossy(&tampered.body)
+    );
+
+    // Unsealing after startup (hashes stripped, content otherwise intact):
+    // the worker must load sealed, not merely verify-if-sealed.
+    let manifest_path = home.join("bundle/manifest.yaml");
+    let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+    let stripped = manifest.split("hashes:").next().unwrap().to_owned();
+    std::fs::write(&manifest_path, stripped).unwrap();
+    let unsealed = request(server.port, "POST", "/v1/render/receipt", &auth, Some(&receipt_body()));
+    assert_eq!(unsealed.status, 400, "{}", String::from_utf8_lossy(&unsealed.body));
+    assert!(
+        String::from_utf8_lossy(&unsealed.body).contains("bundle-unsealed"),
+        "the worker must refuse an unsealed bundle per request: {}",
+        String::from_utf8_lossy(&unsealed.body)
+    );
+}
+
+#[test]
 fn slow_renders_are_killed_and_the_service_recovers() {
     // A compute-heavy bundle and a one-second budget: the supervisor kills
     // the worker, the refusal is audited, and the very next render works.

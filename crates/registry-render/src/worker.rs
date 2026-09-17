@@ -217,7 +217,15 @@ fn cap_address_space(limit: u64) {
 }
 
 fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
-    let bundle = match crate::bundle::Bundle::load(&request.bundle) {
+    // Serve pins the seal per request: the worker loads sealed every time,
+    // so drift (content or a stripped seal) after startup is refused here
+    // with the named problem, not only caught by the parent's hash compare.
+    let bundle = if request.require_sealed {
+        crate::bundle::Bundle::load_sealed(&request.bundle)
+    } else {
+        crate::bundle::Bundle::load(&request.bundle)
+    };
+    let bundle = match bundle {
         Ok(bundle) => bundle,
         Err(problem) => {
             return WorkerResponse::Failed {
