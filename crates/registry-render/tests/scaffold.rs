@@ -309,6 +309,38 @@ fn validate_supports_json() {
 }
 
 #[test]
+fn check_names_a_locale_missing_a_label_key() {
+    let dir = tempdir();
+    run(&[
+        "init",
+        dir.to_str().unwrap(),
+        "--labels",
+        "en",
+        "--labels",
+        "fr",
+    ]);
+    // fr loses a key the template (and en) rely on: only the fr render
+    // would fail at runtime — check must name it up front.
+    let fr = dir.join("labels/fr.yaml");
+    let text = std::fs::read_to_string(&fr).unwrap();
+    let broken = text.replace("reference: \"Reference\"\n", "");
+    std::fs::write(&fr, broken).unwrap();
+    let out = run(&["check", "--bundle", dir.to_str().unwrap()]);
+    assert_eq!(
+        out.status.code(),
+        Some(registry_render::ProblemKind::LabelsInvalid.exit_code()),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("reference") && stderr.contains("fr"),
+        "the missing key and locale are named: {stderr}"
+    );
+}
+
+#[test]
 fn check_seal_refuses_to_seal_a_broken_bundle() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);

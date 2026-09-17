@@ -86,6 +86,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let integrity_key = runtime::resolve_secret(runtime_path, &runtime.audit.integrity_key_ref)?;
     let bundle = Bundle::load_sealed(&runtime.bundle.path)?;
     crate::check::check_script_coverage(&bundle)?;
+    crate::check::check_label_key_sets(&bundle)?;
     let audit = RenderAudit::open(
         &runtime.audit.directory,
         integrity_key,

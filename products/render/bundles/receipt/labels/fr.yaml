@@ -1,5 +1,13 @@
 institution: Conseil Supérieur de la Zakat
-verify: Vérification en ligne
-ref: Réf
+title: Reçu de Zakat
 payer: Payeur
+nni: N° d'identification nationale
+wilaya: Wilaya
+details: Objet
+amount: Montant
+date: Date
+method: Mode de paiement
+footnote: Ce reçu est généré automatiquement et ne nécessite pas de signature
+ref: Réf
+verify: Vérification en ligne
 system-generated: document généré par le système, sans signature requise

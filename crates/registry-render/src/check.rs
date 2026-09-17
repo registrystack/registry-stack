@@ -39,13 +39,13 @@ pub fn run(
         ));
     }
     check_script_coverage(&bundle)?;
+    check_label_key_sets(&bundle)?;
     if seal {
         Bundle::seal(bundle_dir)?;
         println!("sealed (bundle hashes written to manifest.yaml)");
     } else if !bundle.manifest.is_sealed() {
         println!("note: bundle is unsealed; compile works, serve does not (run `render seal`)");
     }
-    check_script_coverage(&bundle)?;
     for document in bundle.documents.values() {
         let labels = document
             .spec
@@ -124,6 +124,51 @@ pub fn check_script_coverage(bundle: &Bundle) -> Result<(), RenderProblem> {
             ProblemKind::FontInvalid,
             format!(
                 "label text is not covered by the bundle fonts: {}",
+                failures.join("; ")
+            ),
+        )
+        .with_locations(failures))
+    }
+}
+
+/// Every locale of a document must define the same label key set: a key
+/// missing from one locale fails only that locale's render, at template
+/// runtime — the worst place to discover it. `check` (and serve startup)
+/// name the divergence up front, so PAYLOAD.md's "a missing label key is a
+/// `render check` error, not a runtime surprise" holds.
+pub fn check_label_key_sets(bundle: &Bundle) -> Result<(), RenderProblem> {
+    let mut failures: Vec<String> = Vec::new();
+    for document in bundle.documents.values() {
+        let mut reference: Option<(String, std::collections::BTreeSet<String>)> = None;
+        for (locale, table) in &document.labels {
+            let keys: std::collections::BTreeSet<String> = table
+                .as_object()
+                .map(|map| map.keys().cloned().collect())
+                .unwrap_or_default();
+            match &reference {
+                None => reference = Some((locale.clone(), keys)),
+                Some((reference_locale, reference_keys)) => {
+                    for missing in reference_keys.difference(&keys) {
+                        failures.push(format!(
+                            "labels/{locale}.yaml is missing key {missing:?} (present in labels/{reference_locale}.yaml)"
+                        ));
+                    }
+                    for undeclared in keys.difference(reference_keys) {
+                        failures.push(format!(
+                            "labels/{reference_locale}.yaml is missing key {undeclared:?} (present in labels/{locale}.yaml)"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(RenderProblem::new(
+            ProblemKind::LabelsInvalid,
+            format!(
+                "label key sets diverge across locales: {}",
                 failures.join("; ")
             ),
         )

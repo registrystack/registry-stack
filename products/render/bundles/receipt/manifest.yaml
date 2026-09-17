@@ -15,8 +15,8 @@ hashes:
   fonts/NotoNaskhArabic-Regular.ttf: 6f0a92031367b2f5a2078fe9d24f3433122b61a0bad57c423aad8f3c39aa2e6e
   fonts/NotoSans-Bold.ttf: 1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913
   fonts/NotoSans-Regular.ttf: 478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823
-  labels/ar.yaml: ffc1fe7d7c4ea2db2e6ff8ceb84fa1ddc21a8a5cbc0964469514c4ffbb2dba9c
-  labels/fr.yaml: 7d195222b2ec0c0f151aebb749828aeee2d15b2ea21fe2102b7410d24fa4cf69
+  labels/ar.yaml: 7b2d9331b453ccb94591e40d660d1a3c3e7c0099dbe2069d659ef8fa167f89c7
+  labels/fr.yaml: bd3c0ecabf6443ed9803438655839b79937dc8580091c97374e3fdd3dc445f81
   packages/preview/zebra/0.1.0/LICENSE: f0f6fec86b9678afa492dc078f81b8576bf25f0a1ca22be9f40e78b731fdf988
   packages/preview/zebra/0.1.0/README.md: d420f30d5c82f6fdd1f8ecaf58f98eaf6320670ab0ce626976c15f853cb57b6a
   packages/preview/zebra/0.1.0/src/generic.typ: 9fb67e4684d1d35b81bb895b5e637286ef56a28c9fbc3715e53af30aa9efb5d4
