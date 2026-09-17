@@ -249,8 +249,8 @@ pub fn render_with_limits(
         .map(|diag| world.redact_host_paths(&format_one_diagnostic(&world, diag)))
         .collect();
 
-    // PDF export options match the Typst CLI defaults exactly; `ident: Auto`
-    // derives the PDF ID from document content, which the golden tests pin.
+    // PDF export options otherwise match the Typst CLI defaults (tagged,
+    // not pretty); the timestamp is the issuance claim, never wall clock.
     let timestamp_datetime = {
         let naive = request.issued_at.naive_utc();
         typst::foundations::Datetime::from_ymd_hms(
@@ -274,9 +274,16 @@ pub fn render_with_limits(
             format!("pdf standard combination is invalid: {err:?}"),
         )
     })?;
+    // Export options: `ident` is pinned explicitly to Auto (the
+    // content-derived PDF id the golden hashes pin) and the creator is the
+    // fixed, version-free product string — the renderer version must appear
+    // nowhere in the PDF bytes, and a Typst pin bump then changes bytes only
+    // when layout changes.
     let options = typst_pdf::PdfOptions {
         timestamp: timestamp_datetime.map(typst_pdf::Timestamp::new_utc),
         standards,
+        ident: typst::foundations::Smart::Auto,
+        creator: typst::foundations::Smart::Custom(Some(crate::PDF_CREATOR.to_owned())),
         ..typst_pdf::PdfOptions::default()
     };
     // Export sits inside the same panic boundary as the compile: an

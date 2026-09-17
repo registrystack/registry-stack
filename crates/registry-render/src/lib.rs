@@ -50,6 +50,11 @@ pub use render::{render, render_with_limits, RenderRequest, Rendered};
 /// hash tests fail if the constant and the dependency drift apart.
 pub const TYPST_PIN: &str = "0.15.1";
 
+/// The fixed, version-free `/Creator` string written into every PDF. The
+/// renderer version must appear nowhere in the PDF bytes (PAYLOAD.md), so
+/// this string never carries one; `tests/golden.rs` pins its presence.
+pub const PDF_CREATOR: &str = "registry-render";
+
 /// The operator-facing version string: the release version plus the Typst
 /// pin. "Pinned binary" is a first-class version fact, reported by
 /// `--version`, `/health`, and every audit event.

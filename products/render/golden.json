@@ -4,21 +4,21 @@
   "documents": {
     "receipt": {
       "document": "receipt v3",
-      "pdfSha256": "ce939b77f78cadda7183ad6ea9207c366a7b579c01cbff73a42f44293b356398",
+      "pdfSha256": "994d0f28e1bba12887ef83b53374c05063cfd1547a553870fa86dabb85824f2b",
       "dataSha256": "26bdfa19b95178dc17fe5826cd43dd26b74f29cf0b69e77f61a69b19beaea4dc",
       "warnings": [],
       "bundleHash": "7cebc2db4cef90eb7ebc1e1f3721076bb04e50a4b09a6743cbd9ffee971f09b8"
     },
     "certificate": {
       "document": "certificate v1",
-      "pdfSha256": "ffead2dad8f698dd137e2447aaadd6976c82a270de177a772cf8d9db5b173e1b",
+      "pdfSha256": "636daae8c1cd2fba01f0d0d60244073d468827fc993cc514b75868660e7552e8",
       "dataSha256": "354f90c81f91fc07f518fbc9b4b8769f9a888f98b80817a013dd906cf3e170f2",
       "warnings": [],
       "bundleHash": "c79c9c4809d687a8a87b3de11e952934abb6c82ef9d5bfe78654c3a59f35eaa7"
     },
     "card": {
       "document": "beneficiary-card v1",
-      "pdfSha256": "ce588994f2cdb11d22e4e848b7d40ad2a228e7b978eaff8d361253477c9f72b9",
+      "pdfSha256": "8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8",
       "dataSha256": "3012d71e3413bd4a829c54a9bd8b395ac3b8e2e17b6d33c47e4040d665a94e82",
       "warnings": [],
       "bundleHash": "8e4cb4eb9a5dc4fe2081513c9e80380414556b51833b416345fcabb70b00afd2"

@@ -64,8 +64,13 @@ Findings folded back into the product (the gate's purpose):
    canonicalize-then-contain check (see the `data_paths_cannot_escape_the_
    bundle` test).
 4. `PdfOptions` must match the CLI defaults exactly (`ident: Auto`,
-   `creator: Auto`, `tagged: true`, `pretty: false`) — Auto derives the
-   document ID from content, which the golden hashes pin.
+   `tagged: true`, `pretty: false`) — Auto derives the document ID from
+   content, which the golden hashes pin. (Amended 2026-09-17, PR review
+   item 12: `creator` is now the fixed, version-free string
+   `registry-render` instead of `Auto`, so the Typst version no longer
+   appears in PDF bytes; `ident` stays `Auto`. The Typst CLI stamps its
+   own version into `/Creator`, so library output intentionally differs
+   from CLI output by that field from here on.)
 
 ## Golden record
 
@@ -81,6 +86,21 @@ cargo test -p registry-render --test golden   # fails with the drift first
 The two-OS CI job (see `.github/workflows/render-golden.yml`) runs the
 golden test on macOS and Linux; identical hashes across both are the
 cross-machine byte-stability proof the DoD requires.
+
+**Regenerated 2026-09-17** (PR review item 12, fixing the PDF creator
+string; same procedure — drift observed by the golden test first, then the
+pinned values updated as the reviewed diff):
+
+| Bundle | sha256 |
+|---|---|
+| receipt | `994d0f28e1bba12887ef83b53374c05063cfd1547a553870fa86dabb85824f2b` |
+| certificate | `636daae8c1cd2fba01f0d0d60244073d468827fc993cc514b75868660e7552e8` |
+| beneficiary-card | `8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8` |
+
+`dataSha256` and bundle hashes are unchanged; the byte delta is the
+`/Creator`/XMP `CreatorTool` metadata only. The Typst pin bump burden
+improves with this change: a pin bump now changes golden bytes only when
+layout changes, not when the Typst version string does.
 
 ## Implementation review round (2026-09-17)
 

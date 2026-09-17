@@ -166,6 +166,28 @@ fn injected_bytes_are_the_hashed_canonical_bytes() {
 }
 
 #[test]
+fn pdf_bytes_carry_no_renderer_version() {
+    // PAYLOAD.md: the renderer version appears nowhere in the envelope or
+    // the PDF bytes. The /Creator and XMP CreatorTool strings are fixed and
+    // version-free, so a Typst pin bump changes bytes only when layout
+    // changes.
+    for case in cases() {
+        let rendered = render_case(&case);
+        let haystack = String::from_utf8_lossy(&rendered.pdf);
+        assert!(
+            !haystack.contains("Typst 0"),
+            "{}: the Typst version leaked into the PDF bytes",
+            case.name
+        );
+        assert!(
+            haystack.contains("registry-render"),
+            "{}: the fixed creator string is missing from the PDF metadata",
+            case.name
+        );
+    }
+}
+
+#[test]
 fn issued_at_changes_bytes_and_is_the_only_knob() {
     let case = cases().into_iter().find(|c| c.name == "receipt").unwrap();
     let bundle = registry_render::Bundle::load_sealed(&case.bundle).unwrap();
