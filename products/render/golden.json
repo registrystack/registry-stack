@@ -7,7 +7,7 @@
       "pdfSha256": "994d0f28e1bba12887ef83b53374c05063cfd1547a553870fa86dabb85824f2b",
       "dataSha256": "d7a97980439a4345fd5222175e45170f52ba96f7a60e7e6a6e8470113b8d2a68",
       "warnings": [],
-      "bundleHash": "0b91baa9ee5046567534c2ad1035155f46e0f5bb3fd8543c086456dd2718eff5",
+      "bundleHash": "fddf92afe4aa71e8d8c00a1bffa1da4225a81ab4b806fbc5937b7fb359a1231c",
       "deps": [
         "@preview/zebra:0.1.0/src/generic.typ",
         "@preview/zebra:0.1.0/src/lib.typ",
@@ -35,7 +35,7 @@
       "pdfSha256": "8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8",
       "dataSha256": "4fbfbe5210c369cfa8f3586f36bf0f3d3b8d78274d2b98dcc65e65b019ec6b0f",
       "warnings": [],
-      "bundleHash": "bf699058223aa1ece045a50f78dda469ff2d2bb3717554e3953465f192e57594",
+      "bundleHash": "7f86fed5e7b7d44f2f56e4126f1a4d9fdc3d059e8683d40defc81bc78c5255d2",
       "deps": [
         "@preview/zebra:0.1.0/src/generic.typ",
         "@preview/zebra:0.1.0/src/lib.typ",

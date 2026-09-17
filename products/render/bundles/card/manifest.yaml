@@ -16,6 +16,7 @@ hashes:
   fonts/NotoNaskhArabic-Regular.ttf: 6f0a92031367b2f5a2078fe9d24f3433122b61a0bad57c423aad8f3c39aa2e6e
   fonts/NotoSans-Bold.ttf: 1df075a380fc7cb898acf64c1f7b3b4dd780de3caa860178bf929de35817a913
   fonts/NotoSans-Regular.ttf: 478c558ea716033cd60c03438f628dfa75694dcf6b5f6d505a2f05fd2b4f3823
+  fonts/OFL.txt: 0dab92d0544f7b233403f14b84a663bdbfa746982eda629e7f4f9ffe1b036feb
   labels/ar.yaml: 5b02371dbf8a090f45613145f3dec281722a755853f700bd08511a9d6f869cd8
   labels/fr.yaml: 14d7d0d228f9749c467b72959ae875ea84c1b0ff58697f41245b4a4758462d2a
   packages/preview/zebra/0.1.0/LICENSE: f0f6fec86b9678afa492dc078f81b8576bf25f0a1ca22be9f40e78b731fdf988

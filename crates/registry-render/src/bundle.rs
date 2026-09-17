@@ -57,8 +57,9 @@ pub struct Bundle {
     /// sha256 of the manifest bytes; identifies the sealed content set.
     pub bundle_hash: String,
     pub documents: BTreeMap<String, LoadedDocument>,
-    /// Bundle fonts plus the binary's baseline set, deterministic order:
-    /// bundle fonts sorted by path, then `typst-assets` order.
+    /// The binary's baseline set (`typst-assets` order) first, then bundle
+    /// fonts sorted by path — the same book order the Typst CLI builds, so
+    /// library and CLI renders agree byte for byte.
     pub fonts: Vec<typst::text::Font>,
 }
 
@@ -283,7 +284,14 @@ pub fn load_fonts(root: &Path) -> Result<Vec<typst::text::Font>, RenderProblem> 
                 )
             })?;
             let path = entry.path();
-            if path.is_file() {
+            // Only font files load; license texts commonly live beside the
+            // fonts they govern (the example bundles ship OFL.txt).
+            let is_font_file = path.is_file()
+                && path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "woff" | "woff2"));
+            if is_font_file {
                 files.push(path);
             }
         }
