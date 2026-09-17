@@ -34,8 +34,9 @@ Rules worth internalizing:
 - **`labels` is bundle-owned content** — flat YAML string maps under
   `labels/<locale>.yaml`, listed in the manifest's `labels: [...]`. The
   template receives every declared table, so a bilingual document consumes
-  both. A missing label key is a `render check` error, not a runtime
-  surprise.
+  both. A key present in one locale and missing from another is a `render
+  check` error, not a runtime surprise; a key no locale declares is a
+  template error at compile time.
 - **`assets` values are the base64 text as received.** The template never
   decodes them — reference the decoded image as `image("/assets/photo")`
   (leading slash: the assets namespace sits at the bundle root). Hashing
@@ -48,7 +49,9 @@ Rules worth internalizing:
   offset is deliberately not preserved — the envelope carries the `Z`
   form only. A local-date layout can still shift the instant:
   `datetime.today(offset: 3)` answers "what date is it 3 hours after
-  issuance".
+  issuance". The offset is total hours, so fractional values work and
+  land at full-second precision; an offset large enough to overflow the
+  shift answers `none` rather than panicking.
 - **`document.version` is the template's own version** from the manifest —
   print it on paper if you like. The renderer version appears nowhere in
   the envelope or the PDF bytes.

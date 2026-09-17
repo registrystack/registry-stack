@@ -227,10 +227,13 @@ could express the finding. Behavior changes:
 - **The Noto fonts ship with `OFL.txt`**; `load_fonts` loads only font
   files by extension so licenses can live beside fonts.
 - **`render init` scaffolds real starter fonts** (Noto Sans + Noto Naskh
-  Arabic + OFL.txt) instead of an empty `fonts/`.
+  Arabic + OFL.txt) instead of an empty `fonts/`. They are embedded in the
+  binary, which costs about 850 KiB: the price of a scaffold that renders
+  Latin and Arabic offline with zero edits.
 - Docs now match shipped behavior throughout; exit codes 2-22 are
   documented in README.md; the OpenAPI drift test parses the served
-  document and compares paths/methods/statuses structurally; `TYPST_PIN`
+  document and compares the declared paths and the render route's
+  documented statuses structurally; `TYPST_PIN`
   is tied to the linked typst by a unit test.
 
 Test totals after the round: 55 (15 unit, 13 golden, 13 serve end-to-end,
@@ -268,5 +271,45 @@ baseline-first order, and the README exit-code intro no longer claims an
 "unmapped failure" code nothing emits (clap usage errors also exit 2; a
 panic exits 101).
 
-Test totals after the second pass: 59 (16 unit, 13 golden, 16 serve
-end-to-end, 14 scaffold/CLI), all green with `--locked`.
+Test totals after the second pass: 63 (18 unit, 13 golden, 17 serve
+end-to-end, 15 scaffold/CLI), all green with `--locked`. The second
+pass's own total line understated this: two later commits in the same
+round (comma-separated `--labels`, runtime-relative path anchoring) added
+tests without updating it.
+
+### Third pass (2026-09-17)
+
+A third review, of the second pass's fixes, confirmed them and found
+seven more, each fixed with a failing test first except where noted:
+
+- **Schema refusals echoed request data.** The validator's message quotes
+  the offending value, so a payer identifier or a name left the process in
+  the problem detail. Refusals now name the field pointer and the schema
+  rule it violated, plus the absent property for a `required` failure
+  (that name comes from the schema, not the request).
+- **Per-request bundle-load problems carried host paths.** Serve reloads
+  the sealed bundle in every worker, so a refused symlink or an unreadable
+  manifest sent the deployment's real path to the caller. The bundle root
+  is now redacted to `<bundle>` in both its given and canonical spelling.
+- **Problem details were unbounded.** An undeclared locale and a badly
+  named asset are named back to the caller, who chooses their length.
+  Details are capped at 2048 characters with an explicit marker.
+- **`shutdownGraceSeconds` was unvalidated.** Zero dropped renders in
+  flight on SIGTERM, and a value near the integer ceiling panicked the
+  shutdown path where it adds the grace twice. The range is now 1 to 3600.
+- **The SIGTERM handler was installed inside the spawned signal task**,
+  where its only failure mode was a panic that killed that task alone and
+  turned SIGTERM into an immediate exit. Installation now happens before
+  the server accepts and refuses startup on failure. This one carries no
+  test: the failure cannot be provoked from a test process.
+- **A refused bind left state behind.** Opening the audit ledger creates
+  its directory, and that ran before the bind was validated. The address
+  is settled first.
+- **Two CLI argument combinations silently did nothing**: `compile
+  --watch --emit-envelope` entered the watch loop and never wrote the
+  envelope, and `init --labels en,en` scaffolded one label file twice
+  before failing on the directory that already existed. Both are usage
+  errors now.
+
+Test totals after the third pass: 71 (22 unit, 13 golden, 19 serve
+end-to-end, 17 scaffold/CLI), all green with `--locked`.
