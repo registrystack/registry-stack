@@ -90,8 +90,13 @@ pub fn validate_data(
             let mut pointers = Vec::new();
             let mut messages = Vec::new();
             for err in errors {
-                pointers.push(format!("/data{}", err.instance_path));
-                messages.push(err.to_string());
+                // The validator's own message quotes the offending value;
+                // that is caller data (a name, an identifier) and never
+                // leaves the process. The field pointer plus the schema
+                // rule it violated names the failure completely.
+                let pointer = format!("/data{}", err.instance_path);
+                messages.push(format!("{pointer} violates {}", err.schema_path));
+                pointers.push(pointer);
             }
             Err(RenderProblem::new(
                 ProblemKind::DataInvalid,

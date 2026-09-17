@@ -307,7 +307,10 @@ fn schema_violations_carry_json_pointers() {
         &std::fs::read_to_string(case.bundle.join("fixtures/data.json")).unwrap(),
     )
     .unwrap();
-    data["payer-nni"] = Value::String("not-ten-digits".into());
+    // The value is caller data: it may name a person, so the problem must
+    // point at the field and the failed schema rule without echoing it.
+    let sentinel = "SENTINEL-not-ten-digits";
+    data["payer-nni"] = Value::String(sentinel.into());
     data.as_object_mut().unwrap().remove("reference");
     let request = registry_render::RenderRequest {
         locale: None,
@@ -322,6 +325,17 @@ fn schema_violations_carry_json_pointers() {
         problem.pointers.iter().any(|p| p == "/data/payer-nni"),
         "pointers name the offending field: {:?}",
         problem.pointers
+    );
+    assert!(
+        !problem.detail.contains(sentinel),
+        "problems never carry request data values: {}",
+        problem.detail
+    );
+    assert!(
+        problem.detail.contains("/properties/payer-nni/pattern")
+            && problem.detail.contains("/required"),
+        "the detail names the failed schema rules: {}",
+        problem.detail
     );
 }
 
