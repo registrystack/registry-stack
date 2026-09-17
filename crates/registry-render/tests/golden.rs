@@ -388,6 +388,52 @@ fn unvendored_package_import_fails_without_network() {
     assert!(problem.detail.contains("not found"), "{problem}");
 }
 
+#[test]
+fn compile_diagnostics_report_virtual_paths_only() {
+    // `image("missing.png")` on a nonexistent file must fail naming the
+    // VIRTUAL path; the host location of the bundle is deployment detail
+    // that never belongs in a caller-visible problem document.
+    let dir = tempfile::tempdir().unwrap();
+    let bundle = dir.path();
+    std::fs::write(
+        bundle.join("manifest.yaml"),
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: missing\n    version: 1\n    entry: templates/missing.typ\n",
+    )
+    .unwrap();
+    for sub in ["templates", "fonts", "labels", "packages/preview"] {
+        std::fs::create_dir_all(bundle.join(sub)).unwrap();
+    }
+    std::fs::write(
+        bundle.join("templates/missing.typ"),
+        "#image(\"missing.png\", width: 5mm)\n",
+    )
+    .unwrap();
+    let loaded = registry_render::Bundle::load(bundle).unwrap();
+    let document = loaded.document("missing").unwrap().clone();
+    let request = registry_render::RenderRequest {
+        locale: None,
+        data: serde_json::json!({}),
+        assets: BTreeMap::new(),
+        issued_at: issued_at(),
+    };
+    let problem = registry_render::render(&loaded, &document, &request, false)
+        .expect_err("missing image must fail the compile");
+    assert_eq!(problem.kind, registry_render::ProblemKind::CompileFailed);
+    let host_root = format!("{}", bundle.display());
+    assert!(
+        !problem.detail.contains(&host_root),
+        "host paths must not leak into the problem detail: {problem}"
+    );
+    assert!(
+        !problem.locations.iter().any(|l| l.contains(&host_root)),
+        "host paths must not leak into locations: {problem}"
+    );
+    assert!(
+        problem.detail.contains("missing.png"),
+        "the virtual path names the missing file: {problem}"
+    );
+}
+
 fn copy_bundle(from: &Path, to: &Path) {
     for entry in walkdir(from) {
         let rel = entry.strip_prefix(from).unwrap();

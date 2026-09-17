@@ -100,6 +100,16 @@ impl RenderWorld {
             .collect()
     }
 
+    /// Outbound-diagnostic redaction: replace any occurrence of the host
+    /// bundle root with the virtual marker. The world itself only ever
+    /// reports virtual paths, so this is defense in depth — a future
+    /// Typst-internal leak fails closed into a redacted string instead of
+    /// reaching a caller.
+    pub fn redact_host_paths(&self, text: &str) -> String {
+        let root = self.bundle_root.to_string_lossy();
+        text.replace(root.as_ref(), "<bundle>")
+    }
+
     fn record(&self, key: String) {
         self.closure.lock().expect("closure lock").insert(key);
     }
@@ -107,8 +117,9 @@ impl RenderWorld {
     /// Map a typst virtual path to a real path under `base`, enforcing the
     /// path rules: no `..`, no absolute components, and the canonicalized
     /// result must stay under the canonical `base`. Symlinks that escape are
-    /// caught by the canonicalization check.
-    fn resolve_under(base: &Path, vpath: &str) -> FileResult<PathBuf> {
+    /// caught by the canonicalization check. Failures carry `display` — the
+    /// virtual, root-relative spelling — never the joined host path.
+    fn resolve_under(base: &Path, vpath: &str, display: &str) -> FileResult<PathBuf> {
         let mut clean = PathBuf::new();
         for component in Path::new(vpath).components() {
             match component {
@@ -126,7 +137,7 @@ impl RenderWorld {
         }
         let joined = base.join(&clean);
         let canon = std::fs::canonicalize(&joined).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(joined.clone()),
+            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(display)),
             _ => FileError::AccessDenied,
         })?;
         if !canon.starts_with(base) {
@@ -172,12 +183,13 @@ impl World for RenderWorld {
         let rooted = id.get();
         let vpath = rooted.vpath().get_without_slash().to_owned();
         let (base, prefix) = self.root_for(rooted.root())?;
-        let path = Self::resolve_under(&base, &vpath)?;
+        let display = closure_key(&prefix, &vpath);
+        let path = Self::resolve_under(&base, &vpath, &display)?;
         if !vpath.ends_with(".typ") {
             return Err(FileError::NotSource);
         }
         let bytes = std::fs::read(&path).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(path.clone()),
+            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(&display)),
             _ => FileError::AccessDenied,
         })?;
         let text = String::from_utf8(bytes).map_err(|_| FileError::InvalidUtf8)?;
@@ -205,9 +217,10 @@ impl World for RenderWorld {
             self.record(closure_key(&prefix, &vpath));
             return Ok(bytes);
         }
-        let path = Self::resolve_under(&base, &vpath)?;
+        let display = closure_key(&prefix, &vpath);
+        let path = Self::resolve_under(&base, &vpath, &display)?;
         let bytes = std::fs::read(&path).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(path.clone()),
+            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(&display)),
             _ => FileError::AccessDenied,
         })?;
         self.record(closure_key(&prefix, &vpath));
@@ -261,23 +274,33 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("leak.txt"))
             .unwrap();
-        assert!(RenderWorld::resolve_under(&root, "ok.typ").is_ok());
+        assert!(RenderWorld::resolve_under(&root, "ok.typ", "ok.typ").is_ok());
         assert_eq!(
-            RenderWorld::resolve_under(&root, "../ok.typ").unwrap_err(),
+            RenderWorld::resolve_under(&root, "../ok.typ", "../ok.typ").unwrap_err(),
             FileError::AccessDenied
         );
         assert_eq!(
-            RenderWorld::resolve_under(&root, "/etc/passwd").unwrap_err(),
+            RenderWorld::resolve_under(&root, "/etc/passwd", "/etc/passwd").unwrap_err(),
             FileError::AccessDenied
         );
         #[cfg(unix)]
         assert_eq!(
-            RenderWorld::resolve_under(&root, "leak.txt").unwrap_err(),
+            RenderWorld::resolve_under(&root, "leak.txt", "leak.txt").unwrap_err(),
             FileError::AccessDenied
         );
         assert_eq!(
-            RenderWorld::resolve_under(&root, "missing.typ").unwrap_err(),
-            FileError::NotFound(root.join("missing.typ"))
+            RenderWorld::resolve_under(&root, "missing.typ", "missing.typ").unwrap_err(),
+            FileError::NotFound(PathBuf::from("missing.typ"))
         );
+    }
+
+    #[test]
+    fn not_found_reports_the_virtual_path_not_the_host_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let err = RenderWorld::resolve_under(&root, "gone.png", "gone.png").unwrap_err();
+        assert_eq!(err, FileError::NotFound(PathBuf::from("gone.png")));
+        let text = err.to_string();
+        assert!(!text.contains(&*root.to_string_lossy()), "{text}");
     }
 }

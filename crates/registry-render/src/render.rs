@@ -236,7 +236,7 @@ pub fn render_with_limits(
     let compiled = match warned.output {
         Ok(document) => document,
         Err(errors) => {
-            let detail = format_diagnostics(&world, &errors);
+            let detail = world.redact_host_paths(&format_diagnostics(&world, &errors));
             return Err(RenderProblem::new(
                 ProblemKind::CompileFailed,
                 format!("template compile failed: {detail}"),
@@ -246,7 +246,7 @@ pub fn render_with_limits(
     let warnings: Vec<String> = warned
         .warnings
         .iter()
-        .map(|diag| format_one_diagnostic(&world, diag))
+        .map(|diag| world.redact_host_paths(&format_one_diagnostic(&world, diag)))
         .collect();
 
     // PDF export options match the Typst CLI defaults exactly; `ident: Auto`
@@ -280,16 +280,16 @@ pub fn render_with_limits(
         ..typst_pdf::PdfOptions::default()
     };
     let pdf = typst_pdf::pdf(&compiled, &options).map_err(|errors| {
+        let detail = world.redact_host_paths(
+            &errors
+                .iter()
+                .map(|diag| diag.message.to_string())
+                .collect::<Vec<_>>()
+                .join("; "),
+        );
         RenderProblem::new(
             ProblemKind::CompileFailed,
-            format!(
-                "PDF export failed: {}",
-                errors
-                    .iter()
-                    .map(|diag| diag.message.to_string())
-                    .collect::<Vec<_>>()
-                    .join("; ")
-            ),
+            format!("PDF export failed: {detail}"),
         )
     })?;
 
