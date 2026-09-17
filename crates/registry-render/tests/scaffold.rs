@@ -80,6 +80,25 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
 }
 
 #[test]
+fn comma_separated_labels_flag_is_accepted() {
+    let dir = tempdir();
+    // `--labels en,fr` reads as two locales to a new operator; a comma is
+    // never valid inside one, so the flag accepts the comma-separated form
+    // instead of failing kebab-case validation on "en,fr".
+    let init = run(&["init", dir.to_str().unwrap(), "--labels", "en,fr"]);
+    assert!(
+        init.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&init.stdout),
+        String::from_utf8_lossy(&init.stderr)
+    );
+    assert!(dir.join("labels/en.yaml").is_file(), "en label file");
+    assert!(dir.join("labels/fr.yaml").is_file(), "fr label file");
+    let manifest = std::fs::read_to_string(dir.join("manifest.yaml")).unwrap();
+    assert!(manifest.contains("labels: [\"en\", \"fr\"]"), "{manifest}");
+}
+
+#[test]
 fn non_latin_scaffold_compiles_zero_edits() {
     let dir = tempdir();
     let init = run(&["init", dir.to_str().unwrap(), "--labels", "ar"]);

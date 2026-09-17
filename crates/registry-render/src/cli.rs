@@ -35,8 +35,9 @@ pub enum Command {
     Init {
         /// Target directory (created if absent).
         dir: PathBuf,
-        /// Label locales for the starter document.
-        #[arg(long = "labels")]
+        /// Label locales for the starter document. Comma-separated or
+        /// repeated: `--labels en,fr` and `--labels en --labels fr` match.
+        #[arg(long = "labels", value_delimiter = ',')]
         labels: Vec<String>,
     },
     /// Verify a bundle (structure, hashes, label coverage), optionally
