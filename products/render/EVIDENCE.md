@@ -157,3 +157,67 @@ end-to-end), on revision `8e06eca6a`. The same PR registers
 `render` shard), so ordinary Rust-workspace routing also covers the
 crate; the classifier's own test suites (111 tests) pass with the new
 shard.
+
+## PR #1113 review round (2026-09-17)
+
+An adversarial review of the PR (three blockers, should-fix list, docs-vs-code
+audit) was triaged and fixed item by item on this branch, TDD where a test
+could express the finding. Behavior changes:
+
+- **Caller API key files**: exactly one trailing line ending is trimmed
+  (the platform's shared normalization, now exported from authcommon);
+  any other whitespace refuses startup instead of arming a key no caller
+  can present while `/health` stays green.
+- **Compile diagnostics carry virtual paths only**: world `NotFound`
+  errors name root-relative virtual spellings, a redaction pass replaces
+  any residual host bundle root with `<bundle>`, and a golden test pins
+  the behavior.
+- **The DoD no longer claims the App Kit journey was walked**; it is the
+  acceptance requirement, with the deferral and sizing in ACCEPTANCE.md.
+- **Serve workers load sealed per request** (the `requireSealed` flag was
+  dead); tamper- and unseal-after-startup are both refused with their
+  named problems.
+- **`datetime.today(offset)` shifts the issuance instant** (22:30Z + 3h is
+  the next day), and an unrepresentable offset yields `None`, not a panic.
+- **Manifest `schema:` paths get the entry containment rule.**
+- **PDF export runs inside the panic boundary.**
+- **CLI renders are bounded**: `compile` (and each `--watch` iteration)
+  render through the supervised worker with a `--timeout` flag (serve's
+  default), so a pathological template costs its timeout, never an
+  unbounded hang.
+- **Shutdown drains inside the graceful-shutdown window**; renders past the
+  grace are abandoned (which kills their worker).
+- **The body ceiling moved inside authentication**: unauthenticated
+  oversized bodies are 401s, never buffered; authenticated ones get an
+  audited `body-too-large` problem (413, exit 22), with the tower stream
+  limit as the backstop.
+- **`server.bind` defaults to `127.0.0.1:8080`** and public or
+  all-interfaces binds refuse startup.
+- **The PDF creator is the fixed, version-free string `registry-render`**
+  (goldens regenerated — see the golden-record section).
+- **`registry-platform-httputil` removed** (declared, unused, and quietly
+  supplying tokio's `io-util` via feature unification); the inert
+  `serve-tests` feature removed with it.
+- **Worker stderr is piped and drained**, never inherited.
+- **`/health` reports bundle and renderer versions** (value-free).
+- **`--now` announces the instant it chose; `--json` failures are
+  RFC 9457 problem documents on stderr; `validate` gained `--json`.**
+- **Label key sets must agree across locales** at `render check` and serve
+  startup — which caught both example bundles (receipt and card locales
+  diverged; now aligned with real translations and re-sealed).
+- **File closures are pinned per bundle in `golden.json`** and every
+  non-virtual dep must be manifest-governed (the closure-drift gate).
+- **The golden workflow** runs the scaffold suite on both OSes, triggers on
+  the eight `registry-platform-*` path dependencies, and no longer cancels
+  the second OS when the first fails.
+- **The Noto fonts ship with `OFL.txt`**; `load_fonts` loads only font
+  files by extension so licenses can live beside fonts.
+- **`render init` scaffolds real starter fonts** (Noto Sans + Noto Naskh
+  Arabic + OFL.txt) instead of an empty `fonts/`.
+- Docs now match shipped behavior throughout; exit codes 2-22 are
+  documented in README.md; the OpenAPI drift test parses the served
+  document and compares paths/methods/statuses structurally; `TYPST_PIN`
+  is tied to the linked typst by a unit test.
+
+Test totals after the round: 55 (15 unit, 13 golden, 13 serve end-to-end,
+14 scaffold/CLI), all green with `--locked`.

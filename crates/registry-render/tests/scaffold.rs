@@ -398,15 +398,35 @@ fn openapi_document_has_no_drift() {
     let server = start_server(&runtime);
     let reply = request(server.port, "GET", "/openapi.json", &[], None);
     assert_eq!(reply.status, 200);
-    let doc = String::from_utf8_lossy(&reply.body);
-    assert!(doc.contains("bearerAuth"), "auth is declared and enforced");
-    assert!(doc.contains("413"), "the body-limit outcome is documented");
+    let doc: serde_json::Value = serde_json::from_slice(&reply.body).expect("openapi json");
+    // Structural, not substring: the served document declares exactly the
+    // implemented surface.
+    let paths = doc["paths"].as_object().expect("paths object");
+    let expected_paths = ["/health", "/ready", "/v1/documents", "/v1/render/{type}"];
+    assert_eq!(paths.len(), expected_paths.len(), "{paths:?}");
+    for path in expected_paths {
+        assert!(paths.contains_key(path), "missing {path}: {paths:?}");
+    }
+    let render = &paths["/v1/render/{type}"]["post"];
     assert!(
-        !doc.contains("\"429\""),
+        render["security"][0]["bearerAuth"].is_array(),
+        "auth is declared and enforced"
+    );
+    let responses = render["responses"].as_object().expect("responses");
+    for status in ["200", "400", "401", "413", "422", "500", "503", "504"] {
+        assert!(
+            responses.contains_key(status),
+            "render must document {status}: {responses:?}"
+        );
+    }
+    assert!(
+        !responses.contains_key("429"),
         "the semaphore queues rather than rejecting; 429 is not a real outcome"
     );
-    assert!(doc.contains("/v1/render/{type}"));
-    assert!(doc.contains("/v1/documents"));
+    assert!(
+        paths["/v1/documents"]["get"]["security"][0]["bearerAuth"].is_array(),
+        "documents is authenticated too"
+    );
 }
 
 #[test]

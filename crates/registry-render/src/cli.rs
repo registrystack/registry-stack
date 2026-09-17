@@ -375,12 +375,19 @@ pub(crate) fn parse_issued_at(
         })
 }
 
-/// The validate dry-run: data and locale only, no clock.
+/// The validate dry-run: data and locale only, no clock. The issuance
+/// field is a fixed epoch sentinel the schema check never reads — nothing
+/// in the dry-run path may touch the wall clock.
 pub(crate) fn read_request_without_time(
     data_path: &Path,
     locale: &Option<String>,
 ) -> Result<RenderRequest, RenderProblem> {
-    read_request(data_path, locale, &[], Some(chrono::Utc::now()))
+    read_request(
+        data_path,
+        locale,
+        &[],
+        Some(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH),
+    )
 }
 
 pub(crate) fn read_request(

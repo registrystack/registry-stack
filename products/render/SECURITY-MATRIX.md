@@ -3,7 +3,8 @@
 Each security row of the Definition of Done, named as a threat, with its
 enforcement point and the executable negative test that proves it. Source:
 implementation review 2026-09-17 (two adversarial reviews; all findings
-fixed or explicitly documented as residuals below).
+fixed or explicitly documented as residuals below), extended by the PR
+#1113 review round the same day (rows 17-20).
 
 | # | Threat | Enforcement point | Negative test |
 |---|---|---|---|
@@ -11,7 +12,7 @@ fixed or explicitly documented as residuals below).
 | 2 | A template imports an unvendored package; render fetches from the network | There is no network code path in library mode; package resolution serves only `packages/` through the world | `golden::unvendored_package_import_fails_without_network` |
 | 3 | Bundle content drifts after sealing (tamper or accidental edit) | Per-file sha256 in the manifest, verified at `check`, at serve startup, **and per render**: serve workers load sealed and the response's bundle hash must equal the startup hash (drift → `BundleTampered`) | `golden::tampered_sealed_bundle_is_refused`; `serve::tampered_bundle_refuses_to_serve` (exit code = tampered); per-request drift check in `handle_render` |
 | 4 | An unsealed bundle is served | `Bundle::load_sealed` at startup and in every worker | `golden::unsealed_bundle_is_refused_for_serving` |
-| 5 | Caller without the API key reads documents or renders | Bearer authentication as a layer on `/v1/*` **before body buffering**; constant-time compare; ≥32-byte ASCII key; identical 401 bodies for missing/wrong/short keys | `serve::unauthorized_requests_are_refused_and_audited` (two indistinguishable 401s); `/v1/documents` behind the same layer |
+| 5 | Caller without the API key reads documents or renders | Bearer authentication as a layer on `/v1/*` **before body buffering**; constant-time compare; ≥32-byte ASCII key; identical 401 bodies for missing/wrong/short keys; the key file gets exactly one trailing line ending trimmed and any other whitespace refuses startup (no silently mis-armed key with `/health` green) | `serve::unauthorized_requests_are_refused_and_audited` (two indistinguishable 401s); `serve::api_key_file_with_one_trailing_newline_is_trimmed`; `serve::api_key_with_stray_whitespace_is_refused_at_startup`; `/v1/documents` behind the same layer |
 | 6 | The immutable audit ledger is used as an unauthenticated write oracle (huge or hostile route params) | Route parameters are bounded (64 chars) and kebab-validated (`sanitize_document_type`) before any audit append, including pre-auth 401 events | code-reviewed; audit shape asserted in `serve::unauthorized_requests_are_refused_and_audited` |
 | 7 | Request data values or the API key leak into the ledger or logs | Audit events carry a closed, value-free field set; lifecycle logs use fixed dimensions (method class, route template, status, latency, trace id) | `serve::audit_events_are_value_free` (canary + key scans over the ledger) |
 | 8 | The ledger lies: records removed, rewritten, or reordered | Keyed HMAC hash chain, sealed non-deleting segments; `render audit-verify` proves the chain end to end | `scaffold::tampered_ledger_fails_audit_verify` (a flipped byte fails verification; the happy path counts real records, not zero) |
@@ -23,6 +24,10 @@ fixed or explicitly documented as residuals below).
 | 14 | Byte drift between renders, machines, or dependency upgrades | Fresh world+library per render, canonical (RFC 8785) envelope = injected = hashed bytes, deterministic font order, `ident: Auto` (content-derived), comemo eviction; lockfile pins Typst **and the deflate stack** | `golden::golden_hashes_match` + `rendering_is_deterministic…` on two OSes in CI (`.github/workflows/render-golden.yml`); merge-gate record in EVIDENCE.md |
 | 15 | Sealed-bundle hash coverage misses nested files or symlinks | Hashes cover every file except the root manifest itself (nested `manifest.yaml` is governed content); any symlink in the bundle refuses sealing | `scaffold::bundle_with_symlink_cannot_be_sealed` |
 | 16 | 401 audit-append failures vanish silently | Failures are logged (`audit-append-failed` warn) even though the refusal itself stands | code-reviewed with the lifecycle-log middleware |
+| 17 | Compile diagnostics leak the host deployment (paths) or raw engine output | World file errors carry virtual, root-relative paths only; a redaction pass replaces any residual host bundle root with `<bundle>` in problem details and warnings | `golden::compile_diagnostics_report_virtual_paths_only`; `world::tests::not_found_reports_the_virtual_path_not_the_host_root` |
+| 18 | Oversized bodies DoS the service or dodge the audit trail | Body ceiling enforced **after authentication** (unauthenticated oversized bodies are 401s, never buffered); an authenticated over-ceiling body gets the `body-too-large` problem (413) and an audit event; the tower stream limit backstops chunked/under-declared bodies | `serve::oversized_bodies_are_refused_after_auth_as_problems` |
+| 19 | A panicking worker's stderr (paths, data fragments) reaches the operator log | Worker stderr is piped and drained, never inherited; problem documents are the diagnosis surface | code-reviewed with the supervise loop; `serve::slow_renders_are_killed_and_the_service_recovers` exercises abnormal worker exits |
+| 20 | Serve listens on a public or all-interfaces address | `runtime::validate_bind` refuses non-loopback/private/unspecified binds at startup; the whole `server:` section defaults to `127.0.0.1:8080` | `runtime::tests::loopback_private_and_link_local_binds_are_allowed`, `runtime::tests::public_and_unspecified_binds_are_refused`, `runtime::tests::bind_defaults_to_loopback` |
 
 ## Documented residuals (accepted, with conditions)
 
