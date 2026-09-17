@@ -1,8 +1,8 @@
-institution: Conseil Supérieur de la Zakat
-title: Reçu de Zakat
+institution: Autorité Exemple des Services Publics
+title: Reçu de paiement
 payer: Payeur
-nni: N° d'identification nationale
-wilaya: Wilaya
+id: N° d'identification
+region: Région
 details: Objet
 amount: Montant
 date: Date

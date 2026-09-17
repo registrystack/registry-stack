@@ -29,13 +29,41 @@ Procedure (per bundle, all commands from the repo root):
    serves the same bytes from the request's virtual `assets/` namespace).
 3. `cmp lib.pdf cli.pdf`.
 
-Results (all identical, byte for byte):
+Results, re-run 2026-09-17 against the current example corpus (the bundles were
+rewritten to name no real programme; see **Golden record** below).
 
-| Bundle | sha256 | Notes |
-|---|---|---|
-| receipt | `ce939b77f78cadda7183ad6ea9207c366a7b579c01cbff73a42f44293b356398` | bilingual RTL, QR, plain PDF |
-| certificate | `ffead2dad8f698dd137e2447aaadd6976c82a270de177a772cf8d9db5b173e1b` | PDF/A-4 (`pdfaid:part` present in output), baseline fonts only |
-| beneficiary-card | `ce588994f2cdb11d22e4e848b7d40ad2a228e7b978eaff8d361253477c9f72b9` | ID-1 duplex, photo from request assets, QR |
+Finding 4 below fixed `creator` to the version-free string `registry-render`,
+while the Typst CLI stamps its own version into `/Creator`. Library and CLI
+bytes are therefore no longer equal, by design, and the gate is now the sharper
+claim: they differ *only* in that field and in what the PDF writer derives from
+it.
+
+| Bundle | library sha256 | pinned CLI sha256 | Notes |
+|---|---|---|---|
+| receipt | `3f31d7fdc1492471259754a9acc9435c6c6475c9aa08f30a9ddcb04c8cab1519` | `c473c6d302493c305fbfb8f1064d0e4800b5dc6ea8bde206c48df27ded35b985` | bilingual RTL, QR, plain PDF |
+| certificate | `252d40678919cb8496950101efa7fa4984ccd6825655679cca6dead05c7696c0` | `653995645aa51a52f978a3bae2e858f4f0a81db82e36a3c16338357887f7f5d6` | PDF/A-4 (`pdfaid:part` present in output), baseline fonts only |
+| beneficiary-card | `cf607a3b82a2027abfb4345377b1b84cd2e616da7376e18f29355ca790c3da2f` | `99c23bd1c71ff2a4d3e5a6afc6bd3ef9bac0e351767eaca2691c9e8e4d6ab62d` | ID-1 duplex, photo from request assets, QR |
+
+The library column is exactly what `golden.json` pins, so this gate and the
+golden test prove the same bytes.
+
+Divergence, enumerated exhaustively (every stream in both files inflated and
+compared object by object, step 3 above):
+
+1. `/Creator` and `xmp:CreatorTool`: `registry-render` against `Typst 0.15.1`.
+2. The metadata stream's `/Length`, three bytes shorter on the CLI side,
+   derived from 1.
+3. The content-derived document identifier (trailer `/ID`, `xmpMM:DocumentID`,
+   `xmpMM:InstanceID`) on the two non-PDF/A documents: `ident: Auto` derives it
+   from document content, and that content includes the creator string. The
+   PDF/A-4 certificate's identifier is byte-identical on both sides, which is
+   what shows the derivation is the only reason the other two move.
+4. xref byte offsets, derived from 2.
+
+Everything else matches byte for byte: every page content stream, every embedded
+font, the card's image, and every other object (receipt 29 streams, certificate
+15, card 35, all equal once the four items above are normalized). A difference
+outside that list is the regression this gate exists to catch.
 
 Closure check: the library's per-render closure and the CLI's `--deps`
 output list the same file set (template + the four zebra package files);
@@ -87,30 +115,43 @@ The two-OS CI job (see `.github/workflows/render-golden.yml`) runs the
 golden test on macOS and Linux; identical hashes across both are the
 cross-machine byte-stability proof the DoD requires.
 
-**Regenerated 2026-09-17** (PR review item 12, fixing the PDF creator
-string; same procedure — drift observed by the golden test first, then the
-pinned values updated as the reviewed diff):
+**Regenerated 2026-09-17, example corpus made generic.** The three example
+bundles named one real programme, its institution, its jurisdiction and its
+religious levy scheme. They were rewritten to name none of that while keeping
+every technical property the corpus exists to exercise: Arabic/RTL primary with
+French secondary, bidirectional text with embedded Latin, a ten-digit identifier
+pattern, a currency (now `XTS`, the ISO 4217 code reserved for testing), a region
+field, an embedded photo, and an offline QR. Content changed in all three
+bundles, so all three were re-sealed and every pinned value moved. The document
+versions were deliberately *not* bumped (receipt stays v3, certificate and
+beneficiary-card v1): nothing has been released, and a bump would imply an
+earlier version existed in the wild.
 
-| Bundle | sha256 |
+This entry supersedes the earlier same-day regeneration rounds (the PDF creator
+fix, the cross-locale label key alignment, and adding `fonts/OFL.txt`); their
+values are no longer reachable from this tree, and their causes are recorded in
+the findings above.
+
+| Bundle | pdf sha256 |
 |---|---|
-| receipt | `994d0f28e1bba12887ef83b53374c05063cfd1547a553870fa86dabb85824f2b` |
-| certificate | `636daae8c1cd2fba01f0d0d60244073d468827fc993cc514b75868660e7552e8` |
-| beneficiary-card | `8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8` |
+| receipt | `3f31d7fdc1492471259754a9acc9435c6c6475c9aa08f30a9ddcb04c8cab1519` |
+| certificate | `252d40678919cb8496950101efa7fa4984ccd6825655679cca6dead05c7696c0` |
+| beneficiary-card | `cf607a3b82a2027abfb4345377b1b84cd2e616da7376e18f29355ca790c3da2f` |
 
-Per-bundle deltas, attributed in order (the table above holds the pdf
-sha256 values; the current dataSha256/bundleHash values live in
-`golden.json`):
+Envelope (`dataSha256`) and bundle hashes moved with them and live in
+`golden.json`: receipt envelope
+`8ab91deaf04f2ab9634da9fe45e63615f285c936659f8d839f413f647641b33a` / bundle
+`96d199d20c94b39d4947168a84337277db1f01e86bb8907d0614d211855b0e26`; certificate
+envelope `cccb32e6fdcf4db99a556ede3abedcc4f46b94575b20a4b5ce361edfd1ac555a` /
+bundle `3bb68569252cd621f0b6992b329de04524c29d02995c14056892f177ac9e6dff`;
+beneficiary-card envelope
+`c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18` / bundle
+`4dd435c0bed4c80f4408dc87173b0f72887071ca78f734441bed979cabfe7d88`. The
+per-render dependency closures are unchanged. Every warning list is empty.
 
-- **certificate**: metadata only — `dataSha256` and bundle hash unchanged.
-- **receipt** and **beneficiary-card**: the creator fix changed the pdf
-  bytes as above, and two same-round bundle changes moved their
-  `dataSha256` and bundle hashes *again* — the label key sets were aligned
-  across locales (item 20) and `fonts/OFL.txt` was added and the bundles
-  re-sealed (item 28). Final envelope hashes: receipt
-  `d7a97980439a4345fd5222175e45170f52ba96f7a60e7e6a6e8470113b8d2a68`,
-  card `4fbfbe5210c369cfa8f3586f36bf0f3d3b8d78274d2b98dcc65e65b019ec6b0f`;
-  pdf bytes were not affected by either (labels only feed the envelope,
-  the license text is not read by templates).
+The Arabic strings in the rewritten fixtures are plausible modern standard
+Arabic written for this corpus; they want a native read before anything ships
+to a reader as example copy.
 
 The Typst pin bump burden improves with this change: a pin bump now
 changes golden bytes only when layout changes, not when the Typst
@@ -166,7 +207,8 @@ Test totals after the round: 36 (7 unit, 11 golden, 9 serve end-to-end,
 
 PR #1113 run 35177001158 — `Registry Render golden gate` green on both
 `ubuntu-24.04` and `macos-14` (golden hashes, determinism suite, serve
-end-to-end), on revision `8e06eca6a`. The same PR registers
+end-to-end); the run record pins the revision, which this branch's
+history does not survive. The same PR registers
 `registry-render` in the CI classifier's Rust shard inventory (new
 `render` shard), so ordinary Rust-workspace routing also covers the
 crate; the classifier's own test suites (111 tests) pass with the new

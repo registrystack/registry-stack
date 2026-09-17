@@ -6,6 +6,13 @@ reader profile whose readable fields equal the template data contract,
 renders via `Accept: application/json`, delivers the PDF, and a dead-letter
 replay produces byte-identical output.
 
+The walk predates the same-day rewrite that made the example corpus generic.
+That rewrite changed the receipt bundle's content, so its field names and its
+pinned digests both moved. This record therefore names digests by reference to
+`products/render/golden.json` rather than quoting them, and shows the field list
+as it now stands; the invariants below are what the walk established, and
+re-walking it reproduces them against the current pinned values.
+
 ## What ran
 
 | Piece | Version / shape |
@@ -30,8 +37,8 @@ profile:
   permissions:
     - entity: record
       operations: [get]          # no list, no filterable fields
-      readableFields: [reference, payer-name-ar, payer-name-fr, payer-nni,
-                       wilaya, amount, currency, date, method-ar,
+      readableFields: [reference, payer-name-ar, payer-name-fr, payer-id,
+                       region, amount, currency, date, method-ar,
                        purpose-ar, verify-url, bidi-note]
       rowBoundaries:
         - {field: status, claim: registry_record_status, operator: equals}
@@ -51,7 +58,7 @@ A reader GET by `recordIdentifier` returns exactly:
 
 ```
 domainData keys: amount, bidiNote, currency, date, methodAr, payerNameAr,
-                 payerNameFr, payerNni, purposeAr, reference, verifyUrl, wilaya
+                 payerNameFr, payerId, purposeAr, reference, region, verifyUrl
 ```
 
 No `code`, `label`, `group`, or `status` reaches the renderer. An
@@ -69,9 +76,9 @@ is the profile's, not the caller's.
    delivers the `pdfBase64` to the delivery endpoint. Exit clean; final
    state is minimized: `{data: {receipt: {sha256, version}},
    eventEffectId}` — no token, key, or record data.
-   - `pdfSha256` = `ce939b77f78cadda7183ad6ea9207c366a7b579c01cbff73a42f44293b356398`
-     — the pinned golden hash from `products/render/golden.json`, i.e. the
-     same bytes the CLI, the tests, and the two-OS CI job produce.
+   - `pdfSha256` equals the receipt's pinned golden hash in
+     `products/render/golden.json`, i.e. the same bytes the CLI, the tests,
+     and the two-OS CI job produce.
    - Delivered bytes on disk hash to the same value.
 2. **Delivery outage (dead-letter).** The delivery endpoint returns 503;
    the job aborts after rendering with an `AdaptorError` in the output
@@ -90,8 +97,8 @@ is the profile's, not the caller's.
 limits verification to sealed segments): **3 record(s) across 1
 segment(s)** — one per render attempt including the dead-lettered one.
 Every record carries `correlationId` = the job's `eventEffectId`, the
-golden `pdfSha256`, and the golden `dataSha256`
-(`26bdfa19b95178dc17fe5826cd43dd26b74f29cf0b69e77f61a69b19beaea4dc`).
+golden `pdfSha256`, and the golden `dataSha256`, both as pinned in
+`golden.json`.
 `Idempotency-Key` stays correlation-only: the byte stability is what makes
 at-least-once redelivery safe.
 

@@ -662,7 +662,7 @@ fn audit_events_are_value_free() {
     let server = start_server(&runtime);
     // Canary in the data must never reach the ledger — even though the
     // rendered document itself carries it.
-    let body = receipt_body().replace("ZKT-2026-W03-000123", "CANARY-DO-NOT-LOG");
+    let body = receipt_body().replace("RCP-2026-W03-000123", "CANARY-DO-NOT-LOG");
     let reply = request(
         server.port,
         "POST",

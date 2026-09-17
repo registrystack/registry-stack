@@ -46,14 +46,14 @@
 
 #v(0.8em)
 
-// ---- parties: payer (Arabic name, Latin NNI) -------------------------------
+// ---- parties: payer (Arabic name, Latin identifier) ------------------------
 #text(lang: "ar")[
   *#L.ar.payer:* #d.payer-name-ar \
-  *#L.ar.nni:* #d.payer-nni — *#L.ar.wilaya:* #d.wilaya
+  *#L.ar.id:* #d.payer-id — *#L.ar.region:* #d.region
 ]
 #v(0.5em)
 #text(lang: "fr", size: 8.5pt, fill: gray)[
-  #L.fr.payer: #d.payer-name-fr · NNI: #d.payer-nni
+  #L.fr.payer: #d.payer-name-fr · #L.fr.id: #d.payer-id
 ]
 
 #v(1.2em)

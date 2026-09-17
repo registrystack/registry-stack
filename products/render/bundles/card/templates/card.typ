@@ -23,9 +23,9 @@
     #box(stroke: 0.4pt + black, inset: (x: 3pt, y: 1pt), fill: luma(230))[*#L.ar.title*]
     #v(0.3em)
     *#L.ar.name:* #d.name-ar \
-    *#L.ar.nni:* #text(lang: "fr")[#d.nni] \
-    *#L.ar.wilaya:* #d.wilaya \
-    *#L.ar.category:* #d.asnaf \
+    *#L.ar.id:* #text(lang: "fr")[#d.id] \
+    *#L.ar.region:* #d.region \
+    *#L.ar.category:* #d.category \
     #v(0.25em)
     #text(lang: "fr", size: 6pt)[#d.name-fr]
   ],

@@ -10,7 +10,7 @@ documents:
   - en
   pdfStandard: a-4
 hashes:
-  fixtures/data.json: 46b9d921d0f9f1fbcba4a1f9ad1acb3b60bfdcb6e7d567736368f171d3df9738
+  fixtures/data.json: 34fb9e0e641ea5176a0ce156fbe5eebf34e2e4014c4b6f3e035e7a83db3462ba
   labels/en.yaml: a7c74d341a024e41428f041b1ae93d0686413923905195b7869b5c0d74792747
   packages/preview/zebra/0.1.0/LICENSE: f0f6fec86b9678afa492dc078f81b8576bf25f0a1ca22be9f40e78b731fdf988
   packages/preview/zebra/0.1.0/README.md: d420f30d5c82f6fdd1f8ecaf58f98eaf6320670ab0ce626976c15f853cb57b6a

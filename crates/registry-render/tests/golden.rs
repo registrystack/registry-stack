@@ -310,7 +310,7 @@ fn schema_violations_carry_json_pointers() {
     // The value is caller data: it may name a person, so the problem must
     // point at the field and the failed schema rule without echoing it.
     let sentinel = "SENTINEL-not-ten-digits";
-    data["payer-nni"] = Value::String(sentinel.into());
+    data["payer-id"] = Value::String(sentinel.into());
     data.as_object_mut().unwrap().remove("reference");
     let request = registry_render::RenderRequest {
         locale: None,
@@ -322,7 +322,7 @@ fn schema_violations_carry_json_pointers() {
         .expect_err("schema violation must be refused");
     assert_eq!(problem.kind, registry_render::ProblemKind::DataInvalid);
     assert!(
-        problem.pointers.iter().any(|p| p == "/data/payer-nni"),
+        problem.pointers.iter().any(|p| p == "/data/payer-id"),
         "pointers name the offending field: {:?}",
         problem.pointers
     );
@@ -332,7 +332,7 @@ fn schema_violations_carry_json_pointers() {
         problem.detail
     );
     assert!(
-        problem.detail.contains("/properties/payer-nni/pattern")
+        problem.detail.contains("/properties/payer-id/pattern")
             && problem.detail.contains("/required"),
         "the detail names the failed schema rules: {}",
         problem.detail

@@ -44,7 +44,7 @@ extra; none is privileged in production code:
 
 | Bundle | Required shape | What it must prove |
 |---|---|---|
-| Bilingual receipt (A5) | Arabic primary + French, RTL justified text, Latin amounts/NNI inline, QR, plain PDF | Mixed-script bidi layout and mixed-family typography are correct by construction, warnings-clean, and byte-stable. |
+| Bilingual receipt (A5) | Arabic primary + French, RTL justified text, Latin amounts and identifiers inline, QR, plain PDF | Mixed-script bidi layout and mixed-family typography are correct by construction, warnings-clean, and byte-stable. |
 | Archival certificate (A4) | Monolingual (or bilingual non-RTL), validity dates, seal text, `pdfStandard: a-4` | A PDF/A document type renders, validates as PDF/A, and stays byte-stable under the standards profile. |
 | ID card (ID-1 duplex) | Photo from request assets, QR, Arabic/French, two pages | Fixed card geometry with a data-carried image; asset decoding, hashing, and virtual-file path rules hold. |
 

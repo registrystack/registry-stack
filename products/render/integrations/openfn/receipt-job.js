@@ -22,7 +22,7 @@ fn(async state => {
   // exactly these fields.
   const contract = {
     reference: 'reference', payerNameAr: 'payer-name-ar', payerNameFr: 'payer-name-fr',
-    payerNni: 'payer-nni', wilaya: 'wilaya', amount: 'amount', currency: 'currency',
+    payerId: 'payer-id', region: 'region', amount: 'amount', currency: 'currency',
     date: 'date', methodAr: 'method-ar', purposeAr: 'purpose-ar', verifyUrl: 'verify-url',
     bidiNote: 'bidi-note',
   };

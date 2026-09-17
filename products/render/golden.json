@@ -4,10 +4,10 @@
   "documents": {
     "receipt": {
       "document": "receipt v3",
-      "pdfSha256": "994d0f28e1bba12887ef83b53374c05063cfd1547a553870fa86dabb85824f2b",
-      "dataSha256": "d7a97980439a4345fd5222175e45170f52ba96f7a60e7e6a6e8470113b8d2a68",
+      "pdfSha256": "3f31d7fdc1492471259754a9acc9435c6c6475c9aa08f30a9ddcb04c8cab1519",
+      "dataSha256": "8ab91deaf04f2ab9634da9fe45e63615f285c936659f8d839f413f647641b33a",
       "warnings": [],
-      "bundleHash": "fddf92afe4aa71e8d8c00a1bffa1da4225a81ab4b806fbc5937b7fb359a1231c",
+      "bundleHash": "96d199d20c94b39d4947168a84337277db1f01e86bb8907d0614d211855b0e26",
       "deps": [
         "@preview/zebra:0.1.0/src/generic.typ",
         "@preview/zebra:0.1.0/src/lib.typ",
@@ -18,10 +18,10 @@
     },
     "certificate": {
       "document": "certificate v1",
-      "pdfSha256": "636daae8c1cd2fba01f0d0d60244073d468827fc993cc514b75868660e7552e8",
-      "dataSha256": "354f90c81f91fc07f518fbc9b4b8769f9a888f98b80817a013dd906cf3e170f2",
+      "pdfSha256": "252d40678919cb8496950101efa7fa4984ccd6825655679cca6dead05c7696c0",
+      "dataSha256": "cccb32e6fdcf4db99a556ede3abedcc4f46b94575b20a4b5ce361edfd1ac555a",
       "warnings": [],
-      "bundleHash": "c79c9c4809d687a8a87b3de11e952934abb6c82ef9d5bfe78654c3a59f35eaa7",
+      "bundleHash": "3bb68569252cd621f0b6992b329de04524c29d02995c14056892f177ac9e6dff",
       "deps": [
         "@preview/zebra:0.1.0/src/generic.typ",
         "@preview/zebra:0.1.0/src/lib.typ",
@@ -32,10 +32,10 @@
     },
     "card": {
       "document": "beneficiary-card v1",
-      "pdfSha256": "8f36c070da1d322664d46ad2b1423ce35eac7c380c1b199a7b99ff4c327f1ec8",
-      "dataSha256": "4fbfbe5210c369cfa8f3586f36bf0f3d3b8d78274d2b98dcc65e65b019ec6b0f",
+      "pdfSha256": "cf607a3b82a2027abfb4345377b1b84cd2e616da7376e18f29355ca790c3da2f",
+      "dataSha256": "c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18",
       "warnings": [],
-      "bundleHash": "7f86fed5e7b7d44f2f56e4126f1a4d9fdc3d059e8683d40defc81bc78c5255d2",
+      "bundleHash": "4dd435c0bed4c80f4408dc87173b0f72887071ca78f734441bed979cabfe7d88",
       "deps": [
         "@preview/zebra:0.1.0/src/generic.typ",
         "@preview/zebra:0.1.0/src/lib.typ",

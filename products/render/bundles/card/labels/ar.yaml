@@ -1,8 +1,8 @@
 title: بطاقة مستفيد
-program: برنامج الزكاة
+program: برنامج الخدمات العامة
 name: الاسم
-nni: الرقم الوطني
-wilaya: الولاية
+id: رقم الهوية
+region: المنطقة
 category: الفئة
 valid: صالحة حتى
 call-center: "الهاتف: 80 00 12 12"

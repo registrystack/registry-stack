@@ -2,14 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["reference", "name-ar", "name-fr", "nni", "wilaya", "asnaf", "valid-until", "verify-url", "bidi-note"],
+  "required": ["reference", "name-ar", "name-fr", "id", "region", "category", "valid-until", "verify-url", "bidi-note"],
   "properties": {
     "reference": { "type": "string", "minLength": 1 },
     "name-ar": { "type": "string", "minLength": 1 },
     "name-fr": { "type": "string", "minLength": 1 },
-    "nni": { "type": "string", "pattern": "^[0-9]{10}$" },
-    "wilaya": { "type": "string" },
-    "asnaf": { "type": "string" },
+    "id": { "type": "string", "pattern": "^[0-9]{10}$" },
+    "region": { "type": "string" },
+    "category": { "type": "string" },
     "valid-until": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
     "verify-url": { "type": "string", "pattern": "^https://[^ ]+$" },
     "bidi-note": { "type": "string" }
