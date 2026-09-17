@@ -95,7 +95,20 @@ pub fn validate_data(
                 // leaves the process. The field pointer plus the schema
                 // rule it violated names the failure completely.
                 let pointer = format!("/data{}", err.instance_path);
-                messages.push(format!("{pointer} violates {}", err.schema_path));
+                // `required` points at the containing object and names the
+                // absent property only in the error kind. That name comes
+                // from the schema, not from the request, so naming it keeps
+                // the refusal actionable.
+                let message = match &err.kind {
+                    jsonschema::error::ValidationErrorKind::Required { property } => {
+                        format!(
+                            "{pointer} violates {} (missing {property})",
+                            err.schema_path
+                        )
+                    }
+                    _ => format!("{pointer} violates {}", err.schema_path),
+                };
+                messages.push(message);
                 pointers.push(pointer);
             }
             Err(RenderProblem::new(
