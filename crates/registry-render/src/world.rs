@@ -36,8 +36,8 @@ pub struct RenderWorld {
     bundle_root: PathBuf,
     /// Decoded request assets, keyed by name, served as `assets/<name>`.
     assets: BTreeMap<String, Bytes>,
-    /// UTC date (and full time) the document claims issuance at.
-    issued_ymd: (i32, u8, u8),
+    /// The issuance instant: the world clock, never the machine clock.
+    issued_utc: chrono::DateTime<chrono::Utc>,
     /// Every virtual path this render actually read, relative to its root,
     /// recorded for the manifest's closure governance.
     closure: Mutex<BTreeSet<String>>,
@@ -72,12 +72,6 @@ impl RenderWorld {
                 .build(),
         );
         let book = LazyHash::new(FontBook::from_fonts(&fonts));
-        let issued_naive = issued.date_naive();
-        let issued_ymd = (
-            issued_naive.year(),
-            issued_naive.month() as u8,
-            issued_naive.day() as u8,
-        );
         Ok(Self {
             library,
             book,
@@ -85,7 +79,7 @@ impl RenderWorld {
             main_id,
             bundle_root,
             assets,
-            issued_ymd,
+            issued_utc: issued,
             closure: Mutex::new(BTreeSet::new()),
         })
     }
@@ -233,19 +227,20 @@ impl World for RenderWorld {
 
     fn today(&self, offset: Option<Duration>) -> Option<Datetime> {
         // Deterministic: the world clock is the document's issuedAt, never
-        // the machine clock. `None` (local) reads as UTC of issuance.
-        let (y, m, d) = self.issued_ymd;
-        let date = chrono::NaiveDate::from_ymd_opt(y, m as u32, d as u32)?;
-        if let Some(duration) = offset {
-            let hours = duration.hours().round() as i64;
-            let shifted = date
-                .and_hms_opt(0, 0, 0)?
-                .checked_add_signed(chrono::Duration::hours(hours))?
-                .date();
-            Datetime::from_ymd(shifted.year(), shifted.month() as u8, shifted.day() as u8)
-        } else {
-            Datetime::from_ymd(y, m, d)
-        }
+        // the machine clock. `None` (local) reads as UTC of issuance; an
+        // offset shifts the issuance instant itself (22:30Z + 3h lands on
+        // the next day), and an offset chrono cannot represent yields None
+        // rather than a panic.
+        let instant = match offset {
+            None => self.issued_utc,
+            Some(duration) => {
+                let hours = duration.hours().round() as i64;
+                let delta = chrono::TimeDelta::try_hours(hours)?;
+                self.issued_utc.checked_add_signed(delta)?
+            }
+        };
+        let date = instant.date_naive();
+        Datetime::from_ymd(date.year(), date.month() as u8, date.day() as u8)
     }
 }
 
@@ -302,5 +297,49 @@ mod tests {
         assert_eq!(err, FileError::NotFound(PathBuf::from("gone.png")));
         let text = err.to_string();
         assert!(!text.contains(&*root.to_string_lossy()), "{text}");
+    }
+
+    fn test_world(issued: chrono::DateTime<chrono::Utc>) -> RenderWorld {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        RenderWorld::new(&root, Vec::new(), "main.typ", BTreeMap::new(), issued, "null".to_owned())
+            .unwrap()
+    }
+
+    fn ymd(datetime: Option<Datetime>) -> Option<(i32, u8, u8)> {
+        let d = datetime?;
+        Some((d.year()?, d.month()? as u8, d.day()? as u8))
+    }
+
+    #[test]
+    fn today_follows_the_issued_instant_with_and_without_offset() {
+        use chrono::TimeZone;
+        let issued = chrono::Utc.with_ymd_and_hms(2026, 9, 16, 22, 30, 0).unwrap();
+        let world = test_world(issued);
+        // No offset: UTC of issuance.
+        assert_eq!(
+            ymd(world.today(None)),
+            Some((2026, 9, 16)),
+            "today() is the issued date"
+        );
+        // +3h shifts the INSTANT: 22:30Z becomes 01:30 the next day.
+        assert_eq!(
+            ymd(world.today(Some(Duration::construct(0, 0, 3, 0, 0)))),
+            Some((2026, 9, 17)),
+            "today(offset) must shift the issuance instant, not its midnight"
+        );
+        // Negative offset crossing midnight downwards.
+        assert_eq!(
+            ymd(world.today(Some(Duration::construct(0, 0, -5, 0, 0)))),
+            Some((2026, 9, 16)),
+            "22:30Z - 5h is still the 16th"
+        );
+    }
+
+    #[test]
+    fn today_with_an_absurd_offset_returns_none_without_panicking() {
+        let world = test_world(chrono::Utc::now());
+        assert!(world.today(Some(Duration::construct(i64::MAX / 2, 0, 0, 0, 0))).is_none());
+        assert!(world.today(Some(Duration::construct(i64::MIN / 2, 0, 0, 0, 0))).is_none());
     }
 }
