@@ -128,12 +128,10 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
     let app = router(Arc::clone(&service)).layer(axum::middleware::from_fn(lifecycle_log));
     let grace = Duration::from_secs(runtime.server.shutdown_grace_seconds);
     let drain_service = Arc::clone(&service);
-    // The drain runs INSIDE the graceful-shutdown future: axum keeps
-    // serving while it is pending, so in-flight renders finish and their
-    // audit appends land before the listener closes. A render still holding
-    // a permit at the end of the grace period is abandoned — dropping its
-    // request future kills the worker (kill_on_drop).
-    let shutdown = async move {
+    // The stop signal is observed once and broadcast, so the drain and the
+    // hard bound below race the same event.
+    let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+    tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
         {
@@ -149,6 +147,14 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         {
             let _ = ctrl_c.await;
         }
+        let _ = stop_tx.send(());
+    });
+    // Phase 1 — drain: the graceful-shutdown future holds the server open
+    // while in-flight renders finish (up to grace), so their responses and
+    // audit appends land before the listener stops accepting.
+    let mut stop_for_drain = stop_rx.clone();
+    let shutdown = async move {
+        let _ = stop_for_drain.changed().await;
         let service = drain_service;
         let drained = tokio::time::timeout(grace, async {
             while service.concurrency.available_permits() < service.max_concurrency {
@@ -159,14 +165,36 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         if drained.is_err() {
             tracing::warn!(
                 grace_seconds = grace.as_secs(),
-                "shutdown grace elapsed with renders in flight; abandoning them"
+                "shutdown grace elapsed with renders in flight; moving to connection teardown"
             );
         }
     };
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown)
-        .await
-        .map_err(|err| RenderProblem::new(ProblemKind::Internal, format!("server: {err}")))?;
+    // Phase 2 — bounded teardown: after the shutdown future resolves, axum
+    // waits for open connections; that wait gets one more grace. Dropping
+    // the serve future at the bound is what actually abandons stragglers —
+    // their request futures drop, which kills their workers (kill_on_drop).
+    let mut stop_for_bound = stop_rx;
+    let bound = async move {
+        let _ = stop_for_bound.changed().await;
+        tokio::time::sleep(grace + grace).await;
+    };
+    let outcome = tokio::select! {
+        result = axum::serve(listener, app).with_graceful_shutdown(shutdown) => Some(result),
+        _ = bound => None,
+    };
+    match outcome {
+        Some(Ok(())) => {}
+        Some(Err(err)) => {
+            return Err(RenderProblem::new(
+                ProblemKind::Internal,
+                format!("server: {err}"),
+            ))
+        }
+        None => tracing::warn!(
+            grace_seconds = grace.as_secs(),
+            "shutdown window elapsed with connections still open; abandoning them (their workers are killed)"
+        ),
+    }
     tracing::info!("render serve stopped");
     Ok(0)
 }

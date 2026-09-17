@@ -852,3 +852,92 @@ fn base64_decode(text: &str) -> Vec<u8> {
         .decode(text)
         .expect("valid base64")
 }
+
+#[test]
+#[cfg(unix)]
+fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
+    // A render far beyond the grace (and a huge render timeout so nothing
+    // else reaps it): SIGTERM must still exit the process within the
+    // bounded window — the drain holds the door for grace, connection
+    // teardown gets grace, then stragglers are abandoned and their workers
+    // killed. Waiting for the render itself would take tens of seconds.
+    let heavy = tempfile::tempdir().unwrap();
+    let bundle = heavy.path();
+    std::fs::write(
+        bundle.join("manifest.yaml"),
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
+    )
+    .unwrap();
+    for dir in ["templates", "fonts", "labels", "schemas", "packages/preview"] {
+        std::fs::create_dir_all(bundle.join(dir)).unwrap();
+    }
+    std::fs::write(
+        bundle.join("templates/heavy.typ"),
+        "#let x = range(200000000).fold(0, (a, b) => a + b)\n#x\n",
+    )
+    .unwrap();
+    let sealed = Command::new(env!("CARGO_BIN_EXE_render"))
+        .args(["seal", "--bundle", bundle.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(sealed.status.success());
+
+    let (home, runtime, port) = deployment(
+        "limits:\n  renderTimeoutSeconds: 120\n  maxOutputBytes: 8388608\n  maxRequestBodyBytes: 8388608\n  maxConcurrency: 2\n",
+        bundle,
+    );
+    // Tighten the grace: the deployment default is 5s.
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    std::fs::write(&runtime, text.replace("shutdownGraceSeconds: 5", "shutdownGraceSeconds: 1"))
+        .unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+            let mut buf = [0u8; 128];
+            if stream.read(&mut buf).is_ok_and(|n| n > 0) {
+                break;
+            }
+        }
+        assert!(Instant::now() < deadline, "server did not start");
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    // A render in flight, from a detached thread (its socket closes when
+    // the process exits).
+    let body = r#"{"issuedAt":"2026-09-16T10:32:00Z","data":{}}"#.to_owned();
+    std::thread::spawn(move || {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.write_all(
+                format!(
+                    "POST /v1/render/heavy HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer {API_KEY}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+            let _ = stream.write_all(body.as_bytes());
+            let mut sink = Vec::new();
+            use std::io::Read as _;
+            let _ = stream.read_to_end(&mut sink);
+        }
+    });
+    std::thread::sleep(Duration::from_millis(700));
+    let started = Instant::now();
+    Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .output()
+        .expect("send SIGTERM");
+    let code = wait_for_exit(&mut child);
+    let elapsed = started.elapsed();
+    assert_eq!(code, 0, "graceful exit code");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "SIGTERM exit took {elapsed:?}; the shutdown window is bounded (grace 1s here)"
+    );
+    let _ = home;
+}
