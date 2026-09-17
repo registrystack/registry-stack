@@ -18,6 +18,7 @@ pub mod action_evidence_contracts;
 pub mod action_evidence_maintenance;
 pub mod action_evidence_validation;
 pub mod action_handler;
+pub(crate) mod action_outcome;
 #[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;

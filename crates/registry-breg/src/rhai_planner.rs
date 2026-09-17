@@ -9,11 +9,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use registry_platform_script::rhai as platform;
 use rhai::{Array, Dynamic, Engine, EvalAltResult, ImmutableString, Map, Position, AST};
-use serde_json::{Map as JsonMap, Number, Value};
+use serde_json::{Map as JsonMap, Value};
 
 use crate::{
-    contract::{FieldTypeSource, Operation, CHANGE_REQUEST_PLAN_ABI_V1},
-    data::{validate_field_value, FieldValue},
+    contract::{Operation, CHANGE_REQUEST_PLAN_ABI_V1},
     model::{
         CompiledChangeRequest, CompiledChangeRequestApplicationMode,
         CompiledChangeRequestDisposition, CompiledChangeRequestMutation,
@@ -709,232 +708,20 @@ pub(crate) fn decode_write_mutations(
     write: &CompiledChangeRequestPlannerWrite,
     map: &Map,
 ) -> Result<Vec<CandidateChangeRequestMutation>, ChangeRequestPlannerError> {
-    decode_write_mutations_detailed(write, map).map_err(|diagnostic| diagnostic.kind)
-}
-
-pub(crate) struct WriteMutationDiagnostic {
-    pub kind: ChangeRequestPlannerError,
-    pub field: Option<String>,
-    pub message: &'static str,
-}
-
-impl WriteMutationDiagnostic {
-    fn new(kind: ChangeRequestPlannerError, message: &'static str) -> Self {
-        Self {
-            kind,
-            field: None,
-            message,
-        }
-    }
-
-    fn at_field(
-        write: &CompiledChangeRequestPlannerWrite,
-        field: &str,
-        kind: ChangeRequestPlannerError,
-        message: &'static str,
-    ) -> Self {
-        // Locations come from the compiled ceiling, never an unknown script key.
-        Self {
-            kind,
-            field: write.fields.get(field).cloned(),
-            message,
-        }
-    }
-}
-
-pub(crate) fn decode_write_mutations_detailed(
-    write: &CompiledChangeRequestPlannerWrite,
-    map: &Map,
-) -> Result<Vec<CandidateChangeRequestMutation>, WriteMutationDiagnostic> {
-    let operation = write.operation;
-    let mut mutations = Vec::new();
-    let mut touched = BTreeSet::new();
-    if let Some(set) = map.get("set") {
-        let set = set.read_lock::<Map>().ok_or_else(|| {
-            WriteMutationDiagnostic::new(
-                ChangeRequestPlannerError::Result,
-                "Return set as a map of declared fields to values.",
+    // The mutation rules are product semantics shared with the action
+    // validator; this adapter only carries the planner's Rhai map into the
+    // backend-neutral member list the shared decoder works on.
+    let members: Vec<(String, crate::action_outcome::ProposedValue)> = map
+        .iter()
+        .map(|(key, value)| {
+            (
+                key.to_string(),
+                crate::action_outcome::rhai_document(value.clone()),
             )
-        })?;
-        for (field, value) in set.iter() {
-            if !write.fields.contains(field.as_str()) {
-                return Err(WriteMutationDiagnostic::at_field(
-                    write,
-                    field,
-                    ChangeRequestPlannerError::Ceiling,
-                    "Set only fields declared by this slot.",
-                ));
-            }
-            touched.insert(field.to_string());
-            mutations.push(CandidateChangeRequestMutation::Set {
-                field: field.to_string(),
-                value: decode_set_value(write, field, value.clone()).map_err(|kind| {
-                    let message = if value.is_unit() {
-                        "Set a non-null value; use clear only for optional patch fields."
-                    } else if matches!(
-                        write.field_types.get(field.as_str()),
-                        Some(FieldTypeSource::Reference { .. })
-                    ) {
-                        "Use a declared fromField or an emitted compatible fromEffect reference."
-                    } else {
-                        "Use a value matching the declared field type and bounds."
-                    };
-                    WriteMutationDiagnostic::at_field(write, field, kind, message)
-                })?,
-            });
-        }
-    }
-    if let Some(clear) = map.get("clear") {
-        let clear = clear.read_lock::<Array>().ok_or_else(|| {
-            WriteMutationDiagnostic::new(
-                ChangeRequestPlannerError::Result,
-                "Return clear as a list of optional patch field names.",
-            )
-        })?;
-        for field in clear.iter() {
-            let field = dynamic_string(field).map_err(|kind| {
-                WriteMutationDiagnostic::new(kind, "Use declared field names in clear.")
-            })?;
-            let message = if !write.fields.contains(&field) {
-                Some("Clear only fields declared by this slot.")
-            } else if operation == Operation::Create {
-                Some("Create effects cannot clear fields; omit optional fields or set a value.")
-            } else if write.required_fields.contains(&field) {
-                Some("Set a value for this required field; it cannot be cleared.")
-            } else if !touched.insert(field.clone()) {
-                Some("Write each field once, using either set or clear.")
-            } else {
-                None
-            };
-            if let Some(message) = message {
-                return Err(WriteMutationDiagnostic::at_field(
-                    write,
-                    &field,
-                    ChangeRequestPlannerError::Ceiling,
-                    message,
-                ));
-            }
-            mutations.push(CandidateChangeRequestMutation::Clear { field });
-        }
-    }
-    if mutations.is_empty() {
-        return Err(WriteMutationDiagnostic::new(
-            ChangeRequestPlannerError::Result,
-            "Return at least one set or clear mutation for the slot.",
-        ));
-    }
-    if operation == Operation::Create {
-        if let Some(field) = write.required_fields.difference(&touched).next() {
-            return Err(WriteMutationDiagnostic::at_field(
-                write,
-                field,
-                ChangeRequestPlannerError::Ceiling,
-                "Set this required field when creating a record.",
-            ));
-        }
-    }
-    Ok(mutations)
-}
-
-fn decode_set_value(
-    write: &CompiledChangeRequestPlannerWrite,
-    field: &str,
-    value: Dynamic,
-) -> Result<CandidateChangeRequestValue, ChangeRequestPlannerError> {
-    let field_type = write
-        .field_types
-        .get(field)
-        .ok_or(ChangeRequestPlannerError::Ceiling)?;
-    if let FieldTypeSource::Reference { .. } = field_type {
-        let sources = write
-            .reference_sources
-            .get(field)
-            .ok_or(ChangeRequestPlannerError::Ceiling)?;
-        let map = value
-            .try_cast::<Map>()
-            .ok_or(ChangeRequestPlannerError::Result)?;
-        match (map.get("fromField"), map.get("fromEffect")) {
-            (Some(field), None) => {
-                exact_keys(&map, &["fromField"], &[])?;
-                let field = dynamic_string(field)?;
-                if !sources.request_fields.contains(&field) {
-                    return Err(ChangeRequestPlannerError::Ceiling);
-                }
-                Ok(CandidateChangeRequestValue::FromRequestField { field })
-            }
-            (None, Some(effect)) => {
-                exact_keys(&map, &["fromEffect"], &[])?;
-                let effect = dynamic_string(effect)?;
-                let target_entity_id = sources
-                    .create_entities
-                    .iter()
-                    .next()
-                    .cloned()
-                    .ok_or(ChangeRequestPlannerError::Ceiling)?;
-                Ok(CandidateChangeRequestValue::FromEffect {
-                    effect,
-                    target_entity_id,
-                })
-            }
-            _ => Err(ChangeRequestPlannerError::Result),
-        }
-    } else {
-        let value = dynamic_to_json(value, 0)?;
-        if value.is_null() || !validate_field_value(FieldValue::Json(&value), field_type) {
-            return Err(ChangeRequestPlannerError::Result);
-        }
-        Ok(CandidateChangeRequestValue::Literal(value))
-    }
-}
-
-fn dynamic_to_json(value: Dynamic, depth: usize) -> Result<Value, ChangeRequestPlannerError> {
-    if depth > MAXIMUM_VALUE_DEPTH {
-        return Err(ChangeRequestPlannerError::Resource);
-    }
-    if value.is_unit() {
-        return Ok(Value::Null);
-    }
-    if value.is::<bool>() {
-        return Ok(Value::Bool(value.cast()));
-    }
-    if value.is::<rhai::INT>() {
-        return Ok(Value::Number(Number::from(value.cast::<rhai::INT>())));
-    }
-    if value.is::<ImmutableString>() {
-        let value = value.cast::<ImmutableString>();
-        if value.len() > MAXIMUM_STRING_BYTES {
-            return Err(ChangeRequestPlannerError::Resource);
-        }
-        return Ok(Value::String(value.to_string()));
-    }
-    if value.is::<Array>() {
-        let array = value.cast::<Array>();
-        if array.len() > MAXIMUM_ARRAY_ITEMS {
-            return Err(ChangeRequestPlannerError::Resource);
-        }
-        return array
-            .into_iter()
-            .map(|value| dynamic_to_json(value, depth + 1))
-            .collect::<Result<Vec<_>, _>>()
-            .map(Value::Array);
-    }
-    if value.is::<Map>() {
-        let map = value.cast::<Map>();
-        if map.len() > MAXIMUM_MAP_ENTRIES {
-            return Err(ChangeRequestPlannerError::Resource);
-        }
-        return map
-            .into_iter()
-            .map(|(key, value)| {
-                if key.len() > MAXIMUM_STRING_BYTES {
-                    return Err(ChangeRequestPlannerError::Resource);
-                }
-                Ok((key.to_string(), dynamic_to_json(value, depth + 1)?))
-            })
-            .collect::<Result<JsonMap<_, _>, _>>()
-            .map(Value::Object);
-    }
-    Err(ChangeRequestPlannerError::Result)
+        })
+        .collect();
+    crate::action_outcome::decode_slot_mutations(write, &members)
+        .map_err(|diagnostic| diagnostic.kind)
 }
 
 pub(crate) fn dynamic_string(value: &Dynamic) -> Result<String, ChangeRequestPlannerError> {
