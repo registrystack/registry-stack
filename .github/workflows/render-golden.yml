@@ -14,6 +14,17 @@ on:
   pull_request:
     paths:
       - "crates/registry-render/**"
+      # The platform crates render links against: a change there can move
+      # bytes without touching any path above (path deps do not surface in
+      # Cargo.lock), so the cross-OS proof must run for them too.
+      - "crates/registry-platform-audit/**"
+      - "crates/registry-platform-authcommon/**"
+      - "crates/registry-platform-buildinfo/**"
+      - "crates/registry-platform-canonical-json/**"
+      - "crates/registry-platform-config/**"
+      - "crates/registry-platform-crypto/**"
+      - "crates/registry-platform-httpsec/**"
+      - "crates/registry-platform-testing/**"
       - "products/render/**"
       - "Cargo.lock"
       - "Cargo.toml"
@@ -44,7 +55,9 @@ jobs:
     name: Golden hashes (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: true
+      # Both OSes must report independently: one failing must not cancel
+      # the other's signal.
+      fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-14]
     steps:
@@ -68,3 +81,6 @@ jobs:
 
       - name: Serve end-to-end tests
         run: cargo test --locked -p registry-render --test serve
+
+      - name: Scaffold and CLI tests
+        run: cargo test --locked -p registry-render --test scaffold
