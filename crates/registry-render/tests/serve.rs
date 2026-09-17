@@ -409,6 +409,40 @@ fn problem_details_are_bounded() {
     );
 }
 
+#[test]
+fn a_refused_bind_is_caught_before_startup_touches_the_filesystem() {
+    let (home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    // A public bind is refused. The refusal must land before the startup
+    // steps with side effects, so a misconfigured deployment leaves no
+    // half-made state behind: here, a created audit directory.
+    let audit = home.join("audit-elsewhere");
+    let text = std::fs::read_to_string(&runtime).unwrap();
+    let text = text.replace("bind: 127.0.0.1:", "bind: 0.0.0.0:").replace(
+        &format!("directory: {}", home.join("audit").display()),
+        &format!("directory: {}", audit.display()),
+    );
+    std::fs::write(&runtime, text).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+        .args(["serve", "--runtime", runtime.to_str().unwrap()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let code = wait_for_exit(&mut child);
+    assert_eq!(
+        code,
+        registry_render::ProblemKind::RuntimeInvalid.exit_code(),
+        "a public bind must refuse startup"
+    );
+    assert!(
+        !audit.exists(),
+        "startup must not create the audit directory before the bind is accepted"
+    );
+}
+
 fn wait_for_exit(child: &mut Child) -> i32 {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

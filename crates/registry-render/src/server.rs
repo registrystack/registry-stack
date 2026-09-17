@@ -85,6 +85,19 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         )
     })?;
     let integrity_key = runtime::resolve_secret(runtime_path, &runtime.audit.integrity_key_ref)?;
+    // The address is settled before the steps with side effects (opening
+    // the audit directory creates it), so a refused bind leaves nothing
+    // half-made behind.
+    let bind: SocketAddr = runtime.server.bind.parse().map_err(|err| {
+        RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            format!(
+                "server.bind {:?} is not an address: {err}",
+                runtime.server.bind
+            ),
+        )
+    })?;
+    runtime::validate_bind(bind)?;
     let bundle = Bundle::load_sealed(&runtime.bundle.path)?;
     crate::check::check_script_coverage(&bundle)?;
     crate::check::check_label_key_sets(&bundle)?;
@@ -112,16 +125,6 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         config = %config_id,
         "render serve starting"
     );
-    let bind: SocketAddr = runtime.server.bind.parse().map_err(|err| {
-        RenderProblem::new(
-            ProblemKind::RuntimeInvalid,
-            format!(
-                "server.bind {:?} is not an address: {err}",
-                runtime.server.bind
-            ),
-        )
-    })?;
-    runtime::validate_bind(bind)?;
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|err| {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;
