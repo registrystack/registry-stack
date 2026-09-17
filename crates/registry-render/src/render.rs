@@ -279,19 +279,35 @@ pub fn render_with_limits(
         standards,
         ..typst_pdf::PdfOptions::default()
     };
-    let pdf = typst_pdf::pdf(&compiled, &options).map_err(|errors| {
-        let detail = world.redact_host_paths(
-            &errors
-                .iter()
-                .map(|diag| diag.message.to_string())
-                .collect::<Vec<_>>()
-                .join("; "),
-        );
-        RenderProblem::new(
-            ProblemKind::CompileFailed,
-            format!("PDF export failed: {detail}"),
-        )
-    })?;
+    // Export sits inside the same panic boundary as the compile: an
+    // unwinding typst-pdf panic becomes `render-panicked` (and the worker
+    // is recycled by construction) instead of killing the worker mid-frame.
+    // Abort-class crashes (stack overflow) still kill the worker; the
+    // supervisor maps that to the same problem.
+    let export = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        typst_pdf::pdf(&compiled, &options)
+    }));
+    let pdf = match export {
+        Ok(result) => result.map_err(|errors| {
+            let detail = world.redact_host_paths(
+                &errors
+                    .iter()
+                    .map(|diag| diag.message.to_string())
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            );
+            RenderProblem::new(
+                ProblemKind::CompileFailed,
+                format!("PDF export failed: {detail}"),
+            )
+        })?,
+        Err(_) => {
+            return Err(RenderProblem::new(
+                ProblemKind::RenderPanicked,
+                "the renderer hit an internal error while exporting the PDF; the worker is recycled",
+            ))
+        }
+    };
 
     if strict && !warnings.is_empty() {
         return Err(RenderProblem::new(
