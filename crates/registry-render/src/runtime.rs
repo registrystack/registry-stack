@@ -157,7 +157,8 @@ pub struct AuditRuntime {
     /// Directory for the sealed, hash-chained JSONL ledger. Relative paths
     /// anchor to the runtime file's directory (see [`load`]).
     pub directory: PathBuf,
-    /// `secret:file/…` reference to the chain integrity key (>= 32 bytes).
+    /// `secret:file/…` or `secret:env/…` reference to the chain integrity
+    /// key (>= 32 bytes).
     pub integrity_key_ref: String,
     /// Sealed segment size before rotation.
     #[serde(default = "default_max_segment_bytes")]

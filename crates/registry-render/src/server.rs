@@ -162,8 +162,8 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
         let _ = stop_tx.send(());
     });
     // Phase 1 — drain: the graceful-shutdown future holds the server open
-    // while in-flight renders finish (up to grace), so their responses and
-    // audit appends land before the listener stops accepting.
+    // until every render permit is back (up to grace), so renders in
+    // flight finish before the listener stops accepting.
     let mut stop_for_drain = stop_rx.clone();
     let shutdown = async move {
         let _ = stop_for_drain.changed().await;

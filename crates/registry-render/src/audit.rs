@@ -173,7 +173,7 @@ pub fn verify_chain(
         let non_empty = std::fs::metadata(&ledger).is_ok_and(|m| m.len() > 0);
         if non_empty {
             println!(
-                "note: no records verified although {} is non-empty; a running serve holds                  the active segment and verification skips it — verify again after shutdown",
+                "note: no records verified although {} is non-empty; a running serve holds the active segment and verification skips it, so verify again after shutdown",
                 ledger.display()
             );
         }

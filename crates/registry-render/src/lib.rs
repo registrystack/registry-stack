@@ -14,7 +14,7 @@
 //!   `dataSha256`.
 //! - **Fresh world and library per render**: inputs live on the `Library`,
 //!   so nothing request-scoped is shared or memoized across renders;
-//!   `comemo::evict()` runs after every render.
+//!   `comemo::evict()` runs after every compile.
 //! - **Deterministic font order**: the binary's baseline set first, then
 //!   bundle fonts sorted by path — mirroring the Typst CLI's book so
 //!   library and CLI renders agree byte for byte. Never filesystem
@@ -76,7 +76,7 @@ mod tests {
         assert_eq!(
             TYPST_PIN,
             typst::utils::version().raw(),
-            "TYPST_PIN drifted from the linked typst crate; update the constant or the              dependency, then re-review the golden hashes"
+            "TYPST_PIN drifted from the linked typst crate; update the constant or the dependency, then re-review the golden hashes"
         );
     }
 }
