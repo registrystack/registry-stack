@@ -544,10 +544,9 @@ pub struct CompiledActionRequirement {
     pub equals_input: Option<String>,
 }
 
-/// The compiled action-handler backend tag, owned by the handler alone. The
-/// wasm backend is expressible on the wire so a future compiler can tag WASM
-/// packages without another wire change; this compiler never produces it and
-/// the runtime refuses to execute it.
+/// The compiled action-handler backend tag, owned by the handler alone. A
+/// build with the WASM executor prototype can compile WASM handlers; the
+/// runtime still refuses to execute them.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CompiledActionHandlerKind {
@@ -562,12 +561,22 @@ pub struct CompiledActionHandler {
     pub source_module: Option<String>,
     #[serde(skip)]
     pub script_path: String,
+    /// The WASM module path, project-local. Carried for wasm handlers only.
+    #[serde(skip)]
+    pub module_path: String,
     pub abi: String,
-    pub rhai_version: String,
-    pub script_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_sha256: Option<String>,
     #[serde(skip)]
     pub script_bytes: Vec<u8>,
-    pub limits: CompiledChangeRequestPlannerLimits,
+    #[serde(skip)]
+    pub module_bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<CompiledChangeRequestPlannerLimits>,
     pub writes: Vec<CompiledActionHandlerWrite>,
     pub refusals: BTreeMap<String, String>,
 }

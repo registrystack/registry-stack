@@ -48,9 +48,17 @@ pub(crate) fn compile_immediate_actions(
     let mut compiled_actions = Vec::new();
     let mut routes = Vec::new();
     let mut access = Vec::new();
+    let mut wasm_module_count = 0usize;
     for collected in actions.values() {
         let diagnostics_start = errors.len();
-        if let Some(compiled) = compile_action(collected, entities, profiles, assets, &mut errors) {
+        if let Some(compiled) = compile_action(
+            collected,
+            entities,
+            profiles,
+            assets,
+            &mut wasm_module_count,
+            &mut errors,
+        ) {
             let action_routes = compile_action_routes(&compiled, profiles, &mut errors);
             let action_access = action_routes
                 .iter()
@@ -95,6 +103,7 @@ fn compile_action(
     entities: &BTreeMap<String, CompiledEntity>,
     profiles: &[ProjectAccessProfileSource],
     assets: &[crate::contract::ModuleAssetSource],
+    wasm_module_count: &mut usize,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<CompiledAction> {
     let action = &collected.source;
@@ -119,7 +128,14 @@ fn compile_action(
         .map(|input| (input.id.as_str(), input))
         .collect::<BTreeMap<_, _>>();
     let (handler, (effects, target_uses, result_effects)) = if action.handler.is_some() {
-        let (handler, effects) = compile_handler(collected, &input_map, entities, assets, errors)?;
+        let (handler, effects) = compile_handler(
+            collected,
+            &input_map,
+            entities,
+            assets,
+            wasm_module_count,
+            errors,
+        )?;
         (Some(handler), effects)
     } else {
         (None, compile_effects(action, &input_map, entities, errors)?)
@@ -189,6 +205,7 @@ fn compile_handler(
     inputs: &BTreeMap<&str, &CompiledActionInput>,
     entities: &BTreeMap<String, CompiledEntity>,
     assets: &[crate::contract::ModuleAssetSource],
+    wasm_module_count: &mut usize,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<(crate::model::CompiledActionHandler, CompiledEffectSet)> {
     use crate::model::{
@@ -207,32 +224,56 @@ fn compile_handler(
             "the action handler ABI is not supported",
         ));
     }
-    if source.kind == crate::contract::ActionHandlerKindSource::Wasm {
-        // Refuse the declared backend explicitly, before any Rhai-shaped
-        // validation could misreport the script: no WASM handler backend is
-        // admitted by this compiler, and the Evidence-enabled v2 ABI is out of
-        // scope for WASM in this release in any case.
-        let (code, message) = if source.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
-            (
-                "action.handler.wasm_abi_unsupported",
-                "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
-            )
-        } else {
-            (
-                "action.handler.kind_unsupported",
-                "this compiler admits only Rhai action handlers",
-            )
-        };
-        errors.push(Diagnostic::error(code, format!("{path}.kind"), message));
-        return None;
-    }
-    if !crate::change_request::valid_planner_path(&source.script) {
+    let is_wasm = source.kind == crate::contract::ActionHandlerKindSource::Wasm;
+    if is_wasm && source.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+        // The Evidence-enabled v2 ABI is out of scope for WASM in this
+        // release, in any build. Refuse it before any other WASM-shaped
+        // validation could misreport the module.
         errors.push(Diagnostic::error(
-            "action.handler.source_invalid",
-            format!("{path}.script"),
-            "the handler script must be a bounded relative .rhai path",
+            "action.handler.wasm_abi_unsupported",
+            format!("{path}.kind"),
+            "WASM action handlers do not support the Evidence-enabled v2 ABI in this release",
         ));
         return None;
+    }
+    #[cfg(not(feature = "wasm-executor-prototype"))]
+    if is_wasm {
+        // Refuse the declared backend explicitly, before any Rhai-shaped
+        // validation could misreport the module: this build carries no WASM
+        // compiler support.
+        errors.push(Diagnostic::error(
+            "action.handler.wasm_build_unsupported",
+            format!("{path}.kind"),
+            "this build of the compiler does not admit WASM action handlers",
+        ));
+        return None;
+    }
+    // The authored source reference follows the declared backend exactly.
+    let source_path: &str = if is_wasm {
+        #[cfg(feature = "wasm-executor-prototype")]
+        {
+            wasm_handler_module_path(source, &path, errors)?
+        }
+        #[cfg(not(feature = "wasm-executor-prototype"))]
+        {
+            return None;
+        }
+    } else {
+        rhai_handler_script_path(source, &path, errors)?
+    };
+    if is_wasm {
+        *wasm_module_count += 1;
+        if *wasm_module_count > crate::wasm_handler::MAX_PACKAGE_WASM_MODULES {
+            errors.push(Diagnostic::error(
+                "action.handler.modules_bound",
+                format!("{path}.module"),
+                &format!(
+                    "a package carries at most {} WASM handler modules",
+                    crate::wasm_handler::MAX_PACKAGE_WASM_MODULES
+                ),
+            ));
+            return None;
+        }
     }
     if source.writes.is_empty() {
         errors.push(Diagnostic::error(
@@ -490,67 +531,107 @@ fn compile_handler(
     }
     let Some(asset) = assets
         .iter()
-        .find(|asset| asset.module == collected.source_module && asset.path == source.script)
+        .find(|asset| asset.module == collected.source_module && asset.path == source_path)
     else {
-        errors.push(Diagnostic::error(
-            "action.handler.source_missing",
-            format!("{path}.script"),
-            &format!(
-                "supply the action's owned handler asset at {}",
-                source.script
-            ),
-        ));
-        return None;
-    };
-    if asset.bytes.is_empty() || asset.bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
-        errors.push(Diagnostic::error(
-            "action.handler.source_bound",
-            format!("{path}.script"),
-            "the handler source must be non-empty and within its fixed byte bound",
-        ));
-        return None;
-    }
-    let Ok(script) = std::str::from_utf8(&asset.bytes) else {
-        errors.push(Diagnostic::error(
-            "action.handler.source_encoding",
-            format!("{path}.script"),
-            "the handler source must be UTF-8",
-        ));
-        return None;
-    };
-    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
-        use crate::rhai_planner::EntrypointCompileError;
-        let (code, message) = match error {
-            EntrypointCompileError::SourceBound => (
-                "action.handler.source_bound",
-                "the handler source exceeds its fixed byte bound".to_owned(),
-            ),
-            EntrypointCompileError::Parse(position) => {
-                let location = match (position.line(), position.position()) {
-                    (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
-                    (Some(line), None) => format!(" at line {line}"),
-                    _ => String::new(),
-                };
-                (
-                    "action.handler.parse",
-                    format!("correct the Rhai syntax or unsupported construct{location}"),
-                )
-            }
-            EntrypointCompileError::Entrypoint => (
-                "action.handler.entrypoint",
-                "declare exactly one public fn handle(ctx) entry point and do not overload functions".to_owned(),
-            ),
+        let (code, member, message) = if is_wasm {
+            (
+                "action.handler.module_asset_missing",
+                "module",
+                format!("supply the action's owned handler module asset at {source_path}"),
+            )
+        } else {
+            (
+                "action.handler.source_missing",
+                "script",
+                format!("supply the action's owned handler asset at {source_path}"),
+            )
         };
-        errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
-        return None;
-    }
-    if crate::action_handler::compile_source_for_abi(script, &source.abi).is_err() {
         errors.push(Diagnostic::error(
-            "action.handler.helper_contract",
-            format!("{path}.script"),
-            "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
+            code,
+            format!("{path}.{member}"),
+            &message,
         ));
         return None;
+    };
+    if is_wasm {
+        if asset.bytes.is_empty()
+            || asset.bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
+        {
+            errors.push(Diagnostic::error(
+                "action.handler.module_bound",
+                format!("{path}.module"),
+                &format!(
+                    "the handler module must be non-empty and at most {} bytes; {} bytes supplied",
+                    crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+                    asset.bytes.len()
+                ),
+            ));
+            return None;
+        }
+        if !crate::wasm_handler::is_wasm_binary(&asset.bytes) {
+            errors.push(Diagnostic::error(
+                "action.handler.module_invalid",
+                format!("{path}.module"),
+                "the handler module must be a WebAssembly binary, not WebAssembly text",
+            ));
+            return None;
+        }
+        #[cfg(feature = "wasm-executor-prototype")]
+        if let Some((code, message)) = crate::wasm_handler::structural_violation(&asset.bytes) {
+            errors.push(Diagnostic::error(code, format!("{path}.module"), &message));
+            return None;
+        }
+    } else {
+        if asset.bytes.is_empty() || asset.bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+            errors.push(Diagnostic::error(
+                "action.handler.source_bound",
+                format!("{path}.script"),
+                "the handler source must be non-empty and within its fixed byte bound",
+            ));
+            return None;
+        }
+        let Ok(script) = std::str::from_utf8(&asset.bytes) else {
+            errors.push(Diagnostic::error(
+                "action.handler.source_encoding",
+                format!("{path}.script"),
+                "the handler source must be UTF-8",
+            ));
+            return None;
+        };
+        if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
+            use crate::rhai_planner::EntrypointCompileError;
+            let (code, message) = match error {
+                EntrypointCompileError::SourceBound => (
+                    "action.handler.source_bound",
+                    "the handler source exceeds its fixed byte bound".to_owned(),
+                ),
+                EntrypointCompileError::Parse(position) => {
+                    let location = match (position.line(), position.position()) {
+                        (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
+                        (Some(line), None) => format!(" at line {line}"),
+                        _ => String::new(),
+                    };
+                    (
+                        "action.handler.parse",
+                        format!("correct the Rhai syntax or unsupported construct{location}"),
+                    )
+                }
+                EntrypointCompileError::Entrypoint => (
+                    "action.handler.entrypoint",
+                    "declare exactly one public fn handle(ctx) entry point and do not overload functions".to_owned(),
+                ),
+            };
+            errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
+            return None;
+        }
+        if crate::action_handler::compile_source_for_abi(script, &source.abi).is_err() {
+            errors.push(Diagnostic::error(
+                "action.handler.helper_contract",
+                format!("{path}.script"),
+                "Evidence helpers require registry.action-handler/v2 and evidence::resolve with exactly two arguments",
+            ));
+            return None;
+        }
     }
     writes.sort_by(|left, right| left.id.cmp(&right.id));
     effects.sort_by(|left, right| left.id.cmp(&right.id));
@@ -578,14 +659,40 @@ fn compile_handler(
         .collect();
     Some((
         CompiledActionHandler {
-            kind: CompiledActionHandlerKind::Rhai,
+            kind: if is_wasm {
+                CompiledActionHandlerKind::Wasm
+            } else {
+                CompiledActionHandlerKind::Rhai
+            },
             source_module: collected.source_module.clone(),
-            script_path: source.script.clone(),
+            script_path: if is_wasm {
+                String::new()
+            } else {
+                source_path.to_owned()
+            },
+            module_path: if is_wasm {
+                source_path.to_owned()
+            } else {
+                String::new()
+            },
             abi: source.abi.clone(),
-            rhai_version: crate::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION.to_owned(),
-            script_sha256: format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes))),
-            script_bytes: asset.bytes.clone(),
-            limits: CompiledChangeRequestPlannerLimits {
+            rhai_version: (!is_wasm)
+                .then(|| crate::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION.to_owned()),
+            script_sha256: (!is_wasm)
+                .then(|| format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes)))),
+            module_sha256: is_wasm
+                .then(|| format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes)))),
+            script_bytes: if is_wasm {
+                Vec::new()
+            } else {
+                asset.bytes.clone()
+            },
+            module_bytes: if is_wasm {
+                asset.bytes.clone()
+            } else {
+                Vec::new()
+            },
+            limits: (!is_wasm).then_some(CompiledChangeRequestPlannerLimits {
                 maximum_source_bytes: crate::rhai_planner::MAXIMUM_SOURCE_BYTES as u32,
                 maximum_operations: crate::rhai_planner::MAXIMUM_OPERATIONS,
                 maximum_call_depth: crate::rhai_planner::MAXIMUM_CALL_DEPTH as u16,
@@ -594,12 +701,81 @@ fn compile_handler(
                 maximum_array_items: crate::rhai_planner::MAXIMUM_ARRAY_ITEMS as u16,
                 maximum_map_entries: crate::rhai_planner::MAXIMUM_MAP_ENTRIES as u16,
                 maximum_modules: 0,
-            },
+            }),
             writes,
             refusals,
         },
         (effects, target_uses, ids),
     ))
+}
+
+/// The authored source reference a Rhai handler must declare: its script path
+/// and nothing else.
+fn rhai_handler_script_path<'a>(
+    source: &'a crate::contract::ActionHandlerSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<&'a str> {
+    if source.module.is_some() {
+        errors.push(Diagnostic::error(
+            "action.handler.module_forbidden",
+            format!("{path}.module"),
+            "a Rhai handler declares its script, not a WASM module",
+        ));
+        return None;
+    }
+    let Some(script) = source.script.as_deref() else {
+        errors.push(Diagnostic::error(
+            "action.handler.script_missing",
+            format!("{path}.script"),
+            "a Rhai handler declares a project-local script path",
+        ));
+        return None;
+    };
+    if !crate::change_request::valid_planner_path(script) {
+        errors.push(Diagnostic::error(
+            "action.handler.source_invalid",
+            format!("{path}.script"),
+            "the handler script must be a bounded relative .rhai path",
+        ));
+        return None;
+    }
+    Some(script)
+}
+
+/// The authored source reference a WASM handler must declare: its module path
+/// and nothing else.
+#[cfg(feature = "wasm-executor-prototype")]
+fn wasm_handler_module_path<'a>(
+    source: &'a crate::contract::ActionHandlerSource,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) -> Option<&'a str> {
+    if source.script.is_some() {
+        errors.push(Diagnostic::error(
+            "action.handler.script_forbidden",
+            format!("{path}.script"),
+            "a WASM handler declares its module, not a Rhai script",
+        ));
+        return None;
+    }
+    let Some(module) = source.module.as_deref() else {
+        errors.push(Diagnostic::error(
+            "action.handler.module_missing",
+            format!("{path}.module"),
+            "a WASM handler declares a project-local module path",
+        ));
+        return None;
+    };
+    if !crate::wasm_handler::valid_wasm_module_path(module) {
+        errors.push(Diagnostic::error(
+            "action.handler.module_source_invalid",
+            format!("{path}.module"),
+            "the handler module must be a bounded relative .wasm path",
+        ));
+        return None;
+    }
+    Some(module)
 }
 
 fn compile_requirements(

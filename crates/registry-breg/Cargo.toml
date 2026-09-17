@@ -294,6 +294,12 @@ registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-breg-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
+wat = "1.259.0"
+
+[[test]]
+name = "wasm_handler_admission"
+path = "tests/wasm_handler_admission.rs"
+required-features = ["wasm-executor-prototype"]
 
 [[test]]
 name = "postgres_immediate_action_requirements"

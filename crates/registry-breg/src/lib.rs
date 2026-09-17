@@ -128,6 +128,7 @@ pub mod task_grant;
 pub mod tooling;
 #[cfg(feature = "wasm-executor-prototype")]
 pub(crate) mod wasm_executor_probe;
+pub mod wasm_handler;
 #[cfg(feature = "runtime")]
 pub mod webhook;
 

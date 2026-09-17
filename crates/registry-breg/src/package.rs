@@ -2666,6 +2666,16 @@ fn package_compiler_assets(
     Ok(assets)
 }
 
+/// The owned asset path a handler declares: its script for Rhai, its module
+/// for WASM. None means the authored source shape did not survive the compile
+/// this package rederives, a derivation mismatch.
+fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option<&str> {
+    match handler.kind {
+        crate::contract::ActionHandlerKindSource::Rhai => handler.script.as_deref(),
+        crate::contract::ActionHandlerKindSource::Wasm => handler.module.as_deref(),
+    }
+}
+
 fn validate_declared_package_assets(
     project: &RegistryProject,
     modules: &[RegistryModule],
@@ -2682,12 +2692,12 @@ fn validate_declared_package_assets(
                 .and_then(|request| request.planner.as_ref())
                 .map(|planner| planner.script.as_str())
         })
-        .chain(project.actions.iter().filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .map(|handler| handler.script.as_str())
-        }))
+        .chain(
+            project
+                .actions
+                .iter()
+                .filter_map(|action| action.handler.as_ref().and_then(handler_source_path)),
+        )
         .chain(
             project
                 .evidence_providers
@@ -2714,12 +2724,7 @@ fn validate_declared_package_assets(
         let mut declared = module
             .actions
             .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .map(|handler| handler.script.as_str())
-            })
+            .filter_map(|action| action.handler.as_ref().and_then(handler_source_path))
             .collect::<BTreeSet<_>>();
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
@@ -2768,6 +2773,9 @@ fn validate_project_asset(path: &str, bytes: &[u8]) -> Result<()> {
         }
         return Err(PackageError::Derivation);
     }
+    if path.ends_with(".wasm") {
+        return validate_wasm_asset(path, bytes);
+    }
     validate_planner_asset(path, bytes)
 }
 
@@ -2778,6 +2786,19 @@ fn validate_planner_asset(path: &str, bytes: &[u8]) -> Result<()> {
         || path == "registry.yaml"
         || bytes.is_empty()
         || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
+    {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
+}
+
+fn validate_wasm_asset(path: &str, bytes: &[u8]) -> Result<()> {
+    validate_relative(path)?;
+    if path.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_PATH_BYTES
+        || !path.ends_with(".wasm")
+        || path == "registry.yaml"
+        || bytes.is_empty()
+        || bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
     {
         return Err(PackageError::Derivation);
     }
@@ -2802,6 +2823,12 @@ fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
         {
             validate_planner_asset(path, bytes)
         }
+        Some("wasm")
+            if path != "module.yaml"
+                && bytes.len() <= crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES =>
+        {
+            validate_wasm_asset(path, bytes)
+        }
         _ => Err(PackageError::Derivation),
     }
 }
@@ -2809,6 +2836,7 @@ fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
 fn package_project_asset_path(asset_path: &str) -> Result<String> {
     validate_relative(asset_path)?;
     if (!asset_path.ends_with(".rhai")
+        && !asset_path.ends_with(".wasm")
         && !crate::action_evidence_contracts::valid_contract_path(asset_path))
         || asset_path == "registry.yaml"
     {
@@ -2833,7 +2861,9 @@ fn project_asset_source_path(package_path: &str) -> Result<&str> {
 fn package_module_asset_path(module_id: &str, asset_path: &str) -> Result<String> {
     validate_relative(module_id)?;
     validate_relative(asset_path)?;
-    if (!asset_path.ends_with(".sql") && !asset_path.ends_with(".rhai"))
+    if (!asset_path.ends_with(".sql")
+        && !asset_path.ends_with(".rhai")
+        && !asset_path.ends_with(".wasm"))
         || asset_path == "module.yaml"
     {
         return Err(PackageError::Derivation);
@@ -2848,6 +2878,10 @@ fn package_module_asset_role(asset_path: &str) -> Result<PackageFileRole> {
         Ok(PackageFileRole::SourceModuleAsset)
     } else if asset_path.ends_with(".rhai") {
         Ok(PackageFileRole::SourceModulePlannerScript)
+    } else if asset_path.ends_with(".wasm") {
+        // A module-owned WASM handler binary rides the generic module asset
+        // role; only the project-level handler source keeps its own role.
+        Ok(PackageFileRole::SourceModuleAsset)
     } else {
         Err(PackageError::Derivation)
     }
@@ -3004,8 +3038,19 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
         path if path.starts_with("source/project/") && path.ends_with(".rhai") => {
             PackageFileRole::SourceProjectPlannerScript
         }
+        // Project-owned WASM handler modules travel as project handler
+        // source; no separate role exists for the binary form.
+        path if path.starts_with("source/project/") && path.ends_with(".wasm") => {
+            PackageFileRole::SourceProjectPlannerScript
+        }
         path if path.starts_with("source/modules/")
             && path.ends_with(".sql")
+            && !path.ends_with("/module.yaml") =>
+        {
+            PackageFileRole::SourceModuleAsset
+        }
+        path if path.starts_with("source/modules/")
+            && path.ends_with(".wasm")
             && !path.ends_with("/module.yaml") =>
         {
             PackageFileRole::SourceModuleAsset

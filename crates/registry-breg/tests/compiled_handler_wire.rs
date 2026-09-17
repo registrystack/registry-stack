@@ -50,7 +50,7 @@ fn old_rhai_handler_wire_stays_readable_and_byte_stable() {
         .expect("the frozen action declares a handler");
     assert_eq!(handler.kind, CompiledActionHandlerKind::Rhai);
     assert_eq!(handler.abi, registry_breg::contract::ACTION_HANDLER_ABI_V1);
-    assert_eq!(handler.rhai_version, "1.25.1");
+    assert_eq!(handler.rhai_version.as_deref(), Some("1.25.1"));
 
     // The exact canonical bytes the pre-change compiler wrote must re-emerge
     // from the current types unchanged.

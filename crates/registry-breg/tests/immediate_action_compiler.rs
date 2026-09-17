@@ -124,7 +124,7 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
 }
 
 #[test]
-fn wasm_handler_kinds_are_refused_with_pinned_diagnostics() {
+fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
     use registry_breg::compiler::compile_project_with_assets;
     use registry_breg::contract::{
         parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2,
@@ -166,18 +166,40 @@ fn wasm_handler_kinds_are_refused_with_pinned_diagnostics() {
         )
     };
 
-    let v1 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V1)
-        .expect_err("a WASM v1 handler kind is refused by this compiler")
-        .diagnostics()
-        .to_vec();
-    let not_admitted = v1
-        .iter()
-        .find(|diagnostic| diagnostic.code == "action.handler.kind_unsupported")
-        .expect("input-only WASM handlers are refused with their own diagnostic");
-    assert_eq!(
-        not_admitted.path,
-        "actions[register-household-contact].handler.kind"
-    );
+    // A default build carries no WASM compiler support, so an input-only WASM
+    // handler is refused with a diagnostic that names the build, not the
+    // authored project. A build with the WASM executor prototype admits the
+    // backend (the admission suite covers that lane); this script-shaped
+    // handler is still refused there, by backend field discipline.
+    let v1 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V1);
+    #[cfg(not(feature = "wasm-executor-prototype"))]
+    {
+        let not_admitted = v1
+            .expect_err("a WASM v1 handler is refused without WASM support in the build")
+            .diagnostics()
+            .to_vec()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "action.handler.wasm_build_unsupported")
+            .expect("input-only WASM handlers name the missing build capability");
+        assert_eq!(
+            not_admitted.path,
+            "actions[register-household-contact].handler.kind"
+        );
+    }
+    #[cfg(feature = "wasm-executor-prototype")]
+    {
+        let forbidden = v1
+            .expect_err("a WASM handler declaring a Rhai script is refused")
+            .diagnostics()
+            .to_vec()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "action.handler.script_forbidden")
+            .expect("a WASM handler never carries a Rhai script field");
+        assert_eq!(
+            forbidden.path,
+            "actions[register-household-contact].handler.script"
+        );
+    }
 
     let v2 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V2)
         .expect_err("a WASM v2 handler kind is refused by this compiler")
@@ -194,6 +216,83 @@ fn wasm_handler_kinds_are_refused_with_pinned_diagnostics() {
 
     compile_with_handler_kind("rhai", ACTION_HANDLER_ABI_V1)
         .expect("a Rhai handler with the same shape still compiles");
+}
+
+#[test]
+fn handler_source_fields_follow_the_declared_backend() {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::parse_project_json;
+    use serde_json::{json, Value};
+
+    fn handler_project(handler: Value) -> Vec<u8> {
+        let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
+        source["actions"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("effects")
+            .unwrap();
+        source["actions"][0]["handler"] = handler;
+        serde_json::to_vec(&source).unwrap()
+    }
+
+    fn compile_with_handler(
+        handler: Value,
+    ) -> Result<registry_breg::CompiledRegistry, registry_breg::CompileFailure> {
+        let project = parse_project_json(&handler_project(handler)).unwrap();
+        compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring)
+    }
+
+    let writes = serde_json::from_str::<Value>(&household_contact_project("")).unwrap()["actions"]
+        [0]["effects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| {
+            json!({
+                "id": effect["id"], "target": effect["target"], "operation": effect["operation"],
+                "fields": effect["set"].as_object().unwrap().keys().collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    // A Rhai handler declares its script and nothing else.
+    let missing_script = compile_with_handler(json!({
+        "kind": "rhai", "abi": "registry.action-handler/v1", "writes": writes
+    }))
+    .expect_err("a Rhai handler without a script is refused")
+    .diagnostics()
+    .to_vec();
+    assert!(missing_script.iter().any(|diagnostic| {
+        diagnostic.code == "action.handler.script_missing"
+            && diagnostic.path == "actions[register-household-contact].handler.script"
+    }));
+
+    let forbidden_module = compile_with_handler(json!({
+        "kind": "rhai", "script": "scripts/handler.rhai", "module": "modules/handler.wasm",
+        "abi": "registry.action-handler/v1", "writes": writes
+    }))
+    .expect_err("a Rhai handler cannot declare a WASM module")
+    .diagnostics()
+    .to_vec();
+    assert!(forbidden_module.iter().any(|diagnostic| {
+        diagnostic.code == "action.handler.module_forbidden"
+            && diagnostic.path == "actions[register-household-contact].handler.module"
+    }));
+
+    // The authored shape stays closed: an unknown member is still a parse
+    // refusal, whatever backend is declared.
+    let mut unknown_field = json!({
+        "kind": "wasm", "module": "modules/handler.wasm",
+        "abi": "registry.action-handler/v1", "writes": writes
+    });
+    unknown_field
+        .as_object_mut()
+        .unwrap()
+        .insert("entrypoint".to_owned(), json!("handle"));
+    assert!(
+        parse_project_json(&handler_project(unknown_field)).is_err(),
+        "unknown handler members stay refused"
+    );
 }
 
 fn household_contact_project(extra: &str) -> String {
