@@ -6,7 +6,9 @@
 //! `serde_json::from_slice` would silently keep the last one. This module
 //! parses bytes into a `serde_json::Value` while rejecting any object that
 //! repeats a member, at any depth, using a `DeserializeSeed`/`Visitor` walk
-//! so the stream is read exactly once.
+//! so the stream is read exactly once. Content after the first JSON value is
+//! refused: the bytes hold exactly one document, not one document plus
+//! whatever follows it.
 //!
 //! The check is engine-neutral: it guards JSON bytes, whatever backend
 //! produced them. It is compiled under the `wasm` feature alongside the
@@ -17,7 +19,6 @@ use std::fmt;
 use std::rc::Rc;
 
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
-use serde::Deserializer as _;
 use serde_json::{Map, Value};
 
 /// Path segments and member names carried in errors are bounded so a
@@ -75,7 +76,9 @@ impl fmt::Display for DuplicateMemberError {
 impl std::error::Error for DuplicateMemberError {}
 
 /// Parse `bytes` into a `Value`, rejecting any object that repeats a member
-/// (recursing through nested objects and arrays).
+/// (recursing through nested objects and arrays) and refusing anything other
+/// than whitespace after the first JSON value: the outcome contract is
+/// exactly one document.
 pub fn check_no_duplicate_members(bytes: &[u8]) -> Result<Value, DuplicateMemberError> {
     // The error slot outlives the deserializer borrow, so the typed error
     // survives even though serde_json only reports `de::Error`.
@@ -84,9 +87,13 @@ pub fn check_no_duplicate_members(bytes: &[u8]) -> Result<Value, DuplicateMember
         path: "$".to_owned(),
         error: Rc::clone(&error),
     };
-    let result = serde_json::Deserializer::from_slice(bytes).deserialize_any(visitor);
+    let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    let result = serde::Deserializer::deserialize_any(&mut deserializer, visitor);
     match result {
-        Ok(value) => Ok(value),
+        Ok(value) => deserializer
+            .end()
+            .map(|()| value)
+            .map_err(|err| DuplicateMemberError::malformed(bounded(&err.to_string(), 256))),
         Err(err) => Err(error
             .borrow_mut()
             .take()
@@ -297,5 +304,40 @@ mod tests {
         let err = check_no_duplicate_members(br#"{"a": "#).unwrap_err();
         assert_eq!(err.duplicate_path(), None);
         assert!(err.to_string().starts_with("not valid JSON"), "{}", err);
+    }
+
+    #[test]
+    fn trailing_content_after_the_document_is_rejected() {
+        for bytes in [
+            br#"{"a": 1} garbage"#.as_slice(),
+            br#"{"a": 1}}"#.as_slice(),
+            br#"{"a": 1} {"b": 2}"#.as_slice(),
+            b"1 2".as_slice(),
+        ] {
+            let err = check_no_duplicate_members(bytes).unwrap_err();
+            assert_eq!(err.duplicate_path(), None, "{bytes:?}");
+            assert!(
+                err.to_string().starts_with("not valid JSON"),
+                "{bytes:?}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn trailing_whitespace_after_the_document_is_accepted() {
+        assert_eq!(
+            check_no_duplicate_members(b"{\"a\": 1}\n\t \r\n").unwrap(),
+            json!({"a": 1})
+        );
+        assert_eq!(check_no_duplicate_members(b"42 \n").unwrap(), json!(42));
+    }
+
+    #[test]
+    fn a_single_document_with_no_trailing_bytes_is_accepted() {
+        assert_eq!(
+            check_no_duplicate_members(br#"{"a": 1, "b": [true, null]}"#).unwrap(),
+            json!({"a": 1, "b": [true, null]})
+        );
+        assert_eq!(check_no_duplicate_members(b"true").unwrap(), json!(true));
     }
 }
