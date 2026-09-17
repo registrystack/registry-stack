@@ -16,7 +16,6 @@ registry-platform-canonical-json = { workspace = true }
 registry-platform-config = { workspace = true }
 registry-platform-crypto = { workspace = true }
 registry-platform-httpsec = { workspace = true, features = ["server"] }
-registry-platform-httputil = { workspace = true }
 typst = { workspace = true }
 typst-pdf = { workspace = true }
 typst-assets = { workspace = true }
@@ -35,7 +34,7 @@ sha2 = { workspace = true }
 rustix = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["process"] }
+tokio = { workspace = true, features = ["process", "io-util"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 zeroize = { workspace = true }
@@ -44,10 +43,6 @@ zeroize = { workspace = true }
 registry-platform-testing = { workspace = true }
 tempfile = { workspace = true }
 tower = { workspace = true }
-
-[features]
-default = []
-serve-tests = []
 
 [[bin]]
 name = "render"

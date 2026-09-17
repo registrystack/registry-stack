@@ -5503,7 +5503,6 @@ dependencies = [
  "registry-platform-config",
  "registry-platform-crypto",
  "registry-platform-httpsec",
- "registry-platform-httputil",
  "registry-platform-testing",
  "rustix 1.1.4",
  "serde",

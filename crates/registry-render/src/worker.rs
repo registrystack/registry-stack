@@ -301,7 +301,11 @@ pub async fn supervise(
         .arg("__worker")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        // Worker stderr is piped and drained, never inherited: a panic
+        // message can carry host paths or data fragments, and the operator
+        // log is value-free by contract. The parent's problem documents are
+        // the diagnosis surface.
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|err| {
@@ -310,6 +314,12 @@ pub async fn supervise(
                 format!("cannot spawn render worker: {err}"),
             )
         })?;
+    let mut stderr = child.stderr.take().expect("stderr piped");
+    let drain = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut sink = [0u8; 4096];
+        while matches!(stderr.read(&mut sink).await, Ok(n) if n > 0) {}
+    });
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut stdin = child.stdin.take().expect("stdin piped");
     let payload = serde_json::to_vec(&request).expect("worker request serializes");
@@ -359,6 +369,7 @@ pub async fn supervise(
         }
     };
     let _ = child.wait().await;
+    let _ = drain.await;
     let response: WorkerResponse = serde_json::from_value(response).map_err(|err| {
         RenderProblem::new(
             ProblemKind::RenderPanicked,
