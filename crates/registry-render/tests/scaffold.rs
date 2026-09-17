@@ -59,10 +59,13 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
         "the scaffold renders warning-free: {}",
         String::from_utf8_lossy(&compiled.stderr)
     );
-    // The scaffold vendors the QR package offline.
-    assert!(dir
-        .join("packages/preview/zebra/0.1.0/typst.toml")
-        .is_file());
+    // The scaffold vendors no third-party package. What it has to teach
+    // is where packages live and that nothing is fetched at render time;
+    // the example bundles carry a worked one.
+    assert!(
+        !dir.join("packages").exists(),
+        "the scaffold writes no vendored package tree"
+    );
     assert!(dir.join("fixtures/data.json").is_file());
     // Starter fonts ship with their license, ready to replace.
     assert!(

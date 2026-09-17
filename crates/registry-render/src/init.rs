@@ -37,10 +37,12 @@ const TEMPLATE_HEAD: &str = r#"// Starter document. It compiles offline: the bin
   )
 ])
 
-// A QR that carries a verification URL is one line (the zebra package is
-// vendored for you under packages/preview/zebra):
-// #import "@preview/zebra:0.1.0": qrcode
-// #place(top + right, qrcode(d.verify-url, width: 16mm, quiet-zone: true))
+// Typst packages are vendored, never fetched at render time: put one
+// under packages/<namespace>/<name>/<version>/ and import it by its
+// package spec, for example
+// #import "@preview/some-package:1.0.0": thing
+// The Render example bundles ship a worked one (a QR carrying a
+// verification URL).
 
 #text(size: 16pt, weight: "bold")[#L.title]
 #v(0.4em)
@@ -95,8 +97,10 @@ const README: &str = r#"# Render bundle
 - `fonts/` — starter fonts (Noto Sans + Noto Naskh Arabic, OFL — the
   license is in `fonts/OFL.txt`); replace them with your own. The binary
   already embeds a Latin baseline.
-- `packages/preview/zebra/` — a vendored QR package; there is no download
-  path at render time, so anything else you import goes here too.
+- `packages/` — create it when you need a Typst package. Packages are
+  vendored, never fetched at render time: one lives under
+  `packages/<namespace>/<name>/<version>/` and is imported by its package
+  spec. The Render example bundles ship a worked one.
 - `fixtures/data.json` — a valid first payload.
 
 Workflow: edit → `registry-render compile --bundle . --type letter
@@ -107,34 +111,6 @@ Before writing a template that prints registry data, agree the field list
 (the disclosure gate): what appears on paper leaves every access profile
 behind.
 "#;
-
-/// The vendored QR package, embedded so `init` needs no network.
-const ZEBRA_FILES: &[(&str, &[u8])] = &[
-    (
-        "typst.toml",
-        include_bytes!("../assets/vendor/zebra/0.1.0/typst.toml"),
-    ),
-    (
-        "LICENSE",
-        include_bytes!("../assets/vendor/zebra/0.1.0/LICENSE"),
-    ),
-    (
-        "README.md",
-        include_bytes!("../assets/vendor/zebra/0.1.0/README.md"),
-    ),
-    (
-        "src/lib.typ",
-        include_bytes!("../assets/vendor/zebra/0.1.0/src/lib.typ"),
-    ),
-    (
-        "src/generic.typ",
-        include_bytes!("../assets/vendor/zebra/0.1.0/src/generic.typ"),
-    ),
-    (
-        "src/zebra.wasm",
-        include_bytes!("../assets/vendor/zebra/0.1.0/src/zebra.wasm"),
-    ),
-];
 
 /// Starter fonts (with their license), embedded the same way: a Latin text
 /// face plus an Arabic one, so `fonts/` holds real, replaceable examples
@@ -181,13 +157,6 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     std::fs::create_dir_all(dir.join("labels")).map_err(io_problem)?;
     std::fs::create_dir_all(dir.join("fonts")).map_err(io_problem)?;
     std::fs::create_dir_all(dir.join("fixtures")).map_err(io_problem)?;
-    for (file, bytes) in ZEBRA_FILES {
-        let path = dir.join("packages/preview/zebra/0.1.0").join(file);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(io_problem)?;
-        }
-        write_new_bytes(&path, bytes)?;
-    }
     for (file, bytes) in STARTER_FONT_FILES {
         write_new_bytes(&dir.join("fonts").join(file), bytes)?;
     }
