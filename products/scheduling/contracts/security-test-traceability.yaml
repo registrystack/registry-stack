@@ -38,7 +38,7 @@ entries:
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_permission_cardinality_bounds_are_enforced}
   - id: SCHEDULING-SEC-06
     tests:
-      - {path: crates/registry-breg/src/task_grant/tests.rs, name: a_scheduling_grant_is_refused_by_the_breg_binding}
+      - {path: crates/registry-breg/src/task_grant/tests.rs, name: a_scheduling_grant_is_refused_by_the_breg_binding, features: [runtime]}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: grant_bounds_variants_are_distinct_and_strict}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: scheduling_value_boundaries_and_unknown_fields_are_enforced}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: the_scheduling_tag_round_trips_through_serde}

@@ -149,6 +149,72 @@ DEFAULT_FILES = {
 }
 
 
+class RunnerValidation(unittest.TestCase):
+    def test_python_discovery_rejects_an_ordinary_method(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="scheduling-python-inventory.") as directory:
+            root = Path(directory)
+            source = root / "test_fixture.py"
+            source.write_text(
+                'import unittest\nclass Tests(unittest.TestCase):\n'
+                '    def test_selectable(self): raise AssertionError("must not execute")\n'
+                '    def ordinary_method(self): pass\n', encoding="utf-8",
+            )
+            self.assertEqual(validator.runner_violations(root, [
+                {"path": source.name, "name": "test_selectable"},
+            ]), [])
+            failures = validator.runner_violations(root, [
+                {"path": source.name, "name": "ordinary_method"},
+            ])
+            self.assertEqual(len(failures), 1, failures)
+            self.assertIn("not selectable", failures[0])
+
+    def test_a_feature_gated_library_citation_names_its_feature(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="scheduling-feature-inventory.") as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "citation-fixture"\nversion = "0.1.0"\nedition = "2021"\n'
+                '[workspace]\n[features]\nruntime = []\n', encoding="utf-8",
+            )
+            (root / "Cargo.lock").write_text(
+                'version = 3\n[[package]]\nname = "citation-fixture"\nversion = "0.1.0"\n',
+                encoding="utf-8",
+            )
+            (root / "src/lib.rs").write_text(
+                '#[cfg(feature = "runtime")]\n#[test]\n'
+                'fn selectable() { panic!("must not execute"); }\n', encoding="utf-8",
+            )
+            citation = {"path": "src/lib.rs", "name": "selectable"}
+            self.assertTrue(validator.runner_violations(root, [citation]))
+            citation["features"] = ["runtime"]
+            self.assertEqual(validator.runner_violations(root, [citation]), [])
+
+    def test_rust_citation_must_be_listed_by_its_runner(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="scheduling-runner-test.") as directory:
+            root = Path(directory)
+            (root / "src").mkdir()
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "citation-fixture"\nversion = "0.1.0"\nedition = "2021"\n'
+                '[workspace]\n', encoding="utf-8",
+            )
+            (root / "Cargo.lock").write_text(
+                'version = 3\n[[package]]\nname = "citation-fixture"\nversion = "0.1.0"\n',
+                encoding="utf-8",
+            )
+            (root / "src/lib.rs").write_text(
+                '#[test]\nfn selectable() { panic!("inventory must not execute tests"); }\n'
+                'pub fn ordinary_function() {}\n', encoding="utf-8",
+            )
+            self.assertEqual(validator.runner_violations(root, [
+                {"path": "src/lib.rs", "name": "selectable"},
+            ]), [])
+            failures = validator.runner_violations(root, [
+                {"path": "src/lib.rs", "name": "ordinary_function"},
+            ])
+            self.assertEqual(len(failures), 1, failures)
+            self.assertIn("not selectable", failures[0])
+
+
 class MatrixValidation(unittest.TestCase):
     def test_a_consistent_tree_has_no_violations(self) -> None:
         self.assertEqual(validate_tree(happy_tree(), DEFAULT_FILES), [])
