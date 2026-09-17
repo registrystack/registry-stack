@@ -92,7 +92,9 @@ const README: &str = r#"# Render bundle
 - `labels/` — one flat YAML string map per locale; seeded in English,
   localize at will. A script beyond Latin needs a font in `fonts/` (for
   example Noto Naskh Arabic); `render check` names the gap.
-- `fonts/` — bundle fonts (the binary already embeds a Latin baseline).
+- `fonts/` — starter fonts (Noto Sans + Noto Naskh Arabic, OFL — the
+  license is in `fonts/OFL.txt`); replace them with your own. The binary
+  already embeds a Latin baseline.
 - `packages/preview/zebra/` — a vendored QR package; there is no download
   path at render time, so anything else you import goes here too.
 - `fixtures/data.json` — a valid first payload.
@@ -134,6 +136,22 @@ const ZEBRA_FILES: &[(&str, &[u8])] = &[
     ),
 ];
 
+/// Starter fonts (with their license), embedded the same way: a Latin text
+/// face plus an Arabic one, so `fonts/` holds real, replaceable examples
+/// and a non-Latin scaffold already has its script covered. Byte-identical
+/// to the copies the example bundles ship.
+const STARTER_FONT_FILES: &[(&str, &[u8])] = &[
+    (
+        "NotoSans-Regular.ttf",
+        include_bytes!("../assets/starter-fonts/NotoSans-Regular.ttf"),
+    ),
+    (
+        "NotoNaskhArabic-Regular.ttf",
+        include_bytes!("../assets/starter-fonts/NotoNaskhArabic-Regular.ttf"),
+    ),
+    ("OFL.txt", include_bytes!("../assets/starter-fonts/OFL.txt")),
+];
+
 pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
     for locale in labels {
         if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_lowercase() || c == '-') {
@@ -160,6 +178,9 @@ pub fn scaffold(dir: &Path, labels: &[String]) -> Result<i32, RenderProblem> {
             std::fs::create_dir_all(parent).map_err(io_problem)?;
         }
         write_new_bytes(&path, bytes)?;
+    }
+    for (file, bytes) in STARTER_FONT_FILES {
+        write_new_bytes(&dir.join("fonts").join(file), bytes)?;
     }
 
     let labels_field = format!(

@@ -64,6 +64,19 @@ fn default_scaffold_compiles_offline_with_zero_edits_and_no_warnings() {
         .join("packages/preview/zebra/0.1.0/typst.toml")
         .is_file());
     assert!(dir.join("fixtures/data.json").is_file());
+    // Starter fonts ship with their license, ready to replace.
+    assert!(
+        dir.join("fonts/NotoSans-Regular.ttf").is_file(),
+        "starter fonts must be real font files"
+    );
+    assert!(
+        dir.join("fonts/NotoNaskhArabic-Regular.ttf").is_file(),
+        "an Arabic-capable starter font ships for non-Latin scaffolds"
+    );
+    assert!(
+        dir.join("fonts/OFL.txt").is_file(),
+        "the fonts' license travels with them"
+    );
 }
 
 #[test]
