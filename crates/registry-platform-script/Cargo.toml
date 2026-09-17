@@ -1,0 +1,15 @@
+[package]
+name = "registry-platform-script"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bounded script execution mechanics for Registry Stack products."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+rhai.workspace = true
