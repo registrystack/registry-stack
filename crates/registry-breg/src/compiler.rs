@@ -163,7 +163,8 @@ pub fn compile_project_with_assets(
                     .source
                     .handler
                     .as_ref()
-                    .map(|handler| (action.source_module.clone(), handler.script.clone()))
+                    .and_then(|handler| handler.script.clone())
+                    .map(|script| (action.source_module.clone(), script))
             })
             .collect(),
         &sources,
@@ -4241,12 +4242,20 @@ fn asset_map<'a>(
 ) -> BTreeMap<(Option<String>, String), &'a [u8]> {
     let mut map = BTreeMap::new();
     for asset in assets {
+        // WASM handler modules are sized against their own budget at handler
+        // admission, which owns the diagnostic naming the action and the
+        // ceiling; every other asset family is bounded here.
+        let bytes_within_bound = if asset.path.ends_with(".wasm") {
+            true
+        } else {
+            asset.bytes.len() <= usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
+        };
         if asset.module.as_deref().is_some_and(str::is_empty)
             || !(valid_relative_asset_path(&asset.path)
                 || (asset.module.is_none()
                     && crate::action_evidence_contracts::valid_contract_path(&asset.path)))
             || asset.bytes.is_empty()
-            || asset.bytes.len() > usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
+            || !bytes_within_bound
         {
             errors.push(Diagnostic::error(
                 "module.asset.invalid",
@@ -4275,7 +4284,7 @@ fn asset_map<'a>(
 fn valid_relative_asset_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
-        && (path.ends_with(".sql") || path.ends_with(".rhai"))
+        && (path.ends_with(".sql") || path.ends_with(".rhai") || path.ends_with(".wasm"))
         && !path.starts_with('/')
         && !path.contains('\\')
         && path

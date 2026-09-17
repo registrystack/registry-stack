@@ -768,7 +768,15 @@ pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ActionHandlerSource {
     pub kind: ActionHandlerKindSource,
-    pub script: String,
+    /// The Rhai handler script path. Declared for rhai handlers only; the
+    /// compiler enforces the pairing with the declared backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    /// The WASM handler module path, project-local. Declared for wasm
+    /// handlers only; the compiler enforces the pairing with the declared
+    /// backend.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
     #[cfg_attr(
         feature = "schema",
         schemars(schema_with = "action_handler_abi_schema")

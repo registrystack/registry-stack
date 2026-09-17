@@ -20,15 +20,20 @@ fn action(script: &str) -> registry_breg::model::CompiledAction {
     let mut assets: Vec<_> = project
         .actions
         .iter()
-        .filter_map(|action| action.handler.as_ref())
-        .map(|handler| ModuleAssetSource {
+        .filter_map(|action| {
+            action
+                .handler
+                .as_ref()
+                .and_then(|handler| handler.script.clone())
+        })
+        .map(|handler_script| ModuleAssetSource {
             module: None,
-            path: handler.script.clone(),
-            bytes: if handler.script.ends_with("register-landholding.rhai") {
+            bytes: if handler_script.ends_with("register-landholding.rhai") {
                 script.as_bytes().to_vec()
             } else {
-                std::fs::read(root.join(&handler.script)).unwrap()
+                std::fs::read(root.join(&handler_script)).unwrap()
             },
+            path: handler_script,
         })
         .collect();
     assets.extend(

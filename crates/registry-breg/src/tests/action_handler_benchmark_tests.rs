@@ -38,11 +38,16 @@ fn acceptance_action() -> CompiledAction {
     let assets = project
         .actions
         .iter()
-        .filter_map(|action| action.handler.as_ref())
-        .map(|handler| ModuleAssetSource {
+        .filter_map(|action| {
+            action
+                .handler
+                .as_ref()
+                .and_then(|handler| handler.script.clone())
+        })
+        .map(|script| ModuleAssetSource {
             module: None,
-            path: handler.script.clone(),
-            bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+            bytes: std::fs::read(root.join(&script)).unwrap(),
+            path: script,
         })
         .collect::<Vec<_>>();
     compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)

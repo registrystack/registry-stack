@@ -6982,7 +6982,7 @@ journeys:
                 action
                     .handler
                     .as_ref()
-                    .map(|handler| handler.script.clone())
+                    .and_then(|handler| handler.script.clone())
             }))
             .collect::<BTreeSet<_>>()
             .into_iter()
@@ -8072,11 +8072,16 @@ journeys:
         let assets = project
             .actions
             .iter()
-            .filter_map(|action| action.handler.as_ref())
-            .map(|handler| ModuleAssetSource {
+            .filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .and_then(|handler| handler.script.clone())
+            })
+            .map(|script| ModuleAssetSource {
                 module: None,
-                path: handler.script.clone(),
-                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+                bytes: std::fs::read(root.join(&script)).unwrap(),
+                path: script,
             })
             .collect::<Vec<_>>();
         let registry =
