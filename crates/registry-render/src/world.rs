@@ -353,7 +353,9 @@ mod tests {
         use chrono::TimeZone;
         // 18:15Z + 5h30m is 23:45 the same day; rounding the offset to a
         // whole 6h would cross midnight and answer the wrong day.
-        let issued = chrono::Utc.with_ymd_and_hms(2026, 9, 16, 18, 15, 0).unwrap();
+        let issued = chrono::Utc
+            .with_ymd_and_hms(2026, 9, 16, 18, 15, 0)
+            .unwrap();
         let world = test_world(issued);
         let offset = Duration::construct(0, 30, 5, 0, 0); // 5h30m
         assert_eq!(

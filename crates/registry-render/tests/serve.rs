@@ -868,7 +868,13 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
         "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: heavy\n    version: 1\n    entry: templates/heavy.typ\n",
     )
     .unwrap();
-    for dir in ["templates", "fonts", "labels", "schemas", "packages/preview"] {
+    for dir in [
+        "templates",
+        "fonts",
+        "labels",
+        "schemas",
+        "packages/preview",
+    ] {
         std::fs::create_dir_all(bundle.join(dir)).unwrap();
     }
     std::fs::write(
@@ -888,8 +894,11 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     );
     // Tighten the grace: the deployment default is 5s.
     let text = std::fs::read_to_string(&runtime).unwrap();
-    std::fs::write(&runtime, text.replace("shutdownGraceSeconds: 5", "shutdownGraceSeconds: 1"))
-        .unwrap();
+    std::fs::write(
+        &runtime,
+        text.replace("shutdownGraceSeconds: 5", "shutdownGraceSeconds: 1"),
+    )
+    .unwrap();
     let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
         .args(["serve", "--runtime", runtime.to_str().unwrap()])
         .stdout(Stdio::null())
@@ -899,7 +908,8 @@ fn shutdown_is_bounded_by_grace_even_with_renders_in_flight() {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+            let _ =
+                stream.write_all(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
             let mut buf = [0u8; 128];
             if stream.read(&mut buf).is_ok_and(|n| n > 0) {
                 break;
