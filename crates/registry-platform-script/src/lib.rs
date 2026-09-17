@@ -11,5 +11,13 @@
 //! through JSON. Both engine lifetimes are first class: a product may construct
 //! a fresh engine per call or retain one engine and its registration surface
 //! for the process lifetime.
+//!
+//! The WASM backend module and its duplicate-JSON-member outcome check are
+//! compiled only under the crate's non-default `wasm` feature; without it the
+//! crate is the Rhai adapter alone.
 
+#[cfg(feature = "wasm")]
+pub mod json_check;
 pub mod rhai;
+#[cfg(feature = "wasm")]
+pub mod wasm;
