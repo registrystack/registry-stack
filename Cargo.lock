@@ -5734,6 +5734,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-script"
+version = "0.32.0"
+dependencies = [
+ "rhai",
+]
+
+[[package]]
 name = "registry-platform-sdjwt"
 version = "0.32.0"
 dependencies = [
