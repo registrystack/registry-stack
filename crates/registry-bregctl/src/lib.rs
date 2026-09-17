@@ -5259,7 +5259,7 @@ fn load_project_planner_asset_files(
     project_directory: &SafeDir,
     project: &RegistryProject,
 ) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
-    let paths = project
+    let mut paths = project
         .entities
         .iter()
         .filter_map(|entity| {
@@ -5274,16 +5274,21 @@ fn load_project_planner_asset_files(
                     )
                 })
         })
-        .chain(project.actions.iter().filter_map(|action| {
-            action.handler.as_ref().map(|handler| {
-                (
-                    handler.script.clone(),
-                    format!("actions[{}].handler.script", action.id),
-                )
-            })
-        }))
         .collect::<BTreeMap<_, _>>();
+    let mut wasm_module_paths = BTreeMap::new();
+    for action in &project.actions {
+        partition_handler_source(
+            action.handler.as_ref(),
+            &format!("actions[{}]", action.id),
+            &mut paths,
+            &mut wasm_module_paths,
+        );
+    }
     let mut assets = load_planner_asset_files(project_directory, paths)?;
+    assets.extend(load_wasm_module_asset_files(
+        project_directory,
+        wasm_module_paths,
+    )?);
     for provider in &project.evidence_providers {
         let location = format!("evidenceProviders[{}].contracts", provider.id);
         if !registry_breg::action_evidence_contracts::valid_contract_path(&provider.contracts) {
@@ -5398,7 +5403,7 @@ fn load_module_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let planner_paths = module
+    let mut planner_paths = module
         .entities
         .iter()
         .filter_map(|entity| {
@@ -5431,18 +5436,50 @@ fn load_module_asset_files(
                     )
                 })
         }))
-        .chain(module.actions.iter().filter_map(|action| {
-            action.handler.as_ref().map(|handler| {
-                (
-                    handler.script.clone(),
-                    format!("modules[{module_id}].actions[{}].handler.script", action.id),
-                )
-            })
-        }))
         .collect::<BTreeMap<_, _>>();
+    let mut wasm_module_paths = BTreeMap::new();
+    for action in &module.actions {
+        partition_handler_source(
+            action.handler.as_ref(),
+            &format!("modules[{module_id}].actions[{}]", action.id),
+            &mut planner_paths,
+            &mut wasm_module_paths,
+        );
+    }
     assets.extend(load_planner_asset_files(module_directory, planner_paths)?);
+    assets.extend(load_wasm_module_asset_files(
+        module_directory,
+        wasm_module_paths,
+    )?);
     assets.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(assets)
+}
+
+/// Split one action handler's declared source reference into its asset family:
+/// a Rhai script for rhai handlers, a WASM module for wasm handlers. An absent
+/// reference contributes nothing here; the compiler refuses the incomplete
+/// shape with its own diagnostic.
+fn partition_handler_source(
+    handler: Option<&registry_breg::contract::ActionHandlerSource>,
+    declaring_path: &str,
+    planner_paths: &mut BTreeMap<String, String>,
+    wasm_module_paths: &mut BTreeMap<String, String>,
+) {
+    use registry_breg::contract::ActionHandlerKindSource;
+    let Some(handler) = handler else { return };
+    match handler.kind {
+        ActionHandlerKindSource::Rhai => {
+            if let Some(script) = &handler.script {
+                planner_paths.insert(script.clone(), format!("{declaring_path}.handler.script"));
+            }
+        }
+        ActionHandlerKindSource::Wasm => {
+            if let Some(module) = &handler.module {
+                wasm_module_paths
+                    .insert(module.clone(), format!("{declaring_path}.handler.module"));
+            }
+        }
+    }
 }
 
 /// Read the Rhai planner scripts declared by one authoring source through the
@@ -5502,6 +5539,96 @@ fn load_planner_asset_files(
             Ok(CapturedModuleAssetSource { path, bytes })
         })
         .collect()
+}
+
+/// Read the WASM handler modules declared by one authoring source through the
+/// descriptor of the directory that source was read from, so module bytes come
+/// from the tree the declaring file came from.
+fn load_wasm_module_asset_files(
+    origin: &SafeDir,
+    paths: BTreeMap<String, String>,
+) -> Result<Vec<CapturedModuleAssetSource>, Diagnostic> {
+    paths
+        .into_iter()
+        .map(|(path, declaring_path)| {
+            validate_wasm_module_asset_path(&declaring_path, &path)?;
+            let entry = open_asset_entry(
+                origin,
+                &path,
+                || wasm_module_asset_path_diagnostic(&declaring_path),
+                |error| {
+                    let mut diagnostic = path_diagnostic(
+                        error,
+                        "source.wasm_module.missing",
+                        &declaring_path,
+                        "the required handler module is not available",
+                        "handler modules must be regular files and must not be symbolic links",
+                    );
+                    diagnostic.message.push_str(&format!(
+                        "; referenced WASM module: {path:?}, relative to its declaring project or module"
+                    ));
+                    diagnostic
+                },
+            )?;
+            let bytes = read_bounded_source_entry(
+                &entry,
+                "source.wasm_module.missing",
+                &declaring_path,
+                registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64,
+            )?;
+            if bytes.is_empty() {
+                return Err(diagnostic(
+                    "source.wasm_module.bounds",
+                    &declaring_path,
+                    &format!("referenced WASM module {path:?} must be a non-empty bounded regular file"),
+                ));
+            }
+            Ok(CapturedModuleAssetSource { path, bytes })
+        })
+        .collect()
+}
+
+fn validate_wasm_module_asset_path(
+    declaring_path: &str,
+    asset_path: &str,
+) -> Result<(), Diagnostic> {
+    if asset_path.is_empty()
+        || asset_path.len() > MAX_RHAI_PLANNER_PATH_BYTES
+        || asset_path.contains('\\')
+        || asset_path.ends_with('/')
+        || !asset_path.ends_with(".wasm")
+    {
+        return Err(wasm_module_asset_path_diagnostic(declaring_path));
+    }
+    let path = Path::new(asset_path);
+    let components = path.components().collect::<Vec<_>>();
+    if path.is_absolute()
+        || components.len() > 12
+        || components
+            .iter()
+            .any(|component| !matches!(component, Component::Normal(_)))
+        || path.to_str() != Some(asset_path)
+        || components
+            .iter()
+            .filter_map(|component| match component {
+                Component::Normal(component) => component.to_str(),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("/")
+            != asset_path
+    {
+        return Err(wasm_module_asset_path_diagnostic(declaring_path));
+    }
+    Ok(())
+}
+
+fn wasm_module_asset_path_diagnostic(declaring_path: &str) -> Diagnostic {
+    diagnostic(
+        "source.wasm_module.path_unsafe",
+        declaring_path,
+        "WASM handler modules must use bounded declaring-origin-relative .wasm paths",
+    )
 }
 
 /// Open an asset named relative to an authoring origin through that origin's
@@ -7325,11 +7452,28 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                 }
             });
             if let Some(handler) = &action.handler {
-                summary["handler"] = json!({
-                    "kind": "rhai", "abi": handler.abi,
+                use registry_breg::model::CompiledActionHandlerKind;
+                // The summary names the compiled backend and its source
+                // fingerprint; the Rhai-only members stay Rhai-only.
+                let (kind, backend_source) = match handler.kind {
+                    CompiledActionHandlerKind::Rhai => (
+                        json!("rhai"),
+                        json!({
+                            "scriptSha256": handler.script_sha256,
+                            "rhaiVersion": handler.rhai_version,
+                            "limits": handler.limits,
+                        }),
+                    ),
+                    CompiledActionHandlerKind::Wasm => (
+                        json!("wasm"),
+                        json!({
+                            "moduleSha256": handler.module_sha256,
+                        }),
+                    ),
+                };
+                let mut handler_summary = json!({
+                    "kind": kind, "abi": handler.abi,
                     "entrypoint": "handle", "context": "ctx.inputs", "inputKeys": "authored_ids",
-                    "scriptSha256": handler.script_sha256, "rhaiVersion": handler.rhai_version,
-                    "limits": handler.limits,
                     "possibleWrites": handler.writes,
                     "refusals": handler.refusals.iter().map(|(code,label)| json!({"code":code,"label":label})).collect::<Vec<_>>(),
                     "outcomes": ["effects", "refusal"],
@@ -7338,6 +7482,10 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                     "reads": "supplied_inputs_only",
                     "replay": "recover_committed_result_without_handler_evaluation",
                 });
+                if let Some(object) = handler_summary.as_object_mut() {
+                    object.extend(backend_source.as_object().cloned().unwrap_or_default());
+                }
+                summary["handler"] = handler_summary;
             }
             if action.handler.as_ref().is_some_and(|handler| handler.abi == registry_breg::contract::ACTION_HANDLER_ABI_V2) {
                 summary["evidence"] = json!({
@@ -10378,6 +10526,56 @@ mod tests {
         assert_eq!(oversized.code, "source.file.bounds");
     }
 
+    #[test]
+    fn wasm_module_capture_enforces_normalized_relative_paths_and_module_bound() {
+        let directory = TestDirectory::create();
+        fs::create_dir_all(directory.path.join("wasm")).unwrap();
+        let module_bytes = b"\0asm\x01\0\0\0module-bytes".to_vec();
+        fs::write(
+            directory.path.join("wasm/handler.wasm"),
+            module_bytes.clone(),
+        )
+        .unwrap();
+        let origin = SafeDir::resolve(&directory.path).expect("the test directory resolves");
+        let captured = load_wasm_module_asset_files(
+            &origin,
+            BTreeMap::from([(
+                "wasm/handler.wasm".to_owned(),
+                "actions[register-person].handler.module".to_owned(),
+            )]),
+        )
+        .expect("safe project-relative module is captured");
+        assert_eq!(captured[0].path, "wasm/handler.wasm");
+        assert_eq!(captured[0].bytes, module_bytes);
+
+        for path in [
+            "../handler.wasm",
+            "/handler.wasm",
+            "wasm//handler.wasm",
+            "wasm/handler.rhai",
+            "wasm\\handler.wasm",
+        ] {
+            assert_eq!(
+                validate_wasm_module_asset_path("registry.yaml", path)
+                    .unwrap_err()
+                    .code,
+                "source.wasm_module.path_unsafe"
+            );
+        }
+
+        fs::write(
+            directory.path.join("wasm/oversized.wasm"),
+            vec![b'x'; registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES + 1],
+        )
+        .unwrap();
+        let oversized = load_wasm_module_asset_files(
+            &origin,
+            BTreeMap::from([("wasm/oversized.wasm".to_owned(), "registry.yaml".to_owned())]),
+        )
+        .unwrap_err();
+        assert_eq!(oversized.code, "source.file.bounds");
+    }
+
     /// The asset readers refuse an escaping path themselves, so the module and
     /// planner path rules are not the only thing between a declared asset and a
     /// file outside the directory the module was listed in.
@@ -10463,10 +10661,11 @@ mod tests {
             .map(|action| {
                 let handler = action.handler.as_mut().unwrap();
                 handler.abi = registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned();
+                let script = handler.script.clone().unwrap();
                 registry_breg::contract::ModuleAssetSource {
                     module: None,
-                    path: handler.script.clone(),
-                    bytes: fs::read(root.join(&handler.script)).unwrap(),
+                    bytes: fs::read(root.join(&script)).unwrap(),
+                    path: script,
                 }
             })
             .collect::<Vec<_>>();

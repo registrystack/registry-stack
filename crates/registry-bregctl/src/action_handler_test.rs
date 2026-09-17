@@ -195,9 +195,14 @@ pub(super) fn run(
         assertions_passed,
         planner: None,
         handler: Some(PlannerTestIdentityReport {
+            // An executed handler is a compiled Rhai handler; the runtime
+            // refuses every other backend before this report is reached.
             kind: "rhai",
             abi: handler.abi.clone(),
-            script_sha256: handler.script_sha256.clone(),
+            script_sha256: handler
+                .script_sha256
+                .clone()
+                .expect("an executed handler carries its Rhai script hash"),
         }),
         disposition: None,
         queue_reason: None,
