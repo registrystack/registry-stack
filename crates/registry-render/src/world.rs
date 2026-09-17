@@ -234,8 +234,11 @@ impl World for RenderWorld {
         let instant = match offset {
             None => self.issued_utc,
             Some(duration) => {
-                let hours = duration.hours().round() as i64;
-                let delta = chrono::TimeDelta::try_hours(hours)?;
+                // Full-second precision: typst offsets are durations, and
+                // real zones sit at half and quarter hours. The saturating
+                // cast plus try_seconds keeps an absurd offset at None.
+                let seconds = duration.seconds().round() as i64;
+                let delta = chrono::TimeDelta::try_seconds(seconds)?;
                 self.issued_utc.checked_add_signed(delta)?
             }
         };
@@ -342,6 +345,30 @@ mod tests {
             ymd(world.today(Some(Duration::construct(0, 0, -5, 0, 0)))),
             Some((2026, 9, 16)),
             "22:30Z - 5h is still the 16th"
+        );
+    }
+
+    #[test]
+    fn today_offset_honors_fractional_hours() {
+        use chrono::TimeZone;
+        // 18:15Z + 5h30m is 23:45 the same day; rounding the offset to a
+        // whole 6h would cross midnight and answer the wrong day.
+        let issued = chrono::Utc.with_ymd_and_hms(2026, 9, 16, 18, 15, 0).unwrap();
+        let world = test_world(issued);
+        let offset = Duration::construct(0, 30, 5, 0, 0); // 5h30m
+        assert_eq!(
+            ymd(world.today(Some(offset))),
+            Some((2026, 9, 16)),
+            "a half-hour offset must not be rounded across midnight"
+        );
+        // 19:00Z + 5h15m crosses to the next day.
+        let issued = chrono::Utc.with_ymd_and_hms(2026, 9, 16, 19, 0, 0).unwrap();
+        let world = test_world(issued);
+        let offset = Duration::construct(0, 15, 5, 0, 0); // 5h15m
+        assert_eq!(
+            ymd(world.today(Some(offset))),
+            Some((2026, 9, 17)),
+            "fractional offsets still cross midnight when they really do"
         );
     }
 
