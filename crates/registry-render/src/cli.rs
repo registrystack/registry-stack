@@ -66,6 +66,10 @@ pub enum Command {
         data: PathBuf,
         #[arg(long)]
         locale: Option<String>,
+        /// Machine-readable result on stdout (failures: problem+json on
+        /// stderr, typed exit code).
+        #[arg(long)]
+        json: bool,
     },
     /// Write per-file hashes into the manifest, sealing the bundle.
     Seal {
@@ -151,12 +155,37 @@ fn parse_asset_arg(spec: &str) -> Result<(String, PathBuf), String> {
 
 /// Run the CLI. Returns the process exit code.
 pub fn run(cli: Cli) -> i32 {
+    let json = wants_json(&cli);
     match run_inner(cli) {
         Ok(code) => code,
         Err(problem) => {
-            eprintln!("render: {problem}");
+            if json {
+                // The same RFC 9457 document HTTP callers get, on stderr;
+                // stdout stays for successful output. Scripts branch on the
+                // typed exit code and read the detail here.
+                let document = serde_json::json!({
+                    "type": format!("{}/{}", crate::problem::PROBLEM_TYPE_BASE, problem.kind.slug()),
+                    "title": problem.kind.slug(),
+                    "detail": problem.detail,
+                    "pointers": problem.pointers,
+                    "locations": problem.locations,
+                });
+                eprintln!("{}", serde_json::to_string(&document).expect("problem json"));
+            } else {
+                eprintln!("render: {problem}");
+            }
             problem.exit_code()
         }
+    }
+}
+
+/// Whether the invoked command asked for JSON output (its failures then
+/// print as problem documents instead of prose).
+fn wants_json(cli: &Cli) -> bool {
+    match &cli.command {
+        Command::Compile { json, .. } => *json,
+        Command::Validate { json, .. } => *json,
+        _ => false,
     }
 }
 
@@ -171,14 +200,18 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             println!("sealed {}", bundle.display());
             Ok(0)
         }
-        Command::Validate { bundle, document, data, locale } => {
+        Command::Validate { bundle, document, data, locale, json } => {
             let bundle = Bundle::load(&bundle)?;
             let document = bundle.document(&document)?;
             // Validate is a schema dry-run; it needs no issuance time and
             // renders nothing.
             let request = read_request_without_time(&data, &locale)?;
             validate_data(document, &request)?;
-            println!("ok");
+            if json {
+                println!("{}", serde_json::json!({"valid": true}));
+            } else {
+                println!("ok");
+            }
             Ok(0)
         }
         Command::Compile {
@@ -197,8 +230,10 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
             emit_envelope,
         } => {
             let issued = parse_issued_at(issued_at, now)?;
-            if now {
-                // The loud opt-in the flag's help promises.
+            if now && !json {
+                // The loud opt-in the flag's help promises (suppressed under
+                // --json, where stderr carries exactly one problem document
+                // on failure).
                 eprintln!(
                     "note: --now resolves issuedAt to {} (wall clock; output is NOT byte-stable)",
                     issued.to_rfc3339()
@@ -212,7 +247,7 @@ fn run_inner(cli: Cli) -> Result<i32, RenderProblem> {
                 return watch_loop(&bundle, &document, &request, strict, timeout, &out);
             }
             let loaded = Bundle::load(&bundle).map_err(recovery_hint)?;
-            if !loaded.manifest.is_sealed() {
+            if !loaded.manifest.is_sealed() && !json {
                 eprintln!(
                     "note: bundle is unsealed; compile is fine, serve is not (run `render seal` when ready)"
                 );

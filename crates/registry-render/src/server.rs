@@ -24,11 +24,9 @@ use registry_platform_httpsec::{request_body_limit, security_headers, CspBuilder
 
 use crate::audit::{RenderAudit, RenderAuditEvent};
 use crate::bundle::Bundle;
-use crate::problem::{ProblemKind, RenderProblem};
+use crate::problem::{ProblemKind, RenderProblem, PROBLEM_TYPE_BASE};
 use crate::runtime;
 use crate::worker::{self, WorkerRendered, WorkerRequest};
-
-const PROBLEM_TYPE_BASE: &str = "https://render.registrystack.org/problems";
 
 pub struct Service {
     bundle: Bundle,

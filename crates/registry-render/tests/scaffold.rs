@@ -208,6 +208,107 @@ fn compile_is_bounded_by_a_timeout() {
 }
 
 #[test]
+fn now_is_loud_about_the_resolved_issued_at() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let out = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--now",
+        "--out",
+        dir.join("letter.pdf").to_str().unwrap(),
+    ]);
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--now") && stderr.contains("issuedAt") && stderr.contains("NOT byte-stable"),
+        "--now must announce the nondeterministic instant it chose: {stderr}"
+    );
+}
+
+#[test]
+fn json_failures_are_problem_documents() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let bad = dir.join("bad.json");
+    std::fs::write(&bad, r#"{"reference": "X"}"#).unwrap();
+    let out = run(&[
+        "compile",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        bad.to_str().unwrap(),
+        "--issued-at",
+        "2026-01-01T00:00:00Z",
+        "--out",
+        dir.join("letter.pdf").to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(registry_render::ProblemKind::DataInvalid.exit_code())
+    );
+    let problem: serde_json::Value =
+        serde_json::from_slice(&out.stderr).expect("stderr is one JSON problem document");
+    assert_eq!(problem["title"], "data-invalid", "{problem}");
+    assert_eq!(
+        problem["type"],
+        "https://render.registrystack.org/problems/data-invalid",
+        "{problem}"
+    );
+    assert!(
+        problem["pointers"].as_array().is_some_and(|p| !p.is_empty()),
+        "schema pointers survive into the JSON failure: {problem}"
+    );
+}
+
+#[test]
+fn validate_supports_json() {
+    let dir = tempdir();
+    run(&["init", dir.to_str().unwrap()]);
+    let good = run(&[
+        "validate",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        dir.join("fixtures/data.json").to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(good.status.code(), Some(0));
+    let value: serde_json::Value = serde_json::from_slice(&good.stdout).expect("json stdout");
+    assert_eq!(value["valid"], true, "{value}");
+
+    let bad_path = dir.join("bad.json");
+    std::fs::write(&bad_path, r#"{"reference": "X"}"#).unwrap();
+    let bad = run(&[
+        "validate",
+        "--bundle",
+        dir.to_str().unwrap(),
+        "--type",
+        "letter",
+        "--data",
+        bad_path.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(
+        bad.status.code(),
+        Some(registry_render::ProblemKind::DataInvalid.exit_code())
+    );
+    let problem: serde_json::Value =
+        serde_json::from_slice(&bad.stderr).expect("json problem on stderr");
+    assert_eq!(problem["title"], "data-invalid", "{problem}");
+}
+
+#[test]
 fn check_seal_refuses_to_seal_a_broken_bundle() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);

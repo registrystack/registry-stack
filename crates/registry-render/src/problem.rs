@@ -3,6 +3,10 @@
 
 use std::fmt;
 
+/// Base URI for RFC 9457 problem types, shared by HTTP responses and CLI
+/// `--json` failure documents.
+pub const PROBLEM_TYPE_BASE: &str = "https://render.registrystack.org/problems";
+
 /// The closed set of Render failure kinds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProblemKind {
