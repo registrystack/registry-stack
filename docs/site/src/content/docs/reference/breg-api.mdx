@@ -379,11 +379,11 @@ showed the action. The server rejects a decision whose binding no longer matches
 never approves a proposal that changed under them. A stage with `excludeSubmitter: true` refuses
 the principal that submitted the request.
 
-Reject and request-revision bodies may also include an optional `reason` string of up to
-4096 Unicode characters. The server preserves whitespace and Unicode exactly, accepts an empty
-string, and refuses null, other types, NUL, or longer text with `400 request.invalid`.
-Approve and apply do not accept `reason`. Include the same reason when replaying an action with
-its original idempotency key; changing it is a different request body.
+Approve, reject, request-revision, and apply bodies may also include an optional `reason` string of up
+to 4096 Unicode characters: the approver's or applier's recorded remark, not only an explanation of a
+refusal. The server preserves whitespace and Unicode exactly, accepts an empty string, and refuses
+null, other types, NUL, or longer text with `400 request.invalid`. Include the same reason when
+replaying an action with its original idempotency key; changing it is a different request body.
 
 Read the current proposal's decisions in `data.request.decisions`. Each decision has `stageId`,
 `kind`, `decidedAt`, and `reasonPresent`; `reason` appears only when retained and permitted by the
@@ -392,7 +392,9 @@ selected profile. Retained proposal history exposes the same decision shape unde
 `readableRequestFields: [reason]`; set `readableRequestFields: []` to hide explanation text while
 keeping the decision facts and reason-presence flag. Anonymous profiles never receive reason
 text. Request-detail erasure removes the text while retaining reason presence and the decision
-facts.
+facts. The applied request's `data.request.application` carries the same disclosure for the applier's
+remark: `reasonPresent` always, and `reason` under the same `readableRequestFields` rule, with the
+text removed but the presence retained by request-detail erasure.
 
 `readableRequestFields` also accepts `review_state`, which discloses `review` and `reviewTiming`
 on the request record, and `actor_reference`, which discloses `submitterReference` and

@@ -80,7 +80,9 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                     "applicationId": "00000000-0000-4000-8000-0000000000aa",
                     "proposalVersion": 2,
                     "effectDigest": digest,
-                    "appliedAt": "2026-08-31T01:02:03.700350Z"
+                    "appliedAt": "2026-08-31T01:02:03.700350Z",
+                    "reasonPresent": true,
+                    "reason": "  Verified against the site register. ตรวจสอบ 🙂  "
                 },
                 "history": {
                     "proposals": [{
@@ -132,7 +134,8 @@ fn request_get_schema_accepts_runtime_annotations_and_erased_terminal_data() {
                 "effectDigest": digest,
                 "application": {
                     "applicationId": "00000000-0000-4000-8000-0000000000aa",
-                    "proposalVersion": 2
+                    "proposalVersion": 2,
+                    "reasonPresent": true
                 },
                 "history": {
                     "proposals": [{
@@ -308,17 +311,11 @@ fn current_and_retained_decision_schemas_match_client_reason_and_count_bounds() 
             assert!(!validator.is_valid(&json!([decision.clone()])));
             decision.as_object_mut().unwrap().remove("reason");
             decision["reasonPresent"] = json!(true);
-            assert_eq!(
-                validator.is_valid(&json!([decision.clone()])),
-                kind != "approve"
-            );
+            assert_valid(&validator, &json!([decision.clone()]));
             for reason in [json!(""), json!("  ตรวจสอบ 🙂  "), json!("🙂".repeat(4096))]
             {
                 decision["reason"] = reason;
-                assert_eq!(
-                    validator.is_valid(&json!([decision.clone()])),
-                    kind != "approve"
-                );
+                assert_valid(&validator, &json!([decision.clone()]));
             }
             for reason in [
                 Value::Null,

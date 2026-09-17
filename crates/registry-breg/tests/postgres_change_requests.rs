@@ -6859,10 +6859,11 @@ fn assert_action_input_component(openapi: &Value, path: &str, operation: &str) {
         .unwrap_or_else(|| panic!("{operation} input component has properties"));
     assert_eq!(
         properties.keys().map(String::as_str).collect::<Vec<_>>(),
-        ["effectDigest", "proposalVersion"]
+        ["effectDigest", "proposalVersion", "reason"]
     );
     assert_eq!(properties["proposalVersion"]["type"], "integer");
     assert_eq!(properties["effectDigest"]["type"], "string");
+    assert_eq!(properties["reason"]["type"], "string");
 }
 
 async fn revision_items(

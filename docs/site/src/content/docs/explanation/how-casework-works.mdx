@@ -112,6 +112,7 @@ Deciding a source-backed item is not a local state change.
 Casework re-reads the request as the acting person, under that person's own bearer token and the [source profile](../../reference/glossary/#casework-source-profile) the request selects, and promotes only an action the registry offers that person for that exact binding at that moment.
 It then reserves one [attempt](../../reference/glossary/#attempt) and executes an inert prepared capsule that holds the exact binding and the evidence needed to replay it, and no credential.
 Approval does not apply: completing a review and applying a request are separate actions, discovered separately, taken separately.
+The reason the person records with the decision travels with it: every promoted decision action and the apply action carry the bounded remark to the source, which records it beside the action under its own disclosure and retention rules.
 
 {/* Evidence: crates/registry-casework/src/service.rs, decide and prepare_action;
     crates/registry-casework-breg/src/lib.rs, execute_prepared;

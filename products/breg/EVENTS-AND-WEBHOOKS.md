@@ -133,14 +133,15 @@ headers because infrastructure commonly logs headers.
 Lifecycle bodies also require a `request` object containing `proposalVersion`,
 `workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
 `deduplicationKey`, and `reasonPresent`. `stage` and `effectDigest` may be null.
-For rejection and request-revision transitions, an explanation supplied by the
-reviewer appears unchanged as the optional `request.reason` string, bounded to
-4096 Unicode characters. An absent explanation omits `reason` and sets
-`reasonPresent` to false. The event's compiled classification and destination
-authority govern delivery independently of a reader's `readableRequestFields`.
+For approve, reject, request-revision, and apply transitions, an explanation
+supplied by the deciding reviewer or by the applier appears unchanged as the
+optional `request.reason` string, bounded to 4096 Unicode characters. An absent
+explanation omits `reason` and sets `reasonPresent` to false. The event's
+compiled classification and destination authority govern delivery independently
+of a reader's `readableRequestFields`.
 The deduplication key stays stable across automatic retries and operator replay.
 Request-detail erasure removes retained explanation text from request events
-and webhook payloads while preserving the decision's reason-presence flag.
+and webhook payloads while preserving the reason-presence flag.
 
 Registry delivery headers add `Idempotency-Key`,
 `X-Registry-Event-Generation`, `X-Registry-Delivery-Attempt`, and

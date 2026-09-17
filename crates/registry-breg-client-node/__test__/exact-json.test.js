@@ -73,6 +73,7 @@ function lifecycleOperation() {
         properties:{
           proposalVersion:{type:'integer',format:'int64',minimum:1,maximum:4294967295},
           effectDigest:{type:'string',pattern:'^sha256:[0-9a-f]{64}$',description:'Digest of the immutable proposal effects displayed to the actor.'},
+          reason:{type:'string',maxLength:4096,pattern:'^[^\\u0000]*$',description:'Optional reviewer explanation, preserved unchanged. At most 4096 Unicode characters; NUL is refused.'},
         },
       },
     },

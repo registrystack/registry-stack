@@ -180,7 +180,6 @@ impl RequestWorkflow {
         if reason
             .as_deref()
             .is_some_and(|reason| !valid_review_reason(reason))
-            || (decision == ReviewDecisionKind::Approve && reason.is_some())
         {
             return Err(WorkflowError::InvalidReviewReason);
         }
@@ -348,6 +347,7 @@ impl RequestWorkflow {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn apply(
         mut self,
         context: TrustedTransitionContext,
@@ -356,7 +356,14 @@ impl RequestWorkflow {
         contract_fingerprint: &ContractFingerprint,
         observed_targets: Vec<ObservedTarget>,
         application: PreparedApplication,
+        reason: Option<String>,
     ) -> Result<WorkflowTransition, WorkflowError> {
+        if reason
+            .as_deref()
+            .is_some_and(|reason| !valid_review_reason(reason))
+        {
+            return Err(WorkflowError::InvalidReviewReason);
+        }
         if self.state != RequestState::Approved {
             return Err(WorkflowError::InvalidTransition);
         }
@@ -387,6 +394,8 @@ impl RequestWorkflow {
             applied_by: context.actor,
             applied_at: context.now,
             result_links: application.result_links,
+            reason_present: reason.is_some(),
+            reason,
         };
         self.state = RequestState::Applied;
         self.workflow_revision = self.workflow_revision.next()?;
@@ -1769,10 +1778,15 @@ pub struct ApplicationReceipt {
     applied_by: TrustedActorRef,
     applied_at: TrustedTimestamp,
     result_links: Vec<ApplicationResultLink>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(default)]
+    reason_present: bool,
 }
 
 impl ApplicationReceipt {
     #[cfg(feature = "runtime")]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn restore(
         application_id: ApplicationId,
         version: ProposalVersion,
@@ -1780,6 +1794,8 @@ impl ApplicationReceipt {
         applied_by: TrustedActorRef,
         applied_at: TrustedTimestamp,
         result_links: Vec<ApplicationResultLink>,
+        reason: Option<String>,
+        reason_present: bool,
     ) -> Result<Self, WorkflowError> {
         let receipt = Self {
             application_id,
@@ -1788,6 +1804,8 @@ impl ApplicationReceipt {
             applied_by,
             applied_at,
             result_links,
+            reason,
+            reason_present,
         };
         receipt.validate()?;
         Ok(receipt)
@@ -1817,7 +1835,23 @@ impl ApplicationReceipt {
         &self.applied_at
     }
 
+    pub fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    pub fn reason_present(&self) -> bool {
+        self.reason_present
+    }
+
     fn validate(&self) -> Result<(), WorkflowError> {
+        if self
+            .reason
+            .as_deref()
+            .is_some_and(|reason| !valid_review_reason(reason))
+            || (self.reason.is_some() && !self.reason_present)
+        {
+            return Err(WorkflowError::InvalidReviewReason);
+        }
         self.application_id.validate()?;
         self.version.validate()?;
         self.effect_digest.validate()?;
@@ -1995,7 +2029,6 @@ impl ReviewDecision {
             .as_deref()
             .is_some_and(|reason| !valid_review_reason(reason))
             || (self.reason.is_some() && !self.reason_present)
-            || (self.kind == ReviewDecisionKind::Approve && self.reason_present)
         {
             return Err(WorkflowError::InvalidReviewReason);
         }
@@ -3627,6 +3660,7 @@ mod tests {
             .effect_digest()
             .clone();
         for kind in [
+            ReviewDecisionKind::Approve,
             ReviewDecisionKind::Reject,
             ReviewDecisionKind::RequestRevision,
         ] {
@@ -3657,7 +3691,6 @@ mod tests {
             );
         }
         for (kind, reason) in [
-            (ReviewDecisionKind::Approve, "must refuse".to_owned()),
             (
                 ReviewDecisionKind::Reject,
                 "x".repeat(MAX_REVIEW_REASON_CHARS + 1),
@@ -3767,6 +3800,7 @@ mod tests {
                 )],
             )
             .expect("application"),
+            None,
         );
         assert_eq!(
             stale.expect_err("stale target refused"),
@@ -3792,6 +3826,7 @@ mod tests {
                 )],
             )
             .expect("application"),
+            None,
         );
         assert_eq!(
             wrong_contract.expect_err("contract mismatch refused"),
@@ -3825,6 +3860,7 @@ mod tests {
                 )],
             )
             .expect("application"),
+            None,
         );
         assert_eq!(
             tampered_apply.expect_err("tampered effects refused"),
@@ -3851,11 +3887,14 @@ mod tests {
                     )],
                 )
                 .expect("application"),
+                Some("approved at site visit".to_owned()),
             )
             .expect("apply")
             .into_workflow();
         assert_eq!(applied.state(), RequestState::Applied);
-        assert!(applied.application().is_some());
+        let receipt = applied.application().expect("application receipt");
+        assert_eq!(receipt.reason(), Some("approved at site visit"));
+        assert!(receipt.reason_present());
         assert_eq!(
             applied
                 .cancel(context("submitter", 7))
@@ -4084,6 +4123,7 @@ mod tests {
                     )],
                 )
                 .expect("application"),
+                None,
             )
             .expect("apply")
             .into_workflow();

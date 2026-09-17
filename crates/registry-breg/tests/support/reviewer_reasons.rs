@@ -33,7 +33,7 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
     .into_iter()
     .enumerate()
     {
-        for decision in [&revise, &reject] {
+        for decision in [&revise, &reject, &approve] {
             let response = send_action(
                 &app,
                 decision,
@@ -50,7 +50,7 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
             );
         }
     }
-    for decision in [&revise, &reject] {
+    for decision in [&revise, &reject, &approve] {
         let response = send_action(
             &app,
             decision,
@@ -61,15 +61,6 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
         .await;
         assert_eq!(response.status, StatusCode::BAD_REQUEST);
     }
-    let refused_approval = send_action(
-        &app,
-        &approve,
-        "reason-on-approval",
-        reviewer.clone(),
-        json!({"proposalVersion": 1, "effectDigest": digest, "reason": "not an approval input"}),
-    )
-    .await;
-    assert_eq!(refused_approval.status, StatusCode::BAD_REQUEST);
     assert_eq!(
         reason_read(&app, &request.id, "submitter", submitter.clone())
             .await
@@ -304,7 +295,8 @@ async fn real_postgres_http_reviewer_reason_event_failure_rolls_back_decision_an
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn real_postgres_http_no_reason_review_remains_compatible_and_apply_refuses_reason() {
+async fn real_postgres_http_no_reason_review_remains_compatible_and_reasoned_decisions_apply_and_are_read_back(
+) {
     let database = TestDatabase::create(8).await;
     let registry = Arc::new(reason_registry());
     let identity = install_registry(&database, &registry, "two-stage-change-request", false).await;
@@ -358,31 +350,222 @@ async fn real_postgres_http_no_reason_review_remains_compatible_and_apply_refuse
         &request.id,
         "correction-requests",
         "submitter",
-        submitter,
+        submitter.clone(),
         "no-reason-resubmit",
         "submit_request",
         None,
         |_| json!({}),
     )
     .await;
-    run_action(&app, &request.id, "correction-requests", "reviewer", reviewer,
-        "no-reason-approve", "approve_request", Some("review"), |action| json!({"proposalVersion":action.proposal_version,"effectDigest":action.effect_digest})).await;
+    let approval_note = "Favourable; re-verify the applicant next cycle.";
+    let approved = run_action(&app, &request.id, "correction-requests", "reviewer", reviewer,
+        "reasoned-approve", "approve_request", Some("review"), |action| json!({"proposalVersion":action.proposal_version,"effectDigest":action.effect_digest,"reason":approval_note})).await;
+    assert_eq!(approved["request"]["bregState"], "approved");
+    let owner = reason_read(&app, &request.id, "submitter", submitter.clone()).await;
+    assert_decision(
+        &owner.body["request"]["decisions"][0],
+        "approve",
+        Some(approval_note),
+    );
     let applier = claims("applier", APPLIER, Some("apply"));
     let ready = reason_read(&app, &request.id, "applier", applier.clone()).await;
     let apply = action(&ready.body, "apply_request", None);
-    let refused = send_action(&app, &apply, "reason-on-apply", applier.clone(),
-        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":"unsupported"})).await;
-    assert_eq!(refused.status, StatusCode::BAD_REQUEST);
-    let applied = send_action(
-        &app,
-        &apply,
-        "no-reason-apply",
-        applier,
-        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest}),
-    )
-    .await;
+    let apply_note = "Applied following the registrar's sign-off.";
+    let applied = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":apply_note})).await;
     assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
     assert_eq!(applied.body["request"]["bregState"], "applied");
+    let final_read = reason_read(&app, &request.id, "submitter", submitter.clone()).await;
+    assert_eq!(final_read.body["request"]["bregState"], "applied");
+    assert_eq!(
+        final_read.body["request"]["application"]["reasonPresent"],
+        true
+    );
+    assert_eq!(
+        final_read.body["request"]["application"]["reason"],
+        apply_note
+    );
+    let hidden = reason_read(
+        &app,
+        &request.id,
+        "reason-hidden",
+        claims("submitter", SUBMITTER, None),
+    )
+    .await;
+    assert_eq!(hidden.body["request"]["application"]["reasonPresent"], true);
+    assert!(hidden.body["request"]["application"]
+        .get("reason")
+        .is_none());
+    assert!(!hidden.body.to_string().contains(apply_note));
+    let replayed_apply = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":apply_note})).await;
+    assert_eq!(replayed_apply.status, StatusCode::OK);
+    assert_eq!(replayed_apply.body, applied.body);
+    let changed_apply = send_action(&app, &apply, "reasoned-apply", applier.clone(),
+        json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":"changed"})).await;
+    assert_eq!(changed_apply.status, StatusCode::CONFLICT);
+    let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
+    let approve_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    assert_eq!(approve_event["request"]["transition"], "approve");
+    assert_eq!(approve_event["request"]["reason"], approval_note);
+    let apply_event: Value = serde_json::from_str(&rows[2].get::<_, String>(0)).unwrap();
+    assert_eq!(apply_event["request"]["transition"], "apply");
+    assert_eq!(apply_event["request"]["reason"], apply_note);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_http_reasoned_approval_before_the_last_stage_is_recorded_and_published() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(compile_reason_registry(2, false));
+    let identity = install_registry(&database, &registry, "two-stage-change-request", false).await;
+    let app = change_request_router(
+        &database,
+        registry,
+        identity,
+        "two-stage-change-request",
+        None,
+    );
+    let submitter = claims("submitter", SUBMITTER, None);
+    let reviewer = claims("reviewer", REVIEWER, Some("review"));
+    let final_reviewer = claims("final-reviewer", "final-reviewer-principal", Some("final"));
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let review = reason_read(&app, &request.id, "reviewer", reviewer.clone()).await;
+    let stage_approve = action(&review.body, "approve_request", Some("review"));
+    let stage_note = "Stage one is satisfied; the final reviewer still decides.";
+    let stage_approved = send_action(
+        &app,
+        &stage_approve,
+        "stage-reason-approve",
+        reviewer,
+        json!({"proposalVersion": 1, "effectDigest": digest, "reason": stage_note}),
+    )
+    .await;
+    assert_eq!(
+        stage_approved.status,
+        StatusCode::OK,
+        "{}",
+        stage_approved.body
+    );
+    assert_eq!(
+        stage_approved.body["request"]["bregState"], "submitted",
+        "an approval before the last stage leaves the request under review"
+    );
+    let pending = reason_read(&app, &request.id, "submitter", submitter.clone()).await;
+    assert_decision(
+        &pending.body["request"]["decisions"][0],
+        "approve",
+        Some(stage_note),
+    );
+
+    let final_review =
+        reason_read(&app, &request.id, "final-reviewer", final_reviewer.clone()).await;
+    let final_approve = action(&final_review.body, "approve_request", Some("final"));
+    let final_note = "Final sign-off recorded.";
+    let approved = send_action(
+        &app,
+        &final_approve,
+        "final-reason-approve",
+        final_reviewer,
+        json!({"proposalVersion": 1, "effectDigest": digest, "reason": final_note}),
+    )
+    .await;
+    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+    assert_eq!(approved.body["request"]["bregState"], "approved");
+    let decided = reason_read(&app, &request.id, "submitter", submitter).await;
+    let decisions = decided.body["request"]["decisions"]
+        .as_array()
+        .expect("decisions are an array");
+    assert_eq!(decisions.len(), 2);
+    let last_decision = decisions
+        .iter()
+        .find(|decision| decision["stageId"] == "final")
+        .expect("the last stage decision is retained");
+    assert_eq!(last_decision["kind"], "approve");
+    assert_eq!(last_decision["reasonPresent"], true);
+    assert_eq!(last_decision["reason"], final_note);
+
+    let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
+    assert_eq!(rows.len(), 2);
+    let stage_event: Value = serde_json::from_str(&rows[0].get::<_, String>(0)).unwrap();
+    assert_eq!(stage_event["request"]["transition"], "approve");
+    assert_eq!(stage_event["request"]["toState"], "submitted");
+    assert_eq!(stage_event["request"]["reasonPresent"], true);
+    assert_eq!(stage_event["request"]["reason"], stage_note);
+    let final_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    assert_eq!(final_event["request"]["toState"], "approved");
+    assert_eq!(final_event["request"]["reason"], final_note);
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_http_request_detail_erasure_keeps_reason_presence_without_reason_text() {
+    let database = TestDatabase::create(8).await;
+    let registry = Arc::new(compile_reason_registry(1, true));
+    let identity = install_registry(&database, &registry, "two-stage-change-request", false).await;
+    let app = change_request_router(
+        &database,
+        registry.clone(),
+        identity.clone(),
+        "two-stage-change-request",
+        None,
+    );
+    let submitter = claims("submitter", SUBMITTER, None);
+    let reviewer = claims("reviewer", REVIEWER, Some("review"));
+    let applier = claims("applier", APPLIER, Some("apply"));
+    let (request, digest) = submit_two_stage_correction(&app).await;
+    let approval_note = "Approved against the site register.";
+    let apply_note = "Applied under the registrar's standing instruction.";
+    let review = reason_read(&app, &request.id, "reviewer", reviewer.clone()).await;
+    let approve = action(&review.body, "approve_request", Some("review"));
+    let approved = send_action(
+        &app,
+        &approve,
+        "erasure-reason-approve",
+        reviewer,
+        json!({"proposalVersion": 1, "effectDigest": digest, "reason": approval_note}),
+    )
+    .await;
+    assert_eq!(approved.status, StatusCode::OK, "{}", approved.body);
+    let ready = reason_read(&app, &request.id, "applier", applier.clone()).await;
+    let apply = action(&ready.body, "apply_request", None);
+    let applied = send_action(&app, &apply, "erasure-reason-apply", applier,
+        json!({"proposalVersion": apply.proposal_version, "effectDigest": apply.effect_digest, "reason": apply_note})).await;
+    assert_eq!(applied.status, StatusCode::OK, "{}", applied.body);
+    assert_eq!(applied.body["request"]["bregState"], "applied");
+
+    let retention = registry_breg::request_retention::RequestRetentionOperatorService::new_for_test(
+        registry.as_ref().clone(),
+        identity,
+        registry_breg::postgres::ExpectedManagedCatalog::compiled(&registry),
+        RegistryLockKey::derive("two-stage-change-request").unwrap(),
+        database.migration_config.clone(),
+        database.migration_role.clone(),
+        database.runtime_role.clone(),
+        AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into()).unwrap(),
+    );
+    let erased = retention
+        .erase(
+            registry_breg::request_retention::RequestDetailErasureScope {
+                request_entity_id: "correction-request",
+                request_id: Uuid::parse_str(&request.id).unwrap(),
+                proposal_version: 1,
+            },
+        )
+        .await
+        .expect("terminal request detail erases through the operator boundary");
+    assert_eq!(erased.erasure.decision_reasons, 1);
+    assert_eq!(erased.erasure.application_reasons, 1);
+
+    let read = reason_read(&app, &request.id, "submitter", submitter).await;
+    assert_eq!(read.body["request"]["detailErased"], true);
+    assert_eq!(read.body["request"]["application"]["reasonPresent"], true);
+    assert!(read.body["request"]["application"].get("reason").is_none());
+    assert_eq!(read.body["request"]["decisions"][0]["reasonPresent"], true);
+    assert!(read.body["request"]["decisions"][0].get("reason").is_none());
+    let body = read.body.to_string();
+    assert!(!body.contains(approval_note));
+    assert!(!body.contains(apply_note));
     database.cleanup().await;
 }
 
@@ -415,6 +598,12 @@ async fn reason_read(
 }
 
 fn reason_registry() -> registry_breg::CompiledRegistry {
+    compile_reason_registry(1, false)
+}
+
+/// The reviewer-explanation fixture, kept to `stages` review stages and
+/// optionally admitting operator erasure of retained request detail.
+fn compile_reason_registry(stages: usize, operator_erase: bool) -> registry_breg::CompiledRegistry {
     let mut source = serde_json::to_value(two_stage_project()).expect("fixture serializes");
     let request = source["entities"]
         .as_array_mut()
@@ -425,13 +614,21 @@ fn reason_registry() -> registry_breg::CompiledRegistry {
     request["changeRequest"]["review"]["stages"]
         .as_array_mut()
         .unwrap()
-        .truncate(1);
+        .truncate(stages);
+    if operator_erase {
+        request["changeRequest"]["retention"] = json!({"mode": "operator_erase"});
+    }
     request["events"] = json!([{
         "id":"review-returned", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["reject","request_revision"], "toStates":["rejected","needs_changes"], "stages":["review"]}
+    }, {
+        "id":"review-decided", "trigger":"request_lifecycle", "projection":["reason"],
+        "when":{"kind":"request_lifecycle", "transitions":["approve","apply"], "toStates":["submitted","approved","applied"]}
     }]);
     let profiles = source["accessProfiles"].as_array_mut().unwrap();
-    profiles.retain(|profile| profile["id"] != "final-reviewer");
+    if stages < 2 {
+        profiles.retain(|profile| profile["id"] != "final-reviewer");
+    }
     let mut hidden = profiles
         .iter()
         .find(|profile| profile["id"] == "submitter")

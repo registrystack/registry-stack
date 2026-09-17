@@ -416,16 +416,17 @@ metadata. A stale proposal version, stale effect digest, or stale action
 
 ## Reviewer explanations
 
-The `reject_request` and `request_revision` actions accept an optional `reason`
-string beside `proposalVersion` and `effectDigest`. In an authored journey,
-place `reason` directly under `request`, beside the proposal-reference fields.
-The asset fixture requests revision with a Unicode explanation, reads the
-feedback as the submitter, then revises and resubmits before approval.
+The `approve_request`, `reject_request`, `request_revision`, and `apply_request`
+actions accept an optional `reason` string beside `proposalVersion` and
+`effectDigest`. In an authored journey, place `reason` directly under `request`,
+beside the proposal-reference fields. The asset fixture requests revision with a
+Unicode explanation, reads the feedback as the submitter, then revises and
+resubmits before approval.
 
 Reasons preserve whitespace and Unicode exactly. Empty strings are permitted;
-null, other types, NUL, and more than 4096 Unicode characters are refused.
-Approve and apply bodies remain closed and reject `reason`. A replay must use
-the same reason and other original action input with its idempotency key.
+null, other types, NUL, and more than 4096 Unicode characters are refused. A
+replay must use the same reason and other original action input with its
+idempotency key.
 
 GET exposes current decisions at `data.request.decisions` and retained decisions
 at `data.request.history.proposals[].decisions`. Each carries `stageId`, `kind`,
@@ -434,7 +435,10 @@ and the selected profile permits it. The request permission defaults to
 `readableRequestFields: [reason]`; an explicit empty list hides reason text
 without hiding the decision facts. Anonymous profiles never receive reason text.
 Request-detail erasure removes reason text while preserving the decision and
-reason-presence flag.
+reason-presence flag. An applied request carries the applier's remark at
+`data.request.application` under the same rule: `reasonPresent` always, and
+`reason` only when its text remains retained and the selected profile permits
+it.
 
 ## Retention operator checks
 
