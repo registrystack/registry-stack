@@ -241,8 +241,8 @@ caused are in the ledger, which is the next thing you will check.
 ## Stop and verify the audit trail
 
 Stop the server with SIGTERM (`kill` on the job, or Ctrl+C in its terminal), then verify the
-ledger. Verification covers sealed segments, and the writer holds the active one, so verify after
-shutdown:
+ledger. The writer holds the active segment while the server runs, so verify after shutdown, when
+every segment including the newest one is covered:
 
 ```sh
 target/release/render audit-verify --runtime render-work/deploy/runtime.yaml

@@ -100,7 +100,8 @@ The limits carry hard ceilings the runtime refuses to exceed: the output cap can
 and the request body cap 64 MiB, so a configuration mistake cannot unbound the process. On
 shutdown the process drains in-flight renders for one grace period, gives open connections a
 second one, and then abandons the rest; `shutdownGraceSeconds` is therefore the number to align
-with your stop timeout, not a decorative field.
+with your stop timeout, not a decorative field. It must be between 1 and 3600 seconds: zero would
+drop the renders it exists to protect, and startup refuses both ends.
 
 {/* Evidence: crates/registry-render/src/runtime.rs, LimitsRuntime and validate_bind;
     crates/registry-render/src/server.rs, serve. */}
@@ -116,7 +117,7 @@ curl -s http://127.0.0.1:8080/ready
 ```
 
 `GET /health` answers with the bundle version and hash and the renderer version, so you can
-reconcine the running service against what you deployed. `GET /ready` includes the audit ledger:
+reconcile the running service against what you deployed. `GET /ready` includes the audit ledger:
 if the sink cannot answer, readiness fails. Both are value-free. `render healthcheck --runtime
 <file>` performs the same probe for a supervisor script.
 
@@ -151,7 +152,8 @@ opaque correlation id; rendering is deterministic, so no deduplication exists or
 
 Failures are RFC 9457 problem documents with a closed vocabulary, on HTTP and in the CLI's exit
 codes, and every render response, success or refusal, is preceded by its audit event: if the
-ledger cannot be written, the response fails closed.
+ledger cannot be written, the render fails closed. Refusals that precede authentication, a 401 or
+an oversized body, are audited on a best-effort basis and still answer.
 
 {/* Evidence: crates/registry-render/src/server.rs, render_route and refuse_oversized_bodies;
     crates/registry-render/src/problem.rs, ProblemKind;
@@ -161,7 +163,7 @@ ledger cannot be written, the response fails closed.
 ## Verify the ledger
 
 The ledger is a keyed hash chain in sealed segments. Stop the process first: the writer holds the
-active segment, and verification covers what has been sealed. Then:
+active segment; once no writer holds it, the newest segment is verified too. Then:
 
 ```sh
 target/release/render audit-verify --runtime /etc/registry-render/runtime.yaml
@@ -173,8 +175,7 @@ both are worth knowing before an audit depends on it. One event per render, valu
 versions, the caller's key fingerprint, and the trace and correlation ids, never data values or
 image bytes.
 
-{/* Evidence: crates/registry-render/src/audit.rs, verify_chain;
-    crates/registry-render/src/server.rs, RenderAuditEvent. */}
+{/* Evidence: crates/registry-render/src/audit.rs, verify_chain and RenderAuditEvent. */}
 
 ## Upgrade discipline
 
