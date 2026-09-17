@@ -87,14 +87,21 @@ fn deployment(limits: &str, bundle_source: &Path) -> (PathBuf, PathBuf, u16) {
 }
 
 fn start_server(runtime_path: &Path) -> Server {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_render"))
+    start_server_at(runtime_path, None)
+}
+
+fn start_server_at(runtime_path: &Path, current_dir: Option<&Path>) -> Server {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_render"));
+    command
         .arg("serve")
         .arg("--runtime")
         .arg(runtime_path)
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn render serve");
+        .stderr(Stdio::null());
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    let mut child = command.spawn().expect("spawn render serve");
     let port: u16 = std::fs::read_to_string(runtime_path)
         .unwrap()
         .lines()
@@ -253,6 +260,60 @@ fn serve_health_and_ready() {
     assert_eq!(ready.status, 200);
     drop(server);
     let _ = home;
+}
+
+#[test]
+fn relative_runtime_paths_anchor_to_the_runtime_files_directory() {
+    // The natural deployment layout: runtime file and key files together in
+    // deploy/, bundle and audit as siblings one level up. Every path in the
+    // runtime file is relative to it, so the file works from any working
+    // directory — before anchoring, a relative audit directory killed serve
+    // at startup and a relative bundle path silently depended on the CWD.
+    let home = tempfile::tempdir().expect("deployment home");
+    let bundle = home.path().join("bundle");
+    copy_dir(
+        &repo_root().join("products/render/bundles/receipt"),
+        &bundle,
+    );
+    let deploy = home.path().join("deploy");
+    std::fs::create_dir_all(&deploy).unwrap();
+    write_secret(&deploy.join("api.key"), API_KEY);
+    write_secret(&deploy.join("audit.key"), AUDIT_KEY);
+    std::fs::create_dir(home.path().join("audit")).unwrap();
+    let port = free_port();
+    std::fs::write(
+        deploy.join("runtime.yaml"),
+        format!(
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nserver:\n  bind: 127.0.0.1:{port}\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: ../audit\n  integrityKeyRef: secret:file/audit.key\n"
+        ),
+    )
+    .unwrap();
+    let elsewhere = tempfile::tempdir().expect("unrelated working directory");
+    let server = start_server_at(&deploy.join("runtime.yaml"), Some(elsewhere.path()));
+    let health = request(server.port, "GET", "/health", &[], None);
+    assert_eq!(health.status, 200);
+    let reply = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[
+            ("Authorization", &format!("Bearer {API_KEY}")),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&receipt_body()),
+    );
+    assert_eq!(
+        reply.status,
+        200,
+        "{}",
+        String::from_utf8_lossy(&reply.body)
+    );
+    drop(server);
+    let lines = audit_lines(home.path());
+    assert!(
+        lines.iter().any(|l| l.contains("\"outcome\":\"rendered\"")),
+        "the render was audited into the anchored audit directory: {lines:?}"
+    );
 }
 
 #[test]

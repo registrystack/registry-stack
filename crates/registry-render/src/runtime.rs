@@ -90,7 +90,8 @@ fn default_shutdown_grace_seconds() -> u64 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BundleRuntime {
-    /// Path to a sealed bundle directory.
+    /// Path to a sealed bundle directory. Relative paths anchor to the
+    /// runtime file's directory (see [`load`]), not the working directory.
     pub path: PathBuf,
 }
 
@@ -148,7 +149,8 @@ pub fn default_max_concurrency() -> usize {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AuditRuntime {
-    /// Directory for the sealed, hash-chained JSONL ledger.
+    /// Directory for the sealed, hash-chained JSONL ledger. Relative paths
+    /// anchor to the runtime file's directory (see [`load`]).
     pub directory: PathBuf,
     /// `secret:file/…` reference to the chain integrity key (>= 32 bytes).
     pub integrity_key_ref: String,
@@ -162,7 +164,10 @@ pub fn default_max_segment_bytes() -> u64 {
 }
 
 /// Load and validate a runtime file, expanding bounded `${VAR}` references.
-/// Returns the runtime and its canonical sha256 config id.
+/// Relative `bundle.path` and `audit.directory` values are anchored to the
+/// runtime file's directory — the same anchor `secret:file/…` refs use — so
+/// one runtime file behaves identically regardless of the working directory
+/// it is loaded from. Returns the runtime and its canonical sha256 config id.
 pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
     let raw = std::fs::read_to_string(path).map_err(|err| {
         RenderProblem::new(
@@ -172,7 +177,7 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
     })?;
     let expanded = registry_platform_config::expand_config_env_vars(&raw)
         .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
-    let runtime: RenderRuntime = serde_norway::from_str(&expanded).map_err(|err| {
+    let mut runtime: RenderRuntime = serde_norway::from_str(&expanded).map_err(|err| {
         RenderProblem::new(
             ProblemKind::RuntimeInvalid,
             format!("runtime YAML invalid: {err}"),
@@ -218,19 +223,58 @@ pub fn load(path: &Path) -> Result<(RenderRuntime, String), RenderProblem> {
             "maxRequestBodyBytes exceeds the 64 MiB hard ceiling",
         ));
     }
+    let anchor = runtime_anchor(path);
+    runtime.bundle.path = anchored(&anchor, &runtime.bundle.path);
+    runtime.audit.directory = anchored(&anchor, &runtime.audit.directory);
     let id = crate::hash::sha256_hex(expanded.as_bytes());
     Ok((runtime, id))
+}
+
+/// The directory runtime-relative values anchor to: the runtime file's own
+/// directory, canonicalized when possible. A bare filename anchors to the
+/// current directory (its parent is empty).
+fn runtime_anchor(runtime_path: &Path) -> PathBuf {
+    let parent = runtime_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
+    std::fs::canonicalize(&parent).unwrap_or(parent)
+}
+
+/// Join a configured path onto the anchor when relative, collapsing `.` and
+/// `..` lexically so anchored paths stay readable in problems and logs.
+/// Absolute paths pass through verbatim.
+fn anchored(anchor: &Path, field: &Path) -> PathBuf {
+    if field.is_absolute() {
+        return field.to_path_buf();
+    }
+    let mut out = PathBuf::new();
+    if anchor.is_absolute() {
+        out.push(std::path::Component::RootDir.as_os_str());
+    }
+    let mut parts: Vec<std::ffi::OsString> = Vec::new();
+    for component in anchor.join(field).components() {
+        match component {
+            std::path::Component::CurDir | std::path::Component::RootDir => {}
+            std::path::Component::ParentDir => {
+                parts.pop();
+            }
+            std::path::Component::Prefix(prefix) => parts.push(prefix.as_os_str().to_owned()),
+            std::path::Component::Normal(segment) => parts.push(segment.to_owned()),
+        }
+    }
+    for part in parts {
+        out.push(part);
+    }
+    out
 }
 
 /// Resolve a `secret:…` reference relative to the runtime file's directory,
 /// the same provider pair Relay allows (environment and runtime-rooted files).
 pub fn resolve_secret(runtime_path: &Path, reference: &str) -> Result<Vec<u8>, RenderProblem> {
     use registry_platform_config::{SecretProvider, SecretResolver};
-    let root = runtime_path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("/"));
-    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    let root = runtime_anchor(runtime_path);
     let resolver =
         SecretResolver::new([SecretProvider::Environment, SecretProvider::File], root)
             .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
@@ -274,6 +318,40 @@ mod tests {
             let addr: SocketAddr = bind.parse().unwrap();
             validate_bind(addr).unwrap_or_else(|err| panic!("{bind} must be allowed: {err}"));
         }
+    }
+
+    #[test]
+    fn relative_bundle_and_audit_paths_anchor_to_the_runtime_file() {
+        let home = tempfile::tempdir().expect("deployment home");
+        let deploy = home.path().join("deploy");
+        std::fs::create_dir_all(&deploy).expect("deploy directory");
+        let file = deploy.join("runtime.yaml");
+        std::fs::write(
+            &file,
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: ../bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: ../audit\n  integrityKeyRef: secret:file/audit.key\n",
+        )
+        .expect("runtime file");
+        let (runtime, _) = load(&file).expect("runtime loads");
+        let home = std::fs::canonicalize(home.path()).expect("canonical home");
+        assert_eq!(runtime.bundle.path, home.join("bundle"));
+        assert_eq!(runtime.audit.directory, home.join("audit"));
+    }
+
+    #[test]
+    fn absolute_bundle_and_audit_paths_are_kept_verbatim() {
+        let home = tempfile::tempdir().expect("deployment home");
+        let file = home.path().join("runtime.yaml");
+        std::fs::write(
+            &file,
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\nbundle:\n  path: /srv/render/bundle\nauth:\n  apiKeyRef: secret:file/api.key\naudit:\n  directory: /var/lib/render/audit\n  integrityKeyRef: secret:file/audit.key\n",
+        )
+        .expect("runtime file");
+        let (runtime, _) = load(&file).expect("runtime loads");
+        assert_eq!(runtime.bundle.path, PathBuf::from("/srv/render/bundle"));
+        assert_eq!(
+            runtime.audit.directory,
+            PathBuf::from("/var/lib/render/audit")
+        );
     }
 
     #[test]
