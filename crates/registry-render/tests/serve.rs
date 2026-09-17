@@ -367,6 +367,48 @@ fn api_key_with_stray_whitespace_is_refused_at_startup() {
     );
 }
 
+#[test]
+fn problem_details_are_bounded() {
+    let (_home, runtime, _) = deployment(
+        DEFAULT_LIMITS,
+        &repo_root().join("products/render/bundles/receipt"),
+    );
+    let server = start_server(&runtime);
+    // Some refusals name the offending request field: an undeclared locale,
+    // a badly named asset. The caller controls the length of those values,
+    // so the detail must be capped rather than echoed in full.
+    let locale = "x".repeat(50_000);
+    let data = std::fs::read_to_string(
+        repo_root().join("products/render/bundles/receipt/fixtures/data.json"),
+    )
+    .unwrap();
+    let reply = request(
+        server.port,
+        "POST",
+        "/v1/render/receipt",
+        &[
+            ("Authorization", &format!("Bearer {API_KEY}")),
+            ("Content-Type", "application/json"),
+        ],
+        Some(&format!(
+            r#"{{"locale":"{locale}","issuedAt":"2026-09-16T10:32:00Z","data":{data}}}"#
+        )),
+    );
+    let body = String::from_utf8_lossy(&reply.body).into_owned();
+    assert_eq!(reply.status, 400, "{body}");
+    let problem: serde_json::Value = serde_json::from_str(&body).expect("problem json");
+    let detail = problem["detail"].as_str().expect("detail");
+    assert!(
+        detail.chars().count() <= 2_048,
+        "the detail is capped, found {} characters",
+        detail.chars().count()
+    );
+    assert!(
+        detail.ends_with("[truncated]"),
+        "a capped detail says so: {detail}"
+    );
+}
+
 fn wait_for_exit(child: &mut Child) -> i32 {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {

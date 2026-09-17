@@ -368,6 +368,23 @@ fn route_template(path: &str) -> &'static str {
     }
 }
 
+/// Some details name the offending request field (an undeclared locale, a
+/// badly named asset), and the caller decides how long that value is. The
+/// cap keeps a refusal small enough to log and read; the marker says the
+/// detail is not the whole message.
+const MAX_DETAIL_CHARS: usize = 2_048;
+const TRUNCATION_MARKER: &str = " [truncated]";
+
+fn bounded_detail(detail: &str) -> String {
+    if detail.chars().count() <= MAX_DETAIL_CHARS {
+        return detail.to_owned();
+    }
+    let keep = MAX_DETAIL_CHARS - TRUNCATION_MARKER.chars().count();
+    let mut bounded: String = detail.chars().take(keep).collect();
+    bounded.push_str(TRUNCATION_MARKER);
+    bounded
+}
+
 fn problem_response(problem: &RenderProblem) -> Response {
     Problem::new(
         &format!("{}/{}", PROBLEM_TYPE_BASE, problem.kind.slug()),
@@ -375,7 +392,7 @@ fn problem_response(problem: &RenderProblem) -> Response {
         StatusCode::from_u16(problem.kind.http_status())
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
     )
-    .detail(problem.detail.clone())
+    .detail(bounded_detail(&problem.detail))
     .with_extra("pointers", serde_json::json!(problem.pointers))
     .with_extra("locations", serde_json::json!(problem.locations))
     .into_response()
@@ -830,5 +847,30 @@ pub fn healthcheck(runtime_path: Option<&Path>) -> Result<i32, RenderProblem> {
             ProblemKind::RuntimeInvalid,
             format!("health endpoint at {address} did not answer 200"),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_detail_at_the_cap_is_kept_verbatim() {
+        let detail = "e".repeat(MAX_DETAIL_CHARS);
+        assert_eq!(bounded_detail(&detail), detail);
+    }
+
+    #[test]
+    fn a_long_detail_is_cut_on_a_character_boundary() {
+        // Multibyte input: the cut counts characters, so it may never split
+        // one and produce invalid text.
+        let detail = "é".repeat(MAX_DETAIL_CHARS + 1);
+        let bounded = bounded_detail(&detail);
+        assert_eq!(bounded.chars().count(), MAX_DETAIL_CHARS);
+        assert!(bounded.ends_with(TRUNCATION_MARKER));
+        assert!(bounded
+            .trim_end_matches(TRUNCATION_MARKER)
+            .chars()
+            .all(|c| c == 'é'));
     }
 }
