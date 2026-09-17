@@ -120,6 +120,46 @@ class DatabaseTestIsolationTests(unittest.TestCase):
         self.assertIn("postgres_commitments", failures[0])
         self.assertIn("postgres_replay", failures[0])
 
+    def test_a_feature_forwarded_through_a_default_features_definition_is_rejected(self):
+        graph = metadata(
+            [
+                {
+                    "name": "registry-scheduling",
+                    "targets": [
+                        {"name": "postgres_commitments", "kind": ["test"], "required-features": ["postgres-test"]},
+                    ],
+                    "features": {"full": ["postgres-test"]},
+                },
+                package(
+                    "registry-schedulingctl",
+                    {},
+                    [dependency("registry-scheduling", ["full"], kind="dev")],
+                ),
+            ]
+        )
+        failures = MODULE.violations(graph)
+        self.assertEqual(len(failures), 1)
+        self.assertIn("registry-scheduling/full", failures[0])
+
+    def test_an_ungated_database_suite_is_named_for_its_package(self):
+        graph = metadata(
+            [
+                package("registry-scheduling", {"postgres_commitments": []}, []),
+                {
+                    "name": "registry-schedulingctl",
+                    "targets": [
+                        {"name": "records_apply_postgres", "kind": ["test"], "required-features": []},
+                    ],
+                    "dependencies": [],
+                },
+            ]
+        )
+        failures = MODULE.violations(graph)
+        self.assertEqual(len(failures), 2)
+        self.assertIn("registry-scheduling/postgres_commitments", failures[0])
+        self.assertIn("registry-schedulingctl/records_apply_postgres", failures[1])
+        self.assertIn("required-features", failures[0])
+
 
 if __name__ == "__main__":
     unittest.main()
