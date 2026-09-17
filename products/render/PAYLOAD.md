@@ -43,7 +43,12 @@ Rules worth internalizing:
 - **`issuedAt` is the clock.** `datetime.today()`, `set document(date:
   auto)`, and the PDF creation date all derive from it. A re-render with
   the same `issuedAt` and data is byte-identical; changing it changes
-  bytes.
+  bytes. The instant is normalized to UTC (`2026-09-16T13:32:00+03:00`
+  and `2026-09-16T10:32:00Z` are the same render): the caller's UTC
+  offset is deliberately not preserved — the envelope carries the `Z`
+  form only. A local-date layout can still shift the instant:
+  `datetime.today(offset: 3)` answers "what date is it 3 hours after
+  issuance".
 - **`document.version` is the template's own version** from the manifest —
   print it on paper if you like. The renderer version appears nowhere in
   the envelope or the PDF bytes.

@@ -14,7 +14,7 @@ replay produces byte-identical output.
 | Adaptor | `@openfn/language-common` 3.3.4 (`util.request`, `parseAs: "json"`) |
 | render | this repo's binary, `render serve` on loopback: sealed receipt bundle, API key + audit key in owner-only files |
 | breg | v0.32.0 dev stack (`bregctl dev`: PostgreSQL + ThunderID issuer + registry, all loopback) |
-| job | `receipt-delivery.js` (this directory), notify.js idiom |
+| job | `receipt-job.js` (this directory), notify.js idiom |
 
 ## breg side (least-privilege read-back)
 
