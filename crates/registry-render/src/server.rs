@@ -206,8 +206,7 @@ fn router(service: Arc<Service>) -> Router {
         .merge(api)
         .fallback(not_found)
         .with_state(service)
-        .layer(security_headers(CspBuilder::restrictive()))
-}
+        .layer(security_headers(CspBuilder::restrictive()))}
 
 /// Authentication as a layer: it runs before the handler (and so before
 /// the body extractor buffers anything), and every refusal is audited —
@@ -347,8 +346,16 @@ async fn not_found() -> Response {
     .into_response()
 }
 
-async fn health() -> Response {
-    minimal_json(StatusCode::OK, "{\"status\":\"ok\"}")
+async fn health(State(service): State<Arc<Service>>) -> Response {
+    // Versions operators reconcile against, value-free.
+    let body = serde_json::json!({
+        "status": "ok",
+        "bundleVersion": service.bundle.manifest.bundle_version,
+        "bundleHash": service.bundle.bundle_hash,
+        "rendererVersion": crate::display_version(),
+        "typstPin": crate::TYPST_PIN,
+    });
+    Json(body).into_response()
 }
 
 async fn ready(State(service): State<Arc<Service>>) -> Response {

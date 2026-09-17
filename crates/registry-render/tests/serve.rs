@@ -232,6 +232,21 @@ fn serve_health_and_ready() {
     let server = start_server(&runtime);
     let health = request(server.port, "GET", "/health", &[], None);
     assert_eq!(health.status, 200);
+    let body: serde_json::Value = serde_json::from_slice(&health.body).expect("health json");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(
+        body["bundleVersion"], 3,
+        "health reports the served bundle version: {body}"
+    );
+    assert!(
+        body["rendererVersion"].as_str().is_some_and(|v| v.contains("typst")),
+        "health reports the renderer version plus pin: {body}"
+    );
+    assert_eq!(
+        body["bundleHash"].as_str().map(|h| h.len()),
+        Some(64),
+        "health reports the served bundle hash: {body}"
+    );
     let ready = request(server.port, "GET", "/ready", &[], None);
     assert_eq!(ready.status, 200);
     drop(server);

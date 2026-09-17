@@ -11,7 +11,7 @@ pub const OPENAPI_JSON: &str = r#"{
   "paths": {
     "/health": {
       "get": {
-        "summary": "Liveness",
+        "summary": "Liveness (value-free: status, bundle version and hash, renderer version, Typst pin)",
         "responses": { "200": { "description": "ok" } }
       }
     },
