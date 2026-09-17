@@ -187,9 +187,8 @@ security and adopter-experience). Findings fixed in the same revision:
   gains a seal.
 - **Scaffold honesty** — non-Latin `--labels` scaffold compiles with zero
   edits (full label key set seeded, template bound to the declared
-  locale), the QR package is vendored into every scaffold, a data fixture
-  is written, the unsealed notice prints on compile, and edit-after-seal
-  names `registry-render seal` as recovery.
+  locale), a data fixture is written, the unsealed notice prints on
+  compile, and edit-after-seal names `registry-render seal` as recovery.
 - **OpenAPI drift** corrected (413 documented, unimplementable 429
   removed) and pinned by a serve test.
 - Dead code removed; font-order doc fixed to match the implementation
@@ -355,3 +354,14 @@ seven more, each fixed with a failing test first except where noted:
 
 Test totals after the third pass: 71 (22 unit, 13 golden, 19 serve
 end-to-end, 17 scaffold/CLI), all green with `--locked`.
+
+### Scaffold contents (2026-09-17)
+
+The scaffold vendors no third-party Typst package. The generated template
+never imported one: every `init` wrote 136K into the new bundle, 113K of
+it a WASM plugin, for files `seal` then hashed and nothing read, and the
+binary carried the same bytes through `include_bytes!`. The scaffold's
+template and README now say where a package lives and that none is
+fetched at render time. The three example bundles keep their vendored
+copy, which is what the golden hashes cover, and remain the worked
+example.
