@@ -323,25 +323,28 @@ fn api_key_file_with_one_trailing_newline_is_trimmed() {
         &repo_root().join("products/render/bundles/receipt"),
     );
     // Key files written by an editor or `echo` end with one line ending;
-    // serve must trim it, not arm a key nobody can present.
-    write_secret(&home.join("api.key"), &format!("{API_KEY}\r\n"));
-    let server = start_server(&runtime);
-    let reply = request(
-        server.port,
-        "POST",
-        "/v1/render/receipt",
-        &[
-            ("Authorization", &format!("Bearer {API_KEY}")),
-            ("Content-Type", "application/json"),
-        ],
-        Some(&receipt_body()),
-    );
-    assert_eq!(
-        reply.status,
-        200,
-        "{}",
-        String::from_utf8_lossy(&reply.body)
-    );
+    // serve must trim it, not arm a key nobody can present. Both endings
+    // count: bare LF is what a Linux deployment writes.
+    for ending in ["\n", "\r\n"] {
+        write_secret(&home.join("api.key"), &format!("{API_KEY}{ending}"));
+        let server = start_server(&runtime);
+        let reply = request(
+            server.port,
+            "POST",
+            "/v1/render/receipt",
+            &[
+                ("Authorization", &format!("Bearer {API_KEY}")),
+                ("Content-Type", "application/json"),
+            ],
+            Some(&receipt_body()),
+        );
+        assert_eq!(
+            reply.status,
+            200,
+            "key file ending in {ending:?}: {}",
+            String::from_utf8_lossy(&reply.body)
+        );
+    }
 }
 
 #[test]
