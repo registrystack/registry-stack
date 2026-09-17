@@ -121,6 +121,7 @@ async fn serve_async(runtime_path: &Path) -> Result<i32, RenderProblem> {
             ),
         )
     })?;
+    runtime::validate_bind(bind)?;
     let listener = tokio::net::TcpListener::bind(bind).await.map_err(|err| {
         RenderProblem::new(ProblemKind::RuntimeInvalid, format!("bind {bind}: {err}"))
     })?;

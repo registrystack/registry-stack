@@ -16,6 +16,7 @@ pub const RUNTIME_KIND: &str = "RenderRuntime";
 pub struct RenderRuntime {
     pub api_version: String,
     pub kind: String,
+    #[serde(default)]
     pub server: ServerRuntime,
     pub bundle: BundleRuntime,
     pub auth: AuthRuntime,
@@ -27,11 +28,59 @@ pub struct RenderRuntime {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct ServerRuntime {
-    /// Loopback or private address; TLS is the proxy's job, not Render's.
+    /// Loopback or private address to listen on; defaults to loopback.
+    /// Public and all-interfaces binds are refused at startup — see
+    /// [`validate_bind`]. TLS is the proxy's job, not Render's.
+    #[serde(default = "default_bind")]
     pub bind: String,
     /// Grace period for in-flight renders at shutdown.
     #[serde(default = "default_shutdown_grace_seconds")]
     pub shutdown_grace_seconds: u64,
+}
+
+/// The default listener: loopback, fixed port. Deployments behind a proxy
+/// set their own private address explicitly.
+pub fn default_bind() -> String {
+    "127.0.0.1:8080".to_owned()
+}
+
+impl Default for ServerRuntime {
+    fn default() -> Self {
+        Self {
+            bind: default_bind(),
+            shutdown_grace_seconds: default_shutdown_grace_seconds(),
+        }
+    }
+}
+
+/// Render never listens on a public address: TLS termination and network
+/// position belong to the deployment's proxy. Loopback, private, and
+/// link-local addresses pass; unspecified (all interfaces) and public
+/// addresses are refused with a named startup problem — an explicit refusal
+/// instead of an accidental exposure.
+pub fn validate_bind(addr: std::net::SocketAddr) -> Result<(), RenderProblem> {
+    let allowed = match addr {
+        std::net::SocketAddr::V4(a) => {
+            let ip = a.ip();
+            ip.is_loopback() || ip.is_private() || ip.is_link_local()
+        }
+        std::net::SocketAddr::V6(a) => {
+            let ip = a.ip();
+            ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+        }
+    };
+    if allowed {
+        Ok(())
+    } else {
+        Err(RenderProblem::new(
+            ProblemKind::RuntimeInvalid,
+            format!(
+                "server.bind {addr} is not a loopback or private address; Render never \
+                 listens publicly or on all interfaces — terminate TLS and position the \
+                 service on a proxy, and bind its private address here"
+            ),
+        ))
+    }
 }
 
 fn default_shutdown_grace_seconds() -> u64 {
@@ -189,4 +238,55 @@ pub fn resolve_secret(runtime_path: &Path, reference: &str) -> Result<Vec<u8>, R
         .resolve(reference)
         .map_err(|err| RenderProblem::new(ProblemKind::RuntimeInvalid, format!("{err}")))?;
     Ok(secret.expose_secret().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::SocketAddr;
+
+    fn runtime_yaml(body: &str) -> RenderRuntime {
+        let text = format!("apiVersion: render.registrystack.org/v1alpha1\nkind: RenderRuntime\n{body}");
+        serde_norway::from_str(&text).expect("runtime parses")
+    }
+
+    #[test]
+    fn bind_defaults_to_loopback() {
+        let runtime = runtime_yaml(
+            "bundle:\n  path: /b\nauth:\n  apiKeyRef: secret:file/k\naudit:\n  directory: /a\n  integrityKeyRef: secret:file/k\n",
+        );
+        assert_eq!(runtime.server.bind, "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn loopback_private_and_link_local_binds_are_allowed() {
+        for bind in [
+            "127.0.0.1:8080",
+            "10.0.0.5:8080",
+            "192.168.1.10:8080",
+            "172.16.0.1:8080",
+            "169.254.7.7:8080",
+            "[::1]:8080",
+            "[fe80::1]:8080",
+            "[fd00::5]:8080",
+        ] {
+            let addr: SocketAddr = bind.parse().unwrap();
+            validate_bind(addr).unwrap_or_else(|err| panic!("{bind} must be allowed: {err}"));
+        }
+    }
+
+    #[test]
+    fn public_and_unspecified_binds_are_refused() {
+        for bind in [
+            "0.0.0.0:8080",
+            "8.8.8.8:8080",
+            "203.0.113.9:8080",
+            "[::]:8080",
+            "[2001:db8::1]:8080",
+        ] {
+            let addr: SocketAddr = bind.parse().unwrap();
+            let problem = validate_bind(addr).expect_err(bind);
+            assert_eq!(problem.kind, ProblemKind::RuntimeInvalid, "{bind}");
+        }
+    }
 }
