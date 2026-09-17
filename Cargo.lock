@@ -4839,7 +4839,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wasmtime",
  "zeroize",
 ]
 
