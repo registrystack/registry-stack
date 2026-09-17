@@ -678,6 +678,42 @@ fn bundle_drift_after_serve_starts_is_refused_per_render() {
         String::from_utf8_lossy(&tampered.body)
     );
 
+    // A bundle-load failure that formats a host path (here: a symlink the
+    // seal walk refuses) reaches the caller as a problem, so the bundle
+    // root must be redacted the way render diagnostics already are.
+    #[cfg(unix)]
+    {
+        let escape = home.join("bundle/escape");
+        std::os::unix::fs::symlink(home.join("api.key"), &escape).unwrap();
+        let symlinked = request(
+            server.port,
+            "POST",
+            "/v1/render/receipt",
+            &auth,
+            Some(&receipt_body()),
+        );
+        std::fs::remove_file(&escape).unwrap();
+        let body = String::from_utf8_lossy(&symlinked.body).into_owned();
+        assert_eq!(symlinked.status, 400, "{body}");
+        assert!(body.contains("manifest-invalid"), "{body}");
+        assert!(
+            body.contains("<bundle>/escape"),
+            "the detail names the offending file under the redaction marker: {body}"
+        );
+        for root in [
+            home.to_string_lossy().into_owned(),
+            std::fs::canonicalize(&home)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned(),
+        ] {
+            assert!(
+                !body.contains(&root),
+                "host paths must not reach the caller: {body}"
+            );
+        }
+    }
+
     // Unsealing after startup (hashes stripped, content otherwise intact):
     // the worker must load sealed, not merely verify-if-sealed.
     let manifest_path = home.join("bundle/manifest.yaml");

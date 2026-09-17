@@ -10,7 +10,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -217,6 +217,32 @@ fn cap_address_space(limit: u64) {
     }
 }
 
+/// Bundle-load problems format host paths (the manifest it cannot read, a
+/// symlink the seal walk refuses), and in serve mode they cross the pipe to
+/// the caller. The bundle root is replaced with `<bundle>` the way render
+/// diagnostics already are, in both its given and its canonical spelling.
+fn redact_bundle_root(mut problem: RenderProblem, root: &Path) -> RenderProblem {
+    let mut roots = vec![root.to_string_lossy().into_owned()];
+    if let Ok(canonical) = root.canonicalize() {
+        let canonical = canonical.to_string_lossy().into_owned();
+        if !roots.contains(&canonical) {
+            roots.push(canonical);
+        }
+    }
+    let redact = |text: &str| {
+        roots
+            .iter()
+            .fold(text.to_owned(), |acc, root| acc.replace(root, "<bundle>"))
+    };
+    problem.detail = redact(&problem.detail);
+    problem.locations = problem
+        .locations
+        .iter()
+        .map(|location| redact(location))
+        .collect();
+    problem
+}
+
 fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
     // Serve pins the seal per request: the worker loads sealed every time,
     // so drift (content or a stripped seal) after startup is refused here
@@ -230,7 +256,7 @@ fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
         Ok(bundle) => bundle,
         Err(problem) => {
             return WorkerResponse::Failed {
-                problem: (&problem).into(),
+                problem: (&redact_bundle_root(problem, &request.bundle)).into(),
             }
         }
     };
