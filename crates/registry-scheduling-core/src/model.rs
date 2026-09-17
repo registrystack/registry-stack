@@ -202,6 +202,18 @@ pub struct PoolMember {
     pub available: bool,
 }
 
+impl PoolMember {
+    /// Whether this member carries every capability an offering requires.
+    /// Availability counting and admission share this one predicate, so a
+    /// free count never advertises a member admission would refuse.
+    #[must_use]
+    pub fn serves(&self, requires_capabilities: &[String]) -> bool {
+        requires_capabilities
+            .iter()
+            .all(|wanted| self.capabilities.iter().any(|held| held == wanted))
+    }
+}
+
 /// A pool of interchangeable resources backing exact-time offerings. A pool is
 /// its concrete members, never an independent counter.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]

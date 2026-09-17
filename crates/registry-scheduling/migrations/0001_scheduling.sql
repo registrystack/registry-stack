@@ -144,8 +144,11 @@ CREATE TABLE IF NOT EXISTS scheduling_audit_outbox (
     -- The publisher appends every pending record to a hash chain, and a
     -- chain is a record of order: publishing in an arbitrary one would have
     -- the chain attest to a sequence the deployment never had. The event id
-    -- is a random UUID and carries no order at all, so the order the rows
-    -- were written is kept here and nowhere else.
+    -- is a random UUID and carries no order at all. The sequence orders the
+    -- rows a publication pass reads; it is allocated at write time, so
+    -- between two concurrent transactions it can differ from commit
+    -- visibility order. The chain attests to publication order, not to
+    -- insertion-sequence order.
     recorded_seq bigint GENERATED ALWAYS AS IDENTITY,
     audit_record jsonb NOT NULL,
     published_at timestamptz

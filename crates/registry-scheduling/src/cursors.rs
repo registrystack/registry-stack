@@ -111,8 +111,16 @@ pub fn cursor_expiry(now: DateTime<Utc>) -> DateTime<Utc> {
 pub enum ListingPosition {
     /// Resume strictly after this catalogue id.
     AfterId { last_id: String },
-    /// Resume strictly after this UTC instant.
-    FromInstant { after: DateTime<Utc> },
+    /// Resume an availability walk after this instant, carrying the
+    /// effective interval the walk was minted for. The interval rides with
+    /// the cursor because a request that omitted its bounds has none of its
+    /// own to repeat: the continuation restores them from here rather than
+    /// deriving a different interval from its own request time.
+    AvailabilityAfter {
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+        after: DateTime<Utc>,
+    },
     /// Resume strictly before this instant and id, walking newest first: the
     /// position one history page leaves behind.
     BeforeInstantAndId {
@@ -128,9 +136,11 @@ impl ListingPosition {
     pub fn to_json(&self) -> Value {
         match self {
             Self::AfterId { last_id } => serde_json::json!({"afterId": last_id}),
-            Self::FromInstant { after } => {
-                serde_json::json!({"after": after.to_rfc3339()})
-            }
+            Self::AvailabilityAfter { from, to, after } => serde_json::json!({
+                "from": from.to_rfc3339(),
+                "to": to.to_rfc3339(),
+                "after": after.to_rfc3339(),
+            }),
             Self::BeforeInstantAndId { before, last_id } => {
                 serde_json::json!({"before": before.to_rfc3339(), "lastId": last_id})
             }
@@ -158,13 +168,19 @@ impl ListingPosition {
                 }
             });
         }
-        value
-            .get("after")
-            .and_then(Value::as_str)
-            .and_then(|after| DateTime::parse_from_rfc3339(after).ok())
-            .map(|after| Self::FromInstant {
-                after: after.with_timezone(&Utc),
-            })
+        let instant = |key: &str| {
+            value
+                .get(key)
+                .and_then(Value::as_str)
+                .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
+                .map(|instant| instant.with_timezone(&Utc))
+        };
+        match (instant("from"), instant("to"), instant("after")) {
+            (Some(from), Some(to), Some(after)) => {
+                Some(Self::AvailabilityAfter { from, to, after })
+            }
+            _ => None,
+        }
     }
 }
 
@@ -238,7 +254,11 @@ mod tests {
             ListingPosition::AfterId {
                 last_id: "w1".to_owned(),
             },
-            ListingPosition::FromInstant { after: Utc::now() },
+            ListingPosition::AvailabilityAfter {
+                from: Utc::now(),
+                to: Utc::now(),
+                after: Utc::now(),
+            },
             ListingPosition::BeforeInstantAndId {
                 before: Utc::now(),
                 last_id: "event-1".to_owned(),

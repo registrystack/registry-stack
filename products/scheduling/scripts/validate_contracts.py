@@ -8,8 +8,9 @@ the shape the product committed to:
 - every security invariant names a threat, an enforcement point, a
   refusal, and a negative test;
 - every cited test exists in the cited file, as a Rust test function or a
-  Python test method, which is what makes it selectable by its own runner
-  (cargo test <name>, unittest <name>);
+  Python test method. That is source-reference consistency: it proves the
+  citation points at maintained source, not that the citation's runner
+  selects or compiles it.
 - the traceability document covers exactly the matrix's invariants;
 - every recorded decision cites evidence that exists;
 - every deferral names the tracked file that records it, and that file

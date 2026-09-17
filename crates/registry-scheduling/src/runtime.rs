@@ -63,6 +63,13 @@ const REMINDER_ATTEMPTS_CEILING: i32 = 8;
 /// hour.
 const REMINDER_RETRY_BASE_SECONDS: i64 = 30;
 const REMINDER_RETRY_MAX_SECONDS: i64 = 3600;
+/// The lease one dispatch pass holds its claimed intents for. The worst
+/// case of one whole claimed batch is every intent sending to its full
+/// timeout, 100 x 5 s = 500 s, plus the database round trips around each
+/// send; 600 s covers both, so a second dispatcher never re-sends what a
+/// slow first one still owns, and a dispatcher that dies delays its
+/// intents by exactly one lease.
+const INTENT_DISPATCH_LEASE_SECONDS: i64 = 600;
 /// One rendered reminder event is bounded, as is the whole request.
 const REMINDER_MAXIMUM_BODY_BYTES: usize = 16 * 1024;
 const REMINDER_MAXIMUM_REQUEST_BYTES: usize = 32 * 1024;
@@ -663,8 +670,18 @@ fn next_attempt(attempts: i32) -> DateTime<Utc> {
 
 /// Claim every due intent and give each one dispatch attempt. A transport
 /// failure proves nothing and schedules a retry; a refusal outside the retry
-/// classes is held as failed for the operator; with no destination configured
-/// the intent is marked local: recorded, never pretended delivered.
+/// classes is held as failed for the operator; with no destination
+/// configured the intent is marked local: recorded, never pretended
+/// delivered.
+///
+/// A claimed intent is leased for the pass that claimed it and fenced by
+/// its attempt number, so a concurrent or restarted dispatcher cannot
+/// re-send it or overwrite a newer outcome. Reminders whose appointment has
+/// been cancelled or moved to a newer revision are skipped before the send
+/// rather than delivered against a decision the caller already changed; the
+/// residual race, a suppression landing while the send itself is in flight,
+/// is reported as a lost outcome rather than erased, and the destination
+/// deduplicates by the event's stable identifier.
 ///
 /// # Errors
 ///
@@ -676,11 +693,34 @@ pub async fn dispatch_due_intents(
     transport: Option<&ReminderTransport>,
 ) -> Result<(), StoreError> {
     let now = Utc::now();
-    for row in store.claim_due_intents(now, REMINDER_BATCH).await? {
+    let lease = TimeDelta::seconds(INTENT_DISPATCH_LEASE_SECONDS);
+    for row in store.claim_due_intents(now, REMINDER_BATCH, lease).await? {
         let Some(transport) = transport else {
-            store.hold_intent_local(row.outbox_id).await?;
+            let owned = store.hold_intent_local(row.outbox_id, row.attempts).await?;
+            if !owned {
+                // Nothing was sent: no destination exists. The intent was
+                // suppressed or taken over between the claim and this write,
+                // and its owner holds the record.
+                tracing::warn!(
+                    outbox_id = %row.outbox_id,
+                    attempts = row.attempts,
+                    "a local hold arrived after its attempt lost the intent; nothing was sent"
+                );
+            }
             continue;
         };
+        // The claim's own liveness: a suppressed reminder, or one whose
+        // appointment moved to a newer revision, is not sent.
+        if !store
+            .intent_still_dispatchable(row.outbox_id, row.attempts)
+            .await?
+        {
+            tracing::info!(
+                outbox_id = %row.outbox_id,
+                "a claimed intent was suppressed or superseded before its dispatch"
+            );
+            continue;
+        }
         let body = match reminder_event(scheduling_id, &row) {
             Ok(body) => body,
             Err(error) => {
@@ -692,7 +732,12 @@ pub async fn dispatch_due_intents(
                 // An unrenderable intent is held, not retried: no amount of
                 // retrying fixes a payload that cannot become an event.
                 store
-                    .retry_intent(row.outbox_id, next_attempt(row.attempts), row.attempts)
+                    .retry_intent(
+                        row.outbox_id,
+                        next_attempt(row.attempts),
+                        row.attempts,
+                        row.attempts,
+                    )
                     .await?;
                 continue;
             }
@@ -728,13 +773,27 @@ pub async fn dispatch_due_intents(
             }
         };
         match outcome.unwrap_or(Delivery::Transient) {
-            Delivery::Delivered => store.mark_intent_delivered(row.outbox_id).await?,
+            Delivery::Delivered => {
+                let owned = store
+                    .mark_intent_delivered(row.outbox_id, row.attempts)
+                    .await?;
+                if !owned {
+                    // The send completed, but suppression or a superseding
+                    // attempt owns the row now. The row records its own
+                    // state; this line is the delivery's accounting.
+                    report_lost_outcome(&row);
+                }
+            }
             Delivery::Transient => {
+                // A retry write that loses its claim needs no report: the
+                // attempt that took the intent over writes the outcome that
+                // counts, and a back-off nobody owes is nobody's news.
                 store
                     .retry_intent(
                         row.outbox_id,
                         next_attempt(row.attempts),
                         REMINDER_ATTEMPTS_CEILING,
+                        row.attempts,
                     )
                     .await?;
             }
@@ -748,12 +807,30 @@ pub async fn dispatch_due_intents(
                     "a reminder destination refused an intent outright"
                 );
                 store
-                    .retry_intent(row.outbox_id, next_attempt(row.attempts), row.attempts)
+                    .retry_intent(
+                        row.outbox_id,
+                        next_attempt(row.attempts),
+                        row.attempts,
+                        row.attempts,
+                    )
                     .await?;
             }
         }
     }
     Ok(())
+}
+
+/// Report an outcome write that landed on nobody: the intent was
+/// suppressed, or a superseding attempt took it over, while this attempt
+/// was in flight. The row keeps the state its owner left it in; what this
+/// records is that a send this attempt made may have reached a destination
+/// that no outbox state will name.
+fn report_lost_outcome(row: &OutboxRow) {
+    tracing::warn!(
+        outbox_id = %row.outbox_id,
+        attempts = row.attempts,
+        "a dispatch outcome arrived after its attempt lost the intent; a send may have completed"
+    );
 }
 
 // ---------------------------------------------------------------------------

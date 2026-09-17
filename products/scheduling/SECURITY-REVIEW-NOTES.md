@@ -41,8 +41,10 @@ audit journal. The threats this surface answers:
    is refused as a credentials problem, never honoured partially.
 2. **A token that was valid at the door commits after its grant lapsed.**
    The grant's expiry is re-checked inside the capacity transaction,
-   immediately before the claim commits, against the same observed now the
-   rest of the transaction decided under. The full bounds are matched once
+   immediately before the claim commits, against a fresh observation of
+   the store's clock taken after every lock wait, not against the
+   request's own entry time: a transaction delayed by contention cannot
+   carry a lapsed grant to a commit. The full bounds are matched once
    at the service before the transaction opens; re-reading them inside
    would only defend against narrowing at the issuer, which needs a
    revocation path this milestone does not have (matrix deferral
@@ -127,7 +129,7 @@ answer is unchanged, so what changes is the record and not the disclosure.
 deferral SCHEDULING-DEF-02 and promotes matrix row SCHEDULING-SEC-14 to
 `enforced`.
 
-**The journal is published in the order it was written.** *Threat:* the
+**The journal is published in the order it became visible.** *Threat:* the
 audit outbox carried no ordering column, and the query feeding the
 publisher ordered by a random version 4 event identifier while its own
 documentation said oldest first. The publisher appends what that query
@@ -136,7 +138,12 @@ attested to a sequence the deployment never had. A chain that certifies
 the wrong order is worse than no chain, because it is believed.
 *Default:* the outbox carries its own recorded sequence, the pending query
 reads in it, and the chain continues across a restart from its verified
-tail rather than from whatever the first query after startup returns.
+tail rather than from whatever the first query after startup returns. The
+sequence is allocated when a row is written, not when its transaction
+commits, so two concurrent transactions can publish in the opposite order
+from their sequence numbers; the chain attests to publication order, and
+no claim is made about insertion-sequence order between transactions that
+committed in the other order.
 *Tests:* `the_audit_journal_is_read_in_the_order_it_was_written` and
 `the_audit_chain_continues_across_a_restart`,
 `crates/registry-scheduling/tests/postgres_commitments.rs`.

@@ -90,7 +90,7 @@ def main() -> int:
         for failure in failures:
             print(f"database-test isolation violation: {failure}", file=sys.stderr)
         return 1
-    print("Scheduling database suites stay opt-in.")
+    print("No Scheduling crate enables a sibling's database-only test feature.")
     return 0
 
 

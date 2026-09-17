@@ -317,25 +317,48 @@ impl SchedulingService {
     ) -> Result<PageDocument<AvailabilityEntry>, ServiceError> {
         let limit = page_limit(limit);
         let offering = self.published_offering(offering_id)?;
-        let from = start.unwrap_or(now);
         let span = TimeDelta::days(MAXIMUM_AVAILABILITY_SPAN_DAYS);
+        // A continuation restores the effective interval of the request that
+        // minted its cursor. A default availability request, with neither
+        // start nor end, has no bounds of its own to repeat, so it reads
+        // them from the cursor rather than deriving a different interval
+        // from this request's own now; bounds a caller does supply must
+        // repeat the minted interval exactly, and anything else is a
+        // different listing the cursor refuses.
+        let stored = match cursor {
+            Some(encoded) => Some(self.stored_cursor(encoded).await?),
+            None => None,
+        };
+        let minted_interval = match &stored {
+            Some(row) => match ListingPosition::from_json(&row.position) {
+                Some(ListingPosition::AvailabilityAfter { from, to, .. }) => Some((from, to)),
+                _ => return Err(ServiceError::Problem(ProblemCode::CursorInvalid)),
+            },
+            None => None,
+        };
+        let from = start
+            .or(minted_interval.map(|(from, _)| from))
+            .unwrap_or(now);
         let to = match end {
             Some(end) => end.max(from + TimeDelta::minutes(1)).min(from + span),
-            None => from + span,
+            None => minted_interval.map(|(_, to)| to).unwrap_or(from + span),
         };
         let context = format!("availability:{offering_id}:{}:{to}", from.to_rfc3339());
-        let position = self.resolve_position(cursor, &context, now).await?;
+        let position = match stored {
+            Some(ref row) => Some(bind_stored(row, &context, now)?),
+            None => None,
+        };
         let after = match position {
-            Some(ListingPosition::FromInstant { after }) => Some(after),
+            Some(ListingPosition::AvailabilityAfter { after, .. }) => Some(after),
             Some(_) => return Err(ServiceError::Problem(ProblemCode::CursorInvalid)),
             None => None,
         };
-        let entries = match self.supply(offering).await? {
+        let entries = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
                 exact,
                 members,
                 open,
-                closures,
+                ..
             } => {
                 let duration = TimeDelta::minutes(i64::from(exact.duration_minutes));
                 let buffer = TimeDelta::minutes(i64::from(
@@ -349,7 +372,16 @@ impl SchedulingService {
                     .store
                     .member_snapshot(&ids, from - buffer, to + duration + buffer, now)
                     .await?;
-                exact_time_slots(&exact, &members, &open, &closures, &snapshot, from, to, now)
+                exact_time_slots(
+                    &exact,
+                    &members,
+                    &offering.requires_capabilities,
+                    &open,
+                    &snapshot,
+                    from,
+                    to,
+                    now,
+                )
             }
             ResolvedSupply::Window {
                 window,
@@ -380,7 +412,11 @@ impl SchedulingService {
         let items: Vec<_> = selected.into_iter().take(limit).collect();
         let next_cursor = if more {
             let last = entry_instant(items.last().expect("a limited page is not empty"));
-            let position = ListingPosition::FromInstant { after: last };
+            let position = ListingPosition::AvailabilityAfter {
+                from,
+                to,
+                after: last,
+            };
             Some(self.mint_cursor(&context, &position, now).await?)
         } else {
             None
@@ -414,7 +450,7 @@ impl SchedulingService {
             capabilities: Vec::new(),
             prerequisites: Vec::new(),
         };
-        let refusal = match self.supply(offering).await? {
+        let refusal = match self.supply(offering).await?.0 {
             ResolvedSupply::ExactTime {
                 exact,
                 members,
@@ -459,6 +495,13 @@ impl SchedulingService {
                 horizon_days,
                 channels,
             } => {
+                // The probe carries the window's current revision, the way a
+                // booking request would: window admission checks capacity
+                // only under a revision the caller actually observed, and an
+                // explain that never names one answers every window with a
+                // revision mismatch instead of explaining the start.
+                let mut probe = probe.clone();
+                probe.window_revision = Some(window.revision);
                 let snapshot = self.store.window_snapshot(&window.id, now).await?;
                 evaluate_window_admission(
                     &WindowContext {
@@ -504,7 +547,7 @@ impl SchedulingService {
             .require_permission(caller, offering, HOLD_CREATE_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let supply = self.supply(offering).await?;
+        let (supply, facts_revision) = self.supply(offering).await?;
         let request_hash = admission_request_hash(request);
         let commitment = self.commitment(
             caller,
@@ -514,6 +557,7 @@ impl SchedulingService {
             &request_hash,
             HOLD_CREATE_ACTION,
             now,
+            facts_revision,
         )?;
         let outcome = self
             .store
@@ -537,6 +581,7 @@ impl SchedulingService {
                 "hold:create",
                 HOLD_CREATE_ACTION,
                 now,
+                facts_revision,
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
@@ -572,6 +617,8 @@ impl SchedulingService {
         // The release carries no caller-chosen key, so the hold's own id is
         // the idempotency key: a retried release replays the first answer.
         let release_key = hold_id.to_string();
+        // A release evaluates no supply, so no records revision guards it:
+        // closing a hold cannot name a resource.
         let commitment = self.commitment(
             caller,
             &actor,
@@ -580,6 +627,7 @@ impl SchedulingService {
             &request_hash,
             HOLD_RELEASE_ACTION,
             now,
+            0,
         )?;
         let outcome = self.store.release_hold(hold_id, commitment).await;
         self.commitment_outcome(
@@ -592,6 +640,7 @@ impl SchedulingService {
             &format!("hold:{hold_id}:release"),
             HOLD_RELEASE_ACTION,
             now,
+            0,
         )
         .await
     }
@@ -650,7 +699,7 @@ impl SchedulingService {
             .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let supply = self.supply(offering).await?;
+        let (supply, facts_revision) = self.supply(offering).await?;
         let request_hash = canonical_hash(&json!({"hold": hold_id}))?;
         let commitment = self.commitment(
             caller,
@@ -660,6 +709,7 @@ impl SchedulingService {
             &request_hash,
             APPOINTMENT_CREATE_ACTION,
             now,
+            facts_revision,
         )?;
         let outcome = self
             .store
@@ -675,6 +725,7 @@ impl SchedulingService {
             &format!("hold:{hold_id}:confirm"),
             APPOINTMENT_CREATE_ACTION,
             now,
+            facts_revision,
         )
         .await
     }
@@ -691,7 +742,7 @@ impl SchedulingService {
             .require_permission(caller, offering, APPOINTMENT_CREATE_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let supply = self.supply(offering).await?;
+        let (supply, facts_revision) = self.supply(offering).await?;
         let request_hash = admission_request_hash(request);
         let commitment = self.commitment(
             caller,
@@ -701,6 +752,7 @@ impl SchedulingService {
             &request_hash,
             APPOINTMENT_CREATE_ACTION,
             now,
+            facts_revision,
         )?;
         let outcome = self
             .store
@@ -716,6 +768,7 @@ impl SchedulingService {
             "appointment:create",
             APPOINTMENT_CREATE_ACTION,
             now,
+            facts_revision,
         )
         .await
     }
@@ -755,7 +808,7 @@ impl SchedulingService {
             .require_permission(caller, offering, APPOINTMENT_RESCHEDULE_ACTION)
             .await?;
         let actor = caller.actor_pseudonym(&self.hasher, &self.scheduling_id)?;
-        let supply = self.supply(offering).await?;
+        let (supply, facts_revision) = self.supply(offering).await?;
         let request_hash = canonical_hash(&json!({
             "observedRevision": request.observed_revision,
             "admissionHash": admission_request_hash(&request.admission),
@@ -768,6 +821,7 @@ impl SchedulingService {
             &request_hash,
             APPOINTMENT_RESCHEDULE_ACTION,
             now,
+            facts_revision,
         )?;
         let outcome = self
             .store
@@ -791,6 +845,7 @@ impl SchedulingService {
                 &format!("appointment:{appointment_id}:reschedule"),
                 APPOINTMENT_RESCHEDULE_ACTION,
                 now,
+                facts_revision,
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
@@ -821,6 +876,8 @@ impl SchedulingService {
             "observedRevision": request.observed_revision,
             "reason": request.reason,
         }))?;
+        // A cancellation evaluates no supply, so no records revision guards
+        // it: closing an appointment cannot name a resource.
         let commitment = self.commitment(
             caller,
             &actor,
@@ -829,6 +886,7 @@ impl SchedulingService {
             &request_hash,
             APPOINTMENT_CANCEL_ACTION,
             now,
+            0,
         )?;
         let outcome = self
             .store
@@ -851,6 +909,7 @@ impl SchedulingService {
                 &format!("appointment:{appointment_id}:cancel"),
                 APPOINTMENT_CANCEL_ACTION,
                 now,
+                0,
             )
             .await?;
         Ok(claim_or_replay(answer, |claim| {
@@ -1090,10 +1149,19 @@ impl SchedulingService {
     }
 
     /// The policy-resolved supply an offering runs against, read from the
-    /// live facts the operator's records apply wrote.
-    async fn supply(&self, offering: &OfferingPolicy) -> Result<ResolvedSupply, ServiceError> {
-        let facts = self.store.facts().await?;
-        ResolvedSupply::resolve(&self.policy, &facts, offering)
+    /// live facts the operator's records apply wrote, with the records
+    /// revision the read observed. The revision travels into the capacity
+    /// transaction, which refuses to commit against records a replacement
+    /// has since superseded.
+    async fn supply(
+        &self,
+        offering: &OfferingPolicy,
+    ) -> Result<(ResolvedSupply, i64), ServiceError> {
+        let (facts, revision) = self.store.facts().await?;
+        Ok((
+            ResolvedSupply::resolve(&self.policy, &facts, offering)?,
+            revision,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1106,6 +1174,7 @@ impl SchedulingService {
         request_hash: &'a str,
         operation: &str,
         now: DateTime<Utc>,
+        facts_revision: i64,
     ) -> Result<Commitment<'a>, ServiceError> {
         let attempt_expires_at = now
             .checked_add_signed(TimeDelta::days(self.attempt_receipt_days))
@@ -1124,6 +1193,7 @@ impl SchedulingService {
         Ok(Commitment {
             now,
             policy_revision: i64::try_from(self.policy_revision).unwrap_or(i64::MAX),
+            facts_revision,
             actor,
             actor_issuer: &caller.issuer,
             actor_subject: &caller.subject,
@@ -1152,6 +1222,7 @@ impl SchedulingService {
         scope: &str,
         operation: &str,
         now: DateTime<Utc>,
+        facts_revision: i64,
     ) -> Result<CommitmentAnswer<T>, ServiceError>
     where
         T: FromMinted,
@@ -1172,6 +1243,17 @@ impl SchedulingService {
                     tracing::error!(%error, "the Scheduling store failed mid-commitment");
                     return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
                 }
+                if matches!(error, CommitError::FactsStale) {
+                    // A records replacement moved under this request. Nothing
+                    // was decided and the caller retries; the swap is an
+                    // expected operator act, so this is a warning, not a
+                    // failure.
+                    tracing::warn!(
+                        %error,
+                        "the environment records were replaced while a commitment was in flight"
+                    );
+                    return Err(ServiceError::Problem(ProblemCode::ServiceUnavailable));
+                }
                 let problem = problem_of(&error);
                 // Key misuse keeps the stored attempt as the answer and
                 // records nothing new.
@@ -1184,6 +1266,7 @@ impl SchedulingService {
                         request_hash,
                         operation,
                         now,
+                        facts_revision,
                     );
                     match receipt {
                         Ok(commitment) => {
@@ -1229,6 +1312,25 @@ impl SchedulingService {
         }
     }
 
+    /// Decode and load one stored cursor row. Binding to a listing is the
+    /// caller's act: the availability walk reads the stored interval before
+    /// it can compute the context it binds against.
+    async fn stored_cursor(&self, encoded: &str) -> Result<StoredCursor, ServiceError> {
+        let cursor_id = decode_cursor(encoded)?;
+        let stored = self
+            .store
+            .cursor(cursor_id)
+            .await?
+            .ok_or(CursorError::Invalid)?;
+        Ok(StoredCursor {
+            cursor_id,
+            context: stored["context"].as_str().unwrap_or_default().to_owned(),
+            position: stored["position"].clone(),
+            expires_at: serde_json::from_value(stored["expiresAt"].clone())
+                .map_err(|_| CursorError::Invalid)?,
+        })
+    }
+
     async fn resolve_position(
         &self,
         cursor: Option<&str>,
@@ -1238,19 +1340,7 @@ impl SchedulingService {
         let Some(encoded) = cursor else {
             return Ok(None);
         };
-        let cursor_id = decode_cursor(encoded)?;
-        let stored = self
-            .store
-            .cursor(cursor_id)
-            .await?
-            .ok_or(CursorError::Invalid)?;
-        let stored = StoredCursor {
-            cursor_id,
-            context: stored["context"].as_str().unwrap_or_default().to_owned(),
-            position: stored["position"].clone(),
-            expires_at: serde_json::from_value(stored["expiresAt"].clone())
-                .map_err(|_| CursorError::Invalid)?,
-        };
+        let stored = self.stored_cursor(encoded).await?;
         Ok(Some(bind_stored(&stored, context, now)?))
     }
 
@@ -1431,14 +1521,20 @@ impl ResolvedSupply {
 }
 
 /// The exact-time availability walk: one entry per grid slot that lies inside
-/// the published openings, clear of closures, inside the booking horizon, and
-/// that at least one available member can still serve.
+/// the effective openings, inside the booking horizon, and that at least one
+/// available, capable member can still serve.
+///
+/// `open` is the effective-open truth: closures already removed from it, and
+/// an authorized reopening already restored into it. Filtering by raw
+/// closures again here would strike out the time a reopening put back, so
+/// discovery and admission would disagree; they read the same intervals
+/// instead.
 #[allow(clippy::too_many_arguments)]
 fn exact_time_slots(
     exact: &ExactTimeOffering,
     members: &[PoolMember],
+    requires_capabilities: &[String],
     open: &[CalendarInterval],
-    closures: &[CalendarInterval],
     snapshot: &LedgerSnapshot,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
@@ -1451,8 +1547,7 @@ fn exact_time_slots(
     let mut entries = Vec::new();
     for interval in open {
         // Slots anchor on each published opening's own start and step the
-        // authored grid; a start that leaves the opening or lands in a
-        // closure is not offered.
+        // authored grid; a start that leaves the opening is not offered.
         let mut slot_start = interval.start;
         while slot_start + duration <= interval.end {
             let slot_end = slot_start + duration;
@@ -1461,13 +1556,11 @@ fn exact_time_slots(
             let occupied_end = slot_end + TimeDelta::minutes(i64::from(exact.buffer_after_minutes));
             let in_range = slot_start >= from && slot_start < to;
             let in_horizon = slot_start >= earliest && slot_start <= latest;
-            let clear_of_closures = closures
-                .iter()
-                .all(|closure| closure.end <= slot_start || slot_end <= closure.start);
-            if in_range && in_horizon && clear_of_closures {
+            if in_range && in_horizon {
                 let free = members
                     .iter()
                     .filter(|member| member.available)
+                    .filter(|member| member.serves(requires_capabilities))
                     .filter(|member| {
                         snapshot.claims.iter().all(|claim| {
                             claim.supply_id != member.resource_id
@@ -1706,6 +1799,9 @@ fn problem_of(error: &CommitError) -> ProblemCode {
         CommitError::Unauthorized => ProblemCode::OperationNotAuthorized,
         CommitError::RevisionMismatch => ProblemCode::RevisionMismatch,
         CommitError::CutoffPassed => ProblemCode::CancellationCutoffPassed,
+        // Never reached: the outcome handler intercepts a stale-facts
+        // refusal before it projects, because nothing was decided.
+        CommitError::FactsStale => ProblemCode::ServiceUnavailable,
     }
 }
 
@@ -1881,8 +1977,8 @@ mod tests {
         let entries = exact_time_slots(
             &exact(),
             &members(2),
-            &[interval(2, 4)],
             &[],
+            &[interval(2, 4)],
             &LedgerSnapshot { claims: Vec::new() },
             at(1, 0),
             at(5, 0),
@@ -1902,8 +1998,8 @@ mod tests {
         let entries = exact_time_slots(
             &exact(),
             &members(1),
-            &[interval(2, 4)],
             &[],
+            &[interval(2, 4)],
             &LedgerSnapshot { claims: Vec::new() },
             at(1, 0),
             at(5, 0),
@@ -1924,8 +2020,8 @@ mod tests {
         let entries = exact_time_slots(
             &exact(),
             &members(2),
-            &[interval(2, 4)],
             &[],
+            &[interval(2, 4)],
             &snapshot,
             at(1, 0),
             at(5, 0),
@@ -1948,16 +2044,22 @@ mod tests {
     }
 
     #[test]
-    fn a_closure_removes_the_slots_it_covers() {
-        let closures = vec![CalendarInterval {
-            start: at(2, 30),
-            end: at(3, 30),
-        }];
+    fn slots_follow_the_effective_openings_a_reopening_restored() {
+        // The openings are the effective-open truth: a closure that an
+        // authorized reopening partly restores has already been subtracted
+        // and added back here, so the walk does not filter by raw closures
+        // again and strike out the restored time.
         let entries = exact_time_slots(
             &exact(),
             &members(1),
-            &[interval(2, 4)],
-            &closures,
+            &[],
+            &[
+                interval(2, 3),
+                CalendarInterval {
+                    start: at(3, 30),
+                    end: at(4, 0),
+                },
+            ],
             &LedgerSnapshot { claims: Vec::new() },
             at(1, 0),
             at(5, 0),
@@ -1965,8 +2067,48 @@ mod tests {
         );
         assert_eq!(
             entries.iter().map(entry_instant).collect::<Vec<_>>(),
-            vec![at(2, 0), at(3, 30)]
+            vec![at(2, 0), at(2, 30), at(3, 30)]
         );
+    }
+
+    #[test]
+    fn a_slot_without_a_free_capable_member_is_not_availability() {
+        let capable = [PoolMember {
+            resource_id: "station-1".to_owned(),
+            capabilities: vec!["interpreter".to_owned()],
+            available: true,
+        }];
+        let requires = vec!["interpreter".to_owned()];
+        // Only an incapable member is free: the slot is not listed, because
+        // admission would refuse every start it advertised.
+        let entries = exact_time_slots(
+            &exact(),
+            &members(1),
+            &requires,
+            &[interval(2, 4)],
+            &LedgerSnapshot { claims: Vec::new() },
+            at(1, 0),
+            at(5, 0),
+            at(0, 0),
+        );
+        assert!(entries.is_empty());
+        // One capable member among two: the free count names only it.
+        let mut mixed = members(2);
+        mixed.extend_from_slice(&capable);
+        let entries = exact_time_slots(
+            &exact(),
+            &mixed,
+            &requires,
+            &[interval(2, 4)],
+            &LedgerSnapshot { claims: Vec::new() },
+            at(1, 0),
+            at(5, 0),
+            at(0, 0),
+        );
+        assert!(entries.iter().all(|entry| match entry {
+            AvailabilityEntry::Slot { free, .. } => *free == 1,
+            _ => false,
+        }));
     }
 
     #[test]
@@ -1980,8 +2122,8 @@ mod tests {
         let entries = exact_time_slots(
             &exact(),
             &members(2),
-            &[interval(2, 4)],
             &[],
+            &[interval(2, 4)],
             &snapshot,
             at(1, 0),
             at(5, 0),
@@ -1997,6 +2139,7 @@ mod tests {
         let entries = exact_time_slots(
             &exact(),
             &members(1),
+            &[],
             &[
                 interval(2, 3),
                 CalendarInterval {
@@ -2004,7 +2147,6 @@ mod tests {
                     end: at(4, 15),
                 },
             ],
-            &[],
             &LedgerSnapshot { claims: Vec::new() },
             at(1, 0),
             at(5, 0),

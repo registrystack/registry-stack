@@ -12,18 +12,25 @@
 //!    claim consumes capacity when it is an active booking, or an active
 //!    hold whose `hold_expires_at` is still ahead of the observed now. A
 //!    delayed cleanup worker therefore cannot keep an expired hold alive.
-//! 3. The revision and policy-revision guards, with `policy.changed`
-//!    winning.
+//! 3. The revision guards, with `policy.changed` winning: the revision of
+//!    the policy this process actually evaluated must still be the stored
+//!    one, and the facts the request resolved must not have been replaced
+//!    by a records swap. Both are checked under the anchor, after every
+//!    lock wait, so a commitment never carries a stale evaluation forward.
 //! 4. The pure evaluators from `registry-scheduling-core`, in memory, inside
 //!    the lock but never doing I/O. The task grant's expiry is re-checked
-//!    here too, against the same now, so a grant that lapses before the
-//!    commit never books.
+//!    here too, against a fresh observation of the clock taken after the
+//!    waits, so a grant that lapses before the commit never books.
 //! 5. The claim, the idempotency attempt, the history event, and the outbox
-//!    rows, written in that same transaction.
+//!    rows, written in that same transaction. The lifecycle writes carry
+//!    the observed revision and the active state in their own predicates,
+//!    so a second writer that accepted the same observed state changes
+//!    nothing.
 //! 6. Commit.
 //!
-//! Workers claim due work with `FOR UPDATE SKIP LOCKED` and a limit, the
-//! idiom the stack already uses for due clocks and retention sweeps.
+//! Workers claim due work with `FOR UPDATE SKIP LOCKED`, a limit, and a
+//! dispatch lease: a claimed intent is not claimable again until its lease
+//! passes, and an outcome write only lands for the attempt that owns it.
 
 use std::str::FromStr;
 use std::time::Duration;
@@ -46,9 +53,11 @@ use uuid::Uuid;
 use crate::config::{describe_secret_failure, DatabaseConfig};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
+const FACTS_REVISION_MIGRATION: &str =
+    include_str!("../migrations/0002_facts_revision_and_suppressed.sql");
 
 /// Every schema version in ledger order.
-const MIGRATIONS: [(i64, &str); 1] = [(1, SCHEDULING_MIGRATION)];
+const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
@@ -62,6 +71,18 @@ const MIGRATION_LOCK_KEY: i64 = 0x7363_6865_6475_6c65;
 /// capacity transaction ends, committed or rolled back. The namespace spells
 /// the ASCII bytes of "SCHD".
 const HOLD_CEILING_LOCK_NAMESPACE: i32 = 0x5343_4844;
+
+/// The clock the store reads when it re-checks authorization currency.
+/// Production observes the system clock; the database suite pins one to
+/// cross an expiry boundary deterministically inside a transaction. The
+/// clock sits behind a shared lock so every handle cloned from one store
+/// reads the same time.
+pub type Clock = std::sync::Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>;
+type SharedClock = std::sync::Arc<std::sync::RwLock<Clock>>;
+
+fn system_clock() -> SharedClock {
+    std::sync::Arc::new(std::sync::RwLock::new(std::sync::Arc::new(Utc::now)))
+}
 
 #[derive(Debug, Error)]
 pub enum StoreError {
@@ -88,6 +109,40 @@ pub enum StoreError {
 #[derive(Clone)]
 pub struct PostgresStore {
     pool: Pool,
+    clock: SharedClock,
+}
+
+impl PostgresStore {
+    /// One observation of the store's clock: the time an authorization
+    /// re-check inside a transaction is decided under.
+    fn observed_now(&self) -> DateTime<Utc> {
+        let clock = self
+            .clock
+            .read()
+            .expect("the store clock is never held across a panic");
+        clock()
+    }
+
+    /// The task-grant re-check at decision time: one fresh observation of
+    /// the store's clock, taken after every wait and immediately before the
+    /// final writes, so a grant that lapsed while this transaction waited
+    /// for a lock never commits. The rest of the transaction keeps the
+    /// request's own single `now`; this is the one authorization-currency
+    /// exception to it.
+    fn recheck_grant(&self, commitment: &Commitment<'_>) -> Result<(), CommitError> {
+        check_grant_current_at(commitment, self.observed_now())
+    }
+
+    /// Pin the clock the store's authorization re-checks read. Test-only:
+    /// production always observes the system clock. Every handle cloned
+    /// from this store reads the pinned time.
+    #[cfg(feature = "postgres-test")]
+    pub fn pin_clock(&self, clock: Clock) {
+        *self
+            .clock
+            .write()
+            .expect("the store clock is never held across a panic") = clock;
+    }
 }
 
 impl std::fmt::Debug for PostgresStore {
@@ -166,11 +221,22 @@ impl ClaimState {
 }
 
 /// The caller-side facts every commitment carries. `now` is observed once
-/// per request and used for every decision inside it, including the grant
-/// re-check, so a transaction never mixes two observations of time.
+/// per request and used for every decision the caller reads inside it, so
+/// a transaction never mixes two observations of the time it answers with.
+/// Authorization currency is the one deliberate exception: the grant's
+/// expiry is re-checked against a fresh observation taken inside the
+/// transaction, after every wait and immediately before the final write.
 pub struct Commitment<'c> {
     pub now: DateTime<Utc>,
+    /// The revision of the policy this process evaluated, not the stored
+    /// current one: the capacity transaction verifies the two still agree
+    /// before it commits, so a claim never carries a revision that names
+    /// rules it was not evaluated under.
     pub policy_revision: i64,
+    /// The records revision the request resolved its supply under. A
+    /// wholesale records replacement increments it; a transaction whose
+    /// resolved facts are older than the stored revision is refused.
+    pub facts_revision: i64,
     /// The pseudonymized actor reference history and audit carry.
     pub actor: &'c str,
     pub actor_issuer: &'c str,
@@ -249,6 +315,11 @@ pub enum CommitError {
     RevisionMismatch,
     #[error("the cancellation cutoff has passed")]
     CutoffPassed,
+    /// The environment records were replaced after this request resolved
+    /// its supply. Nothing was decided; the caller retries against the
+    /// current records.
+    #[error("the environment records were replaced while the request was in flight")]
+    FactsStale,
 }
 
 /// One due or delivered outbox intent.
@@ -348,7 +419,10 @@ impl PostgresStore {
             .runtime(Runtime::Tokio1)
             .build()
             .map_err(|_| StoreError::Configuration)?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool,
+            clock: system_clock(),
+        })
     }
 
     async fn client(&self) -> Result<deadpool_postgres::Client, StoreError> {
@@ -477,6 +551,16 @@ impl PostgresStore {
     /// Publish a policy: bump the revision when the digest changed, and make
     /// sure every supply anchor the policy needs exists. Re-applying the
     /// same policy is a no-op that still verifies the anchors.
+    ///
+    /// Lock order, load-bearing: this method takes `scheduling_meta`
+    /// exclusively and then only inserts `scheduling_supply` rows with
+    /// `ON CONFLICT DO NOTHING`, which never waits on a row lock a capacity
+    /// transaction holds on that table. The capacity transactions take a
+    /// supply anchor first and `scheduling_meta` for share after, and the
+    /// records swap takes every anchor before `scheduling_meta`. Those three
+    /// orders cannot cycle only while this method keeps to inserts here:
+    /// an update or a locking read of `scheduling_supply` under the meta
+    /// lock would close a cycle.
     pub async fn apply_policy(
         &self,
         scheduling_id: &str,
@@ -532,33 +616,49 @@ impl PostgresStore {
         Ok(revision)
     }
 
-    /// The environment records an admission runs against.
-    pub async fn facts(&self) -> Result<SchedulingFacts, StoreError> {
-        let client = self.client().await?;
-        let locations = client
+    /// The environment records an admission runs against, with the records
+    /// revision they were read under. The whole read shares one repeatable
+    /// snapshot, so no records replacement can land between the members and
+    /// the exceptions and hand a caller a torn combination; the revision
+    /// travels with the facts into the capacity transaction, which refuses
+    /// to commit against records a replacement has since superseded.
+    pub async fn facts(&self) -> Result<(SchedulingFacts, i64), StoreError> {
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        transaction
+            .batch_execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            .await?;
+        let revision: i64 = transaction
+            .query_one(
+                "SELECT facts_revision FROM scheduling_meta WHERE singleton",
+                &[],
+            )
+            .await?
+            .get(0);
+        let locations = transaction
             .query(
                 "SELECT location_id, timezone FROM scheduling_locations",
                 &[],
             )
             .await?;
-        let members = client
+        let members = transaction
             .query(
                 "SELECT resource_id, pool_id, capabilities, available \
                  FROM scheduling_pool_members ORDER BY pool_id, resource_id",
                 &[],
             )
             .await?;
-        let pools = client
+        let pools = transaction
             .query("SELECT pool_id FROM scheduling_pools ORDER BY pool_id", &[])
             .await?;
-        let exceptions = client
+        let exceptions = transaction
             .query(
                 "SELECT exception_id, location, kind, date::text, start_time, end_time, \
                  reopens, authority FROM scheduling_exceptions",
                 &[],
             )
             .await?;
-        Ok(SchedulingFacts {
+        let facts = SchedulingFacts {
             locations: locations
                 .iter()
                 .map(|row| registry_scheduling_core::LocationRecord {
@@ -597,7 +697,8 @@ impl PostgresStore {
                     authority: row.get(7),
                 })
                 .collect(),
-        })
+        };
+        Ok((facts, revision))
     }
 
     /// Replace the environment records wholesale. This is the operator
@@ -785,7 +886,7 @@ impl PostgresStore {
         request: &registry_scheduling_core::AdmissionRequest,
         ttl_minutes: u32,
         max_per_caller: u32,
-        mut commitment: Commitment<'_>,
+        commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -804,7 +905,6 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         // The caller lock is taken after the supply lock, never before: every
         // hold transaction acquires the two in that one order, so no pair of
@@ -816,7 +916,12 @@ impl PostgresStore {
         {
             return Err(CommitError::HoldCeiling);
         }
+        guard_revisions(&transaction, &commitment).await?;
         let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        // The last authorization fact before the writes: the grant must
+        // still stand at the time this transaction decides, observed after
+        // every wait rather than at the door.
+        self.recheck_grant(&commitment)?;
         let expires_at = commitment
             .now
             .checked_add_signed(TimeDelta::minutes(i64::from(ttl_minutes)))
@@ -880,7 +985,7 @@ impl PostgresStore {
         offering: &registry_scheduling_core::OfferingPolicy,
         supply: &SupplyContext<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
-        mut commitment: Commitment<'_>,
+        commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
@@ -899,9 +1004,10 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
+        guard_revisions(&transaction, &commitment).await?;
         let admission = evaluate(offering, supply, request, &snapshot, &commitment, None)?;
+        self.recheck_grant(&commitment)?;
         let appointment_id = Uuid::new_v4();
         let claim = transaction
             .insert_claim(&NewClaim {
@@ -973,7 +1079,7 @@ impl PostgresStore {
         hold_id: Uuid,
         offering: &registry_scheduling_core::OfferingPolicy,
         supply: &SupplyContext<'_>,
-        mut commitment: Commitment<'_>,
+        commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("hold:{hold_id}:confirm");
         let mut client = self.client().await?;
@@ -993,12 +1099,12 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        commitment.policy_revision = current_policy_revision(&transaction).await?;
         // The snapshot is read under the lock for serialization order, but
         // admission is not re-evaluated: the hold's own reservation transfers
         // to the booking in this same transaction, so capacity does not
         // change. What must hold is identity (the policy revision the hold
-        // was admitted under is still current), checked below.
+        // was admitted under is still current), checked with the other
+        // revision guards below, under the anchor.
         let _snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         let hold = transaction
             .claim_in_transaction(hold_id)
@@ -1007,6 +1113,7 @@ impl PostgresStore {
         if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
+        guard_revisions(&transaction, &commitment).await?;
         // The expiry check stays here so a hold whose TTL lapsed inside this
         // very transaction is refused by the same clock the snapshot used.
         evaluate_hold_state(&hold_ledger_claim(&hold), commitment.now)?;
@@ -1018,6 +1125,7 @@ impl PostgresStore {
             // an authorization refusal the audit journal records.
             return Err(CommitError::Unauthorized);
         }
+        self.recheck_grant(&commitment)?;
         let appointment_id = Uuid::new_v4();
         let claim = transaction
             .insert_claim(&NewClaim {
@@ -1040,9 +1148,15 @@ impl PostgresStore {
                 reason: None,
             })
             .await?;
-        transaction
-            .close_claim(hold_id, ClaimState::Consumed, None, hold.revision + 1)
-            .await?;
+        if !transaction
+            .close_claim(hold_id, ClaimState::Consumed, None, hold.revision)
+            .await?
+        {
+            // The hold changed state between the read and this write; the
+            // whole transaction, booking included, rolls back behind the
+            // refusal.
+            return Err(AdmissionRefusal::HoldReleased.into());
+        }
         transaction
             .insert_history(
                 appointment_id,
@@ -1124,9 +1238,13 @@ impl PostgresStore {
         if hold.actor != commitment.actor {
             return Err(CommitError::Unauthorized);
         }
-        transaction
-            .close_claim(hold_id, ClaimState::Released, None, hold.revision + 1)
-            .await?;
+        self.recheck_grant(&commitment)?;
+        if !transaction
+            .close_claim(hold_id, ClaimState::Released, None, hold.revision)
+            .await?
+        {
+            return Err(AdmissionRefusal::HoldReleased.into());
+        }
         transaction
             .insert_history(
                 hold_id,
@@ -1163,7 +1281,7 @@ impl PostgresStore {
         supply: &SupplyContext<'_>,
         request: &registry_scheduling_core::AdmissionRequest,
         observed_revision: u64,
-        mut commitment: Commitment<'_>,
+        commitment: Commitment<'_>,
     ) -> Result<CommitOutcome, CommitError> {
         let scope = format!("appointment:{appointment_id}:reschedule");
         let mut client = self.client().await?;
@@ -1183,7 +1301,6 @@ impl PostgresStore {
             None => {}
         }
         check_grant_current(&commitment)?;
-        commitment.policy_revision = current_policy_revision(&transaction).await?;
         let snapshot = lock_and_snapshot(&transaction, supply, commitment.now).await?;
         let appointment = transaction
             .claim_in_transaction(appointment_id)
@@ -1192,6 +1309,7 @@ impl PostgresStore {
         if appointment.kind != LedgerKind::Booking || appointment.state != ClaimState::Active {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
+        guard_revisions(&transaction, &commitment).await?;
         // The policy guard wins over the revision guard: a caller whose
         // observed revision is also stale learns the policy moved first.
         if request.policy_revision != u64::try_from(commitment.policy_revision).unwrap_or(u64::MAX)
@@ -1216,22 +1334,32 @@ impl PostgresStore {
             &commitment,
             Some(&own_claim_id),
         )?;
+        self.recheck_grant(&commitment)?;
         let next_revision = appointment.revision + 1;
-        transaction
-            .move_claim(&ClaimMove {
-                claim_id: appointment_id,
-                supply_id: admission
-                    .resource
-                    .as_deref()
-                    .unwrap_or(&appointment.supply_id),
-                displayed_start: admission.start,
-                displayed_end: admission.end,
-                occupied_start: admission.occupied_start,
-                occupied_end: admission.occupied_end,
-                policy_revision: commitment.policy_revision,
-                next_revision,
-            })
-            .await?;
+        if !transaction
+            .move_claim(
+                &ClaimMove {
+                    claim_id: appointment_id,
+                    supply_id: admission
+                        .resource
+                        .as_deref()
+                        .unwrap_or(&appointment.supply_id),
+                    displayed_start: admission.start,
+                    displayed_end: admission.end,
+                    occupied_start: admission.occupied_start,
+                    occupied_end: admission.occupied_end,
+                    policy_revision: commitment.policy_revision,
+                    next_revision,
+                },
+                appointment.revision,
+            )
+            .await?
+        {
+            // A concurrent lifecycle writer moved the appointment first;
+            // this transaction's whole decision rolls back behind the
+            // refusal.
+            return Err(CommitError::RevisionMismatch);
+        }
         transaction
             .insert_history(appointment_id, next_revision, "rescheduled", commitment.now,
                 commitment.actor,
@@ -1334,10 +1462,21 @@ impl PostgresStore {
                 return Err(CommitError::CutoffPassed);
             }
         }
+        self.recheck_grant(&commitment)?;
         let next_revision = appointment.revision + 1;
-        transaction
-            .close_claim(appointment_id, ClaimState::Cancelled, reason, next_revision)
-            .await?;
+        if !transaction
+            .close_claim(
+                appointment_id,
+                ClaimState::Cancelled,
+                reason,
+                appointment.revision,
+            )
+            .await?
+        {
+            // A concurrent lifecycle writer closed or moved the appointment
+            // first; nothing this transaction decided stands.
+            return Err(CommitError::RevisionMismatch);
+        }
         transaction
             .insert_history(
                 appointment_id,
@@ -1425,16 +1564,29 @@ impl PostgresStore {
         Ok(rows.len() as u64)
     }
 
-    /// Claim due outbox intents for dispatch, marking their attempt. An
-    /// intent is due when its own time has come and the back-off a failed
-    /// attempt wrote has passed: without the second half a failing intent
-    /// would be re-claimed on every tick and burn its attempts ceiling in
-    /// seconds.
+    /// Claim due outbox intents for dispatch, marking the attempt and
+    /// holding each intent for the lease a dispatch pass needs. An intent
+    /// is due when its own time has come and the back-off a failed attempt
+    /// wrote has passed: without the second half a failing intent would be
+    /// re-claimed on every tick and burn its attempts ceiling in seconds.
+    ///
+    /// The claim is a durable reservation. `next_attempt_at` moves to the
+    /// end of the lease, so a second dispatcher, or the same one after a
+    /// crash, cannot claim the intent again until the lease passes; the
+    /// outcome writes that follow are fenced by the attempt number this
+    /// claim stamped, so only the attempt that owns the intent can settle
+    /// it. The lease must therefore cover a whole claimed batch's worst
+    /// case, and a dispatcher that dies delays its intents by exactly one
+    /// lease.
     pub async fn claim_due_intents(
         &self,
         now: DateTime<Utc>,
         limit: i64,
+        lease: TimeDelta,
     ) -> Result<Vec<OutboxRow>, StoreError> {
+        let leased_until = now
+            .checked_add_signed(lease)
+            .ok_or(StoreError::Configuration)?;
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let rows = transaction
@@ -1445,8 +1597,8 @@ impl PostgresStore {
                      WHERE delivery_state='pending' AND due_at <= $1 \
                      AND next_attempt_at <= $1 \
                      ORDER BY due_at LIMIT $2 FOR UPDATE SKIP LOCKED) \
-                 RETURNING outbox_id, purpose, claim_id, appointment_revision, due_at, attempts, payload",
-                &[&now, &limit, &now],
+                     RETURNING outbox_id, purpose, claim_id, appointment_revision, due_at, attempts, payload",
+                &[&now, &limit, &leased_until],
             )
             .await?;
         transaction.commit().await?;
@@ -1462,6 +1614,31 @@ impl PostgresStore {
                 payload: row.get(6),
             })
             .collect())
+    }
+
+    /// Whether the attempt that claimed an intent still owns a dispatch it
+    /// should carry out: the row must still be pending at that attempt, and
+    /// a reminder must still describe its appointment's current revision.
+    /// A cancellation or reschedule suppresses the row, and a superseding
+    /// attempt means this one no longer speaks for the intent; either way
+    /// the send is skipped.
+    pub async fn intent_still_dispatchable(
+        &self,
+        outbox_id: Uuid,
+        attempts: i32,
+    ) -> Result<bool, StoreError> {
+        let client = self.client().await?;
+        let row = client
+            .query_opt(
+                "SELECT 1 FROM scheduling_outbox AS o \
+                 JOIN scheduling_claims AS c ON c.claim_id = o.claim_id \
+                 WHERE o.outbox_id=$1 AND o.attempts=$2 AND o.delivery_state='pending' \
+                   AND (o.purpose <> 'reminder' \
+                        OR (c.state='active' AND c.revision = o.appointment_revision))",
+                &[&outbox_id, &attempts],
+            )
+            .await?;
+        Ok(row.is_some())
     }
 
     /// The intents nothing will deliver without an operator, oldest first.
@@ -1501,53 +1678,70 @@ impl PostgresStore {
             .collect())
     }
 
-    /// Mark one intent delivered.
-    pub async fn mark_intent_delivered(&self, outbox_id: Uuid) -> Result<(), StoreError> {
+    /// Mark one intent delivered, for the attempt that delivered it.
+    ///
+    /// `false` means the write changed nothing: the intent was suppressed
+    /// or a superseding attempt took it over while this one was in flight.
+    /// The caller reports that outcome explicitly, because a send whose
+    /// acknowledgement is lost is a delivery the accounting must still talk
+    /// about, not a silence.
+    pub async fn mark_intent_delivered(
+        &self,
+        outbox_id: Uuid,
+        attempts: i32,
+    ) -> Result<bool, StoreError> {
         let client = self.client().await?;
-        client
+        let delivered = client
             .execute(
-                "UPDATE scheduling_outbox SET delivery_state='delivered', delivered_at=now() \
-                 WHERE outbox_id=$1",
-                &[&outbox_id],
+                "UPDATE scheduling_outbox SET delivery_state='delivered', delivered_at=now(), \
+                 next_attempt_at=now() \
+                 WHERE outbox_id=$1 AND attempts=$2 AND delivery_state='pending'",
+                &[&outbox_id, &attempts],
             )
             .await?;
-        Ok(())
+        Ok(delivered == 1)
     }
 
     /// Schedule one intent's retry, or fail it once its attempts reach the
-    /// ceiling.
+    /// ceiling, for the attempt that owns it.
     pub async fn retry_intent(
         &self,
         outbox_id: Uuid,
         next_attempt_at: DateTime<Utc>,
         attempts_ceiling: i32,
-    ) -> Result<(), StoreError> {
+        attempts: i32,
+    ) -> Result<bool, StoreError> {
         let client = self.client().await?;
-        client
+        let written = client
             .execute(
                 "UPDATE scheduling_outbox \
                  SET delivery_state = CASE WHEN attempts >= $3 THEN 'failed' ELSE 'pending' END, \
                      next_attempt_at = CASE WHEN attempts >= $3 THEN now() ELSE $2 END \
-                 WHERE outbox_id=$1",
-                &[&outbox_id, &next_attempt_at, &attempts_ceiling],
+                 WHERE outbox_id=$1 AND attempts=$4 AND delivery_state='pending'",
+                &[&outbox_id, &next_attempt_at, &attempts_ceiling, &attempts],
             )
             .await?;
-        Ok(())
+        Ok(written == 1)
     }
 
-    /// Hold one intent locally: the deployment has no destination
-    /// configured, so the intent stays recorded instead of pretending a
-    /// delivery happened. Nothing is delivered, so no delivery instant is
-    /// stamped either.
-    pub async fn hold_intent_local(&self, outbox_id: Uuid) -> Result<(), StoreError> {
+    /// Hold one intent locally, for the attempt that claimed it: the
+    /// deployment has no destination configured, so the intent stays
+    /// recorded instead of pretending a delivery happened. Nothing is
+    /// delivered, so no delivery instant is stamped either.
+    pub async fn hold_intent_local(
+        &self,
+        outbox_id: Uuid,
+        attempts: i32,
+    ) -> Result<bool, StoreError> {
         let client = self.client().await?;
-        client
+        let held = client
             .execute(
-                "UPDATE scheduling_outbox SET delivery_state='local' WHERE outbox_id=$1",
-                &[&outbox_id],
+                "UPDATE scheduling_outbox SET delivery_state='local', next_attempt_at=now() \
+                 WHERE outbox_id=$1 AND attempts=$2 AND delivery_state='pending'",
+                &[&outbox_id, &attempts],
             )
             .await?;
-        Ok(())
+        Ok(held == 1)
     }
 
     /// Erase cursors whose fifteen minutes have passed.
@@ -1635,9 +1829,14 @@ impl PostgresStore {
 
     /// The pending audit journal, oldest first.
     ///
-    /// The order is the one the rows were written in, not the one their
-    /// identifiers sort in: the publisher appends what this returns to a hash
-    /// chain, so the order it reads in is the order the chain attests to.
+    /// The chain the publisher extends attests to *publication order*: the
+    /// order in which rows became visible and were appended, with each
+    /// batch internally ordered by the recorded sequence. The sequence is
+    /// allocated when a row is written, not when its transaction commits, so
+    /// two concurrent transactions can become visible in the opposite order
+    /// from their sequence numbers; the chain does not claim
+    /// insertion-sequence order, and a verifier of the chain verifies what
+    /// the deployment published, in the order it published it.
     pub async fn pending_audit(&self, limit: i64) -> Result<Vec<(Uuid, Value)>, StoreError> {
         let client = self.client().await?;
         Ok(client
@@ -1808,12 +2007,20 @@ async fn lock_and_snapshot(
     }
 }
 
-/// The task-grant re-check, inside the transaction: the grant's own expiry
-/// is the one fact that can change between the service's authorization
-/// decision and the commit, so it is checked against the commitment's now.
+/// The task-grant re-check at the door of the transaction: a request whose
+/// grant already lapsed fails before any lock is taken.
 fn check_grant_current(commitment: &Commitment<'_>) -> Result<(), CommitError> {
+    check_grant_current_at(commitment, commitment.now)
+}
+
+/// The same expiry rule against an explicitly supplied observation of now,
+/// which is how the store re-checks it at decision time.
+fn check_grant_current_at(
+    commitment: &Commitment<'_>,
+    now: DateTime<Utc>,
+) -> Result<(), CommitError> {
     match commitment.grant_exp_unix {
-        Some(exp) if commitment.now.timestamp() < i64::try_from(exp).unwrap_or(i64::MAX) => Ok(()),
+        Some(exp) if now.timestamp() < i64::try_from(exp).unwrap_or(i64::MAX) => Ok(()),
         Some(_) => Err(CommitError::Unauthorized),
         // A mutating commitment without a grant never reaches the store: the
         // service refuses it before the transaction opens.
@@ -1891,26 +2098,36 @@ fn hold_ledger_claim(hold: &ClaimRow) -> LedgerClaim {
     }
 }
 
-/// The policy revision the deployment is published under, read inside the
-/// commitment's own transaction. A commitment is admitted against the stored
-/// revision, never against one cached when the process started: operator
-/// tooling and a rolling deploy both move it under a running process, and a
-/// claim written under the cached number would name a policy that no longer
-/// stands.
+/// The revision guards, read under the transaction after the supply anchor
+/// it holds is locked.
 ///
-/// The share lock holds it still for the life of the transaction, so a
-/// policy published concurrently waits behind the commitments already in
-/// flight instead of moving under them.
-async fn current_policy_revision(
+/// A commitment may only land under the policy revision this process
+/// actually evaluated and the records revision the request actually
+/// resolved. The stored revisions are the deployment's current truth: a
+/// policy published by another process, or a records swap another operator
+/// wrote, makes the caller's whole evaluation stale, and the commitment is
+/// refused rather than stamped with a revision whose rules it never saw.
+/// The share lock holds both revisions still for the life of the
+/// transaction, so they cannot move again between the guard and the commit.
+async fn guard_revisions(
     transaction: &deadpool_postgres::Transaction<'_>,
-) -> Result<i64, StoreError> {
+    commitment: &Commitment<'_>,
+) -> Result<(), CommitError> {
     let row = transaction
         .query_one(
-            "SELECT policy_revision FROM scheduling_meta WHERE singleton FOR SHARE",
+            "SELECT policy_revision, facts_revision FROM scheduling_meta WHERE singleton FOR SHARE",
             &[],
         )
         .await?;
-    Ok(row.get(0))
+    let current_policy: i64 = row.get(0);
+    let current_facts: i64 = row.get(1);
+    if current_policy != commitment.policy_revision {
+        return Err(AdmissionRefusal::PolicyChanged.into());
+    }
+    if current_facts != commitment.facts_revision {
+        return Err(CommitError::FactsStale);
+    }
+    Ok(())
 }
 
 /// Replay a stored attempt: the same key with a different payload is
@@ -2101,6 +2318,17 @@ pub(crate) async fn replace_facts_in_transaction(
             )
             .await?;
     }
+    // The records revision moves last, inside the same transaction that
+    // holds every supply anchor: a capacity transaction that acquires its
+    // anchor after this commit reads the new revision and refuses to
+    // evaluate against the resolved-before facts it carried in.
+    transaction
+        .execute(
+            "UPDATE scheduling_meta SET facts_revision = facts_revision + 1, \
+             updated_at=now() WHERE singleton",
+            &[],
+        )
+        .await?;
     transaction
         .execute(
             "INSERT INTO scheduling_audit_outbox(event_id, audit_record) VALUES($1,$2)",
@@ -2188,9 +2416,16 @@ trait CapacityStatements {
         claim_id: Uuid,
         state: ClaimState,
         reason: Option<&str>,
-        next_revision: i64,
-    ) -> Result<(), StoreError>;
-    async fn move_claim(&self, movement: &ClaimMove<'_>) -> Result<(), StoreError>;
+        observed_revision: i64,
+    ) -> Result<bool, StoreError>;
+    /// Move an active booking to a new time or resource under the revision
+    /// the mover observed. `false` means a concurrent writer changed the
+    /// claim first and this transaction's whole decision is superseded.
+    async fn move_claim(
+        &self,
+        movement: &ClaimMove<'_>,
+        observed_revision: i64,
+    ) -> Result<bool, StoreError>;
     async fn insert_history(
         &self,
         claim_id: Uuid,
@@ -2310,40 +2545,52 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         })
     }
 
+    /// Close the claim under the revision its caller observed. The
+    /// predicate, not an earlier read, decides: a concurrent lifecycle
+    /// writer that already moved the claim makes this affect zero rows, and
+    /// the caller rolls its whole transaction back behind the conflict.
     async fn close_claim(
         &self,
         claim_id: Uuid,
         state: ClaimState,
         reason: Option<&str>,
-        next_revision: i64,
-    ) -> Result<(), StoreError> {
-        self.execute(
-            "UPDATE scheduling_claims SET state=$2, reason=$3, revision=$4, \
-             closed_at=now(), changed_at=now() WHERE claim_id=$1",
-            &[&claim_id, &state.as_str(), &reason, &next_revision],
-        )
-        .await?;
-        Ok(())
+        observed_revision: i64,
+    ) -> Result<bool, StoreError> {
+        let closed = self
+            .execute(
+                "UPDATE scheduling_claims SET state=$2, reason=$3, \
+                 revision=$4 + 1, closed_at=now(), changed_at=now() \
+                 WHERE claim_id=$1 AND state='active' AND revision=$4",
+                &[&claim_id, &state.as_str(), &reason, &observed_revision],
+            )
+            .await?;
+        Ok(closed == 1)
     }
 
-    async fn move_claim(&self, movement: &ClaimMove<'_>) -> Result<(), StoreError> {
-        self.execute(
-            "UPDATE scheduling_claims SET supply_id=$2, displayed_start=$3, displayed_end=$4, \
-             occupied_start=$5, occupied_end=$6, policy_revision=$7, revision=$8, \
-             changed_at=now() WHERE claim_id=$1",
-            &[
-                &movement.claim_id,
-                &movement.supply_id,
-                &movement.displayed_start,
-                &movement.displayed_end,
-                &movement.occupied_start,
-                &movement.occupied_end,
-                &movement.policy_revision,
-                &movement.next_revision,
-            ],
-        )
-        .await?;
-        Ok(())
+    async fn move_claim(
+        &self,
+        movement: &ClaimMove<'_>,
+        observed_revision: i64,
+    ) -> Result<bool, StoreError> {
+        let moved = self
+            .execute(
+                "UPDATE scheduling_claims SET supply_id=$2, displayed_start=$3, displayed_end=$4, \
+                 occupied_start=$5, occupied_end=$6, policy_revision=$7, revision=$8, \
+                 changed_at=now() WHERE claim_id=$1 AND state='active' AND revision=$9",
+                &[
+                    &movement.claim_id,
+                    &movement.supply_id,
+                    &movement.displayed_start,
+                    &movement.displayed_end,
+                    &movement.occupied_start,
+                    &movement.occupied_end,
+                    &movement.policy_revision,
+                    &movement.next_revision,
+                    &observed_revision,
+                ],
+            )
+            .await?;
+        Ok(moved == 1)
     }
 
     async fn insert_history(
@@ -2398,8 +2645,11 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
     }
 
     async fn suppress_pending_reminders(&self, claim_id: Uuid) -> Result<(), StoreError> {
+        // Suppression marks rather than deletes: the row keeps accounting
+        // for the intent, and a dispatch already in flight reports its
+        // outcome as lost to suppression instead of vanishing.
         self.execute(
-            "DELETE FROM scheduling_outbox \
+            "UPDATE scheduling_outbox SET delivery_state='suppressed' \
              WHERE claim_id=$1 AND purpose='reminder' AND delivery_state='pending'",
             &[&claim_id],
         )

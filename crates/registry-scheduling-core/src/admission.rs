@@ -229,14 +229,15 @@ pub fn evaluate_exact_time_admission(
     // starts at fixed increments from the opening's start. A zero increment
     // publishes no grid at all, so every start is off it; the check refuses
     // zero, and the evaluator still refuses to divide by it rather than trust
-    // its caller.
-    let offset = request
-        .start
-        .signed_duration_since(covering.start)
-        .num_minutes();
-    let grid = u64::from(exact.start_increment_minutes);
-    let on_grid =
-        offset >= 0 && grid != 0 && u64::try_from(offset).is_ok_and(|minutes| minutes % grid == 0);
+    // its caller. Alignment is exact: a start inside the minute after a grid
+    // point, whatever seconds it carries, is off the grid availability
+    // publishes.
+    let offset = request.start.signed_duration_since(covering.start);
+    let grid_seconds = i64::from(exact.start_increment_minutes) * 60;
+    let on_grid = offset >= Duration::zero()
+        && grid_seconds != 0
+        && offset.subsec_nanos() == 0
+        && offset.num_seconds() % grid_seconds == 0;
     if !on_grid {
         return Err(AdmissionRefusal::ScheduleUnpublished);
     }
@@ -258,12 +259,7 @@ pub fn evaluate_exact_time_admission(
 
     let capable: Vec<&PoolMember> = members
         .iter()
-        .filter(|member| {
-            offering
-                .requires_capabilities
-                .iter()
-                .all(|wanted| member.capabilities.iter().any(|held| held == wanted))
-        })
+        .filter(|member| member.serves(&offering.requires_capabilities))
         .collect();
     if capable.is_empty() {
         return Err(AdmissionRefusal::CapabilityUnmatched);
@@ -832,6 +828,35 @@ mod tests {
                 .map(|refusal| refusal.public_code()),
             Some(ProblemCode::ScheduleUnpublished)
         );
+    }
+
+    /// Grid alignment is exact, not minute-truncated: a start inside the
+    /// minute after a grid point is off the grid availability publishes,
+    /// whatever seconds it carries.
+    #[test]
+    fn a_start_inside_the_minute_after_a_grid_point_is_off_the_grid() {
+        let (offering, exact) = exact_offering();
+        let snapshot = LedgerSnapshot::default();
+        let now = utc(4, 4, 0);
+        let context = exact_context(&offering, &exact, members(), &snapshot, now);
+        let grid_point = utc(5, 2, 30);
+        assert!(
+            evaluate_exact_time_admission(&context, &exact_request(grid_point), None).is_ok(),
+            "the grid point itself admits"
+        );
+        for off_grid in [
+            grid_point + Duration::seconds(45),
+            grid_point + Duration::milliseconds(500),
+            grid_point + Duration::minutes(29) + Duration::seconds(59),
+        ] {
+            assert_eq!(
+                evaluate_exact_time_admission(&context, &exact_request(off_grid), None)
+                    .err()
+                    .map(|refusal| refusal.public_code()),
+                Some(ProblemCode::ScheduleUnpublished),
+                "a start off the grid by less than a minute is still off it: {off_grid}"
+            );
+        }
     }
 
     /// Self-overlap: a reschedule onto its own current slot succeeds, because

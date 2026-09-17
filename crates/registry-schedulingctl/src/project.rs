@@ -125,9 +125,18 @@ pub(super) fn test(project: &Path) -> Result<Value> {
         }));
     }
     let fixture_dir = project.join(FIXTURES_DIRECTORY);
+    // An entry the directory cannot hand over is a filesystem failure, not a
+    // fixture that does not exist: swallowing it here would report a partial
+    // replay as a complete, passing one.
     let mut paths = fs::read_dir(&fixture_dir)
         .context("reading fixtures directory")?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .map(|entry| {
+            entry
+                .context("reading a fixtures directory entry")
+                .map(|entry| entry.path())
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
         .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("yaml"))
         .collect::<Vec<_>>();
     paths.sort();

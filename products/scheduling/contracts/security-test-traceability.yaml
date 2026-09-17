@@ -20,6 +20,7 @@ entries:
       - {path: crates/registry-scheduling/src/runtime.rs, name: the_offering_anchors_are_collected_without_duplicates}
   - id: SCHEDULING-SEC-03
     tests:
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_grant_that_lapses_before_the_commit_never_books}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: the_edge_refuses_unauthenticated_callers_and_unauthorized_mutations}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: expiry_uses_earlier_token_or_grant_deadline_and_refuses_exact_deadline}
   - id: SCHEDULING-SEC-04
@@ -68,6 +69,9 @@ entries:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: policy_change_outranks_a_window_revision_mismatch}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: window_revisions_must_match_and_policy_change_wins}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_moves_under_the_observed_revision_and_refuses_stale_ones}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_stale_process_refuses_even_a_request_under_the_current_revision}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: competing_cancellations_commit_exactly_one_transition}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_reschedule_and_a_cancellation_commit_exactly_one_transition}
   - id: SCHEDULING-SEC-11
     tests:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}

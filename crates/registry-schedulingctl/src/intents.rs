@@ -7,7 +7,9 @@
 //! intent failed. Both are recorded in the outbox and then waited on by
 //! nobody, so this is the read path an operator has without one: it lists
 //! what the sweep has stopped carrying, oldest due first, in the store's own
-//! terms.
+//! terms. A reminder suppressed by a cancellation or a reschedule is not
+//! listed: nobody was ever meant to deliver it, and the row is retained as
+//! accounting rather than as work.
 
 use std::fs;
 use std::path::Path;

@@ -183,7 +183,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         .expect("the environment secret provider configures");
     let store = PostgresStore::connect_runtime(&config.database, &resolver).unwrap();
 
-    let facts = store.facts().await.unwrap();
+    let (facts, _) = store.facts().await.unwrap();
     assert_eq!(facts.locations.len(), 1);
     assert_eq!(facts.locations[0].id, "bangkok-counter");
     assert_eq!(facts.locations[0].timezone, "Asia/Bangkok");
@@ -216,7 +216,7 @@ async fn records_apply_replaces_facts_wholesale_and_audits_each_write() {
         report["applied"],
         json!({"locations": 2, "pools": 1, "members": 1, "exceptions": 0})
     );
-    let facts = store.facts().await.unwrap();
+    let (facts, _) = store.facts().await.unwrap();
     assert_eq!(facts.locations.len(), 2);
     let retired_station = facts
         .pools
