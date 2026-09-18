@@ -60,7 +60,8 @@ Changing the blocklist is a boundary decision: record it in this file.
   `products/breg/HISTORY.md`, `products/breg/SPATIAL-QUERIES.md`,
   `products/breg/EVENTS-AND-WEBHOOKS.md`, `products/breg/metadata.md`,
   `products/breg/immediate-actions.md`, `products/breg/registry-extensibility.md`,
-  `products/breg/native-patterns.md`, and `products/breg/membership-access.md`.
+  `products/breg/native-patterns.md`, `products/breg/membership-access.md`,
+  and `products/breg/wasm-action-handlers.md`.
 - Local loops: `products/breg/DEV.md` for the native `bregctl dev` lifecycle,
   `products/breg/quickstart/` for the scripted first hour, and
   `products/breg/starters/` for the resumable starter journeys `bregctl
