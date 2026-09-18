@@ -225,6 +225,7 @@ runtime = [
     "dep:registry-platform-buildinfo",
     "dep:registry-platform-config",
     "dep:registry-platform-crypto",
+    "dep:registry-platform-hooks",
     "dep:registry-platform-httpsec",
     "dep:registry-platform-httputil",
     "dep:registry-platform-oidc",
@@ -266,6 +267,7 @@ registry-platform-authcommon = { workspace = true, optional = true }
 registry-platform-buildinfo = { workspace = true, optional = true }
 registry-platform-config = { workspace = true, optional = true }
 registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-hooks = { workspace = true, features = ["postgres"], optional = true }
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }

@@ -27,9 +27,13 @@
 //!   a handler whose answer is empty; re-expressing it that way is a refactor
 //!   for after the library exists.
 //!
-//! No storage, no delivery worker, and no executor live here.
+//! The delivery schema (the three delivery/outbox tables' DDL) lives here
+//! behind the `postgres` feature. No delivery worker and no executor live
+//! here.
 
 mod declaration;
+#[cfg(feature = "postgres")]
+pub mod delivery_schema;
 mod envelope;
 mod error;
 mod message;

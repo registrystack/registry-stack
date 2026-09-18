@@ -12,9 +12,14 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = ["postgres"]
+postgres = ["dep:tokio-postgres"]
+
 [dependencies]
 registry-platform-canonical-json.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 time = { workspace = true, features = ["serde-well-known"] }
+tokio-postgres = { workspace = true, optional = true }
