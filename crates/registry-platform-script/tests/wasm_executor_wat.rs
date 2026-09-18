@@ -235,16 +235,16 @@ fn ticker_stop_joins_and_double_stop_is_harmless() {
 #[test]
 fn huge_initial_memory_is_denied() {
     for backend in backends() {
-        // 600 pages = 39 MiB > the 32 MiB guest-memory ceiling; the limiter is
-        // attached before instantiation, so creation itself fails.
+        // 600 pages = 39 MiB > the 32 MiB guest-memory ceiling; the declared
+        // minimum alone violates the budget, so prepare refuses the module
+        // before any call is opened.
         let wat = guest_wat("(i32.const 0)", "(i32.const 0)").replacen(
             "(memory (export \"memory\") 1)",
             "(memory (export \"memory\") 600)",
             1,
         );
         let exec = executor(backend);
-        let prepared = exec.prepare(wat.as_bytes()).expect("exports are valid");
-        match err_of(exec.invoke(&prepared, b"x")) {
+        match err_of(exec.prepare(wat.as_bytes())) {
             InvokeError::MemoryLimitExceeded { requested, max } => {
                 assert_eq!(requested, 600 * 64 * 1024);
                 assert_eq!(max, 32 * MIB);
@@ -252,6 +252,24 @@ fn huge_initial_memory_is_denied() {
             err => panic!("wrong error: {err}"),
         }
     }
+}
+
+#[test]
+fn declared_memory_minimum_at_the_ceiling_is_allowed() {
+    // 512 pages = exactly 32 MiB: the ceiling is inclusive, so a module
+    // declaring the full budget still prepares and runs.
+    let wat = guest_wat(ECHO_HANDLE, ECHO_LEN).replacen(
+        "(memory (export \"memory\") 1)",
+        "(memory (export \"memory\") 512)",
+        1,
+    );
+    let exec = executor(Backend::Native);
+    let prepared = exec
+        .prepare(wat.as_bytes())
+        .expect("a minimum at the ceiling is within the budget");
+    let ok = exec.invoke(&prepared, b"x").expect("echo");
+    assert_eq!(ok.output, b"x");
+    assert_eq!(ok.stats.memory_bytes, 32 * MIB as u64);
 }
 
 #[test]
