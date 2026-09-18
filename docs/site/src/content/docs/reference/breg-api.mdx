@@ -674,7 +674,7 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 }
 ```
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, reload_and_send();
+{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, reload_and_send();
     crates/registry-breg/src/artifacts.rs, event_data_schema_binding();
     crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
     crates/registry-breg/src/outbox.rs, insert_configured_events();
@@ -744,7 +744,8 @@ event identity, `ce-source` plus `ce-id`, or on a business key.
 An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
 and an expired payload cannot be replayed.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, claim(), finalize(), replay(), webhook_idempotency_key(), verify_retained_bindings(), WebhookDeliveryService, and WebhookDeliveryStatusKind;
+{/* Evidence: crates/registry-breg/src/webhook.rs, claim(), finalize(), replay(), verify_retained_bindings(), WebhookDeliveryService, and WebhookDeliveryStatusKind;
+    crates/registry-platform-hooks/src/delivery/service.rs, delivery_idempotency_key();
     crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
     crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();
     crates/registry-breg/src/event_destination.rs, EventDestinationDeliveryCeilings;

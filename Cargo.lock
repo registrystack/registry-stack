@@ -4786,6 +4786,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "registry-breg"
 version = "0.32.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chacha20poly1305",
@@ -5674,12 +5675,18 @@ dependencies = [
 name = "registry-platform-hooks"
 version = "0.32.0"
 dependencies = [
+ "async-trait",
+ "hex",
  "registry-platform-canonical-json",
+ "registry-platform-httputil",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "time",
+ "tokio",
  "tokio-postgres",
+ "uuid",
 ]
 
 [[package]]

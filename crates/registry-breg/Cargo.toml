@@ -208,6 +208,7 @@ workspace = true
 [features]
 default = []
 runtime = [
+    "dep:async-trait",
     "dep:axum",
     "dep:base64",
     "dep:clap",
@@ -248,6 +249,7 @@ wasm = ["registry-platform-script/wasm"]
 chrono.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
+async-trait = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true, optional = true }

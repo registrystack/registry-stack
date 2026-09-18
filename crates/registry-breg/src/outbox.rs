@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::delivery::DeliveryCapture;
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
@@ -17,6 +17,7 @@ use crate::contract::{
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::{CompiledEventDelivery, CompiledWebhookDeliveryMode};
+use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum OutboxError {
@@ -231,6 +232,8 @@ pub(crate) struct WebhookCapture<'a> {
     pub schema_fingerprint: &'a str,
 }
 
+/// Capture one webhook delivery through the platform delivery INSERT, under
+/// Base Registry Engine's schema and stored vocabulary.
 pub(crate) async fn insert_webhook_delivery(
     transaction: &Transaction<'_>,
     event_id: Uuid,
@@ -251,66 +254,38 @@ pub(crate) async fn insert_webhook_delivery(
         .copied()
         .map(i64::from)
         .collect::<Vec<_>>();
-    let payload_digest = Sha256::digest(payload).to_vec();
     let deployed_attempt_timeout_ms = i64::try_from(deployed_attempt_timeout.as_millis())
         .map_err(|_| OutboxError::Unavailable)?;
-    let changed = transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_webhook_deliveries
-                 (event_id, compiled_delivery_id, logical_destination_id,
-                  destination_binding_digest, package_revision, schema_fingerprint,
-                  data_schema,
-                  classification_ceiling, authentication_profile, delivery_mode,
-                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
-                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
-                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
-                  deployed_maximum_attempts, dead_letter, operator_replay)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                     $11, $12, $13, $14, $15, $16, $17, $18, $19,
-                     $20, $21, $22)",
-            &[
-                &event_id,
-                &delivery.id,
-                &delivery.destination_id,
-                &destination_binding_digest,
-                &package_revision,
-                &schema_fingerprint,
-                &delivery.data_schema,
-                &classification_name(delivery.classification_ceiling),
-                &authentication_profile_name(delivery.authentication_profile),
-                &delivery_mode_name(delivery.delivery_mode),
-                &i64::from(delivery.attempt_timeout_ms),
-                &i64::from(delivery.initial_backoff_ms),
-                &i64::from(delivery.maximum_backoff_ms),
-                &i16::from(delivery.exponential_backoff_multiplier),
-                &i16::from(delivery.maximum_attempts),
-                &retry_delays_ms,
-                &i64::from(delivery.maximum_payload_bytes),
-                &payload_digest,
-                &deployed_attempt_timeout_ms,
-                &i16::from(deployed_maximum_attempts),
-                &dead_letter_name(delivery.dead_letter),
-                &delivery.operator_replay,
-            ],
-        )
-        .await
-        .map_err(|_| OutboxError::Unavailable)?;
-    if changed != 1 {
-        return Err(OutboxError::Unavailable);
-    }
-    let changed = transaction
-        .execute(
-            "INSERT INTO registry_internal.registry_webhook_delivery_state
-                 (event_id, compiled_delivery_id, generation, state, attempt, next_attempt_at)
-             VALUES ($1, $2, 1, 'pending', 0, transaction_timestamp())",
-            &[&event_id, &delivery.id],
-        )
-        .await
-        .map_err(|_| OutboxError::Unavailable)?;
-    if changed != 1 {
-        return Err(OutboxError::Unavailable);
-    }
-    Ok(())
+    registry_platform_hooks::delivery::insert_delivery(
+        transaction,
+        DELIVERY_SCHEMA,
+        event_id,
+        DeliveryCapture {
+            compiled_delivery_id: &delivery.id,
+            logical_destination_id: &delivery.destination_id,
+            destination_binding_digest,
+            package_revision,
+            schema_fingerprint,
+            data_schema: &delivery.data_schema,
+            classification_ceiling: classification_name(delivery.classification_ceiling),
+            authentication_profile: authentication_profile_name(delivery.authentication_profile),
+            delivery_mode: delivery_mode_name(delivery.delivery_mode),
+            attempt_timeout_ms: i64::from(delivery.attempt_timeout_ms),
+            initial_backoff_ms: i64::from(delivery.initial_backoff_ms),
+            maximum_backoff_ms: i64::from(delivery.maximum_backoff_ms),
+            exponential_backoff_multiplier: i16::from(delivery.exponential_backoff_multiplier),
+            maximum_attempts: i16::from(delivery.maximum_attempts),
+            retry_delays_ms: &retry_delays_ms,
+            maximum_payload_bytes: i64::from(delivery.maximum_payload_bytes),
+            payload,
+            deployed_attempt_timeout_ms,
+            deployed_maximum_attempts: i16::from(deployed_maximum_attempts),
+            dead_letter: dead_letter_name(delivery.dead_letter),
+            operator_replay: delivery.operator_replay,
+        },
+    )
+    .await
+    .map_err(|_| OutboxError::Unavailable)
 }
 
 fn classification_name(classification: Classification) -> &'static str {

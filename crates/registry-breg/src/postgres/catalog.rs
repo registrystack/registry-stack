@@ -34,6 +34,22 @@ const TABLE_OWNER_PRIVILEGES: &[&str] = &[
 ];
 const SEQUENCE_OWNER_PRIVILEGES: &[&str] = &["SELECT", "UPDATE", "USAGE"];
 const FUNCTION_OWNER_PRIVILEGES: &[&str] = &["EXECUTE"];
+// The delivery objects belong to the platform delivery schema, so their
+// names come from there. A unit test below holds this list against the
+// library's own, and the runtime privileges on each stay Base Registry
+// Engine's decision.
+const DELIVERY_TABLE_PRIVILEGES: &[(&str, &[&str])] = &[
+    ("registry_internal.registry_outbox", &["INSERT", "SELECT"]),
+    (
+        "registry_internal.registry_webhook_deliveries",
+        &["INSERT", "SELECT"],
+    ),
+    (
+        "registry_internal.registry_webhook_delivery_state",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+];
+const DELIVERY_SEQUENCE: &str = "registry_internal.registry_outbox_outbox_id_seq";
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 enum ManagedObjectKind {
@@ -135,22 +151,10 @@ impl ExpectedManagedCatalog {
             catalog.grant_schema_spatial_bbox("registry_data");
             catalog.grant_schema_spatial_bbox("registry_context");
         }
-        for (name, privileges) in [
+        for (name, privileges) in DELIVERY_TABLE_PRIVILEGES.iter().copied().chain([
             (
                 "registry_internal.registry_revisions",
                 &["INSERT", "SELECT"][..],
-            ),
-            (
-                "registry_internal.registry_outbox",
-                &["INSERT", "SELECT"][..],
-            ),
-            (
-                "registry_internal.registry_webhook_deliveries",
-                &["INSERT", "SELECT"][..],
-            ),
-            (
-                "registry_internal.registry_webhook_delivery_state",
-                &["INSERT", "SELECT", "UPDATE"][..],
             ),
             (
                 "registry_internal.registry_audit",
@@ -188,7 +192,7 @@ impl ExpectedManagedCatalog {
                 "registry_internal.registry_history_schemas",
                 &["SELECT"][..],
             ),
-        ] {
+        ]) {
             catalog.table(
                 name,
                 privileges.iter().copied(),
@@ -222,10 +226,7 @@ impl ExpectedManagedCatalog {
             "runtime",
             "UPDATE",
         );
-        catalog.sequence(
-            "registry_internal.registry_outbox_outbox_id_seq",
-            ["SELECT", "USAGE"],
-        );
+        catalog.sequence(DELIVERY_SEQUENCE, ["SELECT", "USAGE"]);
         for (table, privileges) in crate::request_store::REQUEST_TABLES {
             catalog.table(
                 &format!("registry_internal.{table}"),
@@ -1631,4 +1632,26 @@ fn hash_text(hasher: &mut Sha256, value: &str) {
 
 fn hash_bool(hasher: &mut Sha256, value: bool) {
     hasher.update([u8::from(value)]);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_inventory_names_every_platform_delivery_object() {
+        let inventoried: Vec<&str> = DELIVERY_TABLE_PRIVILEGES
+            .iter()
+            .map(|(name, _)| *name)
+            .chain([DELIVERY_SEQUENCE])
+            .collect();
+        for object in
+            registry_platform_hooks::delivery_schema::object_names(crate::webhook::DELIVERY_SCHEMA)
+        {
+            assert!(
+                inventoried.contains(&object.as_str()),
+                "the managed catalog does not inventory the delivery object {object}"
+            );
+        }
+    }
 }
