@@ -9,11 +9,12 @@ use registry_casework::{
 use registry_casework_core::{
     AccessProfile, ActorContext, BootstrapDirectoryRequest, CaseworkIdentity, CaseworkProject,
     CaseworkRole, HostedCancelRequest, HostedCreateRequest, HostedDecisionRequest,
-    HostedKindPolicy, HostedNoteRequest, HostedOutcomePolicy, HostedRetentionPolicy, InboxPolicy,
-    InboxView, IssuerPrincipal, OccurrenceState, QueuePolicy,
+    HostedKindPolicy, HostedNoteRequest, HostedOutcomePolicy, HostedRetentionPolicy,
+    HostedValidationReason, InboxPolicy, InboxView, IssuerPrincipal, OccurrenceState, QueuePolicy,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
+use sha2::Digest;
 use tokio_postgres::NoTls;
 use uuid::Uuid;
 
@@ -1390,4 +1391,343 @@ async fn terminal_cursors_and_independent_retention_are_enforced_and_erased() {
     );
     let sensitive_rows: i64=fixture.database.query_one("SELECT count(*) FROM casework_hosted_items WHERE item_id=$1 AND (requester_issuer IS NOT NULL OR requester_reference IS NOT NULL OR display IS NOT NULL)",&[&created.item_id]).await.expect("inspect erased item").get(0);
     assert_eq!(sensitive_rows, 0);
+}
+
+fn accepted_result_constraints() -> serde_json::Value {
+    json!({
+        "batchStatus": {
+            "oneOf": [
+                {"const": "valid", "title": "All rows valid"},
+                {"const": "partial", "title": "Some rows rejected"}
+            ]
+        },
+        "acceptedCount": {"minimum": 0, "maximum": 412}
+    })
+}
+
+#[tokio::test]
+async fn results_flow_from_constraints_through_decision_to_accountability() {
+    let fixture = fixture().await;
+    let mut outcomes = default_outcomes();
+    outcomes[0].result_required = true;
+    let service = CaseworkService::new(
+        fixture.service.store().clone(),
+        project("1", outcomes),
+        Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
+    )
+    .expect("result-requiring service");
+    let mut request = create_request("batch-result");
+    request.result_constraints = Some(accepted_result_constraints());
+    let created = service
+        .hosted_create(&fixture.requester, &request, "create-result")
+        .await
+        .expect("create with accepted constraints");
+    assert_eq!(created.result_constraints, request.result_constraints);
+    let reread = service
+        .hosted_requester_item(&fixture.requester, created.item_id)
+        .await
+        .expect("requester re-read carries constraints");
+    assert_eq!(reread.result_constraints, request.result_constraints);
+
+    let open = service
+        .hosted_work_item(&fixture.staff, created.item_id)
+        .await
+        .expect("staff work item");
+    let hosted = open.hosted.as_ref().expect("hosted context");
+    assert!(hosted.result_schema.is_some());
+    assert_eq!(hosted.result_constraints, request.result_constraints);
+    assert!(hosted
+        .outcomes
+        .iter()
+        .any(|outcome| outcome.id == "confirmed" && outcome.result_required));
+
+    let claimed = service
+        .hosted_claim(
+            &fixture.staff,
+            created.item_id,
+            created.revision,
+            "claim-result",
+        )
+        .await
+        .expect("claim");
+    assert!(matches!(
+        service
+            .hosted_decide(
+                &fixture.staff,
+                created.item_id,
+                claimed.revision,
+                &HostedDecisionRequest {
+                    outcome: "confirmed".to_owned(),
+                    reason: None,
+                    result: None,
+                },
+                "decide-without-result",
+            )
+            .await,
+        Err(ServiceError::HostedValidation(error))
+            if error.reason == HostedValidationReason::ResultRequired
+                && error.path == "$.result"
+    ));
+    let result = json!({
+        "batchStatus": "partial",
+        "acceptedCount": 400,
+        "correctedReference": "REF-2"
+    });
+    let decided = service
+        .hosted_decide(
+            &fixture.staff,
+            created.item_id,
+            claimed.revision,
+            &HostedDecisionRequest {
+                outcome: "confirmed".to_owned(),
+                reason: Some("checked".to_owned()),
+                result: Some(result.clone()),
+            },
+            "decide-result",
+        )
+        .await
+        .expect("decide with a result inside the narrowing");
+    assert_eq!(decided.result, Some(result.clone()));
+
+    let terminal = service
+        .hosted_terminal_page(&fixture.requester, 10, HOSTED_TERMINAL_CURSOR_CONTEXT, None)
+        .await
+        .expect("terminal page");
+    let entry = terminal
+        .items
+        .iter()
+        .find(|item| item.event_id == decided.event_id)
+        .expect("terminal entry");
+    assert_eq!(entry.result, Some(result.clone()));
+
+    let accountability = service
+        .hosted_accountability_record(&fixture.supervisor, decided.event_id)
+        .await
+        .expect("accountability record");
+    let canonical =
+        registry_platform_canonical_json::canonicalize_json(&result).expect("canonical result");
+    let mut digest = String::from("sha256:");
+    for byte in sha2::Sha256::digest(canonical) {
+        use std::fmt::Write as _;
+        write!(&mut digest, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    assert_eq!(
+        accountability.result_digest.as_deref(),
+        Some(digest.as_str())
+    );
+
+    // A second item decides without a result where the outcome leaves it
+    // optional, and its accountability row carries no digest.
+    let optional = service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("batch-optional-result"),
+            "create-optional-result",
+        )
+        .await
+        .expect("create without constraints");
+    let claimed_optional = service
+        .hosted_claim(
+            &fixture.staff,
+            optional.item_id,
+            optional.revision,
+            "claim-optional-result",
+        )
+        .await
+        .expect("claim optional item");
+    let decided_optional = service
+        .hosted_decide(
+            &fixture.staff,
+            optional.item_id,
+            claimed_optional.revision,
+            &HostedDecisionRequest {
+                outcome: "rejected".to_owned(),
+                reason: Some("return it".to_owned()),
+                result: None,
+            },
+            "decide-optional-result",
+        )
+        .await
+        .expect("decide without a result");
+    assert_eq!(decided_optional.result, None);
+    let accountability_optional = service
+        .hosted_accountability_record(&fixture.supervisor, decided_optional.event_id)
+        .await
+        .expect("accountability without a digest");
+    assert_eq!(accountability_optional.result_digest, None);
+}
+
+#[tokio::test]
+async fn create_replay_with_different_constraints_conflicts() {
+    let fixture = fixture().await;
+    let mut request = create_request("batch-constraint-replay");
+    request.result_constraints = Some(json!({"batchStatus": {"enum": ["valid"]}}));
+    let created = fixture
+        .service
+        .hosted_create(&fixture.requester, &request, "create-constraints")
+        .await
+        .expect("create with constraints");
+    let replay = fixture
+        .service
+        .hosted_create(&fixture.requester, &request, "create-constraints")
+        .await
+        .expect("identical replay answers the same item");
+    assert_eq!(replay.item_id, created.item_id);
+    assert_eq!(replay.result_constraints, created.result_constraints);
+    request.result_constraints = Some(json!({"batchStatus": {"enum": ["partial"]}}));
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_create(&fixture.requester, &request, "create-constraints")
+            .await,
+        Err(ServiceError::Store(StoreError::IdempotencyConflict))
+    ));
+    // A narrowing the pinned schema refuses never records the key, so the
+    // key stays reusable for a valid payload.
+    let mut refused = create_request("batch-refused-constraints");
+    refused.result_constraints = Some(json!({"unknownField": {"enum": ["x"]}}));
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_create(&fixture.requester, &refused, "create-refused-constraints")
+            .await,
+        Err(ServiceError::HostedValidation(_))
+    ));
+    refused.result_constraints = None;
+    let created_after_refusal = fixture
+        .service
+        .hosted_create(&fixture.requester, &refused, "create-refused-constraints")
+        .await
+        .expect("key reusable after a refused payload");
+    assert_ne!(created_after_refusal.item_id, created.item_id);
+}
+
+#[tokio::test]
+async fn result_payload_erases_on_the_terminal_clock_and_the_digest_on_its_own() {
+    let fixture = fixture().await;
+    let mut request = create_request("batch-result-retention");
+    request.result_constraints = Some(json!({"batchStatus": {"enum": ["valid", "partial"]}}));
+    let created = fixture
+        .service
+        .hosted_create(&fixture.requester, &request, "create-result-retention")
+        .await
+        .expect("create with constraints");
+    let claimed = fixture
+        .service
+        .hosted_claim(
+            &fixture.staff,
+            created.item_id,
+            created.revision,
+            "claim-result-retention",
+        )
+        .await
+        .expect("claim");
+    let result = json!({"batchStatus": "valid", "acceptedCount": 12});
+    let decided = fixture
+        .service
+        .hosted_decide(
+            &fixture.staff,
+            created.item_id,
+            claimed.revision,
+            &HostedDecisionRequest {
+                outcome: "confirmed".to_owned(),
+                reason: Some("checked".to_owned()),
+                result: Some(result.clone()),
+            },
+            "decide-result-retention",
+        )
+        .await
+        .expect("decide with a result");
+    let accountability = fixture
+        .service
+        .hosted_accountability_record(&fixture.supervisor, decided.event_id)
+        .await
+        .expect("digest readable before erasure");
+    assert!(accountability.result_digest.is_some());
+
+    // Expire the terminal clock only: the result payload goes with the
+    // requester payload, while the accountability digest survives.
+    fixture.database.execute(
+        "UPDATE casework_hosted_items SET terminal_retained_until=now()-interval '1 second',accountability_retained_until=now()+interval '1 day' WHERE item_id=$1",
+        &[&created.item_id],
+    ).await.expect("expire terminal clock");
+    fixture.database.execute(
+        "UPDATE casework_hosted_terminal_events SET retained_until=now()-interval '1 second' WHERE item_id=$1",
+        &[&created.item_id],
+    ).await.expect("expire terminal event");
+    fixture
+        .service
+        .erase_expired_hosted()
+        .await
+        .expect("erase terminal payload");
+    let terminal = fixture
+        .service
+        .hosted_terminal_page(&fixture.requester, 10, HOSTED_TERMINAL_CURSOR_CONTEXT, None)
+        .await
+        .expect("terminal page after erasure");
+    assert!(terminal.items.is_empty());
+    let surviving_result: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_hosted_terminal_events WHERE item_id=$1 AND result IS NOT NULL",
+            &[&created.item_id],
+        )
+        .await
+        .expect("terminal events are deleted, not blanked")
+        .get(0);
+    assert_eq!(surviving_result, 0);
+    let erased_row = fixture
+        .database
+        .query_one(
+            "SELECT display,result_constraints FROM casework_hosted_items WHERE item_id=$1",
+            &[&created.item_id],
+        )
+        .await
+        .expect("item row survives payload erasure");
+    let erased_display: Option<serde_json::Value> = erased_row.get(0);
+    let erased_constraints: Option<serde_json::Value> = erased_row.get(1);
+    assert_eq!(erased_display, None);
+    assert_eq!(erased_constraints, None);
+    let digest_kept = fixture
+        .service
+        .hosted_accountability_record(&fixture.supervisor, decided.event_id)
+        .await
+        .expect("digest outlives the terminal clock");
+    assert_eq!(digest_kept.result_digest, accountability.result_digest);
+
+    // Expire the accountability clock: the digest row goes with it.
+    fixture.database.execute(
+        "UPDATE casework_hosted_accountability SET retained_until=now()-interval '1 second' WHERE event_id=$1",
+        &[&decided.event_id],
+    ).await.expect("expire accountability");
+    fixture.database.execute(
+        "UPDATE casework_hosted_items SET accountability_retained_until=now()-interval '1 second' WHERE item_id=$1",
+        &[&created.item_id],
+    ).await.expect("expire tombstone boundary");
+    fixture.database.execute(
+        "UPDATE casework_hosted_idempotency_tombstones SET retained_until=now()-interval '1 second'",
+        &[],
+    ).await.expect("expire tombstones");
+    fixture
+        .service
+        .erase_expired_hosted()
+        .await
+        .expect("erase accountability");
+    assert!(matches!(
+        fixture
+            .service
+            .hosted_accountability_record(&fixture.supervisor, decided.event_id)
+            .await,
+        Err(ServiceError::Store(StoreError::NotFound))
+    ));
+    let digest_rows: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_hosted_accountability WHERE event_id=$1",
+            &[&decided.event_id],
+        )
+        .await
+        .expect("count erased accountability rows")
+        .get(0);
+    assert_eq!(digest_rows, 0);
 }
