@@ -1479,7 +1479,7 @@ fn first_finding(findings: Vec<Finding>, artifact: &str) -> Result<()> {
 /// One grammar for refusal codes across the CLI: dotted, namespaced names.
 /// The authoring crate's finding codes are its own closed vocabulary, so a
 /// bare code surfaces under the authoring namespace instead of bare.
-fn dotted_code(code: &str) -> String {
+pub(crate) fn dotted_code(code: &str) -> String {
     if code.contains('.') {
         code.to_owned()
     } else {

@@ -969,9 +969,9 @@ fn project_identity_findings(project: &Path) -> Result<Vec<Value>> {
             Ok(_) => Ok(Vec::new()),
             Err(finding) => Err(DeniedFindings(vec![diagnostic(
                 "error",
-                finding.code,
+                &authoring::dotted_code(finding.code),
                 "authoring_project",
-                &format!("{PROJECT_MARKER_FILE}:/{}", finding.field.to_json_pointer()),
+                &project_marker_finding_path(&finding.field),
                 "the Evidence project marker does not match the closed Version 1 shape",
                 "Correct the Evidence Version 1 project marker.",
             )])
@@ -986,6 +986,17 @@ fn project_identity_findings(project: &Path) -> Result<Vec<Value>> {
             "Add the unchanged Version 1 evidence-project.yaml marker.",
         )]),
         Err(error) => Err(error).context("reading the Evidence authoring project marker"),
+    }
+}
+
+/// Cite a project marker finding's field the way every other diagnostic path
+/// is rendered: the marker file alone at the root, a JSON pointer after it
+/// otherwise.
+fn project_marker_finding_path(field: &registry_evidence_authoring::FieldPath) -> String {
+    if field.is_root() {
+        PROJECT_MARKER_FILE.to_owned()
+    } else {
+        format!("{PROJECT_MARKER_FILE}:{}", field.to_json_pointer())
     }
 }
 
@@ -1620,6 +1631,42 @@ factSchema: schemas/record-status-facts.schema.yaml
         let denied = check(temporary.path(), None, false, true)
             .expect_err("--deny-findings refuses incomplete target closure");
         assert!(denied.downcast_ref::<DeniedFindings>().is_some());
+    }
+
+    #[test]
+    fn a_wrong_version_project_marker_is_dotted_and_points_at_the_field() {
+        let temporary = temporary();
+        fs::write(
+            temporary.path().join(PROJECT_MARKER_FILE),
+            "version: 2\nproject: evidence-authoring\n",
+        )
+        .unwrap();
+
+        let error = check(temporary.path(), None, false, false).unwrap_err();
+        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
+        assert_eq!(
+            denied.0[0]["code"],
+            "evidence.authoring.project-marker-version"
+        );
+        assert_eq!(denied.0[0]["path"], "evidence-project.yaml:/version");
+    }
+
+    #[test]
+    fn an_unparseable_project_marker_is_dotted_and_points_at_the_document() {
+        let temporary = temporary();
+        fs::write(
+            temporary.path().join(PROJECT_MARKER_FILE),
+            "- not a mapping\n",
+        )
+        .unwrap();
+
+        let error = check(temporary.path(), None, false, false).unwrap_err();
+        let denied = error.downcast_ref::<DeniedFindings>().unwrap();
+        assert_eq!(
+            denied.0[0]["code"],
+            "evidence.authoring.project-marker-parse"
+        );
+        assert_eq!(denied.0[0]["path"], "evidence-project.yaml");
     }
 
     #[test]
