@@ -45,7 +45,7 @@ use crate::{
         compile_local_project_with_ports_and_resource,
         compile_local_project_with_target_inputs_and_resource, valid_local_audience,
         CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalAdmission,
-        LocalServicePorts,
+        LocalServicePorts, MAX_SOURCE_ARTIFACT_BYTES, SOURCES_DIRECTORY,
     },
     keygen, OutputFormat,
 };
@@ -1720,6 +1720,7 @@ fn start_detached(
         requested_resource,
     } = selection;
     let project = canonical_project(project)?;
+    refuse_unservable_project(&project)?;
     let generated_root = ensure_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
@@ -1823,6 +1824,65 @@ fn start_detached(
         remove_retained_stopped_session(&retained_root)?;
     }
     result
+}
+
+/// Refuse a project local serving can never bind, before anything is probed,
+/// resolved or created for it.
+///
+/// The compiler raises the same refusal, but only once a container binary has
+/// been resolved and the session's ports have been claimed, so an operator is
+/// asked to install Docker or to free a port for a project no port can serve.
+/// The authored transports answer that question on their own, so they are read
+/// first and the session ends where nothing has been touched.
+fn refuse_unservable_project(project: &Path) -> Result<()> {
+    let Some(source_id) = source_local_serving_cannot_bind(project) else {
+        return Ok(());
+    };
+    Err(DevRefusal {
+        operational: false,
+        code: "evidence.dev.local-transport-refused",
+        path: format!("sources/{source_id}.yaml:/transport"),
+        message: "Local serving does not bind SQLite extracts.".to_owned(),
+        suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
+            .to_owned(),
+    }
+    .into())
+}
+
+/// The first authored source, by id, whose transport opens no channel a local
+/// service could bind.
+///
+/// This read answers that one question and no other: a document it cannot
+/// open, bound or parse is left to the compiler, which reads the same
+/// directory under the authoring form and states the diagnostic for it.
+fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
+    let mut refused = BTreeSet::new();
+    let authored = fs::read_dir(project.join(SOURCES_DIRECTORY)).ok()?;
+    for entry in authored.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            continue;
+        }
+        let Some(source_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let readable = fs::symlink_metadata(&path).is_ok_and(|metadata| {
+            metadata.is_file() && metadata.len() <= MAX_SOURCE_ARTIFACT_BYTES
+        });
+        if !readable {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(source) = serde_norway::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+            refused.insert(source_id.to_owned());
+        }
+    }
+    refused.into_iter().next()
 }
 
 fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) -> Result<&'a str> {
@@ -3377,6 +3437,50 @@ mod tests {
         );
         assert!(select_resource(Some(growers), Some(laboratory)).is_err());
         assert!(select_resource(None, Some("not-an-absolute-uri")).is_err());
+    }
+
+    #[test]
+    fn a_project_read_from_a_sqlite_extract_is_refused_before_a_session_is_prepared() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = root.path();
+        let sources = project.join(SOURCES_DIRECTORY);
+        fs::create_dir(&sources).expect("sources directory");
+        fs::write(sources.join("records.yaml"), "transport: sqlite-extract\n").expect("source");
+
+        let error = refuse_unservable_project(project).expect_err("unservable project");
+
+        let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
+        assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
+        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert!(refusal.message.contains("does not bind SQLite extracts"));
+        assert!(!refusal.operational);
+    }
+
+    #[test]
+    fn a_project_a_local_service_can_bind_is_left_to_the_compiler() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = root.path();
+        refuse_unservable_project(project).expect("a project without sources is not refused here");
+
+        let sources = project.join(SOURCES_DIRECTORY);
+        fs::create_dir(&sources).expect("sources directory");
+        fs::write(sources.join("people.yaml"), "transport: http-json\n").expect("source");
+        fs::write(sources.join("notes.txt"), "transport: sqlite-extract\n").expect("other file");
+        refuse_unservable_project(project).expect("an HTTP source is not refused here");
+
+        // Two extracts name the first by id, as the compiler's own reading of
+        // the same directory does.
+        for id in ["records", "holders"] {
+            fs::write(
+                sources.join(format!("{id}.yaml")),
+                "transport: sqlite-extract\n",
+            )
+            .expect("source");
+        }
+        assert_eq!(
+            source_local_serving_cannot_bind(project).as_deref(),
+            Some("holders")
+        );
     }
 
     #[test]

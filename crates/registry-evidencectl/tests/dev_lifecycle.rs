@@ -325,25 +325,7 @@ fn bare_dev_without_detach_names_the_required_spelling() {
 #[test]
 fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
     let fixture = Project::new();
-    let project = fixture
-        .root
-        .parent()
-        .expect("temporary parent")
-        .join("sqlite-project");
-    assert_success(
-        &evidencectl()
-            .args([
-                "new",
-                project.to_str().expect("UTF-8 project path"),
-                "--transport",
-                "sqlite-extract",
-                "--profile",
-                "local",
-            ])
-            .output()
-            .expect("create SQLite starter"),
-        "create SQLite starter",
-    );
+    let project = fixture.sqlite_extract_starter();
     let tool = fixture.tool_that_never_serves();
     let (evidence_port, issuer_port) = unused_port_pair();
 
@@ -393,6 +375,77 @@ fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
         .as_str()
         .expect("suggested action")
         .contains("evidencectl test"));
+}
+
+/// A project no local service can serve is refused for what it is, not for the
+/// container tooling the session would have needed had it been servable.
+#[test]
+fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
+    let fixture = Project::new();
+    let project = fixture.sqlite_extract_starter();
+    let tool = fixture.tool_that_never_serves();
+    let toolless_path = fixture.directory_without_tools();
+    let (evidence_port, issuer_port) = unused_port_pair();
+
+    let json = evidencectl()
+        .env("PATH", &toolless_path)
+        .args(["--format=json", "dev", "start"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite dev start without docker");
+
+    assert_eq!(json.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
+    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/transport");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("does not bind SQLite extracts"));
+    assert!(!project.join(".evidence").exists());
+}
+
+/// Freeing a port cannot make a SQLite extract servable, so the transport is
+/// judged before the ports the session would otherwise have claimed.
+#[test]
+fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
+    let fixture = Project::new();
+    let project = fixture.sqlite_extract_starter();
+    let tool = fixture.tool_that_never_serves();
+    let occupied = TcpListener::bind("127.0.0.1:0").expect("occupy a local port");
+    let evidence_port = occupied.local_addr().expect("occupied address").port();
+    let (_, issuer_port) = unused_port_pair();
+
+    let output = evidencectl()
+        .args(["dev", "--detach", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite bare dev start on an occupied port");
+
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("evidence.dev.local-transport-refused"),
+        "{error}"
+    );
+    assert!(
+        error.contains("sources/record-status.yaml:/transport"),
+        "{error}"
+    );
+    assert!(!error.contains("evidence.dev.port-unavailable"), "{error}");
+    assert!(!error.contains(&evidence_port.to_string()), "{error}");
+    assert!(!project.join(".evidence").exists());
+    drop(occupied);
 }
 
 #[test]
@@ -522,6 +575,39 @@ impl Project {
                 "HMAC key",
             );
         }
+    }
+
+    /// Scaffold a second project beside this one whose only source is read
+    /// from a SQLite extract, a transport local serving cannot bind.
+    fn sqlite_extract_starter(&self) -> PathBuf {
+        let project = self
+            .root
+            .parent()
+            .expect("temporary parent")
+            .join("sqlite-project");
+        assert_success(
+            &evidencectl()
+                .args([
+                    "new",
+                    project.to_str().expect("UTF-8 project path"),
+                    "--transport",
+                    "sqlite-extract",
+                    "--profile",
+                    "local",
+                ])
+                .output()
+                .expect("create SQLite starter"),
+            "create SQLite starter",
+        );
+        project
+    }
+
+    /// A search path holding no tool at all, so resolving `docker` from it
+    /// must fail.
+    fn directory_without_tools(&self) -> PathBuf {
+        let path = self.root.join("no-tools");
+        fs::create_dir(&path).expect("tool-free directory");
+        path
     }
 
     fn tool_that_never_serves(&self) -> PathBuf {
