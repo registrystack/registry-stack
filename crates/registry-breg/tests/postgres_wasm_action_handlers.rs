@@ -191,6 +191,10 @@ fn configured_app(
     identity: ExpectedRegistryIdentity,
     fault: Option<MutationFaultPoint>,
 ) -> axum::Router {
+    // Assembling the app directly bypasses the server startup path, so this
+    // embedder installs the process WASM runtime itself; evaluation without
+    // an install is refused.
+    registry_breg::wasm_runtime::install_default().expect("the wasm runtime installs");
     let pool = database.runtime_config.build_pool().unwrap();
     let audit = AuditProfile::production_from_secret_bytes(vec![0x42; 32].into()).unwrap();
     let lock = RegistryLockKey::derive(PACKAGE).unwrap();

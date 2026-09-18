@@ -71,7 +71,7 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 /// modules; the default build refuses WASM handlers at admission instead.
 #[cfg(feature = "wasm")]
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
-    use registry_platform_script::wasm::{Backend, Budgets, Executor, InvokeError};
+    use registry_platform_script::wasm::{Backend, Budgets, Executor};
 
     // The same engine configuration the runtime's prepare path uses, with
     // the structural module ceiling: authoring validates anything an
@@ -84,41 +84,50 @@ pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String
     };
     let executor = match Executor::new(Backend::Native, budgets) {
         Ok(executor) => executor,
-        Err(error) => {
-            return Some((
-                "action.handler.module_invalid",
-                format!("this build cannot validate WASM handler modules: {error}"),
-            ));
-        }
+        Err(error) => return Some(admission_violation(error)),
     };
-    match executor.prepare(bytes) {
-        Ok(_) => None,
-        Err(error) => Some(match error {
-            InvokeError::ModuleTooLarge { size, max } => (
-                "action.handler.module_bound",
-                format!("the handler module is {size} bytes; the ceiling is {max} bytes"),
-            ),
-            InvokeError::UnsupportedImport { .. } => (
-                "action.handler.module_import_unsupported",
-                error.to_string(),
-            ),
-            InvokeError::MissingExport { .. } => {
-                ("action.handler.module_export_missing", error.to_string())
-            }
-            InvokeError::ExportTypeMismatch { .. } => {
-                ("action.handler.module_export_type", error.to_string())
-            }
-            InvokeError::UnexpectedExport { .. } => {
-                ("action.handler.module_export_unexpected", error.to_string())
-            }
-            InvokeError::InvalidModule { .. } => (
-                "action.handler.module_invalid",
-                format!("the handler module is not a valid WebAssembly binary: {error}"),
-            ),
-            error => (
-                "action.handler.module_invalid",
-                format!("the handler module was rejected: {error}"),
-            ),
-        }),
+    executor.prepare(bytes).err().map(admission_violation)
+}
+
+/// Map an executor refusal to its admission diagnostic code and message. An
+/// engine-setup failure is a build fault, typed with the same execution
+/// class the runtime's prepare and invoke paths use, never as a module
+/// fault: the module bytes did not cause it.
+#[cfg(feature = "wasm-executor-prototype")]
+pub(crate) fn admission_violation(
+    error: registry_platform_script::wasm::InvokeError,
+) -> (&'static str, String) {
+    use registry_platform_script::wasm::InvokeError;
+
+    match error {
+        InvokeError::ModuleTooLarge { size, max } => (
+            "action.handler.module_bound",
+            format!("the handler module is {size} bytes; the ceiling is {max} bytes"),
+        ),
+        InvokeError::UnsupportedImport { .. } => (
+            "action.handler.module_import_unsupported",
+            error.to_string(),
+        ),
+        InvokeError::MissingExport { .. } => {
+            ("action.handler.module_export_missing", error.to_string())
+        }
+        InvokeError::ExportTypeMismatch { .. } => {
+            ("action.handler.module_export_type", error.to_string())
+        }
+        InvokeError::UnexpectedExport { .. } => {
+            ("action.handler.module_export_unexpected", error.to_string())
+        }
+        InvokeError::InvalidModule { .. } => (
+            "action.handler.module_invalid",
+            format!("the handler module is not a valid WebAssembly binary: {error}"),
+        ),
+        InvokeError::EngineSetup { .. } => (
+            "action.handler.execution",
+            format!("this build cannot validate WASM handler modules: {error}"),
+        ),
+        error => (
+            "action.handler.module_invalid",
+            format!("the handler module was rejected: {error}"),
+        ),
     }
 }

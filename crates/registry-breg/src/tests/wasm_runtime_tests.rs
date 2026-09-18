@@ -173,6 +173,11 @@ fn person_inputs() -> Map<String, Value> {
 #[test]
 fn request_envelope_is_the_inputs_document() {
     let _guard = INSTALL_LOCK.lock().unwrap();
+    install(
+        WasmExecutionBudgets::default(),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
+    .expect("the default runtime installs");
     // The guest hands back its outcome only when the request starts with
     // `{"inputs`; any other envelope shape is reported malformed.
     let document = r#"{"effects":[{"id":"person","set":{"name":"Mina"}}]}"#;
@@ -188,6 +193,11 @@ fn request_envelope_is_the_inputs_document() {
 #[test]
 fn wasm_effects_and_refusals_flow_through_the_shared_validator() {
     let _guard = INSTALL_LOCK.lock().unwrap();
+    install(
+        WasmExecutionBudgets::default(),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
+    .expect("the default runtime installs");
     // Accepted effects.
     let document =
         r#"{"effects":[{"id":"person","set":{"name":"Mina","friend":{"fromField":"person"}}}]}"#;
@@ -226,6 +236,11 @@ fn wasm_effects_and_refusals_flow_through_the_shared_validator() {
 #[test]
 fn action_deadline_maps_to_the_epoch_backstop() {
     let _guard = INSTALL_LOCK.lock().unwrap();
+    install(
+        WasmExecutionBudgets::default(),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
+    .expect("the default runtime installs");
     // A spinning guest under a 25 ms action deadline is stopped by the epoch
     // deadline and classified exactly like the Rhai path classifies a
     // deadline: ActionHandlerError::Deadline.
@@ -402,6 +417,52 @@ fn operator_configuration_maps_onto_the_execution_budgets() {
     );
 }
 
+/// Evaluation before any install is refused with the closed execution
+/// refusal, never silently served by a lazily defaulted runtime that would
+/// discard the operator budgets the startup path owns.
+#[test]
+fn evaluation_before_any_install_is_refused_not_defaulted() {
+    let _guard = INSTALL_LOCK.lock().unwrap();
+    shutdown();
+    let document = r#"{"refusal":{"code":"blank-name"}}"#;
+    let action = wasm_person_action(&compiled_wat(&outcome_guest(document)));
+    let diagnostic =
+        evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap_err();
+    assert_eq!(diagnostic.kind, ActionHandlerError::Execution);
+    assert_eq!(
+        diagnostic.message,
+        "The WASM execution runtime is not installed; the server startup path installs it."
+    );
+    // The refusal built no runtime behind the operator's back.
+    assert!(!installed());
+}
+
+/// An engine-setup failure is a build fault, so every path types it as the
+/// same execution fault class: never a module-source refusal at prepare, and
+/// never a module-invalid admission diagnostic.
+#[test]
+fn engine_setup_failure_is_an_execution_fault_on_every_path() {
+    use registry_platform_script::wasm::{BoundedString, InvokeError};
+    let setup = InvokeError::EngineSetup {
+        detail: BoundedString::new("wasmtime rejected the configuration"),
+    };
+    let prepared = crate::wasm_runtime::classify_prepare_error(setup.clone());
+    assert_eq!(prepared.kind, ActionHandlerError::Execution);
+    assert_eq!(
+        prepared.message,
+        "This build cannot start the WASM execution engine."
+    );
+    let invoked = crate::wasm_runtime::classify_invoke_error(setup.clone());
+    assert_eq!(invoked.kind, ActionHandlerError::Execution);
+    assert_eq!(invoked.message, prepared.message);
+    let (code, message) = crate::wasm_handler::admission_violation(setup);
+    assert_eq!(code, "action.handler.execution");
+    assert!(
+        message.starts_with("this build cannot validate WASM handler modules"),
+        "the admission diagnostic stays a build-fault message: {message}"
+    );
+}
+
 #[test]
 fn install_replaces_and_shutdown_clears_the_process_runtime() {
     let _guard = INSTALL_LOCK.lock().unwrap();
@@ -413,9 +474,12 @@ fn install_replaces_and_shutdown_clears_the_process_runtime() {
     assert!(installed());
     shutdown();
     assert!(!installed());
-    // The next evaluation lazily builds a fresh default runtime.
+    // After shutdown, evaluation refuses until a new install; no lazy
+    // default runtime is built behind the operator's back.
     let document = r#"{"refusal":{"code":"blank-name"}}"#;
     let action = wasm_person_action(&compiled_wat(&outcome_guest(document)));
-    evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap();
-    assert!(installed());
+    let diagnostic =
+        evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap_err();
+    assert_eq!(diagnostic.kind, ActionHandlerError::Execution);
+    assert!(!installed());
 }
