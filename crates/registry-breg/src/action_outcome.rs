@@ -143,7 +143,7 @@ fn json_document(value: Value) -> ProposedValue {
 
 /// Decode a WASM handler's outcome bytes into a proposal: reject repeated
 /// JSON members while parsing, then run the same shared output bound and
-/// document decode the Rhai path runs. Compiled under the prototype feature
+/// document decode the Rhai path runs. Compiled under the `wasm` feature
 /// and used by the WASM execution path in those builds.
 #[cfg(feature = "wasm")]
 pub(crate) fn decode_wasm_outcome(

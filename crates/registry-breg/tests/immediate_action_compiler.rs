@@ -168,7 +168,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
 
     // A default build carries no WASM compiler support, so an input-only WASM
     // handler is refused with a diagnostic that names the build, not the
-    // authored project. A build with the WASM executor prototype admits the
+    // authored project. A build with the `wasm` feature admits the
     // backend (the admission suite covers that lane); this script-shaped
     // handler is still refused there, by backend field discipline.
     let v1 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V1);

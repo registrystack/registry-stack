@@ -338,8 +338,8 @@ pub(crate) fn evaluate_with_engine(
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
     // A WASM handler never reaches the Rhai compile path; its module runs
-    // through the platform executor in builds that carry the prototype
-    // feature (and every build refuses the backend at admission above).
+    // through the platform executor in builds that carry the `wasm`
+    // feature (a build without it refuses the handler at admission above).
     #[cfg(feature = "wasm")]
     if handler.kind == crate::model::CompiledActionHandlerKind::Wasm {
         return crate::wasm_runtime::evaluate_wasm_handler(action, handler, inputs, deadline);
@@ -390,7 +390,7 @@ fn admit_handler<'a>(
                 return Err(ActionHandlerError::Source.into());
             }
         }
-        // A build with the WASM executor prototype executes the input-only
+        // A build with the `wasm` feature executes the input-only
         // v1 ABI for WASM handlers. The Evidence-enabled v2 ABI stays
         // Rhai-only in this release, and a resolver never reaches a WASM
         // handler.

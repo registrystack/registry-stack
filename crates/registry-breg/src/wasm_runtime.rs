@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Process-wide WASM handler execution (prototype feature).
+//! Process-wide WASM handler execution (`wasm` feature).
 //!
 //! One platform [`Executor`] (one engine) and one [`EpochTicker`] serve the
 //! whole server process, and a bounded cache keeps prepared modules so the
@@ -360,7 +360,7 @@ fn evaluate_with_runtime(
     // contract defines: the same JSON conversion the Rhai path's context
     // receives (its ctx map carries one "inputs" member built from this
     // same object), without the operation-dispatch wrapper a multi-operation
-    // prototype envelope needed.
+    // envelope would need.
     let mut envelope = JsonMap::new();
     envelope.insert("inputs".to_owned(), Value::Object(inputs.clone()));
     let request = serde_json::to_vec(&Value::Object(envelope))
