@@ -343,7 +343,7 @@ Run the two fixed-action fixtures and the
 [person registration Rhai fixture](acceptance/person-registration-rhai/README.md)
 with the local runner. It expects the same isolated TLS PostgreSQL environment
 used by the existing [change-request examples](CHANGE_REQUEST_EXAMPLES.md).
-Prerequisites are a disposable PostgreSQL 15-or-newer cluster with TLS, its CA PEM, an
+Prerequisites are a disposable PostgreSQL 17-or-newer cluster with TLS, its CA PEM, an
 administrator credential able to create roles and databases and install
 `btree_gist`, `psql`, OpenSSL with Ed25519 signing support, and Python 3 with
 PyYAML. Building from source also requires the repository's Rust toolchain.

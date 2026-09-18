@@ -119,8 +119,8 @@ the promoted digest of each image; pin that digest instead of the movable tag.
 
 ## Provision PostgreSQL
 
-Base Registry Engine needs PostgreSQL 15 or newer, with TLS between the server and the database. A
-project with a `crs84-point` field needs PostgreSQL 16 or newer and PostGIS. Create two login
+Base Registry Engine needs PostgreSQL 17 or newer, with TLS between the server and the database. A
+project with a `crs84-point` field also needs PostGIS. Create two login
 roles: a migration role that owns the schema and applies packages, and a runtime role the serving
 process uses. Keep the migration credential off the serving host when no activation is in
 progress.

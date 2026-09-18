@@ -41,7 +41,7 @@ pub async fn install_compiled_schema(
     registry: &CompiledRegistry,
     runtime_role: &SqlIdentifier,
 ) -> Result<()> {
-    verify_postgres_15_or_newer(migration).await?;
+    verify_postgres_17_or_newer(migration).await?;
     if registry.ddl().requires_btree_gist {
         verify_btree_gist(migration).await?;
     }
@@ -539,17 +539,28 @@ fn spatial_candidate_view_qualified_name(sql: &str) -> Result<String> {
     Err(PostgresKernelError::RegistryUnavailable)
 }
 
-pub(crate) async fn verify_postgres_15_or_newer(client: &impl GenericClient) -> Result<()> {
+/// Lowest accepted `server_version_num`. The closed-catalog check in
+/// `catalog.rs` expects every managed table to grant the MAINTAIN owner
+/// privilege, which PostgreSQL introduced in version 17; an older server
+/// would pass this gate and then fail the catalog check with a confusing
+/// invariant error instead of a clear version message.
+const MIN_POSTGRES_VERSION_NUM: u32 = 170_000;
+
+fn postgres_version_num_is_supported(version_num: u32) -> bool {
+    version_num >= MIN_POSTGRES_VERSION_NUM
+}
+
+pub(crate) async fn verify_postgres_17_or_newer(client: &impl GenericClient) -> Result<()> {
     let version_num: String = client
         .query_one("SELECT current_setting('server_version_num')", &[])
         .await?
         .get(0);
     let version_num = version_num
         .parse::<u32>()
-        .map_err(|_| PostgresKernelError::Configuration("PostgreSQL 15 or newer is required"))?;
-    if version_num < 150_000 {
+        .map_err(|_| PostgresKernelError::Configuration("PostgreSQL 17 or newer is required"))?;
+    if !postgres_version_num_is_supported(version_num) {
         return Err(PostgresKernelError::Configuration(
-            "PostgreSQL 15 or newer is required",
+            "PostgreSQL 17 or newer is required",
         ));
     }
     Ok(())
@@ -903,4 +914,15 @@ async fn verify_schema_test_runtime_role(
 
 fn quote_compiled_identifier(value: &str) -> String {
     format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::postgres_version_num_is_supported;
+
+    #[test]
+    fn postgres_version_gate_refuses_16_and_accepts_17() {
+        assert!(!postgres_version_num_is_supported(160_000));
+        assert!(postgres_version_num_is_supported(170_000));
+    }
 }

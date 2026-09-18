@@ -18,9 +18,9 @@ on your machine.
 
 ## What you provide
 
-- **PostgreSQL 15 or newer**, with two login roles: a migration role that owns the schema and
+- **PostgreSQL 17 or newer**, with two login roles: a migration role that owns the schema and
   applies packages, and a runtime role the serving process uses. A registry with spatial fields
-  needs PostgreSQL 16 and PostGIS 3.5 or newer. Your administrator installs the extensions the
+  also needs PostGIS 3.5 or newer. Your administrator installs the extensions the
   runtime checks for; neither role creates a schema, an extension, or a role. SQLite is not a
   target.
 - **A host for one process.** The runtime is a single binary that verifies one package and serves
