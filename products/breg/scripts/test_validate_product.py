@@ -123,6 +123,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:registry-platform-buildinfo",
                 "dep:registry-platform-config",
                 "dep:registry-platform-crypto",
+                "dep:registry-platform-hooks",
                 "dep:registry-platform-httpsec",
                 "dep:registry-platform-httputil",
                 "dep:registry-platform-oidc",

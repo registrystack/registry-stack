@@ -62,4 +62,6 @@ stay with the owning product.
 - Orchestration: fan-in, compensation, whole-flow visibility.
 - Folding BReg's notification path into the handler path.
 
-No storage, no delivery worker, and no executor live in this crate.
+The delivery tables' DDL lives here behind the `postgres` feature
+(`delivery_schema`): the product's kernel install includes those statements into
+its own migration. No delivery worker and no executor live in this crate.
