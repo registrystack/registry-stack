@@ -5,25 +5,25 @@
 //! Decision 1(b) of the platform hooks design: the tables are library-owned
 //! and each product's kernel install includes these statements into its own
 //! migration, the way a product includes a shipped migration. The statements
-//! are rendered with the product's schema name; BReg installs them into
-//! `registry_internal`.
+//! are rendered with the adopting product's schema name.
 //!
-//! Every rendered statement is byte-identical to the statement the owning
-//! product executed before the move, so existing databases upgrade in place
-//! through the same idempotent `CREATE`/`ALTER`/`DO` sequence. The statements
-//! are ordered: the deliveries table carries a foreign key into the outbox, so
-//! the outbox is created first.
+//! The statements are an idempotent `CREATE`/`ALTER`/`DO` sequence, so an
+//! existing database upgrades in place. They are ordered: the deliveries
+//! table carries a foreign key into the outbox, so the outbox is created
+//! first.
+//!
+//! Installing the statements installs no ACL. Privileges on the delivery
+//! objects stay with the adopting product: it owns every `GRANT` and
+//! `REVOKE` deciding which roles may read or write them, and [`object_names`]
+//! names the objects its inventory has to cover.
 //!
 //! The schema name is interpolated into DDL, so only a plain lowercase SQL
 //! identifier is accepted; [`statements`] panics otherwise.
 
 use tokio_postgres::GenericClient;
 
-// Rendered statement templates, in execution order. `{schema}` is replaced
-// with the product's schema name. The layout bytes are the ones the owning
-// product executed before the move, so a rendered statement is
-// byte-identical to the statement BReg ran while it carried this DDL
-// inline.
+// Statement templates, in execution order. `{schema}` is replaced with the
+// adopting product's schema name.
 const DELIVERY_STATEMENTS: &[&str] = &[
     // registry_outbox, the envelope store. Created first: the deliveries
     // table carries a foreign key into it.
@@ -363,6 +363,16 @@ const DELIVERY_STATEMENTS: &[&str] = &[
              $registry_webhook_state_upgrade$;",
 ];
 
+// The persistent objects the statements above create, unqualified. The
+// sequence is implicit: PostgreSQL names the one behind an identity column
+// `<table>_<column>_seq`.
+const DELIVERY_OBJECTS: &[&str] = &[
+    "registry_outbox",
+    "registry_outbox_outbox_id_seq",
+    "registry_webhook_deliveries",
+    "registry_webhook_delivery_state",
+];
+
 /// Installs the delivery schema statements in order on the caller's client.
 ///
 /// The statements join the caller's transaction; this function performs no
@@ -388,11 +398,39 @@ pub fn statements(schema: &str) -> Vec<String> {
     let schema = require_plain_identifier(schema);
     DELIVERY_STATEMENTS
         .iter()
-        .map(|template| template.replace("{schema}", schema))
+        .map(|template| render(schema, template))
         .collect()
 }
 
-fn require_plain_identifier(schema: &str) -> &str {
+/// The delivery objects [`statements`] creates, schema-qualified: the three
+/// tables and the identity sequence PostgreSQL creates for the outbox's
+/// `GENERATED ALWAYS AS IDENTITY` key.
+///
+/// A product that keeps an exact inventory of its database, or that grants
+/// privileges object by object, reads the names from here instead of
+/// repeating them, so a rename in this crate reaches it. Indexes are not
+/// listed: they carry no privileges of their own.
+///
+/// # Panics
+///
+/// Panics when `schema` is not a plain lowercase SQL identifier of at most 63
+/// bytes, for the same reason [`statements`] does.
+pub fn object_names(schema: &str) -> Vec<String> {
+    let schema = require_plain_identifier(schema);
+    DELIVERY_OBJECTS
+        .iter()
+        .map(|object| format!("{schema}.{object}"))
+        .collect()
+}
+
+/// Render one delivery SQL template with a product's schema name. `{schema}`
+/// is the only placeholder, and the caller has already accepted the name
+/// through [`require_plain_identifier`].
+pub(crate) fn render(schema: &str, template: &str) -> String {
+    template.replace("{schema}", schema)
+}
+
+pub(crate) fn require_plain_identifier(schema: &str) -> &str {
     let valid = !schema.is_empty()
         && schema.len() <= 63
         && schema
@@ -519,8 +557,72 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
-    fn an_empty_or_uppercase_schema_is_refused() {
+    fn an_empty_schema_is_refused() {
         let _ = statements("");
+    }
+
+    #[test]
+    #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
+    fn an_uppercase_schema_is_refused() {
         let _ = statements("Registry_Internal");
+    }
+
+    #[test]
+    #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
+    fn a_schema_that_starts_with_a_digit_is_refused() {
+        let _ = statements("1registry_internal");
+    }
+
+    #[test]
+    #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
+    fn a_schema_longer_than_sixty_three_bytes_is_refused() {
+        let _ = statements(&"s".repeat(64));
+    }
+
+    #[test]
+    fn a_schema_of_exactly_sixty_three_bytes_is_accepted() {
+        let schema = "s".repeat(63);
+        assert_eq!(rendered(&schema).len(), DELIVERY_STATEMENTS.len());
+    }
+
+    #[test]
+    fn every_named_object_is_created_by_the_statements() {
+        let statements = rendered(KERNEL_SCHEMA).join("\n");
+        for name in object_names(KERNEL_SCHEMA) {
+            if let Some(table) = name.strip_suffix("_outbox_id_seq") {
+                // The identity sequence has no statement of its own: it is
+                // created by the outbox's identity column, and PostgreSQL
+                // derives its name from the table and the column.
+                assert!(
+                    statements.contains(&format!("CREATE TABLE IF NOT EXISTS {table} (")),
+                    "no statement creates the table behind {name}"
+                );
+                assert!(statements.contains("outbox_id bigint GENERATED ALWAYS AS IDENTITY"));
+            } else {
+                assert!(
+                    statements.contains(&format!("CREATE TABLE IF NOT EXISTS {name} (")),
+                    "no statement creates {name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_named_objects_are_qualified_by_the_requested_schema() {
+        assert_eq!(
+            object_names("observability_internal"),
+            vec![
+                "observability_internal.registry_outbox".to_owned(),
+                "observability_internal.registry_outbox_outbox_id_seq".to_owned(),
+                "observability_internal.registry_webhook_deliveries".to_owned(),
+                "observability_internal.registry_webhook_delivery_state".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "delivery schema must be a plain lowercase SQL identifier")]
+    fn object_names_refuse_a_schema_that_is_not_a_plain_identifier() {
+        let _ = object_names("registry; drop table users");
     }
 }

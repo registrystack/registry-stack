@@ -23,15 +23,21 @@
 //! - Orchestration: fan-in, compensation, whole-flow visibility. A later
 //!   orchestrator correlates on the envelope's `causation.root`, which already
 //!   exists, so orchestrating changes nothing in the products.
-//! - Folding BReg's notification path into the handler path. A notification is
-//!   a handler whose answer is empty; re-expressing it that way is a refactor
-//!   for after the library exists.
+//! - Folding a product's existing notification path into the handler path. A
+//!   notification is a handler whose answer is empty; re-expressing it that
+//!   way is a refactor for after the library exists.
 //!
-//! The delivery schema (the three delivery/outbox tables' DDL) lives here
-//! behind the `postgres` feature. No delivery worker and no executor live
-//! here.
+//! The delivery schema (the three delivery/outbox tables' DDL) and the
+//! notification delivery worker live behind the opt-in `postgres` feature;
+//! the contract half above is always available and depends on no database.
+//! The worker sends the product's captured payload bytes with the product's
+//! headers, and everything product-owned enters through the delivery module's
+//! seam trait. No executor lives here: running a Rhai or WASM handler is a
+//! later step.
 
 mod declaration;
+#[cfg(feature = "postgres")]
+pub mod delivery;
 #[cfg(feature = "postgres")]
 pub mod delivery_schema;
 mod envelope;

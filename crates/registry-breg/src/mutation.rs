@@ -119,7 +119,7 @@ pub async fn install_mutation_schema(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
-    registry_platform_hooks::delivery_schema::install(migration, "registry_internal")
+    registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
         .await
         .map_err(|_| MutationError::Unavailable)?;
 
@@ -294,7 +294,7 @@ pub async fn install_mutation_schema(
     // constraints are installed under explicit existence guards.
     migration
         .batch_execute(&format!(
-            "             ALTER TABLE registry_internal.registry_idempotency
+            "ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check;
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values;

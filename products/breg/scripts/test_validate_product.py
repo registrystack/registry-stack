@@ -106,6 +106,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         self.assertEqual([], breg["features"]["default"])
         self.assertEqual(
             {
+                "dep:async-trait",
                 "dep:axum",
                 "dep:base64",
                 "dep:clap",

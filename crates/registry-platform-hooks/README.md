@@ -31,9 +31,8 @@ stay with the owning product.
   `subject`, `dataschema`, `data`, and `causation` (`root`, `parent`, `hop`).
   Delivery attributes (`attempt`, `generation`, `delivery_time`,
   `idempotency_key`, `signature`) are explicitly not envelope fields; they stay
-  on the transport, exactly as `EventDeliveryHeaders` carries them today. The
-  envelope is what the handler reasons over; the attributes are what the worker
-  reasons over.
+  on the transport headers. The envelope is what the handler reasons over; the
+  attributes are what the worker reasons over.
 - Causation and the hop guard: `hop` is 0 for a root event and parent hop + 1
   otherwise, the library ceiling is 8, and producing a child beyond the ceiling
   is refused with an error that names the ceiling so the worker can record a
@@ -47,8 +46,8 @@ stay with the owning product.
 
 ## Budgets
 
-- The envelope carries the same 2 MiB outbox payload bound the `registry_outbox`
-  table enforces today (2,097,152 bytes).
+- The envelope carries the same 2 MiB payload bound the delivery store enforces
+  (2,097,152 bytes).
 - A handler's returned message carries the executor output ceiling; the library
   default mirrors `registry-platform-script`'s 1 MiB `max_output_bytes` default
   and stays operator-configurable per run.
@@ -60,8 +59,19 @@ stay with the owning product.
 - In-request decision hooks (a synchronous remote call inside a request).
 - Phase `before` on plain writes (`created`, `patched`).
 - Orchestration: fan-in, compensation, whole-flow visibility.
-- Folding BReg's notification path into the handler path.
+- Folding a product's existing notification path into the handler path.
 
-The delivery tables' DDL lives here behind the `postgres` feature
+## The PostgreSQL delivery half
+
+The delivery tables' DDL lives here behind the opt-in `postgres` feature
 (`delivery_schema`): the product's kernel install includes those statements into
-its own migration. No delivery worker and no executor live in this crate.
+its own migration, and `object_names` names the objects it creates for a product
+that inventories its database. Installing them installs no ACL; the product owns
+the `GRANT` and `REVOKE` on those objects. The notification delivery worker lives
+here too, behind the same feature (`delivery`): it runs on the product's seams,
+so the audit journal, operational vocabulary, identity preflight, and destination
+signing stay with the product. Nothing above this section is behind the feature:
+the contract half has no database dependency, so a product that only declares and
+validates hooks takes the crate with default features and links no PostgreSQL
+client. No executor lives in this crate: running a Rhai or WASM handler is a
+later step.

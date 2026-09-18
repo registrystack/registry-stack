@@ -73,7 +73,7 @@ pub type Result<T> = std::result::Result<T, EventDestinationActivationError>;
 /// binding.
 pub struct ActivatedEventDestinationRegistry {
     binding_digest: String,
-    bindings: BTreeMap<String, ActivatedEventDestination>,
+    bindings: BTreeMap<String, Arc<ActivatedEventDestination>>,
     payload_retention: Duration,
 }
 
@@ -152,7 +152,10 @@ impl ActivatedEventDestinationRegistry {
                 .max()
                 .ok_or(EventDestinationActivationError::InventoryMismatch)?;
             let activated = config.activate(logical_id, maximum_payload_bytes, secrets)?;
-            if bindings.insert(logical_id.clone(), activated).is_some() {
+            if bindings
+                .insert(logical_id.clone(), Arc::new(activated))
+                .is_some()
+            {
                 return Err(EventDestinationActivationError::InventoryMismatch);
             }
         }
@@ -184,7 +187,17 @@ impl ActivatedEventDestinationRegistry {
     /// Look up a binding only by its compiler-issued logical destination id.
     #[must_use]
     pub fn lookup(&self, compiled_logical_id: &str) -> Option<&ActivatedEventDestination> {
-        self.bindings.get(compiled_logical_id)
+        self.bindings.get(compiled_logical_id).map(Arc::as_ref)
+    }
+
+    /// Owned handle to a binding, for callers that carry it across an await
+    /// point. Same lookup discipline as [`Self::lookup`].
+    #[must_use]
+    pub fn lookup_shared(
+        &self,
+        compiled_logical_id: &str,
+    ) -> Option<Arc<ActivatedEventDestination>> {
+        self.bindings.get(compiled_logical_id).cloned()
     }
 
     /// Build the minimized inventory used to keep queued delivery compatible
