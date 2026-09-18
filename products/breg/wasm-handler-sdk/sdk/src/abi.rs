@@ -8,7 +8,6 @@
 //! with real pointers.
 
 use std::mem;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::Mutex;
 
@@ -52,7 +51,11 @@ pub fn alloc(len: usize) -> *mut u8 {
 /// outcome. Returns [`STATUS_OUTCOME_READY`] when the stored bytes are the
 /// handler's outcome, [`STATUS_MALFORMED_REQUEST`] for an undecodable
 /// envelope or a handler-reported input-contract violation, and
-/// [`STATUS_INTERNAL_ERROR`] otherwise. No panic crosses the boundary.
+/// [`STATUS_INTERNAL_ERROR`] otherwise.
+///
+/// A panic in the handler traps the wasm instance, which the host maps to an
+/// execution error; a panic never escapes as a Rust exception across the
+/// boundary.
 ///
 /// # Safety (embedder contract)
 ///
@@ -71,18 +74,14 @@ where
     // SAFETY: the embedder contract above holds for every caller of this
     // function, host test or platform executor alike.
     let bytes = unsafe { std::slice::from_raw_parts(pointer, len) };
-    match catch_unwind(AssertUnwindSafe(|| dispatch(bytes, handler))) {
-        Ok(Ok(document)) => {
+    match dispatch(bytes, handler) {
+        Ok(document) => {
             store_result(document);
             STATUS_OUTCOME_READY
         }
-        Ok(Err(status)) => {
+        Err(status) => {
             clear_result();
             status
-        }
-        Err(_) => {
-            clear_result();
-            STATUS_INTERNAL_ERROR
         }
     }
 }
