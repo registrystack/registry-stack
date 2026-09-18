@@ -598,6 +598,66 @@ mod tests {
         );
     }
 
+    /// The compile-time envelope wrapper proof against the widest envelope the
+    /// runtime can build for one hook.
+    ///
+    /// Every member is at its own bound: a 64 byte instance id in `source`, a
+    /// caused chain so `causation` carries a parent, the longest audit
+    /// reference prefix and the largest positive revision in `subject`, and a
+    /// capture instant that spells its milliseconds. The wrapper the compiler
+    /// proves must be exactly the bytes the canonical form spends outside
+    /// `data`, so the compile-time refusal and the runtime ceiling measure one
+    /// document.
+    #[test]
+    fn the_compiled_envelope_wrapper_matches_the_widest_canonical_wrapper() {
+        const REGISTRY_ID: &str = "widest-registry-identifier";
+        const ENTITY_ID: &str = "widest-entity-identifier";
+        const EVENT_ID: &str = "widest-event-identifier";
+        let source = crate::webhook::delivery_source(REGISTRY_ID, &"i".repeat(64));
+        let data_schema = format!(
+            "urn:breg:event-schema:{REGISTRY_ID}:{ENTITY_ID}:{EVENT_ID}:sha256:{}",
+            "e".repeat(64)
+        );
+        let schemas = BTreeMap::from([(EVENT_ID.to_owned(), data_schema)]);
+        let parent = Causation::root("2b8f0a24-6a1e-4a0e-9b5d-6c7f0a3d1e42");
+        let caused = parent
+            .child("2b8f0a24-6a1e-4a0e-9b5d-6c7f0a3d1e42")
+            .expect("child causation");
+        let binding = EnvelopeBinding {
+            source: &source,
+            data_schemas: &schemas,
+            causation: Some(&caused),
+        };
+        let record_reference = format!("hmac-sha256:{}", "f".repeat(64));
+        let envelope = capture_envelope(
+            &binding,
+            CapturedEvent {
+                event_id: Uuid::parse_str("4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51")
+                    .expect("event id"),
+                event_type: EVENT_ID,
+                created_at: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
+                    .expect("capture instant"),
+                record_reference: &record_reference,
+                // The largest i64 canonical JSON accepts, and the widest
+                // decimal spelling any revision can reach: 2^63 - 2^10.
+                record_revision: 9_223_372_036_854_774_784,
+                data: projection(),
+            },
+        )
+        .expect("envelope");
+        let payload = envelope_payload(&envelope, None).expect("payload");
+        let data_bytes = registry_platform_canonical_json::canonicalize_json(&envelope.data)
+            .expect("canonical data")
+            .len();
+        let wrapper =
+            crate::compiler::maximum_envelope_wrapper_bytes(REGISTRY_ID, ENTITY_ID, EVENT_ID)
+                .expect("wrapper bound");
+        assert_eq!(
+            u64::try_from(payload.len() - data_bytes).expect("bound"),
+            wrapper
+        );
+    }
+
     #[test]
     fn a_caused_capture_keeps_the_chain_it_was_given() {
         let schemas = data_schemas();

@@ -67,6 +67,9 @@ pub const WEBHOOK_MAXIMUM_ATTEMPTS: u8 = 5;
 pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = WEBHOOK_ATTEMPT_TIMEOUT_MS;
 pub const MAX_WEBHOOK_ATTEMPTS: u8 = WEBHOOK_MAXIMUM_ATTEMPTS;
 pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
+/// The longest build identity value, shared by the environment, instance, and
+/// database identifiers a package build request carries.
+pub const MAX_BUILD_ID_BYTES: u32 = 64;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
@@ -143,7 +146,7 @@ pub fn compile_project_with_assets(
     validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
-    validate_entities(&sources, profile, &mut diagnostics);
+    validate_entities(&project.registry.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
@@ -1836,6 +1839,7 @@ fn resolve_vocabularies(
 }
 
 fn validate_entities(
+    registry_id: &str,
     entities: &BTreeMap<String, EntitySource>,
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
@@ -1899,7 +1903,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
-        validate_hooks(entity, profile, &mut event_ids, errors);
+        validate_hooks(registry_id, entity, profile, &mut event_ids, errors);
     }
     validate_read_path_cycles(entities, errors);
 }
@@ -3585,6 +3589,7 @@ fn validate_read_path_permission_fields(
 }
 
 fn validate_hooks(
+    registry_id: &str,
     entity: &EntitySource,
     profile: CompileProfile,
     registry_event_ids: &mut BTreeSet<String>,
@@ -3636,11 +3641,12 @@ fn validate_hooks(
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, hook, |field| {
-            fields
-                .get(field)
-                .map(|field| (&field.field_type, field.required))
-        });
+        let maximum_payload_bytes =
+            maximum_event_payload_bytes(registry_id, &entity.id, hook, |field| {
+                fields
+                    .get(field)
+                    .map(|field| (&field.field_type, field.required))
+            });
         if matches!(
             hook.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
@@ -3939,7 +3945,14 @@ fn valid_logical_destination_id(value: &str) -> bool {
         })
 }
 
+/// The worst-case canonical bytes of one captured event, envelope included.
+///
+/// The runtime stores and delivers the whole canonical envelope and measures
+/// it against the compiled bound, so the compile-time proof measures the same
+/// document: the `data` object below plus the envelope wrapper
+/// [`maximum_envelope_wrapper_bytes`] covers.
 fn maximum_event_payload_bytes<'a>(
+    registry_id: &str,
     entity_id: &str,
     event: &crate::contract::HookSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
@@ -4035,7 +4048,112 @@ fn maximum_event_payload_bytes<'a>(
             .checked_mul(6)?
             .checked_add(2)?,
     )?;
-    total.checked_add(values)
+    total = total.checked_add(values)?;
+    total.checked_add(maximum_envelope_wrapper_bytes(
+        registry_id,
+        entity_id,
+        &event.id,
+    )?)
+}
+
+/// The worst-case canonical bytes of the envelope members that carry the
+/// `data` object: `causation`, `dataschema`, `id`, `source`, `subject`,
+/// `time`, and `type`, plus the object punctuation of all eight members.
+///
+/// Every term is a length the compiler already knows or a bound the engine
+/// already enforces. The identifiers use the closed lowercase grammar
+/// [`validate_id`] holds, so none of them needs JSON string escaping.
+pub(crate) fn maximum_envelope_wrapper_bytes(
+    registry_id: &str,
+    entity_id: &str,
+    event_id: &str,
+) -> Option<u64> {
+    // Canonical envelope object braces, one comma between members, and fixed
+    // key encodings (two quotes plus a colon per key).
+    let envelope_keys = [
+        "causation",
+        "data",
+        "dataschema",
+        "id",
+        "source",
+        "subject",
+        "time",
+        "type",
+    ];
+    let mut total = 2_u64.checked_add(envelope_keys.len() as u64 - 1)?;
+    for key in envelope_keys {
+        total = total.checked_add(key.len() as u64 + 3)?;
+    }
+    // `causation` is `{"hop":N,"parent":"<uuid>","root":"<uuid>"}`. An event a
+    // hook caused carries a parent, so the worst case keeps it, and `hop` is a
+    // decimal the hook library refuses to raise past its own ceiling.
+    let causation_keys = ["hop", "parent", "root"];
+    let mut causation = 2_u64.checked_add(causation_keys.len() as u64 - 1)?;
+    for key in causation_keys {
+        causation = causation.checked_add(key.len() as u64 + 3)?;
+    }
+    causation = causation
+        .checked_add(decimal_digits(u64::from(
+            registry_platform_hooks::HOP_CEILING,
+        )))?
+        .checked_add(38)?
+        .checked_add(38)?;
+    total = total.checked_add(causation)?;
+    // `dataschema` is the quoted event schema URN the compiler builds: a fixed
+    // prefix, three identifiers with one separator each, and a `sha256:` hex
+    // digest of the data contract.
+    total = total.checked_add(
+        2 + "urn:breg:event-schema:".len() as u64
+            + registry_id.len() as u64
+            + 1
+            + entity_id.len() as u64
+            + 1
+            + event_id.len() as u64
+            + 1
+            + "sha256:".len() as u64
+            + 64,
+    )?;
+    // `id` is a quoted UUID.
+    total = total.checked_add(38)?;
+    // `source` is the quoted deployment URN `crate::webhook::delivery_source`
+    // builds. Its package id is this registry's id; its instance id is
+    // deployment-time and `valid_build_id` holds it to the same closed grammar
+    // within MAX_BUILD_ID_BYTES.
+    total = total.checked_add(
+        2 + "urn:registrystack:registry:".len() as u64
+            + registry_id.len() as u64
+            + ":instance:".len() as u64
+            + u64::from(MAX_BUILD_ID_BYTES),
+    )?;
+    // `subject` is `{"recordReference":"<reference>","recordRevision":N}`. The
+    // reference is the audit key hasher's longest prefix and its hex digest,
+    // and the revision is the largest positive i64, the same bound the data
+    // object's own `revision` carries.
+    let subject_keys = ["recordReference", "recordRevision"];
+    let mut subject = 2_u64.checked_add(subject_keys.len() as u64 - 1)?;
+    for key in subject_keys {
+        subject = subject.checked_add(key.len() as u64 + 3)?;
+    }
+    subject = subject
+        .checked_add(2 + "hmac-sha256:".len() as u64 + 64)?
+        .checked_add(19)?;
+    total = total.checked_add(subject)?;
+    // `time` is the quoted UTC millisecond RFC 3339 spelling the envelope
+    // normalizes every instant to: `YYYY-MM-DDThh:mm:ss.sssZ`.
+    total = total.checked_add(26)?;
+    // `type` is the quoted event identifier.
+    total.checked_add(event_id.len() as u64 + 2)
+}
+
+/// The decimal spelling width of `value`.
+fn decimal_digits(value: u64) -> u64 {
+    let mut digits = 1;
+    let mut remaining = value / 10;
+    while remaining > 0 {
+        digits += 1;
+        remaining /= 10;
+    }
+    digits
 }
 
 fn maximum_event_values_bytes<'a>(
@@ -4064,10 +4182,11 @@ fn maximum_event_values_bytes<'a>(
 }
 
 pub(crate) fn maximum_compiled_event_payload_bytes(
+    registry_id: &str,
     entity: &CompiledEntity,
     event: &crate::contract::HookSource,
 ) -> Option<u32> {
-    let maximum = maximum_event_payload_bytes(&entity.id, event, |field| {
+    let maximum = maximum_event_payload_bytes(registry_id, &entity.id, event, |field| {
         entity
             .fields
             .get(field)
@@ -4200,8 +4319,12 @@ fn compile_event_delivery_inventory(
                     WEBHOOK_MAXIMUM_BACKOFF_MS,
                     WEBHOOK_MAXIMUM_ATTEMPTS,
                 ),
-                maximum_payload_bytes: maximum_compiled_event_payload_bytes(entity, event)
-                    .expect("validated webhook projection fields are bounded"),
+                maximum_payload_bytes: maximum_compiled_event_payload_bytes(
+                    registry_id,
+                    entity,
+                    event,
+                )
+                .expect("validated webhook projection fields are bounded"),
                 dead_letter: WebhookDeadLetterMode::Required,
                 operator_replay: true,
             })
