@@ -4,11 +4,12 @@
 //!
 //! A WASM handler declares a project-local module path instead of a Rhai
 //! script path. This module owns the authored-path discipline, the module
-//! byte ceilings, and (in a build with the WASM executor prototype feature)
+//! byte ceilings, and (in a build with the non-default `wasm` feature)
 //! compile-time structural validation against the platform guest ABI, so a
 //! package either carries a module the runtime could prepare, or the compiler
 //! refuses it with a diagnostic naming the violation. Admission never
-//! executes a guest; the runtime still refuses to execute a WASM handler.
+//! executes a guest; execution belongs to the process runtime in
+//! `wasm_runtime`.
 
 /// Structural byte ceiling for one authored WASM handler module.
 ///
@@ -72,7 +73,7 @@ impl WasmExecutionBackend {
 /// see `structural_violation`) and runtime execution (under the configured
 /// value), so a module is never validated under one engine and executed
 /// under another by configuration drift.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 pub(crate) fn execution_backend(
     configured: WasmExecutionBackend,
 ) -> registry_platform_script::wasm::Backend {
@@ -116,8 +117,8 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 /// tolerated `__data_end`/`__heap_base`.
 ///
 /// Returns the diagnostic code and message for the first violation; the
-/// caller owns the diagnostic path. Runs only in a build with the WASM
-/// executor prototype feature, the only build whose compiler can validate
+/// caller owns the diagnostic path. Runs only in a build with the
+/// `wasm` feature, the only build whose compiler can validate
 /// modules; the default build refuses WASM handlers at admission instead.
 #[cfg(feature = "wasm")]
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
@@ -152,7 +153,7 @@ pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String
 /// engine-setup failure is a build fault, typed with the same execution
 /// class the runtime's prepare and invoke paths use, never as a module
 /// fault: the module bytes did not cause it.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 pub(crate) fn admission_violation(
     error: registry_platform_script::wasm::InvokeError,
 ) -> (&'static str, String) {

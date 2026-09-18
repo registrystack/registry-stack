@@ -1833,8 +1833,8 @@ impl OperationalTimeouts {
 
 /// Operator budgets and backend for process WASM handler execution. Parsed
 /// and validated in every build so the runtime configuration contract is
-/// independent of the server's compiled features; builds without the WASM
-/// executor prototype keep refusing WASM handlers at evaluation admission
+/// independent of the server's compiled features; builds without the
+/// `wasm` feature keep refusing WASM handlers at evaluation admission
 /// whatever these values say.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WasmExecutionConfig {
@@ -1962,7 +1962,7 @@ struct RawRuntimeConfig {
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
     /// Optional WASM handler execution budgets. Parsed in every build;
-    /// executed only in builds with the WASM executor prototype feature.
+    /// executed only in builds with the non-default `wasm` feature.
     #[serde(default)]
     wasm_execution: RawWasmExecutionConfig,
     /// Optional operator-private metrics listener. Absent by default, which
