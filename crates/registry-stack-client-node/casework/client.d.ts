@@ -214,7 +214,7 @@ export interface SourcePolicy {
   requests: ReadonlyArray<SourceRequestPolicy>
 }
 export interface HostedRetentionPolicy { terminalDays: SafeInteger; accountabilityDays: SafeInteger }
-export interface HostedOutcomePolicy { id: string; label: string; reasonRequired: boolean }
+export interface HostedOutcomePolicy { id: string; label: string; reasonRequired: boolean; resultRequired?: boolean }
 export interface HostedKindPolicy {
   id: string
   version: string
@@ -222,6 +222,7 @@ export interface HostedKindPolicy {
   decidingProfiles: ReadonlyArray<string>
   retention: HostedRetentionPolicy
   displaySchema: JsonValue
+  resultSchema?: JsonValue
   outcomes: ReadonlyArray<HostedOutcomePolicy>
 }
 export interface HostedWorkItemContext {
@@ -231,17 +232,20 @@ export interface HostedWorkItemContext {
   display: JsonValue
   kindPolicyDigest: string
   outcomes: ReadonlyArray<HostedOutcomePolicy>
+  resultSchema?: JsonValue
+  resultConstraints?: JsonValue
 }
-export interface HostedCreateRequest { kind: string; requesterReference: string; display: JsonValue }
+export interface HostedCreateRequest { kind: string; requesterReference: string; display: JsonValue; resultConstraints?: JsonValue }
 export interface HostedNoteRequest { note: string }
 export interface HostedCancelRequest { reason: string }
-export interface HostedDecisionRequest { outcome: string; reason?: string }
+export interface HostedDecisionRequest { outcome: string; reason?: string; result?: JsonValue }
 export interface RequesterHostedItem {
   itemId: string
   requesterReference: string
   kind: string
   version: string
   display: JsonValue
+  resultConstraints?: JsonValue
   state: OccurrenceState
   revision: SafeInteger
   kindPolicyDigest: string
@@ -255,7 +259,7 @@ export type HostedTerminalResult = {
   kindPolicyDigest: string
   terminalAt: string
 } & (
-  | { state: 'completed'; outcome: string; actorRef: string }
+  | { state: 'completed'; outcome: string; actorRef: string; result?: JsonValue }
   | { state: 'cancelled'; cancellationReason: string }
 )
 export interface HostedTerminalQuery { cursor?: string; limit?: SafeInteger }
@@ -289,6 +293,7 @@ export interface HostedAccountabilityRecord {
   profileId: string
   outcome: string
   reason?: string
+  resultDigest?: string
   recordedAt: string
   retainedUntil: string
 }
