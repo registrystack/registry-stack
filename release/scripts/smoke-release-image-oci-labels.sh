@@ -17,7 +17,7 @@ source_date_epoch=0
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/registry-stack-oci-labels.XXXXXX")"
 smoke_builder="registry-stack-release-smoke-$$-${RANDOM}"
-buildkit_image="moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
+buildkit_image="ghcr.io/registrystack/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 trap 'docker buildx rm --force "${smoke_builder}" >/dev/null 2>&1 || true; rm -rf -- "${tmp_root}"' EXIT
 
 context_dir="${tmp_root}/context"

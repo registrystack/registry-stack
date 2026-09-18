@@ -30,10 +30,10 @@ RUNTIME_IDENTITY_LABELS = {
     "org.registrystack.runtime.gid": "65532",
 }
 BUILDKIT_IMAGE = (
-    "moby/buildkit:v0.31.2@sha256:"
+    "ghcr.io/registrystack/buildkit:v0.31.2@sha256:"
     "2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 )
-BUILDKIT_REPO_DIGEST = "moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
+BUILDKIT_REPO_DIGEST = "ghcr.io/registrystack/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec"
 
 
 def load_module():
@@ -515,7 +515,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
         result = self.run_wrapper(
             builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
-            builder_container_image="moby/buildkit:v0.31.2",
+            builder_container_image="ghcr.io/registrystack/buildkit:v0.31.2",
         )
 
         self.assertNotEqual(0, result.returncode)
@@ -527,7 +527,7 @@ class ReleaseImageBuildWrapperTest(unittest.TestCase):
             builder_inspect="Driver: docker-container\nBuildKit version: v0.31.2",
             builder_containers="buildx_buildkit_release-builder0",
             builder_container_image=BUILDKIT_IMAGE,
-            buildkit_repo_digests="moby/buildkit@sha256:" + "0" * 64,
+            buildkit_repo_digests="ghcr.io/registrystack/buildkit@sha256:" + "0" * 64,
         )
 
         self.assertNotEqual(0, result.returncode)
@@ -582,8 +582,8 @@ class ReleaseImageOciLabelsSmokeTest(unittest.TestCase):
                 "  'buildx inspect '* ) printf 'Driver: docker-container\\nBuildKit version: v0.31.2\\n' ;;\n"
                 "  'ps --all '* ) cat \"${DOCKER_STATE}\" ;;\n"
                 "  'inspect --format '* )\n"
-                "    echo 'moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
-                "  'image inspect '* ) echo 'moby/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
+                "    echo 'ghcr.io/registrystack/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
+                "  'image inspect '* ) echo 'ghcr.io/registrystack/buildkit@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec' ;;\n"
                 "  'port '* ) echo '127.0.0.1:5000' ;;\n"
                 "esac\n",
                 encoding="utf-8",
