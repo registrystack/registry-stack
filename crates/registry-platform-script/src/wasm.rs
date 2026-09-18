@@ -333,8 +333,9 @@ impl Executor {
     ///
     /// Validation: zero imports; exactly the `alloc` / `handle` /
     /// `result_ptr` / `result_len` / `memory` exports with their wasm32
-    /// signatures, plus an optional `init` export (the pre-initialized
-    /// rewrite strips it).
+    /// signatures, the exported memory's declared minimum within the
+    /// guest-memory budget, plus an optional `init` export (the
+    /// pre-initialized rewrite strips it).
     pub fn prepare(&self, wasm_bytes: &[u8]) -> Result<PreparedModule, InvokeError> {
         if wasm_bytes.len() > self.budgets.max_module_bytes {
             return Err(InvokeError::ModuleTooLarge {
@@ -343,7 +344,7 @@ impl Executor {
             });
         }
         let module = Module::new(&self.engine, wasm_bytes).map_err(invalid_module)?;
-        validate_abi(&module)?;
+        validate_abi(&module, self.budgets.max_guest_memory_bytes)?;
         Ok(PreparedModule { module })
     }
 
@@ -711,10 +712,11 @@ fn types_match(got: impl ExactSizeIterator<Item = ValType>, want: &[ValType]) ->
 /// and pointer exports are `i32`, which is why every wasm-level signature
 /// here is `i32`-typed.
 ///
-/// Error priority: type mismatches and unknown exports are reported while
-/// iterating (deterministically, in module order); a missing required export
-/// is reported only if nothing else fired.
-fn validate_abi(module: &Module) -> Result<(), InvokeError> {
+/// Error priority: type mismatches, oversized declared memory minimums, and
+/// unknown exports are reported while iterating (deterministically, in
+/// module order); a missing required export is reported only if nothing else
+/// fired.
+fn validate_abi(module: &Module, max_guest_memory_bytes: usize) -> Result<(), InvokeError> {
     if let Some(import) = module.imports().next() {
         return Err(InvokeError::UnsupportedImport {
             module: BoundedString::new(import.module()),
@@ -724,12 +726,37 @@ fn validate_abi(module: &Module) -> Result<(), InvokeError> {
 
     let mut seen = [false; 7];
     for export in module.exports() {
-        seen[abi_slot(export.name(), &export.ty())?] = true;
+        let slot = abi_slot(export.name(), &export.ty())?;
+        if slot == MEMORY_SLOT {
+            check_memory_minimum(&export.ty(), max_guest_memory_bytes)?;
+        }
+        seen[slot] = true;
     }
     for (name, present) in REQUIRED_EXPORTS.iter().zip(&seen[..REQUIRED_EXPORTS.len()]) {
         if !present {
             return Err(InvokeError::MissingExport { name });
         }
+    }
+    Ok(())
+}
+
+/// The `seen` slot of the `memory` export.
+const MEMORY_SLOT: usize = 4;
+
+/// Refuse a memory type whose declared minimum (minimum pages times the page
+/// size) already exceeds the guest-memory ceiling: such a module can never
+/// instantiate, so preparation reports the budget denial instead of every
+/// later call failing at instantiation.
+fn check_memory_minimum(ty: &ExternType, max_guest_memory_bytes: usize) -> Result<(), InvokeError> {
+    let ExternType::Memory(memory) = ty else {
+        return Ok(());
+    };
+    let minimum_bytes = memory.minimum().saturating_mul(memory.page_size());
+    if minimum_bytes > max_guest_memory_bytes as u64 {
+        return Err(InvokeError::MemoryLimitExceeded {
+            requested: usize::try_from(minimum_bytes).unwrap_or(usize::MAX),
+            max: max_guest_memory_bytes,
+        });
     }
     Ok(())
 }
