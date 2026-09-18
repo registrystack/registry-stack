@@ -530,7 +530,7 @@ mod tests {
             "entities":[{
                 "id":"record", "primaryDataset":"test-dataset", "route":"records", "mutationMode":"mutable",
                 "classification":"internal", "fields":[field],
-                "events":[{"id":"record-created-v1", "trigger":trigger, "projection":["label"], "webhook":{"destinationId":"local-hook"}}]
+                "hooks":[{"phase":"after","id":"record-created-v1", "trigger":trigger, "projection":["label"], "handler":{"kind":"url","destinationId":"local-hook"}}]
             }]
         });
         if trigger == EventTrigger::RequestLifecycle {

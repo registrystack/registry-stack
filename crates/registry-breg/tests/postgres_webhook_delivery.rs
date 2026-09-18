@@ -1596,9 +1596,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{
+            "hooks":[{
+              "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
-              "webhook":{
+              "handler":{
+                "kind": "url",
                 "destinationId":"case-operations"
               }
             }]

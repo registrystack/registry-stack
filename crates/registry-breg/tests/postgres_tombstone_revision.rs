@@ -532,16 +532,16 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
     };
     let events = if tombstone {
         r#",
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
-              {"id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
+              {"phase":"after","id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
             ]"#
     } else {
         r#",
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]"#
     };
     let project = parse_project_json(

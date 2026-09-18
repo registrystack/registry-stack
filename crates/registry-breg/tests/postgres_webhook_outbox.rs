@@ -621,12 +621,15 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{
+            "hooks":[{
+              "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
-              "webhook":{
+              "handler":{
+                "kind": "url",
                 "destinationId":"case-operations"
               }
             },{
+              "phase": "after",
               "id":"case-label-changed","trigger":"patched","projection":["label"],
               "when":{
                 "kind":"fields",
@@ -634,7 +637,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "beforeEquals":{"label":"first"},
                 "afterEquals":{"restricted_note":"restricted-projection-canary"}
               },
-              "webhook":{"destinationId":"case-operations"}
+              "handler":{"kind":"url","destinationId":"case-operations"}
             }]
           }],
           "accessProfiles":[{

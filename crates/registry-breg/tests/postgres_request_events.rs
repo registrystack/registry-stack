@@ -25,7 +25,7 @@ use registry_breg::api::{
 };
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
-use registry_breg::contract::{EventConditionSource, EventSource, EventTrigger};
+use registry_breg::contract::{EventConditionSource, EventTrigger, HookPhase, HookSource};
 use registry_breg::cursor::CursorCodec;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::mutation::install_mutation_schema;
@@ -308,7 +308,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
     let transaction = migration.transaction().await.expect("transaction starts");
     insert_request_lifecycle_events(
         &transaction,
-        &compiled.entities()[REQUEST_ENTITY].events,
+        &compiled.entities()[REQUEST_ENTITY].hooks,
         &compiled.event_deliveries().deliveries,
         Some(&destinations),
         event,
@@ -549,9 +549,10 @@ async fn authenticated_webhook_service_event_material_does_not_grant_request_act
     database.cleanup().await;
 }
 
-fn configured_events() -> BTreeMap<String, EventSource> {
-    let event = EventSource {
+fn configured_events() -> BTreeMap<String, HookSource> {
+    let event = HookSource {
         id: "approval-ready".to_owned(),
+        phase: HookPhase::After,
         trigger: EventTrigger::RequestLifecycle,
         projection: BTreeSet::from(["reason".to_owned()]),
         when: Some(EventConditionSource::RequestLifecycle {
@@ -559,7 +560,7 @@ fn configured_events() -> BTreeMap<String, EventSource> {
             to_states: BTreeSet::from(["approved".to_owned()]),
             stages: BTreeSet::from(["review".to_owned()]),
         }),
-        webhook: None,
+        handler: None,
     };
     BTreeMap::from([(event.id.clone(), event)])
 }
@@ -576,8 +577,8 @@ fn compiled_lifecycle_registry_with_rejection() -> registry_breg::CompiledRegist
         .iter_mut()
         .find(|entity| entity.id == REQUEST_ENTITY)
         .expect("fixture declares request entity");
-    request.events[0].id = "request-rejected".to_owned();
-    request.events[0].when = Some(EventConditionSource::RequestLifecycle {
+    request.hooks[0].id = "request-rejected".to_owned();
+    request.hooks[0].when = Some(EventConditionSource::RequestLifecycle {
         transitions: BTreeSet::from(["reject".to_owned()]),
         to_states: BTreeSet::from(["rejected".to_owned()]),
         stages: BTreeSet::from(["review".to_owned()]),
@@ -613,7 +614,8 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
               {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
               {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"internal"}
             ],
-            "events":[{
+            "hooks":[{
+              "phase": "after",
               "id":"request-approved",
               "trigger":"request_lifecycle",
               "projection":["reason"],
@@ -623,7 +625,7 @@ fn lifecycle_project() -> registry_breg::contract::RegistryProject {
                 "toStates":["approved"],
                 "stages":["review"]
               },
-              "webhook":{"destinationId":"review-operations"}
+              "handler":{"kind":"url","destinationId":"review-operations"}
             }],
             "changeRequest":{
               "effects":[{

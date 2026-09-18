@@ -456,20 +456,20 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
     let entity_object = entity
         .as_object_mut()
         .context("BReg entity must be an object")?;
-    let events = entity_object
-        .entry("events")
+    let hooks = entity_object
+        .entry("hooks")
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .context("BReg entity events must be an array")?;
-    let (event, profile) = candidate_fragments(entity_id, projection);
-    match events
+        .context("BReg entity hooks must be an array")?;
+    let (hook, profile) = candidate_fragments(entity_id, projection);
+    match hooks
         .iter()
         .find(|item| item["id"] == "casework-lifecycle-v1")
     {
-        Some(existing) if existing != &event => {
-            bail!("BReg event casework-lifecycle-v1 already exists with different content")
+        Some(existing) if existing != &hook => {
+            bail!("BReg hook casework-lifecycle-v1 already exists with different content")
         }
-        None => events.push(event),
+        None => hooks.push(hook),
         _ => {}
     }
     let profiles = object
@@ -484,7 +484,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
         _ => {}
     }
     Ok(json!([
-        {"file":"registry.yaml","path":format!("/entities/{entity_id}/events/casework-lifecycle-v1"),"operation":"ensure_exact"},
+        {"file":"registry.yaml","path":format!("/entities/{entity_id}/hooks/casework-lifecycle-v1"),"operation":"ensure_exact"},
         {"file":"registry.yaml","path":format!("/accessProfiles/{READER_CLIENT_ID}"),"operation":"ensure_exact"}
     ]))
 }
@@ -492,7 +492,7 @@ fn apply_breg_candidate(root: &mut Value, entity_id: &str, projection: &[String]
 fn candidate_fragments(entity_id: &str, projection: &[String]) -> (Value, Value) {
     let fields = reader_fields(projection);
     (
-        json!({"id":"casework-lifecycle-v1","trigger":"request_lifecycle","projection":["record"],"webhook":{"destinationId":"casework"}}),
+        json!({"id":"casework-lifecycle-v1","phase":"after","trigger":"request_lifecycle","projection":["record"],"handler":{"kind":"url","destinationId":"casework"}}),
         json!({
             "id":READER_CLIENT_ID, "default":false, "principalClaim":READER_PRINCIPAL_CLAIM,
             "requiredScopes":[READER_SCOPE], "requiredPurposes":[READER_PURPOSE],
@@ -517,14 +517,14 @@ fn render_candidate_preserving_authored_text(
         return Ok(rendered);
     }
     let parsed: Value = serde_norway::from_str(text)?;
-    let has_event = parsed["entities"]
+    let has_hook = parsed["entities"]
         .as_array()
         .and_then(|entities| entities.iter().find(|entity| entity["id"] == entity_id))
-        .and_then(|entity| entity["events"].as_array())
-        .is_some_and(|events| {
-            events
+        .and_then(|entity| entity["hooks"].as_array())
+        .is_some_and(|hooks| {
+            hooks
                 .iter()
-                .any(|event| event["id"] == "casework-lifecycle-v1")
+                .any(|hook| hook["id"] == "casework-lifecycle-v1")
         });
     let has_profile = parsed["accessProfiles"].as_array().is_some_and(|profiles| {
         profiles
@@ -532,8 +532,8 @@ fn render_candidate_preserving_authored_text(
             .any(|profile| profile["id"] == READER_CLIENT_ID)
     });
     let mut rendered = text.to_owned();
-    if !has_event {
-        rendered = insert_entity_event(&rendered, entity_id)?;
+    if !has_hook {
+        rendered = insert_entity_hook(&rendered, entity_id)?;
     }
     if !has_profile {
         rendered = insert_access_profile(&rendered, entity_id, projection)?;
@@ -546,7 +546,7 @@ fn render_candidate_preserving_authored_text(
     Ok(rendered)
 }
 
-fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
+fn insert_entity_hook(text: &str, entity_id: &str) -> Result<String> {
     let lines = text.split_inclusive('\n').collect::<Vec<_>>();
     let marker = format!("- id: {entity_id}");
     let start = lines
@@ -567,11 +567,11 @@ fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
         .min()
         .unwrap_or(lines.len());
     let field_indent = item_indent + 2;
-    let events = (start + 1..end).find(|index| {
-        leading_spaces(lines[*index]) == field_indent && lines[*index].trim() == "events:"
+    let hooks = (start + 1..end).find(|index| {
+        leading_spaces(lines[*index]) == field_indent && lines[*index].trim() == "hooks:"
     });
-    let insertion = if let Some(events) = events {
-        (events + 1..end)
+    let insertion = if let Some(hooks) = hooks {
+        (hooks + 1..end)
             .find(|index| {
                 leading_spaces(lines[*index]) == field_indent
                     && !lines[*index].trim().is_empty()
@@ -581,10 +581,10 @@ fn insert_entity_event(text: &str, entity_id: &str) -> Result<String> {
     } else {
         end
     };
-    let block = if events.is_some() {
-        format!("{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+    let block = if hooks.is_some() {
+        format!("{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
     } else {
-        format!("{}events:\n{}- id: casework-lifecycle-v1\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  webhook: {{destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
+        format!("{}hooks:\n{}- id: casework-lifecycle-v1\n{}  phase: after\n{}  trigger: request_lifecycle\n{}  projection: [record]\n{}  handler: {{kind: url, destinationId: casework}}\n", " ".repeat(field_indent), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2), " ".repeat(field_indent + 2))
     };
     Ok(insert_at_line(&lines, insertion, &block))
 }
@@ -1415,11 +1415,11 @@ mod tests {
     }
 
     #[test]
-    fn candidate_adds_only_exact_event_and_reader() {
+    fn candidate_adds_only_exact_hook_and_reader() {
         let mut root = json!({"entities":[{"id":"request"}],"accessProfiles":[]});
         apply_breg_candidate(&mut root, "request", &[]).unwrap();
         assert_eq!(
-            root["entities"][0]["events"][0]["trigger"],
+            root["entities"][0]["hooks"][0]["trigger"],
             "request_lifecycle"
         );
         assert_eq!(
@@ -1431,7 +1431,7 @@ mod tests {
             json!(["review_state"])
         );
         apply_breg_candidate(&mut root, "request", &[]).unwrap();
-        assert_eq!(root["entities"][0]["events"].as_array().unwrap().len(), 1);
+        assert_eq!(root["entities"][0]["hooks"].as_array().unwrap().len(), 1);
     }
 
     #[test]
@@ -1468,7 +1468,7 @@ mod tests {
             json!(["record", "region"])
         );
         assert_eq!(
-            expected["entities"][0]["events"][0]["projection"],
+            expected["entities"][0]["hooks"][0]["projection"],
             json!(["record"])
         );
         assert!(!rendered.contains("private-note"));

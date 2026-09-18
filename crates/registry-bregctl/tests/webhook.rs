@@ -23,13 +23,13 @@ impl TestProject {
         Self::create_from(SAMPLE_EVENT_SOURCE)
     }
 
-    /// A project without any authored event, for the refusal an adopter meets
+    /// A project without any authored hook, for the refusal an adopter meets
     /// when there is nothing to sample.
-    fn without_events() -> Self {
-        let (before_events, _) = SAMPLE_EVENT_SOURCE
-            .split_once("    events:")
-            .expect("the sample project authors events");
-        Self::create_from(before_events)
+    fn without_hooks() -> Self {
+        let (before_hooks, _) = SAMPLE_EVENT_SOURCE
+            .split_once("    hooks:")
+            .expect("the sample project authors hooks");
+        Self::create_from(before_hooks)
     }
 
     fn create_from(registry_yaml: &str) -> Self {
@@ -77,11 +77,13 @@ entities:
         vocabulary: record-status
         values: [ready, closed]
         classification: internal
-    events:
+    hooks:
       - id: record-created-v1
+        phase: after
         trigger: created
         projection: [active, count, observed-at, status]
-        webhook:
+        handler:
+          kind: url
           destinationId: sample-receiver
 "#;
 
@@ -233,14 +235,14 @@ fn unavailable_sample_event_is_value_free_and_field_addressed() {
         .expect("message is a string");
     assert!(message.contains(EVENT_ID), "{message}");
 
-    let without_events = TestProject::without_events();
+    let without_hooks = TestProject::without_hooks();
     let (status, stdout, stderr) = run([
         OsStr::new("bregctl"),
         OsStr::new("--format"),
         OsStr::new("json"),
         OsStr::new("webhook"),
         OsStr::new("sample"),
-        without_events.path().as_os_str(),
+        without_hooks.path().as_os_str(),
         OsStr::new("--event"),
         OsStr::new(EVENT_ID),
     ]);

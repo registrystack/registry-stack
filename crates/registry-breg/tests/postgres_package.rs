@@ -3590,7 +3590,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         plan,
         PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
     ) {
-        r#","events":[{"id":"neutral-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"neutral-events"}}]"#
+        r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"neutral-events"}}]"#
     } else {
         ""
     };

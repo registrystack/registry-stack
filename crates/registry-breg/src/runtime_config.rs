@@ -354,7 +354,7 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
         "fields",
         "accessProfiles",
         "routes",
-        "events",
+        "hooks",
         "packages",
         "sources",
         "semantics",
@@ -376,7 +376,7 @@ fn contains_governed_member(value: &serde_norway::Value) -> bool {
         serde_norway::Value::Mapping(mapping) => mapping.iter().any(|(key, value)| {
             key.as_str().is_some_and(|key| GOVERNED.contains(&key))
                 // Binding-map keys are compiler-issued logical ids. Do not
-                // reinterpret an id such as `events` as a governed field; the
+                // reinterpret an id such as `hooks` as a governed field; the
                 // strict binding value types still reject undeployed members.
                 || (key.as_str().is_none_or(|key| {
                     !matches!(key, "eventDestinations" | "evidenceProviders")

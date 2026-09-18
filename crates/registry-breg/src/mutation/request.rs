@@ -1551,7 +1551,7 @@ impl MutationCoordinator {
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
         crate::request_events::insert_request_lifecycle_events(
             transaction.transaction(),
-            &entity.events,
+            &entity.hooks,
             &exact_entity_event_deliveries(registry, entity)?,
             self.event_destinations.as_deref(),
             crate::request_events::RequestLifecycleEvent {
@@ -2514,7 +2514,7 @@ impl MutationCoordinator {
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
         insert_configured_events(
             transaction,
-            &entity.events,
+            &entity.hooks,
             &plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {

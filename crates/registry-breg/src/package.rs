@@ -1261,8 +1261,8 @@ fn compare_entities(
         );
         compare_map(
             entity_id,
-            &previous_entity.events,
-            &candidate_entity.events,
+            &previous_entity.hooks,
+            &candidate_entity.hooks,
             CompiledRegistryChangeTargetKind::Event,
             CompiledRegistryChangeCode::EventAdded,
             CompiledRegistryChangeCode::EventRemoved,

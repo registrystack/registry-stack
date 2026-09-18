@@ -14,11 +14,11 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
-    FieldSource, FieldTypeSource, GeoJsonSource, LookupValueOrigin, ManifestProjectionTextSource,
-    ModuleAssetSource, MutationMode, Operation, ReadPathPermissionSource, RegistryModule,
-    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource,
-    UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
-    MAX_STRUCTURED_VALUE_BYTES,
+    FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
+    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::validate_derived_sql;
 use crate::diagnostics::{CompileFailure, Diagnostic};
@@ -1441,11 +1441,11 @@ fn merge_extension(
         errors,
     );
     merge_by_id(
-        &mut entity.events,
-        &extension.events,
+        &mut entity.hooks,
+        &extension.hooks,
         |value| value.id.as_str(),
         "extension.event.duplicate",
-        "modules[].extendEntities[].events[].id",
+        "modules[].extendEntities[].hooks[].id",
         "an event identifier is contributed more than once",
         errors,
     );
@@ -1899,7 +1899,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
-        validate_events(entity, profile, &mut event_ids, errors);
+        validate_hooks(entity, profile, &mut event_ids, errors);
     }
     validate_read_path_cycles(entities, errors);
 }
@@ -3584,7 +3584,7 @@ fn validate_read_path_permission_fields(
     }
 }
 
-fn validate_events(
+fn validate_hooks(
     entity: &EntitySource,
     profile: CompileProfile,
     registry_event_ids: &mut BTreeSet<String>,
@@ -3596,93 +3596,115 @@ fn validate_events(
         .map(|field| (field.id.as_str(), field))
         .collect();
     let mut ids = BTreeSet::new();
-    for event in &entity.events {
-        validate_id(&event.id, "entities[].events[].id", errors);
-        if !ids.insert(event.id.as_str()) {
+    for hook in &entity.hooks {
+        validate_id(&hook.id, "entities[].hooks[].id", errors);
+        if !ids.insert(hook.id.as_str()) {
             errors.push(Diagnostic::error(
                 "event.id.duplicate",
-                "entities[].events[].id",
+                "entities[].hooks[].id",
                 "an event identifier is duplicated",
             ));
-        } else if !registry_event_ids.insert(event.id.clone()) {
+        } else if !registry_event_ids.insert(hook.id.clone()) {
             errors.push(Diagnostic::error(
                 "event.id.registry_duplicate",
-                "entities[].events[].id",
+                "entities[].hooks[].id",
                 "an event identifier must be unique across the Registry",
             ));
         }
-        if event.projection.is_empty() {
+        if hook.phase != HookPhase::After {
+            errors.push(Diagnostic::error(
+                "hook.phase.unsupported",
+                "entities[].hooks[].phase",
+                "an entity hook runs after the triggering transaction commits; declare phase: after",
+            ));
+        }
+        if hook.projection.is_empty() {
             errors.push(Diagnostic::error(
                 "event.projection.empty",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "an event projection must contain at least one field",
             ));
         }
-        if event
+        if hook
             .projection
             .iter()
             .any(|field| !fields.contains_key(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "event.projection.field_unknown",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, event, |field| {
+        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, hook, |field| {
             fields
                 .get(field)
                 .map(|field| (&field.field_type, field.required))
         });
         if matches!(
-            event.trigger,
+            hook.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
         ) && entity.mutation_mode == MutationMode::CreateOnly
         {
             errors.push(Diagnostic::error(
                 "event.trigger.unavailable",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "an event trigger is unavailable for a create-only entity",
             ));
         }
-        if event.trigger == EventTrigger::Tombstoned && !entity.tombstone {
+        if hook.trigger == EventTrigger::Tombstoned && !entity.tombstone {
             errors.push(Diagnostic::error(
                 "event.trigger.unavailable",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "a tombstone event requires tombstone behavior",
             ));
         }
-        if event.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
+        if hook.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
             errors.push(Diagnostic::error(
                 "event.trigger.request_lifecycle_requires_change_request",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "a request lifecycle event can be declared only on a change-request entity",
             ));
         }
-        validate_event_condition(event, &fields, errors);
-        let Some(webhook) = event.webhook.as_ref() else {
-            if profile == CompileProfile::Production {
+        validate_event_condition(hook, &fields, errors);
+        let destination_id = match hook.handler.as_ref() {
+            Some(HookHandlerSource::Url { destination_id }) => destination_id,
+            // The after-commit worker delivers to a bound destination. A
+            // local handler kind is part of the shared declaration and has no
+            // executor on this path, so it is refused rather than compiled
+            // into a hook that never runs.
+            Some(_) => {
                 errors.push(Diagnostic::error(
-                    "event.delivery.required",
-                    "entities[].events[].webhook",
-                    "a production event requires a supported delivery",
+                    "hook.handler.kind.unsupported",
+                    "entities[].hooks[].handler.kind",
+                    "an entity hook delivers to a bound destination; declare handler kind url",
                 ));
+                continue;
             }
-            continue;
+            None => {
+                if profile == CompileProfile::Production {
+                    errors.push(Diagnostic::error(
+                        "event.delivery.required",
+                        "entities[].hooks[].handler",
+                        "a production event requires a supported delivery",
+                    ));
+                }
+                continue;
+            }
         };
         if maximum_payload_bytes
             .is_some_and(|maximum| maximum > u64::from(MAX_WEBHOOK_PAYLOAD_BYTES))
         {
             errors.push(Diagnostic::error(
                 "event.webhook.projection_too_large",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "the webhook projection can exceed the governed transport body bound",
             ));
         }
-        if !valid_logical_destination_id(&webhook.destination_id) {
+        if !valid_logical_destination_id(destination_id) {
             errors.push(Diagnostic::error(
                 "event.webhook.destination.invalid",
-                "entities[].events[].webhook.destinationId",
+                "entities[].hooks[].handler.destinationId",
                 "a webhook destination must use the closed logical identifier grammar",
             ));
         }
@@ -3690,7 +3712,7 @@ fn validate_events(
 }
 
 fn validate_event_condition(
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
     fields: &BTreeMap<&str, &FieldSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -3703,7 +3725,7 @@ fn validate_event_condition(
             if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
                 errors.push(Diagnostic::error(
                     "event.when.empty",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "a field event condition requires at least one predicate",
                 ));
             }
@@ -3716,7 +3738,7 @@ fn validate_event_condition(
             if !compatible {
                 errors.push(Diagnostic::error(
                     "event.when.trigger_incompatible",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "field predicates are unavailable for this event trigger",
                 ));
             }
@@ -3724,14 +3746,14 @@ fn validate_event_condition(
                 if !fields.contains_key(field.as_str()) {
                     errors.push(Diagnostic::error(
                         "event.when.field_unknown",
-                        "entities[].events[].when.changed",
+                        "entities[].hooks[].when.changed",
                         "an event condition refers to an unknown field",
                     ));
                 }
             }
             for (path, predicates) in [
-                ("entities[].events[].when.beforeEquals", before_equals),
-                ("entities[].events[].when.afterEquals", after_equals),
+                ("entities[].hooks[].when.beforeEquals", before_equals),
+                ("entities[].hooks[].when.afterEquals", after_equals),
             ] {
                 for (field, value) in predicates {
                     let Some(source) = fields.get(field.as_str()) else {
@@ -3764,14 +3786,14 @@ fn validate_event_condition(
             if transitions.is_empty() && to_states.is_empty() && stages.is_empty() {
                 errors.push(Diagnostic::error(
                     "event.when.empty",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "a request lifecycle event condition requires at least one predicate",
                 ));
             }
             if event.trigger != EventTrigger::RequestLifecycle {
                 errors.push(Diagnostic::error(
                     "event.when.trigger_incompatible",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "request lifecycle predicates are available only for request lifecycle events",
                 ));
             }
@@ -3779,7 +3801,7 @@ fn validate_event_condition(
                 if !valid_request_lifecycle_transition(transition) {
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_transition_unknown",
-                        "entities[].events[].when.transitions",
+                        "entities[].hooks[].when.transitions",
                         &format!(
                             "a request lifecycle event condition refers to an unknown transition `{transition}`; the change request workflow performs {}",
                             quoted_list(&REQUEST_LIFECYCLE_TRANSITIONS)
@@ -3791,7 +3813,7 @@ fn validate_event_condition(
                 if !valid_request_lifecycle_state(state) {
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_state_unknown",
-                        "entities[].events[].when.toStates",
+                        "entities[].hooks[].when.toStates",
                         &format!(
                             "a request lifecycle event condition refers to an unknown request state `{state}`; a change request rests in {}",
                             quoted_list(&REQUEST_LIFECYCLE_STATES)
@@ -3800,7 +3822,7 @@ fn validate_event_condition(
                 }
             }
             for stage in stages {
-                validate_id(stage, "entities[].events[].when.stages", errors);
+                validate_id(stage, "entities[].hooks[].when.stages", errors);
             }
         }
         None => {}
@@ -3919,7 +3941,7 @@ fn valid_logical_destination_id(value: &str) -> bool {
 
 fn maximum_event_payload_bytes<'a>(
     entity_id: &str,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
     let trigger = event.trigger;
@@ -4043,7 +4065,7 @@ fn maximum_event_values_bytes<'a>(
 
 pub(crate) fn maximum_compiled_event_payload_bytes(
     entity: &CompiledEntity,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Option<u32> {
     let maximum = maximum_event_payload_bytes(&entity.id, event, |field| {
         entity
@@ -4094,7 +4116,7 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
 
 /// A lifecycle event can disclose reviewer text only on these two transitions.
 /// Empty condition sets are unrestricted, as in runtime condition evaluation.
-fn request_event_may_include_review_reason(event: &crate::contract::EventSource) -> bool {
+fn request_event_may_include_review_reason(event: &crate::contract::HookSource) -> bool {
     if event.trigger != EventTrigger::RequestLifecycle {
         return false;
     }
@@ -4124,14 +4146,17 @@ fn compile_event_delivery_inventory(
     let mut deliveries = entities
         .values()
         .flat_map(|entity| {
-            entity.events.values().filter_map(move |event| {
-                event
-                    .webhook
-                    .as_ref()
-                    .map(|webhook| (entity, event, webhook))
-            })
+            entity
+                .hooks
+                .values()
+                .filter_map(move |event| match event.handler.as_ref() {
+                    Some(HookHandlerSource::Url { destination_id }) => {
+                        Some((entity, event, destination_id))
+                    }
+                    Some(_) | None => None,
+                })
         })
-        .map(|(entity, event, webhook)| {
+        .map(|(entity, event, destination_id)| {
             let binding = event_data_schema_binding(registry_id, entity, event)?;
             let mut classifications = event
                 .projection
@@ -4155,7 +4180,7 @@ fn compile_event_delivery_inventory(
                 entity_id: entity.id.clone(),
                 event_id: event.id.clone(),
                 trigger: event.trigger,
-                destination_id: webhook.destination_id.clone(),
+                destination_id: destination_id.clone(),
                 projection_fields: event.projection.iter().cloned().collect(),
                 when: event.when.clone(),
                 classification_ceiling,
@@ -4187,7 +4212,7 @@ fn compile_event_delivery_inventory(
 }
 
 fn event_condition_fields(
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Box<dyn Iterator<Item = &String> + '_> {
     match event.when.as_ref() {
         Some(EventConditionSource::Fields {
@@ -4518,10 +4543,10 @@ fn compile_entities(
             }
             profiles.insert(access.id.clone(), profile);
         }
-        let events = source
-            .events
+        let hooks = source
+            .hooks
             .iter()
-            .map(|event| (event.id.clone(), event.clone()))
+            .map(|hook| (hook.id.clone(), hook.clone()))
             .collect();
         inventory.insert(
             source.id.clone(),
@@ -4571,7 +4596,7 @@ fn compile_entities(
                 indexes,
                 access_profiles: profiles,
                 membership_boundaries: BTreeMap::new(),
-                events,
+                hooks,
             },
         );
     }
