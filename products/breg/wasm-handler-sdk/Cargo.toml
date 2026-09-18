@@ -1,0 +1,26 @@
+# Workspace for the BREG WASM handler SDK: the guest authoring crates, the
+# build-time pre-initializer, and the admission-proof harness. This directory
+# is excluded from the registry-stack workspace on purpose: guest-only
+# dependencies (the pinned phonenumber metadata) must not enter the
+# registry-stack Cargo.lock, and the byte-ABI shim needs raw-pointer code the
+# registry workspace forbids.
+[workspace]
+resolver = "2"
+members = ["sdk"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# Size-profile for guest wasm builds, the profile the module-size ceiling
+# assumes (diagnostic build recorded in the platform-script WASM plan,
+# 2026-09-17): smallest code size, whole-program LTO, no unwinding tables.
+[profile.release-wasm]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
