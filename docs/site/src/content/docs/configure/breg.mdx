@@ -417,7 +417,7 @@ X-Registry-Signature: v1=<computed-at-delivery>
 ce-specversion: 1.0
 ce-type: record-status-changed-v1
 
-{"entity":"record","packageRevision":"sha256:<digest>","recordId":"<uuid>","revision":1,"trigger":"patched","values":{"code":"x","status":"draft"}}
+{"causation":{"hop":0,"root":"<event-uuid>"},"data":{"entity":"record","packageRevision":"sha256:<digest>","recordId":"<uuid>","revision":1,"trigger":"patched","values":{"code":"x","status":"draft"}},"dataschema":"urn:breg:event-schema:generic-registry:record:record-status-changed-v1:sha256:<digest>","id":"<event-uuid>","source":"urn:registrystack:registry:generic-registry:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:<64-hex>","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"record-status-changed-v1"}
 ```
 
 The remaining headers are omitted.

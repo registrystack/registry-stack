@@ -48,6 +48,8 @@ const SUCCESSOR_PACKAGE_REVISION: &str =
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SUCCESSOR_SCHEMA_FINGERPRINT: &str =
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const EVENT_SOURCE: &str =
+    "urn:registrystack:registry:webhook-delivery-registry:instance:webhook-delivery-instance";
 const DESTINATION_ID: &str = "case-operations";
 const DELIVERY_PATH: &str = "/registry-events";
 const HMAC_KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
@@ -1205,31 +1207,61 @@ async fn create_event(
         package_revision: row.get(4),
         created_at: row.get(5),
     };
-    let body: Value =
+    let envelope: Value =
         serde_json::from_slice(&captured.payload).expect("captured event body is strict JSON");
-    let record_id = body
-        .get("recordId")
+    let record_id = envelope
+        .pointer("/data/recordId")
         .and_then(Value::as_str)
         .expect("captured event contains a raw record id");
     Uuid::parse_str(record_id).expect("captured record id is a UUID");
+    let record_reference = envelope
+        .pointer("/subject/recordReference")
+        .and_then(Value::as_str)
+        .expect("captured envelope names the record reference");
+    let (algorithm, digest) = record_reference
+        .split_once(':')
+        .expect("the record reference names its hash algorithm");
+    assert_eq!(algorithm, "hmac-sha256");
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()),
+        "the subject carries the hashed record reference"
+    );
+    assert!(
+        !record_reference.contains(record_id),
+        "the subject never restates the raw record id"
+    );
     assert_eq!(
-        body,
+        envelope,
         json!({
-            "entity": "case",
-            "recordId": record_id,
-            "revision": 1,
-            "trigger": "created",
-            "packageRevision": PACKAGE_REVISION,
-            "values": {
-                "label": label,
-                "restricted_note": RECORD_VALUE_CANARY,
+            "id": captured.event_id.to_string(),
+            "type": "case-created",
+            "source": EVENT_SOURCE,
+            "time": OffsetDateTime::from(captured.created_at)
+                .format(&Rfc3339)
+                .expect("captured event time formats"),
+            "subject": {"recordReference": record_reference, "recordRevision": 1},
+            "dataschema": captured.data_schema,
+            "causation": {"root": captured.event_id.to_string(), "hop": 0},
+            "data": {
+                "entity": "case",
+                "recordId": record_id,
+                "revision": 1,
+                "trigger": "created",
+                "packageRevision": PACKAGE_REVISION,
+                "values": {
+                    "label": label,
+                    "restricted_note": RECORD_VALUE_CANARY,
+                },
             },
         }),
-        "event body carries only the fixed envelope and declared projection"
+        "event body is one shared hook envelope over the declared projection"
     );
     assert_eq!(
         captured.payload,
-        canonicalize_json(&body).expect("captured body canonicalizes"),
+        canonicalize_json(&envelope).expect("captured body canonicalizes"),
         "durable and transmitted body bytes are canonical"
     );
     captured
@@ -1509,10 +1541,7 @@ async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) 
     );
     assert_eq!(header(request, "ce-id"), event.event_id.to_string());
     assert_eq!(header(request, "ce-specversion"), "1.0");
-    assert_eq!(
-        header(request, "ce-source"),
-        "urn:registrystack:registry:webhook-delivery-registry:instance:webhook-delivery-instance"
-    );
+    assert_eq!(header(request, "ce-source"), EVENT_SOURCE);
     assert_eq!(header(request, "ce-type"), "case-created");
     assert_eq!(
         header(request, "ce-time"),

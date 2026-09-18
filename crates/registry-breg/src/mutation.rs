@@ -54,7 +54,9 @@ use crate::model::{
     CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
     HttpMethod,
 };
-use crate::outbox::{insert_configured_events, OutboxError, OutboxMutation};
+use crate::outbox::{
+    event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
+};
 use crate::postgres::{
     begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
     ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
@@ -771,6 +773,11 @@ pub struct MutationCoordinator {
 }
 
 impl MutationCoordinator {
+    /// The event source this deployment stamps on every captured envelope.
+    fn event_source(&self) -> String {
+        crate::webhook::delivery_source(&self.expected.package_id, &self.expected.instance_id)
+    }
+
     #[must_use]
     pub fn new(
         lock_key: RegistryLockKey,
@@ -1387,13 +1394,21 @@ impl MutationCoordinator {
         )
         .await?;
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+        let trigger = mutation_trigger(request.plan.route.operation);
+        let data_schemas = event_data_schemas(
+            &request.plan.registry_id,
+            &request.plan.entity,
+            trigger,
+            &request.plan.event_deliveries,
+        )?;
+        let event_source = self.event_source();
         insert_configured_events(
             transaction.transaction(),
             &request.plan.entity.hooks,
             &request.plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
-                trigger: mutation_trigger(request.plan.route.operation),
+                trigger,
                 application_reference: None,
                 entity_id: &request.plan.entity.id,
                 record_id: &current.record_id,
@@ -1410,6 +1425,11 @@ impl MutationCoordinator {
                     .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                         destinations.payload_retention()
                     }),
+                envelope: EnvelopeBinding {
+                    source: &event_source,
+                    data_schemas: &data_schemas,
+                    causation: None,
+                },
             },
         )
         .await?;
@@ -1631,13 +1651,21 @@ impl MutationCoordinator {
                 request_receipt_links.push((current.record_uuid, version));
             }
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+            let trigger = mutation_trigger(item_plan.route.operation);
+            let data_schemas = event_data_schemas(
+                &item_plan.registry_id,
+                &item_plan.entity,
+                trigger,
+                &item_plan.event_deliveries,
+            )?;
+            let event_source = self.event_source();
             insert_configured_events(
                 transaction.transaction(),
                 &item_plan.entity.hooks,
                 &item_plan.event_deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {
-                    trigger: mutation_trigger(item_plan.route.operation),
+                    trigger,
                     application_reference: None,
                     entity_id: &item_plan.entity.id,
                     record_id: &current.record_id,
@@ -1653,6 +1681,11 @@ impl MutationCoordinator {
                         .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                             destinations.payload_retention()
                         }),
+                    envelope: EnvelopeBinding {
+                        source: &event_source,
+                        data_schemas: &data_schemas,
+                        causation: None,
+                    },
                 },
             )
             .await?;

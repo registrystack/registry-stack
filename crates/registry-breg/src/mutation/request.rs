@@ -1549,10 +1549,18 @@ impl MutationCoordinator {
             .await?;
         }
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+        let deliveries = exact_entity_event_deliveries(registry, entity)?;
+        let data_schemas = event_data_schemas(
+            registry.registry_id(),
+            entity,
+            EventTrigger::RequestLifecycle,
+            &deliveries,
+        )?;
+        let event_source = self.event_source();
         crate::request_events::insert_request_lifecycle_events(
             transaction.transaction(),
             &entity.hooks,
-            &exact_entity_event_deliveries(registry, entity)?,
+            &deliveries,
             self.event_destinations.as_deref(),
             crate::request_events::RequestLifecycleEvent {
                 request_entity_id: &entity.id,
@@ -1587,6 +1595,11 @@ impl MutationCoordinator {
                     .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                         destinations.payload_retention()
                     }),
+                envelope: EnvelopeBinding {
+                    source: &event_source,
+                    data_schemas: &data_schemas,
+                    causation: None,
+                },
             },
         )
         .await?;
@@ -2512,13 +2525,17 @@ impl MutationCoordinator {
         )
         .await?;
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+        let trigger = mutation_trigger(target.operation);
+        let data_schemas =
+            event_data_schemas(&plan.registry_id, entity, trigger, &plan.event_deliveries)?;
+        let event_source = self.event_source();
         insert_configured_events(
             transaction,
             &entity.hooks,
             &plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
-                trigger: mutation_trigger(target.operation),
+                trigger,
                 application_reference: None,
                 entity_id: &entity.id,
                 record_id: &id,
@@ -2534,6 +2551,11 @@ impl MutationCoordinator {
                     .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                         destinations.payload_retention()
                     }),
+                envelope: EnvelopeBinding {
+                    source: &event_source,
+                    data_schemas: &data_schemas,
+                    causation: None,
+                },
             },
         )
         .await?;

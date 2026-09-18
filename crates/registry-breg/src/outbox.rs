@@ -3,20 +3,22 @@
 //! Immutable configured events created inside the owning record transaction.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_hooks::delivery::DeliveryCapture;
+use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde_json::{json, Map, Value};
+use time::OffsetDateTime;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
+use crate::artifacts::event_data_schema_binding;
 use crate::contract::{
     Classification, EventConditionSource, EventScalarValue, EventTrigger, HookSource,
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
-use crate::model::{CompiledEventDelivery, CompiledWebhookDeliveryMode};
+use crate::model::{CompiledEntity, CompiledEventDelivery, CompiledWebhookDeliveryMode};
 use crate::webhook::DELIVERY_SCHEMA;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -25,6 +27,20 @@ pub enum OutboxError {
     InvalidProjection,
     #[error("mutation outbox is unavailable")]
     Unavailable,
+}
+
+/// The deployment identity and chain position every captured envelope carries.
+#[doc(hidden)]
+pub struct EnvelopeBinding<'a> {
+    /// The producing deployment, the same source the delivery worker renders
+    /// as the `ce-source` header.
+    pub source: &'a str,
+    /// The data contract id for each hook's `data`, by hook id.
+    pub data_schemas: &'a BTreeMap<String, String>,
+    /// The chain this capture belongs to. `None` starts a new chain at the
+    /// captured event; a capture caused by an earlier event passes the child
+    /// causation that event produced.
+    pub causation: Option<&'a Causation>,
 }
 
 pub(crate) struct OutboxMutation<'a> {
@@ -39,6 +55,118 @@ pub(crate) struct OutboxMutation<'a> {
     pub before: Option<&'a Map<String, Value>>,
     pub after: Option<&'a Map<String, Value>>,
     pub payload_retention: Duration,
+    pub envelope: EnvelopeBinding<'a>,
+}
+
+/// One captured event, before it becomes envelope bytes.
+pub(crate) struct CapturedEvent<'a> {
+    pub event_id: Uuid,
+    pub event_type: &'a str,
+    pub created_at: OffsetDateTime,
+    pub record_reference: &'a str,
+    pub record_revision: i64,
+    pub data: Value,
+}
+
+/// Build the shared hook envelope one captured event is stored and delivered
+/// as. `data` is the product projection, carried unchanged.
+pub(crate) fn capture_envelope(
+    binding: &EnvelopeBinding<'_>,
+    event: CapturedEvent<'_>,
+) -> Result<HookEnvelope, OutboxError> {
+    let id = event.event_id.to_string();
+    let causation = binding
+        .causation
+        .cloned()
+        .unwrap_or_else(|| Causation::root(&id));
+    let dataschema = binding
+        .data_schemas
+        .get(event.event_type)
+        .ok_or(OutboxError::InvalidProjection)?
+        .clone();
+    Ok(HookEnvelope {
+        id,
+        event_type: event.event_type.to_owned(),
+        source: binding.source.to_owned(),
+        time: event.created_at,
+        subject: EventSubject {
+            record_reference: event.record_reference.to_owned(),
+            record_revision: event.record_revision,
+        },
+        dataschema,
+        data: event.data,
+        causation,
+    })
+}
+
+/// The canonical envelope bytes the outbox stores and the worker delivers
+/// unchanged.
+///
+/// `maximum_payload_bytes` is the compiled per-delivery bound. It measures the
+/// whole envelope, not the `data` object alone; an event with no compiled
+/// delivery carries the store's own 2 MiB bound.
+pub(crate) fn envelope_payload(
+    envelope: &HookEnvelope,
+    maximum_payload_bytes: Option<u32>,
+) -> Result<Vec<u8>, OutboxError> {
+    let limits = match maximum_payload_bytes {
+        Some(bytes) => EnvelopeLimits::tightened_to(
+            usize::try_from(bytes).map_err(|_| OutboxError::InvalidProjection)?,
+        ),
+        None => EnvelopeLimits::default(),
+    };
+    envelope
+        .to_canonical_bytes(&limits)
+        .map_err(|_| OutboxError::InvalidProjection)
+}
+
+/// Resolve the data contract id of every hook of `entity` that `trigger` fires.
+///
+/// A hook with a compiled delivery carries the id the compiler already proved.
+/// A hook without one still writes an outbox row, so its id is derived from the
+/// same binding the compiler derives it from.
+pub(crate) fn event_data_schemas(
+    registry_id: &str,
+    entity: &CompiledEntity,
+    trigger: EventTrigger,
+    deliveries: &[CompiledEventDelivery],
+) -> Result<BTreeMap<String, String>, OutboxError> {
+    entity
+        .hooks
+        .values()
+        .filter(|event| event.trigger == trigger)
+        .map(|event| {
+            let data_schema = match deliveries
+                .iter()
+                .find(|delivery| delivery.event_id == event.id)
+            {
+                Some(delivery) => delivery.data_schema.clone(),
+                None => {
+                    event_data_schema_binding(registry_id, entity, event)
+                        .map_err(|_| OutboxError::InvalidProjection)?
+                        .data_schema
+                }
+            };
+            Ok((event.id.clone(), data_schema))
+        })
+        .collect()
+}
+
+/// The commit instant every envelope of one transaction carries.
+///
+/// Truncated to the millisecond the envelope's wire form spells, and written to
+/// the outbox row so the delivery worker's `ce-time` header repeats the
+/// envelope's own `time` byte for byte.
+pub(crate) async fn capture_time(transaction: &Transaction<'_>) -> Result<SystemTime, OutboxError> {
+    transaction
+        .query_one(
+            "SELECT date_trunc('milliseconds', transaction_timestamp())",
+            &[],
+        )
+        .await
+        .map_err(|_| OutboxError::Unavailable)?
+        .try_get::<_, SystemTime>(0)
+        .map_err(|_| OutboxError::Unavailable)
 }
 
 pub(crate) async fn insert_configured_events(
@@ -48,6 +176,7 @@ pub(crate) async fn insert_configured_events(
     destinations: Option<&ActivatedEventDestinationRegistry>,
     mutation: OutboxMutation<'_>,
 ) -> Result<(), OutboxError> {
+    let mut captured_at = None;
     for event in events
         .values()
         .filter(|event| event.trigger == mutation.trigger)
@@ -85,23 +214,39 @@ pub(crate) async fn insert_configured_events(
             let value = snapshot.get(field).ok_or(OutboxError::InvalidProjection)?;
             values.insert(field.to_owned(), value.clone());
         }
-        let payload = canonicalize_json(&json!({
+        let data = json!({
             "entity": mutation.entity_id,
             "recordId": mutation.record_id,
             "revision": mutation.record_revision,
             "trigger": trigger_name(mutation.trigger),
             "packageRevision": mutation.package_revision,
             "values": values,
-        }))
-        .map_err(|_| OutboxError::InvalidProjection)?;
+        });
         let event_id = Uuid::new_v4();
-        let activated = if let Some(delivery) = delivery {
-            if payload.len()
-                > usize::try_from(delivery.maximum_payload_bytes)
-                    .map_err(|_| OutboxError::InvalidProjection)?
-            {
-                return Err(OutboxError::InvalidProjection);
+        let created_at = match captured_at {
+            Some(created_at) => created_at,
+            None => {
+                let created_at = capture_time(transaction).await?;
+                captured_at = Some(created_at);
+                created_at
             }
+        };
+        let envelope = capture_envelope(
+            &mutation.envelope,
+            CapturedEvent {
+                event_id,
+                event_type: &event.id,
+                created_at: OffsetDateTime::from(created_at),
+                record_reference: mutation.record_reference,
+                record_revision: mutation.record_revision,
+                data,
+            },
+        )?;
+        let payload = envelope_payload(
+            &envelope,
+            delivery.map(|delivery| delivery.maximum_payload_bytes),
+        )?;
+        let activated = if let Some(delivery) = delivery {
             let destination = destinations
                 .and_then(|destinations| destinations.lookup(&delivery.destination_id))
                 .ok_or(OutboxError::Unavailable)?;
@@ -120,14 +265,17 @@ pub(crate) async fn insert_configured_events(
             .ok()
             .filter(|value| (86_400_000..=2_592_000_000).contains(value))
             .ok_or(OutboxError::Unavailable)?;
+        // Capture time is written explicitly rather than left to the column
+        // default, because the envelope spells the same instant and payload
+        // expiry is measured from it.
         let changed = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_outbox
                      (event_id, event_type, trigger, entity_id, record_reference,
                       record_revision, application_reference, package_revision, schema_fingerprint,
-                      payload, payload_expires_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-                         transaction_timestamp() + $11::bigint * interval '1 millisecond')",
+                      payload, created_at, payload_expires_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11,
+                         $11::timestamptz + $12::bigint * interval '1 millisecond')",
                 &[
                     &event_id,
                     &event.id,
@@ -139,6 +287,7 @@ pub(crate) async fn insert_configured_events(
                     &mutation.package_revision,
                     &mutation.schema_fingerprint,
                     &payload,
+                    &created_at,
                     &retention_milliseconds,
                 ],
             )
@@ -320,5 +469,149 @@ fn trigger_name(trigger: EventTrigger) -> &'static str {
         EventTrigger::Patched => "patched",
         EventTrigger::Tombstoned => "tombstoned",
         EventTrigger::RequestLifecycle => "request_lifecycle",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EVENT_ID: &str = "4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51";
+    const SOURCE: &str = "urn:registrystack:registry:permits:instance:eu-west-1";
+    const DATA_SCHEMA: &str = "urn:breg:event-schema:permits:permit:permit.granted:sha256:\
+        3f786850e387550fdab836ed7e6dc881de23001b";
+
+    fn data_schemas() -> BTreeMap<String, String> {
+        BTreeMap::from([("permit.granted".to_owned(), DATA_SCHEMA.to_owned())])
+    }
+
+    fn captured(data: Value) -> CapturedEvent<'static> {
+        CapturedEvent {
+            event_id: Uuid::parse_str(EVENT_ID).expect("event id"),
+            event_type: "permit.granted",
+            created_at: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
+                .expect("capture instant"),
+            record_reference:
+                "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7",
+            record_revision: 3,
+            data,
+        }
+    }
+
+    fn projection() -> Value {
+        json!({
+            "entity": "permit",
+            "recordId": "8f14e45f-ceea-467a-9cc1-8b2a4b9e2a11",
+            "revision": 3,
+            "trigger": "created",
+            "packageRevision": "sha256:5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+            "values": { "status": "granted" },
+        })
+    }
+
+    #[test]
+    fn capture_carries_the_product_projection_unchanged() {
+        let schemas = data_schemas();
+        let binding = EnvelopeBinding {
+            source: SOURCE,
+            data_schemas: &schemas,
+            causation: None,
+        };
+        let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
+        assert_eq!(envelope.data, projection());
+        assert_eq!(envelope.id, EVENT_ID);
+        assert_eq!(envelope.causation, Causation::root(EVENT_ID));
+        assert_eq!(envelope.dataschema, DATA_SCHEMA);
+        assert_eq!(
+            envelope.subject.record_reference,
+            "hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7"
+        );
+        assert_eq!(envelope.subject.record_revision, 3);
+    }
+
+    #[test]
+    fn capture_refuses_a_hook_without_a_data_contract() {
+        let schemas = BTreeMap::new();
+        let binding = EnvelopeBinding {
+            source: SOURCE,
+            data_schemas: &schemas,
+            causation: None,
+        };
+        assert_eq!(
+            capture_envelope(&binding, captured(projection())).unwrap_err(),
+            OutboxError::InvalidProjection
+        );
+    }
+
+    #[test]
+    fn envelope_payload_is_the_canonical_wire_form() {
+        let schemas = data_schemas();
+        let binding = EnvelopeBinding {
+            source: SOURCE,
+            data_schemas: &schemas,
+            causation: None,
+        };
+        let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
+        let payload = envelope_payload(&envelope, None).expect("payload");
+        let expected = concat!(
+            r#"{"causation":{"hop":0,"root":"4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51"},"#,
+            r#""data":{"entity":"permit","packageRevision":"sha256:5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03","#,
+            r#""recordId":"8f14e45f-ceea-467a-9cc1-8b2a4b9e2a11","revision":3,"#,
+            r#""trigger":"created","values":{"status":"granted"}},"#,
+            r#""dataschema":"urn:breg:event-schema:permits:permit:permit.granted:sha256:3f786850e387550fdab836ed7e6dc881de23001b","#,
+            r#""id":"4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51","#,
+            r#""source":"urn:registrystack:registry:permits:instance:eu-west-1","#,
+            r#""subject":{"recordReference":"hmac-sha256:8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7","recordRevision":3},"#,
+            r#""time":"2026-01-01T00:00:00.123Z","type":"permit.granted"}"#,
+        );
+        assert_eq!(String::from_utf8(payload.clone()).expect("utf-8"), expected);
+        let decoded = HookEnvelope::from_canonical_bytes(&payload, &EnvelopeLimits::default())
+            .expect("round trip");
+        assert_eq!(decoded, envelope);
+        assert_eq!(decoded.data, projection());
+    }
+
+    #[test]
+    fn the_delivery_ceiling_bounds_envelope_bytes_not_data_bytes() {
+        let schemas = data_schemas();
+        let binding = EnvelopeBinding {
+            source: SOURCE,
+            data_schemas: &schemas,
+            causation: None,
+        };
+        let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
+        let payload = envelope_payload(&envelope, None).expect("payload");
+        let data_bytes = serde_json::to_vec(&envelope.data)
+            .expect("data bytes")
+            .len();
+        assert!(data_bytes < payload.len());
+        let between = u32::try_from(data_bytes + 1).expect("bound");
+        assert!(usize::try_from(between).expect("bound") < payload.len());
+        assert_eq!(
+            envelope_payload(&envelope, Some(between)).unwrap_err(),
+            OutboxError::InvalidProjection
+        );
+        let exact = u32::try_from(payload.len()).expect("bound");
+        assert_eq!(
+            envelope_payload(&envelope, Some(exact)).expect("payload"),
+            payload
+        );
+    }
+
+    #[test]
+    fn a_caused_capture_keeps_the_chain_it_was_given() {
+        let schemas = data_schemas();
+        let parent = Causation::root("2b8f0a24-6a1e-4a0e-9b5d-6c7f0a3d1e42");
+        let caused = parent
+            .child("2b8f0a24-6a1e-4a0e-9b5d-6c7f0a3d1e42")
+            .expect("child causation");
+        let binding = EnvelopeBinding {
+            source: SOURCE,
+            data_schemas: &schemas,
+            causation: Some(&caused),
+        };
+        let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
+        assert_eq!(envelope.causation, caused);
+        assert_eq!(envelope.causation.hop, 1);
     }
 }

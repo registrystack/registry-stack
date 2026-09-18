@@ -23,8 +23,20 @@
     - ['`X-Registry-Delivery-Attempt`', 'Positive integer, initially `1`', 'Attempt number within the generation.']
     - ['`X-Registry-Delivery-Time`', 'RFC 3339 timestamp', 'Current attempt time; used for receiver freshness checks.']
     - ['`X-Registry-Signature`', '`v1=<base64url-without-padding>`', 'HMAC-SHA-256 signature over the versioned signing input.']
+- id: envelope
+  title: Required event envelope fields
+  columns: [Field, Type, Meaning]
+  rows:
+    - ['`id`', 'UUID string', 'Captured event identity; equals `ce-id`.']
+    - ['`type`', 'Authored event ID', 'External event contract; equals `ce-type`.']
+    - ['`source`', '`urn:registrystack:registry:<registry-id>:instance:<instance-id>`', 'Registry instance identity; equals `ce-source`.']
+    - ['`time`', 'RFC 3339 timestamp, UTC, whole milliseconds', 'Mutation capture time; equals `ce-time`.']
+    - ['`subject`', 'Object with `recordReference` and `recordRevision`', 'Hashed record reference and the revision the change produced. The reference is `hmac-sha256:<64-hex>`, never the raw record id.']
+    - ['`dataschema`', '`urn:breg:event-schema:<registry-id>:<entity-id>:<event-id>:sha256:<digest>`', 'Generated event data schema identity; equals `ce-dataschema`.']
+    - ['`data`', 'Object', 'The captured event data, described below.']
+    - ['`causation`', 'Object with `root`, `hop`, and optional `parent`', 'Chain position. A captured registry mutation is a root event: `root` equals `id`, `hop` is 0, and `parent` is absent.']
 - id: payload
-  title: Required event payload fields
+  title: Required event data fields
   columns: [Field, Type, Meaning]
   rows:
     - ['`entity`', 'String', 'Authored entity ID.']

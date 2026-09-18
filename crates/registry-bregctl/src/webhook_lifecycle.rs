@@ -14,13 +14,15 @@ use registry_breg::webhook::{
     WebhookDeliveryStatus, WebhookDeliveryStatusKind, WebhookOperatorService,
     MAX_WEBHOOK_STATUS_RESULTS,
 };
-use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde::Serialize;
 use serde_json::{json, Map, Number, Value};
 use uuid::Uuid;
 
 const SAMPLE_EVENT_ID: &str = "00000000-0000-4000-8000-000000000001";
 const SAMPLE_RECORD_ID: &str = "00000000-0000-4000-8000-000000000002";
+const SAMPLE_RECORD_REFERENCE: &str =
+    "hmac-sha256:0000000000000000000000000000000000000000000000000000000000000002";
 const SAMPLE_TIME: &str = "2026-01-01T00:00:00Z";
 const SAMPLE_PACKAGE_REVISION: &str =
     "sha256:0000000000000000000000000000000000000000000000000000000000000000";
@@ -104,7 +106,7 @@ pub(crate) fn sample(
         let value = synthetic_field_value(&field.field_type)?;
         values.insert(field_id.clone(), value);
     }
-    let body = json!({
+    let data = json!({
         "entity": delivery.entity_id,
         "recordId": SAMPLE_RECORD_ID,
         "revision": 1,
@@ -112,10 +114,32 @@ pub(crate) fn sample(
         "packageRevision": SAMPLE_PACKAGE_REVISION,
         "values": values,
     });
-    let canonical_body_bytes =
-        canonicalize_json(&body).map_err(|_| WebhookLifecycleError::Sample)?;
+    let source = format!(
+        "urn:registrystack:registry:{}:instance:<configured-instance>",
+        registry.registry_id()
+    );
+    let envelope = HookEnvelope {
+        id: SAMPLE_EVENT_ID.to_owned(),
+        event_type: delivery.event_id.clone(),
+        source: source.clone(),
+        time: sample_time()?,
+        subject: EventSubject {
+            record_reference: SAMPLE_RECORD_REFERENCE.to_owned(),
+            record_revision: 1,
+        },
+        dataschema: delivery.data_schema.clone(),
+        data,
+        causation: Causation::root(SAMPLE_EVENT_ID),
+    };
+    let canonical_body_bytes = envelope
+        .to_canonical_bytes(&EnvelopeLimits::tightened_to(
+            usize::try_from(delivery.maximum_payload_bytes)
+                .map_err(|_| WebhookLifecycleError::Sample)?,
+        ))
+        .map_err(|_| WebhookLifecycleError::Sample)?;
     let canonical_body =
         String::from_utf8(canonical_body_bytes).map_err(|_| WebhookLifecycleError::Sample)?;
+    let body = serde_json::to_value(&envelope).map_err(|_| WebhookLifecycleError::Sample)?;
     let headers = BTreeMap::from([
         ("Accept".to_owned(), "application/json".to_owned()),
         ("Content-Type".to_owned(), "application/json".to_owned()),
@@ -135,13 +159,7 @@ pub(crate) fn sample(
         ),
         ("ce-dataschema".to_owned(), delivery.data_schema.clone()),
         ("ce-id".to_owned(), SAMPLE_EVENT_ID.to_owned()),
-        (
-            "ce-source".to_owned(),
-            format!(
-                "urn:registrystack:registry:{}:instance:<configured-instance>",
-                registry.registry_id()
-            ),
-        ),
+        ("ce-source".to_owned(), source),
         ("ce-specversion".to_owned(), "1.0".to_owned()),
         ("ce-time".to_owned(), SAMPLE_TIME.to_owned()),
         ("ce-type".to_owned(), delivery.event_id.clone()),
@@ -256,6 +274,12 @@ fn list_item(status: WebhookDeliveryStatus) -> WebhookListItem {
         payload_expires_at: status.payload_expires_at,
         replay_eligible,
     }
+}
+
+/// The sample capture instant, the one [`SAMPLE_TIME`] spells.
+fn sample_time() -> Result<time::OffsetDateTime, WebhookLifecycleError> {
+    time::OffsetDateTime::parse(SAMPLE_TIME, &time::format_description::well_known::Rfc3339)
+        .map_err(|_| WebhookLifecycleError::Sample)
 }
 
 fn trigger_name(trigger: EventTrigger) -> &'static str {

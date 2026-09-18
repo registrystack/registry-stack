@@ -865,6 +865,41 @@ def _verify_webhook_request(
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if canonical != body or not isinstance(document, dict):
         raise DemoError("the receiver refused a non-canonical webhook body")
+    if set(document) != {
+        "id",
+        "type",
+        "source",
+        "time",
+        "subject",
+        "dataschema",
+        "data",
+        "causation",
+    }:
+        raise DemoError("the receiver refused the webhook envelope shape")
+    if (
+        document["id"] != headers["ce-id"]
+        or document["type"] != headers["ce-type"]
+        or document["source"] != headers["ce-source"]
+        or document["dataschema"] != headers["ce-dataschema"]
+        or document["time"] != headers["ce-time"]
+    ):
+        raise DemoError("the receiver refused an envelope that contradicts its headers")
+    subject = document["subject"]
+    causation = document["causation"]
+    if (
+        not isinstance(subject, dict)
+        or set(subject) != {"recordReference", "recordRevision"}
+        or not isinstance(subject["recordReference"], str)
+        or not subject["recordReference"]
+        or not isinstance(subject["recordRevision"], int)
+        or subject["recordRevision"] < 1
+        or not isinstance(causation, dict)
+        or set(causation) - {"root", "parent", "hop"}
+        or causation["root"] != document["id"]
+        or causation["hop"] != 0
+    ):
+        raise DemoError("the receiver refused the envelope subject or causation")
+    document = document["data"]
     if set(document) != {"entity", "recordId", "revision", "trigger", "packageRevision", "values"}:
         raise DemoError("the receiver refused the webhook body shape")
     if (
