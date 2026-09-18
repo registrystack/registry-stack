@@ -1,0 +1,61 @@
+{
+  "handler": "normalize-phone",
+  "description": "The reference handler's fixture corpus: request inputs by authored input id, and the exact outcome document each case must produce. Shared by the template's host tests and the admission-proof harness, which runs every case through the built module.",
+  "cases": [
+    {
+      "name": "mr-spaces",
+      "inputs": {"raw-phone": "22 12 34 56", "default-region": "MR"},
+      "expected": {"effects": [{"id": "phone", "set": {"phone": "+22222123456"}}]}
+    },
+    {
+      "name": "fr-spaces",
+      "inputs": {"raw-phone": "06 12 34 56 78", "default-region": "FR"},
+      "expected": {"effects": [{"id": "phone", "set": {"phone": "+33612345678"}}]}
+    },
+    {
+      "name": "fr-digits",
+      "inputs": {"raw-phone": "0612345678", "default-region": "FR"},
+      "expected": {"effects": [{"id": "phone", "set": {"phone": "+33612345678"}}]}
+    },
+    {
+      "name": "mr-plus",
+      "inputs": {"raw-phone": "+222 22 12 34 56", "default-region": "MR"},
+      "expected": {"effects": [{"id": "phone", "set": {"phone": "+22222123456"}}]}
+    },
+    {
+      "name": "too-short",
+      "inputs": {"raw-phone": "12", "default-region": "FR"},
+      "expected": {"refusal": {"code": "invalid-phone", "field": "raw-phone"}}
+    },
+    {
+      "name": "wrong-length",
+      "inputs": {"raw-phone": "06 12 34 56", "default-region": "FR"},
+      "expected": {"refusal": {"code": "invalid-phone", "field": "raw-phone"}}
+    },
+    {
+      "name": "alpha",
+      "inputs": {"raw-phone": "abc", "default-region": "MR"},
+      "expected": {"refusal": {"code": "invalid-phone", "field": "raw-phone"}}
+    },
+    {
+      "name": "empty",
+      "inputs": {"raw-phone": "", "default-region": "MR"},
+      "expected": {"refusal": {"code": "invalid-phone", "field": "raw-phone"}}
+    },
+    {
+      "name": "region-zz",
+      "inputs": {"raw-phone": "22 12 34 56", "default-region": "ZZ"},
+      "expected": {"refusal": {"code": "invalid-region", "field": "default-region"}}
+    },
+    {
+      "name": "region-xx",
+      "inputs": {"raw-phone": "22 12 34 56", "default-region": "XX"},
+      "expected": {"refusal": {"code": "invalid-region", "field": "default-region"}}
+    },
+    {
+      "name": "region-garbage",
+      "inputs": {"raw-phone": "06 12 34 56 78", "default-region": "not-a-region"},
+      "expected": {"refusal": {"code": "invalid-region", "field": "default-region"}}
+    }
+  ]
+}

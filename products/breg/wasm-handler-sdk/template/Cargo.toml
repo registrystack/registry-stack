@@ -1,0 +1,24 @@
+[package]
+name = "breg-wasm-handler-template"
+description = "Reference BREG WASM action handler: phone normalization"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# cdylib is the wasm module the registry packages; lib keeps the same decision
+# code runnable by host tests.
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# The package name follows the registry- convention; its library name is the
+# short `breg_wasm_sdk` the handler code imports.
+registry-breg-wasm-sdk = { path = "../sdk" }
+# Pinned to 0.3.10+9.0.33 (exact, the release with the bundled metadata the
+# module was measured against, platform-script WASM plan 2026-09-17); the
+# build-metadata half of the pin is recorded in Cargo.lock, since cargo
+# ignores build metadata in version requirements. The module-size ceiling
+# assumes this dependency tree.
+phonenumber = "=0.3.10"
+serde_json = "1"
