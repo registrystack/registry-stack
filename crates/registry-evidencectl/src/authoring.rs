@@ -394,13 +394,18 @@ pub(crate) fn valid_local_audience(value: &str) -> bool {
 }
 
 fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
-    if sources
-        .values()
-        .any(|source| source.get("transport").and_then(Value::as_str) == Some("sqlite-extract"))
-    {
-        bail!(
-            "local serving does not bind SQLite extracts; prove this editable project with `evidencectl test <dir>`"
-        );
+    for (source_id, source) in sources {
+        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+            return Err(crate::dev::DevRefusal {
+                operational: false,
+                code: "evidence.dev.local-transport-refused",
+                path: format!("sources/{source_id}.yaml:/transport"),
+                message: "Local serving does not bind SQLite extracts.".to_owned(),
+                suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
+                    .to_owned(),
+            }
+            .into());
+        }
     }
     Ok(())
 }
@@ -5812,9 +5817,13 @@ factSchema: schemas/source-facts.schema.yaml
         let sources =
             BTreeMap::from([("records".to_owned(), json!({"transport": "sqlite-extract"}))]);
         let error = validate_local_dev_sources(&sources)
-            .expect_err("local serving accepted an unbound statement source")
-            .to_string();
-        assert!(error.contains("evidencectl test <dir>"));
+            .expect_err("local serving accepted an unbound statement source");
+        let refusal = error
+            .downcast_ref::<crate::dev::DevRefusal>()
+            .expect("the refusal is typed so both output formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
+        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert!(refusal.suggested_action.contains("evidencectl test <dir>"));
 
         validate_local_dev_sources(&BTreeMap::from([(
             "records".to_owned(),

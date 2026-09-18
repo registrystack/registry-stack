@@ -23,6 +23,7 @@ source setup itself needs no archive or copied endpoint settings.
 | `named-starter/` | One name-present question to add after guided source setup. |
 | `default-starter/` | One question and 11 fixtures compatible with plain `bregctl init`, for adding Evidence after registry use. |
 | `starter/` | Two questions, derivations, fixtures and a reviewed local target settings template for `evidencectl new --starter`. |
+| `offline-starter/` | One question with its own synthetic source and 13 fixtures that pass `check` and `test` offline, before any registry connection or source import. |
 | `tests/verify-composition.py` | Maintainer-only verification using native binaries; not part of the adopter workflow. |
 
 Copy the registry directory to an empty local working directory. Create the
@@ -72,7 +73,8 @@ private directory, checks repeatable export bytes and all 22 fixture cases, buil
 the target, then proves provenance-only and consumed-behavior revision changes
 through native source diff and update. `--work-dir <new-directory>` retains the
 synthetic outputs for inspection. It also checks unmodified default init with the
-one-question starter and its 11 fixtures. The default run starts no services.
+one-question starter and its 11 fixtures, and the offline starter passing its 13
+cases with no registry or import. The default run starts no services.
 
 Add `--live`, a matching `--breg` binary path, and available Docker
 to execute the retained-record journey. It allocates unused loopback ports,

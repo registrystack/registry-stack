@@ -84,6 +84,136 @@ fn a_starter_without_sources_defers_the_fixture_run_to_its_readme() {
     assert!(printed.contains("and `evidencectl test"));
 }
 
+/// A shipped starter directory under `products/breg/evidence/`.
+fn shipped_starter(name: &str) -> PathBuf {
+    let starter = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../products/breg/evidence")
+        .join(name);
+    assert!(
+        starter.is_dir(),
+        "shipped starter {} is missing",
+        starter.display()
+    );
+    starter
+}
+
+/// A stub `evidence` binary that answers the version handshake with this
+/// build's version and succeeds at every step: an empty provider publication
+/// description for `render-discovery-description`, a fixed but well-formed
+/// revision report for `bundle-check`, and `$CASES` evaluated cases for a
+/// fixture evaluation. The shipped starter's authored content is proven by
+/// the maintainer composition proof against the real binary; this stub proves
+/// the offline pipeline the scaffold promises.
+fn write_stub_evidence(dir: &Path) -> PathBuf {
+    let path = dir.join("evidence");
+    let script = format!(
+        r#"#!/bin/sh
+set -eu
+
+if [ "${{1:-}}" = "--version" ]; then
+  printf 'evidence %s\n' "{version}"
+  exit 0
+fi
+
+if [ "$1" = "render-discovery-description" ]; then
+  printf '{{}}\n'
+  exit 0
+fi
+
+step=""
+for arg in "$@"; do
+  case "$arg" in
+    bundle-check) step="bundle-check" ;;
+    evaluate|bundle-evaluate) step="evaluate" ;;
+  esac
+done
+
+if [ "$step" = "bundle-check" ]; then
+  printf '{{"bundleRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","requirements":[{{"id":"urn:example:stub:record-active","configurationRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}}]}}\n'
+  exit 0
+fi
+
+if [ "$step" = "evaluate" ] && [ -n "${{CASES:-}}" ]; then
+  printf 'Evidence fixture passed (%s evaluated cases)\n' "$CASES"
+fi
+exit 0
+"#,
+        version = registry_platform_buildinfo::DISPLAY_VERSION
+    );
+    fs::write(&path, script).expect("write stub evidence script");
+    let mut permissions = fs::metadata(&path).expect("stat stub").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&path, permissions).expect("chmod stub");
+    path
+}
+
+#[test]
+fn the_shipped_offline_starter_passes_check_and_test_with_no_source_import() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let output = starter_new(&project, &shipped_starter("offline-starter"), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).contains("to prove the copied starter"));
+    assert!(project.join("sources/record-status.yaml").is_file());
+    assert!(project.join("targets/local/settings.yaml").is_file());
+
+    let stub = write_stub_evidence(workspace.path());
+    let checked = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["check", path(&project)])
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("check the offline starter");
+    assert!(checked.status.success(), "{}", stderr(&checked));
+    assert!(
+        stdout(&checked).contains("complete"),
+        "{}",
+        stdout(&checked)
+    );
+
+    let tested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["test", path(&project)])
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("CASES", "13")
+        .output()
+        .expect("test the offline starter");
+    assert!(tested.status.success(), "{}", stderr(&tested));
+    let printed = stdout(&tested);
+    assert!(
+        printed.contains("PASS: fixtures/record-active.yaml (13 cases)"),
+        "{printed}"
+    );
+}
+
+/// The source-less `starter/` input ships questions whose source arrives only
+/// with the reviewed import, so its offline test must refuse rather than
+/// report a green run that was never proven.
+#[test]
+fn a_project_from_the_sourceless_shipped_starter_fails_its_offline_test() {
+    let workspace = TempDir::new().expect("temporary directory");
+    let project = workspace.path().join("project");
+    let output = starter_new(&project, &shipped_starter("starter"), &[]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(!project
+        .join("sources")
+        .join("registry-status.yaml")
+        .exists());
+
+    let stub = write_stub_evidence(workspace.path());
+    let tested = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args(["test", path(&project)])
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("CASES", "13")
+        .output()
+        .expect("test the source-less starter");
+    assert!(
+        !tested.status.success(),
+        "the source-less starter must not pass before its source import:\n{}",
+        stdout(&tested)
+    );
+}
+
 #[test]
 fn openapi_and_sqlite_extract_are_mutually_exclusive_before_writing() {
     let workspace = TempDir::new().expect("temporary directory");

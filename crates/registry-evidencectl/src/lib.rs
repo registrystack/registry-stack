@@ -623,6 +623,20 @@ fn safe_command(
 fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
     match result {
         Err(error) => {
+            if let Some(refusal) = error.downcast_ref::<dev::DevRefusal>() {
+                return Err(SafeCliFailure {
+                    operational: refusal.operational,
+                    code: refusal.code,
+                    artifact: "local development project".to_owned(),
+                    path: refusal.path.clone(),
+                    message: refusal.message.clone(),
+                    suggested_action: refusal.suggested_action.clone(),
+                    // The typed message is the cause; there is no separate
+                    // failure chain to disclose.
+                    cause: None,
+                }
+                .into());
+            }
             if let Some(failure) = error.downcast_ref::<dev::DevStartFailure>() {
                 return Err(SafeCliFailure {
                     operational: true,
@@ -866,9 +880,22 @@ mod tests {
             Cli::try_parse_from(["evidencectl", "dev", "stop", "--project", "project",]).is_ok()
         );
 
+        // The bare-form compatibility flags stay parseable beside an action
+        // subcommand so `run_with_format` can refuse them while naming both
+        // the flags and the spelling that owns them; a parse-level conflict
+        // would collapse into the generic usage failure that names neither.
         let mixed_mode = Cli::try_parse_from(["evidencectl", "dev", "--detach", "stop"])
-            .expect_err("start options must not combine with a lifecycle subcommand");
-        assert_eq!(mixed_mode.kind(), ErrorKind::ArgumentConflict);
+            .expect("the mixed spelling parses so its refusal can name the flags");
+        let Command::Dev(args) = mixed_mode.command else {
+            panic!("the dev command must parse");
+        };
+        let error = dev::run_with_format(args, OutputFormat::Human)
+            .expect_err("the compatibility flags are refused with their cause");
+        let refusal = error
+            .downcast_ref::<dev::DevRefusal>()
+            .expect("the refusal is typed so both output formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.compat-flags-refused");
+        assert!(refusal.message.contains("--detach or --project"));
     }
 
     #[test]
