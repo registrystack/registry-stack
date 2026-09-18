@@ -1704,6 +1704,19 @@
             "format": "date-time",
             "type": "string"
           },
+          "resultDigest": {
+            "anyOf": [
+              {
+                "maxLength": 71,
+                "minLength": 71,
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "retainedUntil": {
             "format": "date-time",
             "type": "string"
@@ -1753,6 +1766,12 @@
             "minLength": 1,
             "type": "string",
             "x-maximum-utf8-bytes": 128
+          },
+          "resultConstraints": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
           }
         },
         "required": [
@@ -1780,6 +1799,12 @@
                 "type": "null"
               }
             ]
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
           }
         },
         "required": [
@@ -1954,6 +1979,12 @@
           "queue": {
             "type": "string"
           },
+          "resultSchema": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 65536,
+            "x-maximum-depth": 16
+          },
           "retention": {
             "$ref": "#/components/schemas/HostedRetentionPolicy"
           },
@@ -2064,6 +2095,9 @@
           },
           "reasonRequired": {
             "type": "boolean"
+          },
+          "resultRequired": {
+            "type": "boolean"
           }
         },
         "required": [
@@ -2170,6 +2204,12 @@
           "requesterReference": {
             "type": "string"
           },
+          "result": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
+          },
           "state": {
             "const": "completed"
           },
@@ -2263,6 +2303,18 @@
           },
           "requesterReference": {
             "type": "string"
+          },
+          "resultConstraints": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
+          },
+          "resultSchema": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 65536,
+            "x-maximum-depth": 16
           },
           "version": {
             "type": "string"
@@ -3625,6 +3677,12 @@
           },
           "requesterReference": {
             "type": "string"
+          },
+          "resultConstraints": {
+            "additionalProperties": true,
+            "type": "object",
+            "x-maximum-canonical-bytes": 16384,
+            "x-maximum-depth": 16
           },
           "revision": {
             "format": "int64",

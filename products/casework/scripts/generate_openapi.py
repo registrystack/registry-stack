@@ -311,6 +311,18 @@ def schemas(problem_entries: list[dict]) -> dict:
         "x-maximum-canonical-bytes": 16_384,
         "x-maximum-depth": 16,
     }
+    result_payload = {
+        "type": "object",
+        "additionalProperties": True,
+        "x-maximum-canonical-bytes": 16_384,
+        "x-maximum-depth": 16,
+    }
+    result_schema_declaration = {
+        "type": "object",
+        "additionalProperties": True,
+        "x-maximum-canonical-bytes": 65_536,
+        "x-maximum-depth": 16,
+    }
     reason = {
         "type": "string",
         "minLength": 1,
@@ -318,7 +330,12 @@ def schemas(problem_entries: list[dict]) -> dict:
         "x-maximum-utf8-bytes": 2000,
     }
     hosted_outcome = obj(
-        {"id": text, "label": text, "reasonRequired": {"type": "boolean"}},
+        {
+            "id": text,
+            "label": text,
+            "reasonRequired": {"type": "boolean"},
+            "resultRequired": {"type": "boolean"},
+        },
         ["id", "label", "reasonRequired"],
     )
     hosted_context = obj(
@@ -329,6 +346,8 @@ def schemas(problem_entries: list[dict]) -> dict:
             "display": display,
             "kindPolicyDigest": policy_digest,
             "outcomes": array(ref("HostedOutcomePolicy")),
+            "resultSchema": result_schema_declaration,
+            "resultConstraints": result_payload,
         },
         [
             "requesterReference",
@@ -426,6 +445,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                     "x-maximum-canonical-bytes": 65_536,
                     "x-maximum-depth": 16,
                 },
+                "resultSchema": result_schema_declaration,
                 "outcomes": array(ref("HostedOutcomePolicy")),
             },
             [
@@ -444,6 +464,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "kind": text,
                 "requesterReference": {"type": "string", "minLength": 1, "maxLength": 128, "x-maximum-utf8-bytes": 128},
                 "display": display,
+                "resultConstraints": result_payload,
             },
             ["kind", "requesterReference", "display"],
         ),
@@ -461,6 +482,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "reason": nullable(
                     {"type": "string", "minLength": 1, "maxLength": 2000, "x-maximum-utf8-bytes": 2000}
                 ),
+                "result": result_payload,
             },
             ["outcome"],
         ),
@@ -471,6 +493,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "kind": text,
                 "version": text,
                 "display": display,
+                "resultConstraints": result_payload,
                 "state": {
                     "type": "string",
                     "enum": ["open", "claimed", "completed", "cancelled"],
@@ -557,6 +580,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "profileId": text,
                 "outcome": text,
                 "reason": nullable(text),
+                "resultDigest": nullable(policy_digest),
                 "recordedAt": instant,
                 "retainedUntil": instant,
             },
@@ -580,6 +604,7 @@ def schemas(problem_entries: list[dict]) -> dict:
                 "outcome": text,
                 "actorRef": actor_ref,
                 "kindPolicyDigest": policy_digest,
+                "result": result_payload,
                 "terminalAt": instant,
             },
             [
@@ -1805,6 +1830,7 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "requester_reference",
         "terminal",
         "kind_policy_digest",
+        "result",
         "terminal_at",
     }:
         raise ValueError("OpenAPI hosted terminal common fields drifted from Rust")
@@ -1831,6 +1857,8 @@ def verify_dto_schemas(repository_root: Path, openapi: dict) -> None:
         "value.len() > 128",
         "pub const MAXIMUM_HOSTED_DISPLAY_BYTES: usize = 16 * 1024;",
         "pub const MAXIMUM_HOSTED_DISPLAY_DEPTH: usize = 16;",
+        "pub const MAXIMUM_HOSTED_RESULT_BYTES: usize = 16 * 1024;",
+        "pub const MAXIMUM_HOSTED_RESULT_CONSTRAINTS_BYTES: usize = 16 * 1024;",
         "pub const MAXIMUM_HOSTED_RETENTION_DAYS: u32 = 3_650;",
     ):
         if marker not in hosted_source:
