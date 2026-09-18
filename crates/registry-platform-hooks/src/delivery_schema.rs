@@ -51,7 +51,11 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  event_id uuid NOT NULL,
                  compiled_delivery_id text NOT NULL
                      CHECK (compiled_delivery_id <> '' AND octet_length(compiled_delivery_id) <= 256),
-                 logical_destination_id text NOT NULL
+                 handler_kind text NOT NULL
+                     CONSTRAINT registry_webhook_delivery_handler_kind_values CHECK (
+                         handler_kind IN ('url', 'rhai', 'wasm')
+                     ),
+                 logical_destination_id text
                      CHECK (logical_destination_id ~ '^[a-z][a-z0-9_-]{0,63}$'),
                  destination_binding_digest text NOT NULL
                      CHECK (destination_binding_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -99,7 +103,12 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  FOREIGN KEY (event_id, package_revision, schema_fingerprint)
                      REFERENCES {schema}.registry_outbox
                          (event_id, package_revision, schema_fingerprint)
-                     ON DELETE RESTRICT
+                     ON DELETE RESTRICT,
+                 CONSTRAINT registry_webhook_delivery_handler_binding CHECK (
+                     (handler_kind = 'url' AND logical_destination_id IS NOT NULL)
+                     OR (handler_kind IN ('rhai', 'wasm')
+                         AND logical_destination_id IS NULL)
+                 )
              );",
     "             CREATE TABLE IF NOT EXISTS {schema}.registry_webhook_delivery_state (
                  event_id uuid NOT NULL,
@@ -118,6 +127,8 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  delivered_at timestamptz,
                  dead_lettered_at timestamptz,
                  expired_at timestamptz,
+                 handler_message bytea,
+                 handler_message_digest bytea,
                  updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (event_id, compiled_delivery_id),
                  FOREIGN KEY (event_id, compiled_delivery_id)
@@ -167,6 +178,12 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND delivered_at IS NULL
                          AND dead_lettered_at IS NULL
                          AND expired_at IS NOT NULL)
+                 ),
+                 CONSTRAINT registry_webhook_delivery_state_answer CHECK (
+                     (handler_message IS NULL AND handler_message_digest IS NULL)
+                     OR (state = 'delivered'
+                         AND octet_length(handler_message) BETWEEN 1 AND 1048576
+                         AND octet_length(handler_message_digest) = 32)
                  )
              );",
     // Delivery-state work indexes.
@@ -272,8 +289,67 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  END IF;
              END
              $registry_webhook_delivery_upgrade$;",
+    // A database activated before local handler kinds existed holds only
+    // `url` rows: every row it carries names a destination, so the backfill
+    // states what those rows already are and the pairing constraint then
+    // holds for them unchanged.
+    "             ALTER TABLE {schema}.registry_webhook_deliveries
+                 ADD COLUMN IF NOT EXISTS handler_kind text;",
+    "             UPDATE {schema}.registry_webhook_deliveries
+                SET handler_kind = 'url'
+              WHERE handler_kind IS NULL;",
+    "             DO $registry_webhook_delivery_handler_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_deliveries'::regclass
+                        AND conname = 'registry_webhook_delivery_handler_kind_values'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_deliveries
+                         ADD CONSTRAINT registry_webhook_delivery_handler_kind_values CHECK (
+                             handler_kind IN ('url', 'rhai', 'wasm')
+                         );
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid =
+                            '{schema}.registry_webhook_deliveries'::regclass
+                        AND attname = 'handler_kind' AND NOT attnotnull
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_deliveries
+                         ALTER COLUMN handler_kind SET NOT NULL;
+                 END IF;
+                 IF EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_attribute
+                      WHERE attrelid =
+                            '{schema}.registry_webhook_deliveries'::regclass
+                        AND attname = 'logical_destination_id' AND attnotnull
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_deliveries
+                         ALTER COLUMN logical_destination_id DROP NOT NULL;
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_deliveries'::regclass
+                        AND conname = 'registry_webhook_delivery_handler_binding'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_deliveries
+                         ADD CONSTRAINT registry_webhook_delivery_handler_binding CHECK (
+                             (handler_kind = 'url' AND logical_destination_id IS NOT NULL)
+                             OR (handler_kind IN ('rhai', 'wasm')
+                                 AND logical_destination_id IS NULL)
+                         );
+                 END IF;
+             END
+             $registry_webhook_delivery_handler_upgrade$;",
     "             ALTER TABLE {schema}.registry_webhook_delivery_state
                  ADD COLUMN IF NOT EXISTS expired_at timestamptz;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS handler_message bytea;",
+    "             ALTER TABLE {schema}.registry_webhook_delivery_state
+                 ADD COLUMN IF NOT EXISTS handler_message_digest bytea;",
     "             DO $registry_webhook_state_upgrade$
              BEGIN
                  IF EXISTS (
@@ -357,6 +433,20 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                                  AND delivered_at IS NULL
                                  AND dead_lettered_at IS NULL
                                  AND expired_at IS NOT NULL)
+                         );
+                 END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_answer'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_answer CHECK (
+                             (handler_message IS NULL AND handler_message_digest IS NULL)
+                             OR (state = 'delivered'
+                                 AND octet_length(handler_message) BETWEEN 1 AND 1048576
+                                 AND octet_length(handler_message_digest) = 32)
                          );
                  END IF;
              END
@@ -518,9 +608,43 @@ mod tests {
     }
 
     #[test]
+    fn a_local_handler_row_carries_no_destination() {
+        let statements = rendered(KERNEL_SCHEMA);
+        let pairings = statements
+            .iter()
+            .filter(|statement| {
+                statement.contains("registry_webhook_delivery_handler_binding CHECK (")
+                    && statement
+                        .contains("handler_kind = 'url' AND logical_destination_id IS NOT NULL")
+                    && statement.contains("handler_kind IN ('rhai', 'wasm')")
+                    && statement.contains("AND logical_destination_id IS NULL")
+            })
+            .count();
+        // The pairing exists both on the fresh creation and in the upgrade
+        // block that adds it to databases from earlier engine builds.
+        assert_eq!(pairings, 2);
+    }
+
+    #[test]
+    fn a_recorded_answer_belongs_to_a_delivered_row() {
+        let statements = rendered(KERNEL_SCHEMA);
+        let answers = statements
+            .iter()
+            .filter(|statement| {
+                statement.contains("registry_webhook_delivery_state_answer CHECK (")
+                    && statement
+                        .contains("handler_message IS NULL AND handler_message_digest IS NULL")
+                    && statement.contains("octet_length(handler_message) BETWEEN 1 AND 1048576")
+                    && statement.contains("octet_length(handler_message_digest) = 32")
+            })
+            .count();
+        assert_eq!(answers, 2);
+    }
+
+    #[test]
     fn every_statement_is_qualified_by_the_schema() {
         let statements = rendered(KERNEL_SCHEMA);
-        assert_eq!(statements.len(), 15);
+        assert_eq!(statements.len(), 20);
         for statement in &statements {
             assert!(
                 statement.contains(KERNEL_SCHEMA),

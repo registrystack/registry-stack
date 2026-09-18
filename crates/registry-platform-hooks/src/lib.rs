@@ -32,8 +32,10 @@
 //! the contract half above is always available and depends on no database.
 //! The worker sends the product's captured payload bytes with the product's
 //! headers, and everything product-owned enters through the delivery module's
-//! seam trait. No executor lives here: running a Rhai or WASM handler is a
-//! later step.
+//! seam trait. No executor lives here: a delivery row that binds a Rhai or
+//! WASM handler is run through the product's own handler seam, so the
+//! reviewed program, the script engine, and the module format stay on the
+//! product side of the boundary.
 
 mod declaration;
 #[cfg(feature = "postgres")]
@@ -46,8 +48,8 @@ mod message;
 mod validate;
 
 pub use declaration::{
-    HookDeclaration, HookDeclarationError, HookHandlerSource, HookPhase, HooksDocument,
-    HOOK_HANDLER_ABI_V1,
+    HookDeclaration, HookDeclarationError, HookHandlerKind, HookHandlerSource, HookPhase,
+    HooksDocument, HOOK_HANDLER_ABI_V1,
 };
 pub use envelope::{
     Causation, EnvelopeLimits, EventSubject, HookCausationError, HookEnvelope, HookEnvelopeError,

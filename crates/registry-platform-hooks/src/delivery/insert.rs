@@ -15,15 +15,21 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use super::seams::DeliveryError;
-use crate::delivery_schema;
+use crate::{delivery_schema, HookHandlerKind};
 
 /// The product-owned capture of one delivery: everything the INSERT needs,
 /// already resolved from the product's compiled authority and its activated
 /// deployment binding.
 pub struct DeliveryCapture<'a> {
     pub compiled_delivery_id: &'a str,
-    pub logical_destination_id: &'a str,
-    /// Digest of the exact binding this delivery was captured under.
+    /// The handler kind this delivery binds.
+    pub handler_kind: HookHandlerKind,
+    /// The destination this delivery is sent to, for the `url` kind only. A
+    /// local kind runs the engine's own reviewed program and carries none.
+    pub logical_destination_id: Option<&'a str>,
+    /// Digest of the exact binding this delivery was captured under: the
+    /// destination binding for the `url` kind, and the reviewed script or
+    /// module for a local kind.
     pub destination_binding_digest: &'a str,
     pub package_revision: &'a str,
     pub schema_fingerprint: &'a str,
@@ -69,6 +75,7 @@ pub async fn insert_delivery(
     let schema = delivery_schema::require_plain_identifier(schema);
     let DeliveryCapture {
         compiled_delivery_id,
+        handler_kind,
         logical_destination_id,
         destination_binding_digest,
         package_revision,
@@ -96,7 +103,7 @@ pub async fn insert_delivery(
             &delivery_schema::render(
                 schema,
                 "INSERT INTO {schema}.registry_webhook_deliveries
-                 (event_id, compiled_delivery_id, logical_destination_id,
+                 (event_id, compiled_delivery_id, handler_kind, logical_destination_id,
                   destination_binding_digest, package_revision, schema_fingerprint,
                   data_schema,
                   classification_ceiling, authentication_profile, delivery_mode,
@@ -106,11 +113,12 @@ pub async fn insert_delivery(
                   deployed_maximum_attempts, dead_letter, operator_replay)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                      $11, $12, $13, $14, $15, $16, $17, $18, $19,
-                     $20, $21, $22)",
+                     $20, $21, $22, $23)",
             ),
             &[
                 &event_id,
                 &compiled_delivery_id,
+                &handler_kind.as_str(),
                 &logical_destination_id,
                 &destination_binding_digest,
                 &package_revision,

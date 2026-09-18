@@ -61,7 +61,7 @@ pub fn validate_hooks(hooks: &[HookDeclaration]) -> Result<(), HookValidationErr
                 return Err(HookValidationError::AbiMissing {
                     index,
                     id: hook.id.clone(),
-                    kind: hook.handler.kind(),
+                    kind: hook.handler.kind().as_str(),
                     required_abi: HOOK_HANDLER_ABI_V1,
                 });
             }
