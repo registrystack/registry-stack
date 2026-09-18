@@ -29,9 +29,10 @@ use registry_breg::postgres::{
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
-use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::{Causation, EnvelopeLimits, HookEnvelope};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -45,6 +46,11 @@ const PATH_CANARY: &str = "/webhook-path-canary";
 const SECRET_REF_CANARY: &str = "webhook-key-ref-canary";
 const SECRET_KEY_CANARY: &[u8] = b"webhook-key-material-canary-0123456789abcdef";
 const RESTRICTED_CANARY: &str = "restricted-projection-canary";
+
+/// `registry.id` of the project below joined with `identity.instanceId` of the
+/// runtime configuration below, in the shape `delivery_source` builds.
+const EXPECTED_EVENT_SOURCE: &str =
+    "urn:registrystack:registry:webhook-outbox-registry:instance:webhook-outbox-instance";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified(
@@ -260,7 +266,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         &binding_digest,
         &identity,
     );
-    assert_eq!(first_capture.payload, expected_payload(raw_record_id));
+    assert_payload_is_the_envelope(&first_capture, raw_record_id);
     assert!(first_capture.payload.len() <= compiled_delivery.maximum_payload_bytes as usize);
     assert_delivery_is_transport_and_value_free(&database, first_capture.event_id, raw_record_id)
         .await;
@@ -366,10 +372,13 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert_eq!(after_match.delivery, before_match.delivery + 1);
     assert_eq!(after_match.delivery_state, before_match.delivery_state + 1);
     let conditional_capture = capture(&database, 2).await;
-    let conditional_body: Value = serde_json::from_slice(&conditional_capture.payload)
-        .expect("conditional event body is JSON");
+    let conditional_envelope = HookEnvelope::from_canonical_bytes(
+        &conditional_capture.payload,
+        &EnvelopeLimits::default(),
+    )
+    .expect("the conditional capture stores a canonical hook envelope");
     assert_eq!(
-        conditional_body,
+        conditional_envelope.data,
         json!({
             "entity": "case",
             "recordId": raw_record_id,
@@ -924,8 +933,8 @@ fn assert_capture_matches(
     );
 }
 
-fn expected_payload(record_id: &str) -> Vec<u8> {
-    canonicalize_json(&json!({
+fn expected_event_data(record_id: &str) -> Value {
+    json!({
         "entity": "case",
         "recordId": record_id,
         "revision": 1,
@@ -935,8 +944,60 @@ fn expected_payload(record_id: &str) -> Vec<u8> {
             "label": "first",
             "restricted_note": RESTRICTED_CANARY,
         },
-    }))
-    .expect("expected event body canonicalizes")
+    })
+}
+
+/// The stored body is the shared hook envelope, not the bare projection. This
+/// holds the envelope to the row that describes it, so a capture cannot store
+/// a body whose identity, schema, origin or time disagrees with its own
+/// delivery row, and pins the canonical byte form the worker will sign.
+fn assert_payload_is_the_envelope(capture: &CapturedDelivery, record_id: &str) {
+    let envelope = HookEnvelope::from_canonical_bytes(&capture.payload, &EnvelopeLimits::default())
+        .expect("the stored body is a canonical hook envelope");
+
+    assert_eq!(
+        envelope.data,
+        expected_event_data(record_id),
+        "the envelope carries exactly the declared projection"
+    );
+    assert_eq!(
+        envelope.id,
+        capture.event_id.to_string(),
+        "the envelope identity is the row's event id"
+    );
+    assert_eq!(
+        envelope.dataschema, capture.data_schema,
+        "the envelope data contract is the row's data schema"
+    );
+    assert_eq!(
+        envelope.source, EXPECTED_EVENT_SOURCE,
+        "the envelope names the deployed registry instance"
+    );
+    assert_eq!(
+        envelope.event_type, "case-created",
+        "the envelope carries the declared event type"
+    );
+    assert_eq!(
+        envelope.subject.record_revision, 1,
+        "the envelope subject carries the committed revision"
+    );
+    assert_eq!(
+        envelope.causation,
+        Causation::root(&envelope.id),
+        "a record-triggered capture starts a causation chain"
+    );
+    assert_eq!(
+        envelope.time,
+        OffsetDateTime::from(capture.created_at),
+        "the envelope time is the captured transaction time"
+    );
+    assert_eq!(
+        envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("the stored envelope re-serializes"),
+        capture.payload,
+        "the stored bytes are the canonical form, byte for byte"
+    );
 }
 
 async fn assert_delivery_is_transport_and_value_free(
