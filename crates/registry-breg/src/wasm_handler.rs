@@ -20,6 +20,11 @@ pub const MAXIMUM_WASM_MODULE_BYTES: usize = 2 * 1024 * 1024;
 /// Ceiling on WASM handler modules carried by one package.
 pub const MAX_PACKAGE_WASM_MODULES: usize = 16;
 
+/// Default byte ceiling for guest memory growth during one handler call.
+/// Operator configuration may raise or lower it; this is the default both the
+/// runtime configuration section and the process executor budgets start from.
+pub const DEFAULT_WASM_GUEST_MEMORY_BYTES: usize = 32 * 1024 * 1024;
+
 /// Ceiling on the authored WASM module path, matching the planner script
 /// path ceiling the package source-file policy already enforces.
 pub const MAXIMUM_WASM_MODULE_PATH_BYTES: usize = 256;

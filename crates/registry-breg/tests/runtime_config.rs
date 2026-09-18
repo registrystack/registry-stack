@@ -645,6 +645,81 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 }
 
 #[test]
+fn wasm_execution_budgets_default_to_the_authoring_module_ceiling() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config =
+        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    // The default module ceiling is the compile-time admission ceiling, so a
+    // module authoring admission accepted always fits execution defaults.
+    assert_eq!(
+        config.wasm_execution().max_module_bytes(),
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64
+    );
+    assert_eq!(
+        config.wasm_execution().max_guest_memory_bytes(),
+        32 * 1024 * 1024
+    );
+
+    let configured = format!(
+        "{base}wasmExecution:\n  maxModuleBytes: 5242880\n  maxGuestMemoryBytes: 536870912\n"
+    );
+    let config = parse_runtime_config(&configured).expect("bounded budgets parse");
+    assert_eq!(config.wasm_execution().max_module_bytes(), 5_242_880);
+    assert_eq!(
+        config.wasm_execution().max_guest_memory_bytes(),
+        536_870_912
+    );
+}
+
+#[test]
+fn wasm_execution_budgets_refuse_out_of_range_values() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for (module_bytes, memory_bytes) in [
+        (0_u64, 32 * 1024 * 1024_u64),
+        (1023, 32 * 1024 * 1024),
+        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024),
+        (2 * 1024 * 1024, 0),
+        (2 * 1024 * 1024, 1024 * 1024 - 1),
+        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1),
+    ] {
+        let configured = format!(
+            "{base}wasmExecution:\n  maxModuleBytes: {module_bytes}\n  maxGuestMemoryBytes: {memory_bytes}\n"
+        );
+        let metadata = parse_runtime_config(&configured)
+            .expect_err("out-of-range WASM execution budget is refused")
+            .metadata();
+        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
+        assert_eq!(metadata.path(), "/wasmExecution");
+    }
+}
+
+#[test]
+fn wasm_execution_section_refuses_unknown_members() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let configured =
+        format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  backend: native\n");
+    assert_eq!(
+        parse_runtime_config(&configured).expect_err("unknown WASM execution member is refused"),
+        RuntimeConfigError::Document
+    );
+}
+
+#[test]
 fn local_runtime_does_not_require_or_supply_package_trust_authority() {
     let fixture = RuntimeFixture::new();
     let missing_anchor = fixture.path("unused-local-trust-anchor.json");

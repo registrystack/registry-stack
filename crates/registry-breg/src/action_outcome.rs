@@ -14,8 +14,8 @@
 //! always took, with the same diagnostics in the same order.
 //!
 //! The WASM outcome-byte decoder is compiled behind the non-default
-//! `wasm-executor-prototype` feature and is exercised only by the parity
-//! tests beside it; no request path constructs it yet.
+//! `wasm-executor-prototype` feature and serves the WASM execution path in
+//! those builds (and the parity tests beside it).
 
 use std::collections::BTreeSet;
 
@@ -120,7 +120,6 @@ pub(crate) fn rhai_document(value: Dynamic) -> ProposedValue {
 /// the same reason as [`rhai_document`]: JSON numbers outside i64 decode to
 /// `Inexpressible` rather than failing the parse.
 #[cfg(feature = "wasm-executor-prototype")]
-#[cfg_attr(not(test), allow(dead_code))]
 fn json_document(value: Value) -> ProposedValue {
     match value {
         Value::Null => ProposedValue::Absent,
@@ -145,9 +144,8 @@ fn json_document(value: Value) -> ProposedValue {
 /// Decode a WASM handler's outcome bytes into a proposal: reject repeated
 /// JSON members while parsing, then run the same shared output bound and
 /// document decode the Rhai path runs. Compiled under the prototype feature
-/// and exercised by the parity tests until the request path adopts it.
+/// and used by the WASM execution path in those builds.
 #[cfg(feature = "wasm-executor-prototype")]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn decode_wasm_outcome(
     bytes: &[u8],
     maximum_snapshot_bytes: u32,

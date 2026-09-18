@@ -1133,6 +1133,28 @@
       ],
       "type": "object"
     },
+    "RawWasmExecutionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "maxGuestMemoryBytes": {
+          "default": 33554432,
+          "description": "Defaults to the platform guest-memory ceiling (32 MiB).",
+          "format": "uint64",
+          "maximum": 1073741824,
+          "minimum": 1048576,
+          "type": "integer"
+        },
+        "maxModuleBytes": {
+          "default": 2097152,
+          "description": "Defaults to the compile-time module admission ceiling (2 MiB).",
+          "format": "uint64",
+          "maximum": 5242880,
+          "minimum": 1024,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "TaskGrantStatusConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1280,6 +1302,14 @@
         "$ref": "#/$defs/TaskGrantStatusConfig"
       },
       "type": "array"
+    },
+    "wasmExecution": {
+      "$ref": "#/$defs/RawWasmExecutionConfig",
+      "default": {
+        "maxGuestMemoryBytes": 33554432,
+        "maxModuleBytes": 2097152
+      },
+      "description": "Optional WASM handler execution budgets. Parsed in every build;\nexecuted only in builds with the WASM executor prototype feature."
     }
   },
   "required": [

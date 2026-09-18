@@ -337,6 +337,13 @@ pub(crate) fn evaluate_with_engine(
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
+    // A WASM handler never reaches the Rhai compile path; its module runs
+    // through the platform executor in builds that carry the prototype
+    // feature (and every build refuses the backend at admission above).
+    #[cfg(feature = "wasm-executor-prototype")]
+    if handler.kind == crate::model::CompiledActionHandlerKind::Wasm {
+        return crate::wasm_runtime::evaluate_wasm_handler(action, handler, inputs, deadline);
+    }
     let source =
         std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
     let ast = compile_source_for_abi(source, &handler.abi)?;
@@ -375,18 +382,29 @@ fn admit_handler<'a>(
             "Evaluate a declared handler; fixed actions use their compiled effects directly.",
         ));
     };
-    if handler.kind != crate::model::CompiledActionHandlerKind::Rhai {
-        // This runtime executes the Rhai backend only; a handler tagged with
-        // any other backend is never interpreted as Rhai source.
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Source,
-            "Evaluate a compiled Rhai handler; this runtime does not execute the declared handler backend.",
-        ));
-    }
-    if handler.abi != ACTION_HANDLER_ABI_V1
-        && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
-    {
-        return Err(ActionHandlerError::Source.into());
+    match handler.kind {
+        crate::model::CompiledActionHandlerKind::Rhai => {
+            if handler.abi != ACTION_HANDLER_ABI_V1
+                && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
+            {
+                return Err(ActionHandlerError::Source.into());
+            }
+        }
+        // A build with the WASM executor prototype executes the input-only
+        // v1 ABI for WASM handlers. The Evidence-enabled v2 ABI stays
+        // Rhai-only in this release, and a resolver never reaches a WASM
+        // handler.
+        #[cfg(feature = "wasm-executor-prototype")]
+        crate::model::CompiledActionHandlerKind::Wasm
+            if handler.abi == ACTION_HANDLER_ABI_V1 && resolver.is_none() => {}
+        _ => {
+            // A handler tagged with a backend this runtime does not execute
+            // is never interpreted as another backend's source.
+            return Err(ActionHandlerDiagnostic::new(
+                ActionHandlerError::Source,
+                "Evaluate a compiled Rhai handler; this runtime does not execute the declared handler backend.",
+            ));
+        }
     }
     Ok(handler)
 }

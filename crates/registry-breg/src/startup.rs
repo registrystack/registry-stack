@@ -810,6 +810,15 @@ async fn finish_prepared_server(
     let task_status = config
         .activate_task_status(&registry)
         .map_err(StartupError::RuntimeConfig)?;
+    // The process WASM executor is installed from the operator budgets before
+    // any request can evaluate a WASM handler. Builds without the prototype
+    // feature refuse WASM handlers at admission; the section still parses.
+    #[cfg(feature = "wasm-executor-prototype")]
+    crate::wasm_runtime::install(
+        crate::wasm_runtime::WasmExecutionBudgets::from(*config.wasm_execution()),
+        crate::wasm_runtime::MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
+    .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?;
     let attachment_verification_worker = if matches!(
         attachment_verification,
         crate::attachment_verification::AttachmentVerification::Disabled
@@ -1128,7 +1137,7 @@ pub async fn serve_until_shutdown(
         }
         result
     };
-    match tokio::time::timeout(shutdown_grace, graceful).await {
+    let outcome = match tokio::time::timeout(shutdown_grace, graceful).await {
         Ok(result) => result,
         Err(_) => {
             if !server_joined {
@@ -1149,7 +1158,12 @@ pub async fn serve_until_shutdown(
             }
             Err(StartupError::Shutdown)
         }
-    }
+    };
+    // The process WASM executor stops its epoch ticker once serving and
+    // background work have ended, on both the graceful and the aborted path.
+    #[cfg(feature = "wasm-executor-prototype")]
+    crate::wasm_runtime::shutdown();
+    outcome
 }
 
 enum ServeExit {
