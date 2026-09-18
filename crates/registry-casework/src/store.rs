@@ -3612,6 +3612,8 @@ pub enum StoreError {
     StaleGeneration,
     #[error("the request is invalid")]
     Invalid,
+    #[error(transparent)]
+    HostedValidation(#[from] registry_casework_core::HostedValidationError),
     #[error("the pagination cursor is invalid")]
     CursorInvalid,
     #[error("the pagination cursor has expired")]

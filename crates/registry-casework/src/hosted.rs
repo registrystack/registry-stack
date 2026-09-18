@@ -1453,13 +1453,22 @@ impl CaseworkService {
         request: &HostedDecisionRequest,
         idempotency_key: &str,
     ) -> Result<HostedTerminalResult, ServiceError> {
-        let (snapshot, result_constraints) =
-            self.store.hosted_policy_for_actor(actor, item_id).await?;
-        request.check(&snapshot, result_constraints.as_ref())?;
-        self.store
+        // The deciding-profile gate answers before the transaction so an
+        // officer without deciding authority learns nothing about the item.
+        self.store.hosted_policy_for_actor(actor, item_id).await?;
+        // The store answers idempotency, If-Match, and holder checks before
+        // result validation, so the typed refusal is the last word.
+        match self
+            .store
             .decide_hosted_item(actor, item_id, expected_revision, request, idempotency_key)
             .await
-            .map_err(ServiceError::from)
+        {
+            Ok(result) => Ok(result),
+            Err(StoreError::HostedValidation(validation)) => {
+                Err(ServiceError::HostedValidation(validation))
+            }
+            Err(other) => Err(ServiceError::Store(other)),
+        }
     }
 
     pub async fn hosted_accountability_record(
@@ -1961,12 +1970,6 @@ impl PostgresStore {
             .ok_or(StoreError::NotFound)?;
         let item = stored_hosted_item(&row)?;
         let snapshot = item.snapshot()?;
-        if request
-            .check(&snapshot, item.result_constraints.as_ref())
-            .is_err()
-        {
-            return Err(StoreError::Invalid);
-        }
         if !snapshot.deciding_profiles.contains(&actor.profile_id)
             || !has_queue_authority(&transaction, actor, &item.queue_id).await?
         {
@@ -1990,6 +1993,12 @@ impl PostgresStore {
         if item.holder.as_ref() != Some(&actor.principal) {
             return Err(StoreError::NotHolder);
         }
+        // §3.5: result validation runs only after the deciding-profile,
+        // idempotency, and If-Match checks have all passed, and carries the
+        // typed reason to the wire.
+        request
+            .check(&snapshot, item.result_constraints.as_ref())
+            .map_err(StoreError::HostedValidation)?;
         let next = item.revision.checked_add(1).ok_or(StoreError::Corrupt)?;
         let now = Utc::now();
         let terminal_retained_until = retained_until(now, snapshot.retention.terminal_days)?;
