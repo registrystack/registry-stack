@@ -37,7 +37,9 @@ Quick install:
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-two binaries together or not at all. It does not verify release authenticity. For
+two binaries together or not at all: every command is a stable link resolved
+through one toolset pointer, so the whole toolset changes version in a single
+step. It does not verify release authenticity. For
 a higher-assurance installation, follow the release verification guide for the
 pinned tag, then rerun with BREG_ASSET_DIR set to the verified
 directory:
@@ -355,9 +357,9 @@ for binary in "${binaries[@]}"; do
 	fi
 done
 
-for binary in "${binaries[@]}"; do
-	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"
-done
+printf 'Base Registry Engine toolset %s installed to %s.\n' "$version" "$install_dir"
+printf 'Every command (%s) is a link through the toolset pointer %s.\n' \
+	"${binaries[*]}" "$current_link"
 cat <<EOF
 
 Try it:

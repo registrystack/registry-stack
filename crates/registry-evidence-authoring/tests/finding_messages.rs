@@ -13,7 +13,8 @@
 //! rule named.
 
 use registry_evidence_authoring::{
-    validate_answer, validate_authored_answer, validate_question, Finding, Question, QuestionAnswer,
+    validate_answer, validate_answer_schema_document, validate_authored_answer, validate_question,
+    Finding, Question, QuestionAnswer,
 };
 use serde_json::{json, Map, Value};
 
@@ -613,6 +614,99 @@ fn structured_answer(concept: &str, claim: &str) -> Value {
         "maximumSerializedBytes": 1024,
         "sdJwtVc": { "claim": claim, "disclosure": "top-level" }
     })
+}
+
+/// An object answer schema is the contract the output gate holds a derivation
+/// to, so it may not permit properties it never declared. The findings name the
+/// schema document's own fields, because the caller renders them beside
+/// `schemas/<name>.yaml` rather than beside the question that referenced it.
+#[test]
+fn an_object_answer_schema_must_close_the_properties_it_permits() {
+    let closed = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {"marker": {"type": "string"}}
+    });
+    assert_eq!(validate_answer_schema_document(&closed), Vec::new());
+
+    let open = json!({
+        "type": "object",
+        "properties": {"marker": {"type": "string"}}
+    });
+    let open_findings = validate_answer_schema_document(&open);
+    let finding = first(&open_findings);
+    assert_eq!(finding.field.to_string(), ".additionalProperties");
+    assert_eq!(finding.code, "evidence.answer-schema.open-object");
+    assert_eq!(
+        finding.message,
+        "an object answer schema must set additionalProperties: false"
+    );
+
+    // Only the boolean `false` closes the form; every other spelling, including
+    // the schema dialect's own null, still permits an undeclared property.
+    for additional in [
+        json!(true),
+        json!("false"),
+        json!(null),
+        json!({"not": "a boolean"}),
+    ] {
+        let document = json!({
+            "type": "object",
+            "additionalProperties": additional,
+            "properties": {"marker": {"type": "string"}}
+        });
+        assert!(
+            !validate_answer_schema_document(&document).is_empty(),
+            "{additional} closed an object answer schema"
+        );
+    }
+
+    // A nullable object still answers with an object, so it closes the same way.
+    let nullable = json!({
+        "type": ["object", "null"],
+        "properties": {"marker": {"type": "string"}}
+    });
+    assert!(
+        !validate_answer_schema_document(&nullable).is_empty(),
+        "a nullable object answer schema escaped the closure rule"
+    );
+
+    let undeclared = json!({"type": "object", "additionalProperties": false});
+    let undeclared_findings = validate_answer_schema_document(&undeclared);
+    let finding = first(&undeclared_findings);
+    assert_eq!(finding.field.to_string(), ".properties");
+    assert_eq!(finding.code, "evidence.answer-schema.declared-properties");
+    assert_eq!(
+        finding.message,
+        "an object answer schema must declare the properties it permits"
+    );
+    let non_object_properties = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": ["marker"]
+    });
+    assert!(
+        !validate_answer_schema_document(&non_object_properties).is_empty(),
+        "a sequence of properties declared a property set"
+    );
+}
+
+/// A schema that does not declare an object type permits no object property
+/// set, so the closure rule has nothing to say about it.
+#[test]
+fn a_schema_that_declares_no_object_type_is_not_checked_for_closure() {
+    for document in [
+        json!({"type": "string"}),
+        json!({"type": ["string", "null"]}),
+        json!({"properties": {"marker": {"type": "string"}}}),
+        json!({}),
+    ] {
+        assert_eq!(
+            validate_answer_schema_document(&document),
+            Vec::new(),
+            "a non-object schema was checked for object closure"
+        );
+    }
 }
 
 fn object(document: &mut Value) -> &mut Map<String, Value> {

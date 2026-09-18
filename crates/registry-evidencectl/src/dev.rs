@@ -45,7 +45,7 @@ use crate::{
         compile_local_project_with_ports_and_resource,
         compile_local_project_with_target_inputs_and_resource, valid_local_audience,
         CompiledAccessPolicy, CompiledConceptForm, CompiledQuestion, LocalAdmission,
-        LocalServicePorts,
+        LocalServicePorts, MAX_SOURCE_ARTIFACT_BYTES, SOURCES_DIRECTORY,
     },
     keygen, OutputFormat,
 };
@@ -102,6 +102,29 @@ impl std::fmt::Display for DevStartFailure {
 
 impl std::error::Error for DevStartFailure {}
 
+/// One refused local development operation whose cause an operator can act
+/// on. The safe wrapper renders it in both output formats; a plain `bail!`
+/// would collapse into the canned `evidence.dev.failed` message instead.
+#[derive(Debug)]
+pub(crate) struct DevRefusal {
+    /// Whether the environment, not an authored or command-line input, is
+    /// what the operation refused (a missing ready session rather than a
+    /// refused flag or transport).
+    pub(crate) operational: bool,
+    pub(crate) code: &'static str,
+    pub(crate) path: String,
+    pub(crate) message: String,
+    pub(crate) suggested_action: String,
+}
+
+impl std::fmt::Display for DevRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DevRefusal {}
+
 #[derive(Debug)]
 pub(crate) struct RetiredMintDevelopment;
 
@@ -114,7 +137,11 @@ impl std::fmt::Display for RetiredMintDevelopment {
 impl std::error::Error for RetiredMintDevelopment {}
 
 #[derive(Debug, Args)]
-#[command(args_conflicts_with_subcommands = true, subcommand_negates_reqs = true)]
+// The bare-form flags --detach and --project stay parseable beside an action
+// subcommand on purpose: `args_conflicts_with_subcommands` would replace this
+// command's specific "these compatibility flags belong to the bare spelling"
+// refusal with the generic top-level usage failure that names neither flag.
+#[command(subcommand_negates_reqs = true)]
 pub struct DevArgs {
     #[command(subcommand)]
     action: Option<DevAction>,
@@ -457,11 +484,13 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
     if args.mint_port.is_some() || args.mint_bin.is_some() {
         return Err(RetiredMintDevelopment.into());
     }
+    if let Some(action) = &args.action {
+        if args.detach || args.project.is_some() {
+            return Err(compat_flag_refusal(action_name(action)));
+        }
+    }
     match args.action {
         Some(DevAction::Start(start)) => {
-            if args.detach || args.project.is_some() {
-                bail!("`dev start` does not accept the compatibility flags --detach or --project");
-            }
             let owner = args
                 .issuer_project
                 .as_deref()
@@ -493,9 +522,6 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             )
         }
         Some(DevAction::Stop(stop)) => {
-            if args.detach {
-                bail!("`dev stop` does not accept `--detach`");
-            }
             let project = stop
                 .project
                 .as_deref()
@@ -503,17 +529,21 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
                 .unwrap_or_else(|| Path::new("."));
             stop_dev(project, format)
         }
-        Some(DevAction::Clean(clean)) => {
-            if args.detach {
-                bail!("`dev clean` does not accept `--detach`");
-            }
-            clean_dev(&clean.project, format)
-        }
+        Some(DevAction::Clean(clean)) => clean_dev(&clean.project, format),
         Some(DevAction::Token(token)) => fresh_token(&token.project, &token.client, format),
         Some(DevAction::Grant(args)) => approved_grant(args, format),
         None => {
             if !args.detach {
-                bail!("the local development lifecycle requires `evidencectl dev --detach`");
+                return Err(DevRefusal {
+                    operational: false,
+                    code: "evidence.dev.detach-required",
+                    path: "$".to_owned(),
+                    message: "The bare `dev` form requires --detach.".to_owned(),
+                    suggested_action:
+                        "Run `evidencectl dev start <project>` for the current lifecycle, or add --detach for the retained bare spelling."
+                            .to_owned(),
+                }
+                .into());
             }
             let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
             let owner = args
@@ -547,6 +577,33 @@ pub(crate) fn run_with_format(args: DevArgs, format: OutputFormat) -> Result<Exi
             )
         }
     }
+}
+
+fn action_name(action: &DevAction) -> &'static str {
+    match action {
+        DevAction::Start(_) => "start",
+        DevAction::Stop(_) => "stop",
+        DevAction::Clean(_) => "clean",
+        DevAction::Token(_) => "token",
+        DevAction::Grant(_) => "grant",
+    }
+}
+
+/// The bare-`dev` compatibility flags are refused beside an action
+/// subcommand, naming both the flags and the spelling that owns them.
+fn compat_flag_refusal(action: &'static str) -> anyhow::Error {
+    DevRefusal {
+        operational: false,
+        code: "evidence.dev.compat-flags-refused",
+        path: "$".to_owned(),
+        message: format!(
+            "`dev {action}` does not accept the compatibility flags --detach or --project."
+        ),
+        suggested_action: format!(
+            "Run `evidencectl dev {action}` with the project as its own argument; --detach and --project belong to the bare `evidencectl dev` spelling."
+        ),
+    }
+    .into()
 }
 
 fn selected_ports(
@@ -905,10 +962,26 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
     if !valid_local_identifier(client_id) {
         bail!("a registered bounded local client ID is required");
     }
-    let ready = load_ready_state(project)?;
+    let ready = match load_ready_state(project) {
+        Ok(ready) => ready,
+        Err(_) if no_ready_session(project) => {
+            return Err(DevRefusal {
+                operational: true,
+                code: "evidence.dev.no-ready-session",
+                path: "$".to_owned(),
+                message: "No ready local development session exists in this project."
+                    .to_owned(),
+                suggested_action:
+                    "Run `evidencectl dev start <project>` and wait for readiness, then request the token again."
+                        .to_owned(),
+            }
+            .into());
+        }
+        Err(error) => return Err(error),
+    };
     let private_key_path = if let Some(caller) = &ready.caller {
         if caller.client_id != client_id {
-            bail!("the local client is not registered");
+            return Err(unregistered_client_refusal());
         }
         caller.private_key_path.clone()
     } else {
@@ -917,6 +990,12 @@ fn fresh_token(project: &Path, client_id: &str, format: OutputFormat) -> Result<
             .iter()
             .map(|policy| (policy.id.clone(), policy.requester_tag.clone()))
             .collect::<BTreeMap<_, _>>();
+        if !access::active_client_ids(&ready.project)?
+            .iter()
+            .any(|id| id == client_id)
+        {
+            return Err(unregistered_client_refusal());
+        }
         access::resolve_ready_client(&ready.project, client_id, &policy_tags)?.private_key_path
     };
     let token = obtain_issuer_token(&ready, client_id, &private_key_path)?;
@@ -1003,6 +1082,53 @@ pub fn run_supervisor(args: SupervisorArgs) -> Result<ExitCode> {
         return Err(error);
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Whether a project plainly holds no ready session: no readable dev state,
+/// or one whose status is not a failure-free `ready`. Used only to choose the
+/// missing-session refusal; a state that exists but fails closed-state
+/// validation still surfaces its own diagnostic.
+fn no_ready_session(project: &Path) -> bool {
+    no_session_with_status(project, |status, failure, _| {
+        status != DevStatus::Ready || failure.is_some()
+    })
+}
+
+/// Whether a project plainly holds no completed stopped session for `clean`
+/// to remove. A stopped session carries no caller and no failure kind.
+fn no_stopped_session(project: &Path) -> bool {
+    no_session_with_status(project, |status, failure, caller| {
+        status != DevStatus::Stopped || failure.is_some() || caller.is_some()
+    })
+}
+
+fn no_session_with_status(
+    project: &Path,
+    refused: impl FnOnce(DevStatus, Option<FailureKind>, &Option<CallerState>) -> bool,
+) -> bool {
+    let Some(project) = fs::canonicalize(project).ok() else {
+        return true;
+    };
+    match read_state(&project.join(".evidence").join("dev").join("state.json")) {
+        Ok(state) => refused(state.status, state.failure, &state.caller),
+        Err(_) => true,
+    }
+}
+
+/// The named client is not one this ready session would issue a token for.
+/// The client ID itself stays out of the message: it is caller-chosen input
+/// the operator still has in front of them, and the refusal names where the
+/// registered identifiers are listed instead.
+fn unregistered_client_refusal() -> anyhow::Error {
+    DevRefusal {
+        operational: false,
+        code: "evidence.dev.client-unregistered",
+        path: "$".to_owned(),
+        message: "The named client is not registered with the ready local session.".to_owned(),
+        suggested_action: "List the registered clients with `evidencectl access client list --project <dir>`, request the token for one of those, and retry."
+            .to_owned(),
+    }
+    .into()
 }
 
 #[allow(dead_code)] // Crate-private handoff for the immediately following request slice.
@@ -1594,6 +1720,7 @@ fn start_detached(
         requested_resource,
     } = selection;
     let project = canonical_project(project)?;
+    refuse_unservable_project(&project)?;
     let generated_root = ensure_private_generated_root(&project)?;
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
@@ -1697,6 +1824,65 @@ fn start_detached(
         remove_retained_stopped_session(&retained_root)?;
     }
     result
+}
+
+/// Refuse a project local serving can never bind, before anything is probed,
+/// resolved or created for it.
+///
+/// The compiler raises the same refusal, but only once a container binary has
+/// been resolved and the session's ports have been claimed, so an operator is
+/// asked to install Docker or to free a port for a project no port can serve.
+/// The authored transports answer that question on their own, so they are read
+/// first and the session ends where nothing has been touched.
+fn refuse_unservable_project(project: &Path) -> Result<()> {
+    let Some(source_id) = source_local_serving_cannot_bind(project) else {
+        return Ok(());
+    };
+    Err(DevRefusal {
+        operational: false,
+        code: "evidence.dev.local-transport-refused",
+        path: format!("sources/{source_id}.yaml:/transport"),
+        message: "Local serving does not bind SQLite extracts.".to_owned(),
+        suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
+            .to_owned(),
+    }
+    .into())
+}
+
+/// The first authored source, by id, whose transport opens no channel a local
+/// service could bind.
+///
+/// This read answers that one question and no other: a document it cannot
+/// open, bound or parse is left to the compiler, which reads the same
+/// directory under the authoring form and states the diagnostic for it.
+fn source_local_serving_cannot_bind(project: &Path) -> Option<String> {
+    let mut refused = BTreeSet::new();
+    let authored = fs::read_dir(project.join(SOURCES_DIRECTORY)).ok()?;
+    for entry in authored.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|extension| extension.to_str()) != Some("yaml") {
+            continue;
+        }
+        let Some(source_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+        let readable = fs::symlink_metadata(&path).is_ok_and(|metadata| {
+            metadata.is_file() && metadata.len() <= MAX_SOURCE_ARTIFACT_BYTES
+        });
+        if !readable {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else {
+            continue;
+        };
+        let Ok(source) = serde_norway::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+            refused.insert(source_id.to_owned());
+        }
+    }
+    refused.into_iter().next()
 }
 
 fn select_resource<'a>(retained: Option<&'a str>, requested: Option<&'a str>) -> Result<&'a str> {
@@ -1925,9 +2111,45 @@ fn remove_completed_dev_root(project: &Path, dev_root: &Path) -> Result<()> {
     fs::remove_dir_all(dev_root).context("failed to replace the completed local session")
 }
 
+/// `clean` removes one completed stopped session; a project whose dev tree
+/// was rolled back or never started has nothing at that path to remove.
+fn or_nothing_to_clean<T>(result: Result<T>) -> Result<T> {
+    match result {
+        Err(error)
+            if error.chain().any(|cause| {
+                cause
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+            }) =>
+        {
+            Err(nothing_to_clean_refusal())
+        }
+        other => other,
+    }
+}
+
+fn nothing_to_clean_refusal() -> anyhow::Error {
+    DevRefusal {
+        operational: true,
+        code: "evidence.dev.no-stopped-session",
+        path: "$".to_owned(),
+        message: "No completed stopped local development session exists in this project; nothing was removed."
+            .to_owned(),
+        suggested_action: "Check the project path, or stop the active session with `evidencectl dev stop <project>` first."
+            .to_owned(),
+    }
+    .into()
+}
+
 fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
-    let generated_root = existing_private_generated_root(&project)?;
+    let generated_root = match existing_private_generated_root(&project) {
+        Ok(root) => root,
+        Err(_) if no_stopped_session(&project) => {
+            return Err(nothing_to_clean_refusal());
+        }
+        Err(error) => return Err(error),
+    };
     let _lifecycle = lock_lifecycle(&generated_root)?;
     let dev_root = generated_root.join("dev");
     recover_retained_stopped_session(
@@ -1935,7 +2157,7 @@ fn clean_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
         &dev_root,
         &generated_root.join(RETAINED_STOPPED_SESSION),
     )?;
-    validate_private_directory(&dev_root)?;
+    or_nothing_to_clean(validate_private_directory(&dev_root))?;
     remove_completed_dev_root(&project, &dev_root)?;
     match format {
         OutputFormat::Human => println!("Removed stopped local Evidence state"),
@@ -2263,7 +2485,17 @@ fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     or_inactive_session(validate_private_directory(&dev_root))?;
     let state = or_inactive_session(read_state(&dev_root.join("state.json")))?;
     if state.project != project || !matches!(state.status, DevStatus::Starting | DevStatus::Ready) {
-        bail!("local development state is not an active session");
+        return Err(DevRefusal {
+            operational: true,
+            code: "evidence.dev.no-active-session",
+            path: "$".to_owned(),
+            message: "The local development session is not active; nothing was stopped."
+                .to_owned(),
+            suggested_action:
+                "Restart it with `evidencectl dev start <project>`, or remove a completed stopped session with `evidencectl dev clean --project <dir>`."
+                    .to_owned(),
+        }
+        .into());
     }
     let socket = dev_root.join(CONTROL_SOCKET_NAME);
     validate_control_socket(&socket)?;
@@ -2298,12 +2530,29 @@ fn stop_dev(project: &Path, format: OutputFormat) -> Result<ExitCode> {
 /// instead of letting the raw filesystem error reach the caller.
 fn or_inactive_session<T>(result: Result<T>) -> Result<T> {
     match result {
+        // The context layers naming the private directory wrap the raw
+        // `NotFound`, so the whole chain is searched: every call site here
+        // is the same question of a dev tree that was never written.
         Err(error)
             if error
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                .chain()
+                .any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
         {
-            bail!("local development state is not an active session")
+            Err(DevRefusal {
+                operational: true,
+                code: "evidence.dev.no-active-session",
+                path: "$".to_owned(),
+                message:
+                    "No active local development session exists in this project; nothing was stopped."
+                        .to_owned(),
+                suggested_action: "Check the project path, or start one with `evidencectl dev start <project>`."
+                    .to_owned(),
+            }
+            .into())
         }
         other => other,
     }
@@ -3191,6 +3440,50 @@ mod tests {
     }
 
     #[test]
+    fn a_project_read_from_a_sqlite_extract_is_refused_before_a_session_is_prepared() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = root.path();
+        let sources = project.join(SOURCES_DIRECTORY);
+        fs::create_dir(&sources).expect("sources directory");
+        fs::write(sources.join("records.yaml"), "transport: sqlite-extract\n").expect("source");
+
+        let error = refuse_unservable_project(project).expect_err("unservable project");
+
+        let refusal = error.downcast_ref::<DevRefusal>().expect("typed refusal");
+        assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
+        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert!(refusal.message.contains("does not bind SQLite extracts"));
+        assert!(!refusal.operational);
+    }
+
+    #[test]
+    fn a_project_a_local_service_can_bind_is_left_to_the_compiler() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let project = root.path();
+        refuse_unservable_project(project).expect("a project without sources is not refused here");
+
+        let sources = project.join(SOURCES_DIRECTORY);
+        fs::create_dir(&sources).expect("sources directory");
+        fs::write(sources.join("people.yaml"), "transport: http-json\n").expect("source");
+        fs::write(sources.join("notes.txt"), "transport: sqlite-extract\n").expect("other file");
+        refuse_unservable_project(project).expect("an HTTP source is not refused here");
+
+        // Two extracts name the first by id, as the compiler's own reading of
+        // the same directory does.
+        for id in ["records", "holders"] {
+            fs::write(
+                sources.join(format!("{id}.yaml")),
+                "transport: sqlite-extract\n",
+            )
+            .expect("source");
+        }
+        assert_eq!(
+            source_local_serving_cannot_bind(project).as_deref(),
+            Some("holders")
+        );
+    }
+
+    #[test]
     fn a_selected_resource_is_one_the_token_request_can_carry() {
         // A URL parser normalizes these hosts, so each would be accepted here
         // and then refused when the same bytes became the OAuth resource
@@ -4018,11 +4311,13 @@ requirements:
         let project = tempfile::tempdir().expect("tempdir");
         let error = stop_dev(project.path(), OutputFormat::Human)
             .expect_err("stop must refuse a project with no dev session");
-        let diagnostic = format!("{error:#}");
-        assert_eq!(
-            diagnostic,
-            "local development state is not an active session"
-        );
+        let refusal = error
+            .downcast_ref::<DevRefusal>()
+            .expect("the missing-session refusal is typed so both formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.no-active-session");
+        assert!(refusal
+            .message
+            .starts_with("No active local development session"));
     }
 
     #[test]
@@ -4042,11 +4337,13 @@ requirements:
 
         let error = stop_dev(project.path(), OutputFormat::Human)
             .expect_err("stop must refuse a project with no dev state");
-        let diagnostic = format!("{error:#}");
-        assert_eq!(
-            diagnostic,
-            "local development state is not an active session"
-        );
+        let refusal = error
+            .downcast_ref::<DevRefusal>()
+            .expect("the missing-session refusal is typed so both formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.no-active-session");
+        assert!(refusal
+            .message
+            .starts_with("No active local development session"));
     }
 
     #[test]

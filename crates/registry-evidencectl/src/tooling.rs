@@ -9,7 +9,10 @@ use std::process::ExitCode;
 use anyhow::{anyhow, Result};
 use clap::Subcommand;
 
-use crate::tooling_editor::{self, EditorArgs};
+use crate::{
+    tooling_editor::{self, EditorArgs},
+    OutputFormat,
+};
 
 #[derive(Debug, Subcommand)]
 pub enum ToolingCommand {
@@ -19,9 +22,9 @@ pub enum ToolingCommand {
     LanguageServer,
 }
 
-pub fn run(command: ToolingCommand) -> Result<ExitCode> {
+pub fn run(command: ToolingCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        ToolingCommand::Editor(args) => tooling_editor::run(args),
+        ToolingCommand::Editor(args) => tooling_editor::run(args, format),
         ToolingCommand::LanguageServer => {
             tokio::runtime::Builder::new_current_thread()
                 .enable_all()

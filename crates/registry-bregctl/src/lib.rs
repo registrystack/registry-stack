@@ -1586,6 +1586,19 @@ where
 {
     let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
     let machine_mode = requested_json(&arguments);
+    if machine_mode && help_requested(&arguments) {
+        let catalog = registry_cli_reference::binary_catalog(
+            command(),
+            registry_platform_buildinfo::DISPLAY_VERSION,
+            Some(registry_cli_reference::SYMBOLIC_LINK_REFUSAL),
+        );
+        let _ = writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&catalog).expect("the command catalog serializes")
+        );
+        return ExitCode::SUCCESS;
+    }
     let cli = match Cli::try_parse_from(&arguments) {
         Ok(cli) => cli,
         Err(error) => {
@@ -3992,6 +4005,40 @@ fn diff_change_path(change: &registry_breg::package::CompiledRegistryChange) -> 
     }
 }
 
+/// Whether the operator asked for the command tree rather than an operation.
+/// `--help` and `-h` are recognized in any position, matching clap's own
+/// help flags. A bare `help` token only counts in the subcommand position,
+/// reached by skipping past the global `--format` flag when it comes first,
+/// so `help --format json` and `--format json help` render the catalog while
+/// a value spelled "help" carried by a later argument, such as the project
+/// path in `explain access help`, is never mistaken for a help request.
+fn help_requested(arguments: &[OsString]) -> bool {
+    if arguments
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        return true;
+    }
+    let mut index = 1;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--format" {
+            index += 2;
+            continue;
+        }
+        if argument
+            .to_str()
+            .is_some_and(|value| value.starts_with("--format="))
+        {
+            index += 1;
+            continue;
+        }
+        return argument == "help";
+    }
+    false
+}
+
 fn requested_json(arguments: &[OsString]) -> bool {
     arguments.iter().enumerate().any(|(index, argument)| {
         argument == "--format=json"
@@ -5991,6 +6038,9 @@ const INIT_DEV_CLIENTS: &[u8] =
 # short-lived tokens carrying these claims. One client binds each access profile
 # that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
 # first start runs the journeys and serves the package without another file.
+# A maintained refusal step can name the exact client for its profile with
+# `testBindings`; the 'Explicit teaching clients' section of
+# products/breg/DEV.md documents the closed binding format.
 # `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
 # nothing here is a credential, and none of it belongs in a deployment.
 version: 1
@@ -12002,4 +12052,40 @@ fn native_pattern_schema_test_diagnostic_identifies_only_the_authored_field() {
     );
     assert!(!diagnostic.message.contains("registry_data"));
     assert!(diagnostic.message.contains("PostgreSQL ARE syntax"));
+}
+
+#[cfg(test)]
+#[test]
+fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
+    fn args(tokens: &[&str]) -> Vec<OsString> {
+        std::iter::once("bregctl")
+            .chain(tokens.iter().copied())
+            .map(OsString::from)
+            .collect()
+    }
+
+    for tokens in [
+        &["help"][..],
+        &["help", "--format", "json"][..],
+        &["--format", "json", "help"][..],
+        &["--format", "json", "--help"][..],
+        &["--format", "json", "-h"][..],
+        &["--format", "json", "project", "--help"][..],
+    ] {
+        assert!(
+            help_requested(&args(tokens)),
+            "{tokens:?} must be recognized as a help request"
+        );
+    }
+
+    for tokens in [
+        &["--format", "json", "explain", "access", "help"][..],
+        &["--format", "json", "doctor", "--runtime-config", "help"][..],
+        &["explain", "access", "help"][..],
+    ] {
+        assert!(
+            !help_requested(&args(tokens)),
+            "{tokens:?} carries `help` as a value, not the subcommand"
+        );
+    }
 }

@@ -38,7 +38,9 @@ Quick install:
 
 The installer verifies every downloaded release asset against the release's
 SHA256SUMS before anything reaches the install directory, and installs the
-three binaries together or not at all. It does not verify release
+three binaries together or not at all: every command is a stable link resolved
+through one toolset pointer, so the whole toolset changes version in a single
+step. It does not verify release
 authenticity. For a higher-assurance installation, follow the release
 verification guide for the pinned tag, then rerun with EVIDENCECTL_ASSET_DIR
 set to the verified directory:
@@ -286,49 +288,97 @@ EOF
 fi
 
 mkdir -p "$install_dir"
-stage_dir="$(mktemp -d "$install_dir/.evidencectl-install.XXXXXX")"
-install_started=0
+stage_dir="$(mktemp -d "$install_dir/.evidence-toolset.XXXXXX")"
+link_stage_dir="$(mktemp -d "$install_dir/.evidence-links.XXXXXX")"
+chmod 0755 "$stage_dir"
 install_complete=0
-# The saved copy under $tmpdir is itself the record that a binary was already
-# installed, so rollback needs no parallel bookkeeping. Stock macOS bash is 3.2
-# and has no associative array to keep that bookkeeping in.
-rollback_install() {
+cleanup_install() {
 	set +e
-	if [ "$install_started" -eq 1 ] && [ "$install_complete" -eq 0 ]; then
-		local binary
-		for binary in "${binaries[@]}"; do
-			if [ -f "$tmpdir/${binary}.previous" ]; then
-				cp -p "$tmpdir/${binary}.previous" "$install_dir/$binary"
-			else
-				rm -f "$install_dir/$binary"
-			fi
-		done
+	if [ "$install_complete" -eq 0 ]; then
+		rm -rf "$stage_dir"
 	fi
-	rm -rf "$stage_dir"
+	rm -rf "$link_stage_dir"
 }
-trap 'rollback_install; cleanup' EXIT
+trap 'cleanup_install; cleanup' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 for binary in "${binaries[@]}"; do
 	cp "$tmpdir/${binary}-${version}-${os_label}-${arch_label}" "$stage_dir/$binary"
 	chmod 0755 "$stage_dir/$binary"
-	if [ -e "$install_dir/$binary" ]; then
-		cp -p "$install_dir/$binary" "$tmpdir/${binary}.previous"
+done
+
+replace_path() {
+	local source="$1"
+	local destination="$2"
+	if [ "$os_label" = "macos" ]; then
+		mv -fh "$source" "$destination"
+	else
+		mv -Tf "$source" "$destination"
+	fi
+}
+
+current_link="$install_dir/.evidence-current"
+if [ -e "$current_link" ] && [ ! -L "$current_link" ]; then
+	echo "Refusing to replace a non-symbolic Evidence toolset pointer." >&2
+	exit 1
+fi
+
+# A one-time migration keeps existing direct binaries behind the same pointer
+# before their stable command links are installed. At every point every command
+# therefore resolves to the prior toolset, the new toolset, or neither. Stock
+# macOS bash is 3.2 and has no associative array, so the migration walks the
+# binaries instead of bookkeeping their previous state.
+if [ ! -L "$current_link" ]; then
+	previous_dir="$(mktemp -d "$install_dir/.evidence-previous.XXXXXX")"
+	chmod 0755 "$previous_dir"
+	previous_count=0
+	for binary in "${binaries[@]}"; do
+		if [ -e "$install_dir/$binary" ] && [ ! -d "$install_dir/$binary" ]; then
+			cp -p "$install_dir/$binary" "$previous_dir/$binary"
+			previous_count=$((previous_count + 1))
+		fi
+	done
+	if [ "$previous_count" -gt 0 ]; then
+		ln -s "${previous_dir##*/}" "$link_stage_dir/current"
+		replace_path "$link_stage_dir/current" "$current_link"
+	else
+		rm -rf "$previous_dir"
+	fi
+fi
+
+for binary in "${binaries[@]}"; do
+	if [ -d "$install_dir/$binary" ] && [ ! -L "$install_dir/$binary" ]; then
+		echo "Refusing to replace a directory at $install_dir/$binary." >&2
+		exit 1
+	fi
+	ln -s ".evidence-current/$binary" "$link_stage_dir/$binary"
+	if [ -e "$current_link/$binary" ]; then
+		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
 	fi
 done
 
-# Replace the four binaries only after every one of them is staged and
-# verified, so an interrupted update never leaves a mixed-version toolset.
-install_started=1
-for binary in "${binaries[@]}"; do
-	mv -f "$stage_dir/$binary" "$install_dir/$binary"
-done
+# Every stable command link the pointer already resolves changes version through
+# this one atomic rename. A failed switch leaves the pointer, and with it the
+# previously working toolset, exactly where it was.
+ln -s "${stage_dir##*/}" "$link_stage_dir/current"
 install_complete=1
+replace_path "$link_stage_dir/current" "$current_link"
 
+# A command the pointer does not resolve yet, such as one another product's
+# installer wrote directly, is linked only now that the switch has made its
+# target real. Installing that link earlier would replace a working command with
+# a link to a file that a failed switch never creates. Its staged link is still
+# in place because the loop above left it there.
 for binary in "${binaries[@]}"; do
-	printf '%s installed to %s\n' "$binary" "$install_dir/$binary"
+	if [ -L "$link_stage_dir/$binary" ]; then
+		replace_path "$link_stage_dir/$binary" "$install_dir/$binary"
+	fi
 done
+
+printf 'Evidence toolset %s installed to %s.\n' "$version" "$install_dir"
+printf 'Every command (%s) is a link through the toolset pointer %s.\n' \
+	"${binaries[*]}" "$current_link"
 cat <<EOF
 
 Try it:

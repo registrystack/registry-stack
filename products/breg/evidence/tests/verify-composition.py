@@ -209,6 +209,29 @@ def verify_default_init(workspace: Path, binaries: dict[str, Path]) -> dict[str,
     return {"questions": 1, "fixtureCases": 11, "defaultSourceClient": "dedicated"}
 
 
+def verify_offline_starter(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
+    """The shipped offline starter proves itself with no registry and no import."""
+    workspace.mkdir()
+    environment = dict(os.environ)
+    environment.pop("REGISTRY_EVIDENCE_RUNTIME", None)
+    environment["PATH"] = os.pathsep.join(
+        [str(binaries["evidence"].parent), environment.get("PATH", "")]
+    )
+    project = workspace / "evidence"
+    run(binaries["evidencectl"], "init", project, "--starter", INPUTS / "offline-starter",
+        "--profile", "local", environment=environment)
+    run(binaries["evidencectl"], "check", project, environment=environment)
+    fixtures = json.loads(run(
+        binaries["evidencectl"], "--format", "json", "test", project,
+        environment=environment,
+    ))
+    assert fixtures["passed"], fixtures
+    assert len(fixtures["fixtures"]) == 1, "the offline starter ships one fixture set"
+    assert fixtures["fixtures"][0]["passed"]
+    assert fixtures["fixtures"][0]["evaluated_cases"] == 13, fixtures
+    return {"questions": 1, "fixtureCases": 13, "registryRequired": False}
+
+
 def verify_source_add_review(workspace: Path, binaries: dict[str, Path]) -> dict[str, object]:
     """source add reviews by default and refuses before it changes either project.
 
@@ -657,6 +680,7 @@ def main() -> None:
         workspace.mkdir(mode=0o700)
         report = verify(workspace, binaries)
         report["defaultInit"] = verify_default_init(workspace / "default-init", binaries)
+        report["offlineStarter"] = verify_offline_starter(workspace / "offline-starter", binaries)
         report["sourceAddReview"] = verify_source_add_review(workspace / "source-add", binaries)
         if args.live:
             report["live"] = verify_live(workspace / "live", binaries)
@@ -667,7 +691,12 @@ def main() -> None:
             try:
                 report = verify(workspace, binaries)
                 report["defaultInit"] = verify_default_init(workspace / "default-init", binaries)
-                report["sourceAddReview"] = verify_source_add_review(workspace / "source-add", binaries)
+                report["offlineStarter"] = verify_offline_starter(
+                    workspace / "offline-starter", binaries
+                )
+                report["sourceAddReview"] = verify_source_add_review(
+                    workspace / "source-add", binaries
+                )
                 if args.live:
                     report["live"] = verify_live(workspace / "live", binaries)
                     report["lateAdoption"] = verify_live(workspace / "late-adoption", binaries, late=True)

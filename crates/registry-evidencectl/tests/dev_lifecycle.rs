@@ -268,6 +268,265 @@ fn public_symlink_and_stale_state_are_never_replaced() {
     );
 }
 
+#[test]
+fn compatibility_flags_beside_a_dev_action_are_refused_naming_both_flags() {
+    let fixture = Project::new();
+    // The flags stay parseable next to the action so the refusal can name
+    // them; both output formats must carry that cause.
+    let human = evidencectl()
+        .args(["dev", "--detach", "start"])
+        .arg(&fixture.root)
+        .output()
+        .expect("compat-flag start");
+    assert_eq!(human.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        error.contains("evidence.dev.compat-flags-refused"),
+        "{error}"
+    );
+    assert!(error.contains("--detach"), "{error}");
+    assert!(error.contains("--project"), "{error}");
+    assert!(!fixture.root.join(".evidence").exists());
+
+    let json = evidencectl()
+        .args(["--format=json", "dev", "--project"])
+        .arg(&fixture.root)
+        .args(["token", "local-tutorial-caller"])
+        .output()
+        .expect("compat-flag token");
+    assert_eq!(json.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.dev.compat-flags-refused"
+    );
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("--detach or --project"));
+}
+
+#[test]
+fn bare_dev_without_detach_names_the_required_spelling() {
+    let fixture = Project::new();
+    let output = evidencectl()
+        .args(["dev", "--project"])
+        .arg(&fixture.root)
+        .output()
+        .expect("bare dev");
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(error.contains("evidence.dev.detach-required"), "{error}");
+    assert!(error.contains("dev start"), "{error}");
+    assert!(!fixture.root.join(".evidence").exists());
+}
+
+#[test]
+fn sqlite_extract_dev_start_refuses_local_serving_by_name_in_both_formats() {
+    let fixture = Project::new();
+    let project = fixture.sqlite_extract_starter();
+    let tool = fixture.tool_that_never_serves();
+    let (evidence_port, issuer_port) = unused_port_pair();
+
+    let human = evidencectl()
+        .args(["dev", "start"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite dev start");
+    assert_eq!(human.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&human.stderr);
+    assert!(
+        error.contains("evidence.dev.local-transport-refused"),
+        "{error}"
+    );
+    assert!(error.contains("does not bind SQLite extracts"), "{error}");
+    assert!(
+        error.contains("sources/record-status.yaml:/transport"),
+        "{error}"
+    );
+    assert!(error.contains("evidencectl test"), "{error}");
+    assert!(!project.join(".evidence/dev/state.json").exists());
+
+    let json = evidencectl()
+        .args(["--format=json", "dev", "start"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite dev start JSON");
+    assert_eq!(json.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
+    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/transport");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("does not bind SQLite extracts"));
+    assert!(diagnostic["suggestedAction"]
+        .as_str()
+        .expect("suggested action")
+        .contains("evidencectl test"));
+}
+
+/// A project no local service can serve is refused for what it is, not for the
+/// container tooling the session would have needed had it been servable.
+#[test]
+fn sqlite_extract_dev_start_refuses_local_serving_without_docker_on_the_path() {
+    let fixture = Project::new();
+    let project = fixture.sqlite_extract_starter();
+    let tool = fixture.tool_that_never_serves();
+    let toolless_path = fixture.directory_without_tools();
+    let (evidence_port, issuer_port) = unused_port_pair();
+
+    let json = evidencectl()
+        .env("PATH", &toolless_path)
+        .args(["--format=json", "dev", "start"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite dev start without docker");
+
+    assert_eq!(json.status.code(), Some(1));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidence.dev.local-transport-refused");
+    assert_eq!(diagnostic["path"], "sources/record-status.yaml:/transport");
+    assert!(diagnostic["message"]
+        .as_str()
+        .expect("message")
+        .contains("does not bind SQLite extracts"));
+    assert!(!project.join(".evidence").exists());
+}
+
+/// Freeing a port cannot make a SQLite extract servable, so the transport is
+/// judged before the ports the session would otherwise have claimed.
+#[test]
+fn sqlite_extract_bare_dev_refuses_local_serving_before_an_occupied_port() {
+    let fixture = Project::new();
+    let project = fixture.sqlite_extract_starter();
+    let tool = fixture.tool_that_never_serves();
+    let occupied = TcpListener::bind("127.0.0.1:0").expect("occupy a local port");
+    let evidence_port = occupied.local_addr().expect("occupied address").port();
+    let (_, issuer_port) = unused_port_pair();
+
+    let output = evidencectl()
+        .args(["dev", "--detach", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&tool)
+        .args(["--evidence-port", &evidence_port.to_string()])
+        .args(["--issuer-port", &issuer_port.to_string()])
+        .output()
+        .expect("sqlite bare dev start on an occupied port");
+
+    assert_eq!(output.status.code(), Some(1));
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("evidence.dev.local-transport-refused"),
+        "{error}"
+    );
+    assert!(
+        error.contains("sources/record-status.yaml:/transport"),
+        "{error}"
+    );
+    assert!(!error.contains("evidence.dev.port-unavailable"), "{error}");
+    assert!(!error.contains(&evidence_port.to_string()), "{error}");
+    assert!(!project.join(".evidence").exists());
+    drop(occupied);
+}
+
+#[test]
+fn dev_token_without_a_ready_session_names_the_missing_session_in_both_formats() {
+    let fixture = Project::new();
+
+    let human = evidencectl()
+        .args(["dev", "token", "local-tutorial-caller"])
+        .arg(&fixture.root)
+        .output()
+        .expect("token without session");
+    assert_eq!(human.status.code(), Some(3));
+    let error = String::from_utf8_lossy(&human.stderr);
+    assert!(error.contains("evidence.dev.no-ready-session"), "{error}");
+    assert!(
+        error.contains("No ready local development session"),
+        "{error}"
+    );
+    assert!(error.contains("dev start"), "{error}");
+
+    let json = evidencectl()
+        .args(["--format=json", "dev", "token", "local-tutorial-caller"])
+        .arg(&fixture.root)
+        .output()
+        .expect("token without session JSON");
+    assert_eq!(json.status.code(), Some(3));
+    let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+    assert_eq!(report["status"], "operational-failure");
+    assert_eq!(
+        report["diagnostics"][0]["code"],
+        "evidence.dev.no-ready-session"
+    );
+    assert!(report["diagnostics"][0]["message"]
+        .as_str()
+        .expect("message")
+        .contains("No ready local development session"));
+}
+
+#[test]
+fn dev_stop_and_clean_without_a_session_name_what_is_missing_in_both_formats() {
+    let fixture = Project::new();
+
+    for (arguments, code, message) in [
+        (
+            vec!["dev", "stop"],
+            "evidence.dev.no-active-session",
+            "No active local development session",
+        ),
+        (
+            vec!["dev", "clean", "--project"],
+            "evidence.dev.no-stopped-session",
+            "No completed stopped local development session",
+        ),
+    ] {
+        let human = evidencectl()
+            .args(&arguments)
+            .arg(&fixture.root)
+            .output()
+            .expect("lifecycle refusal");
+        assert_eq!(human.status.code(), Some(3));
+        let error = String::from_utf8_lossy(&human.stderr);
+        assert!(error.contains(code), "{error}");
+        assert!(error.contains(message), "{error}");
+
+        let json = evidencectl()
+            .args(["--format=json"])
+            .args(&arguments)
+            .arg(&fixture.root)
+            .output()
+            .expect("lifecycle refusal JSON");
+        assert_eq!(json.status.code(), Some(3));
+        let report: Value = serde_json::from_slice(&json.stdout).expect("JSON refusal");
+        assert_eq!(report["status"], "operational-failure");
+        assert_eq!(report["diagnostics"][0]["code"], code);
+        assert!(report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("nothing was"));
+    }
+}
+
 struct Project {
     _temporary: tempfile::TempDir,
     root: PathBuf,
@@ -316,6 +575,39 @@ impl Project {
                 "HMAC key",
             );
         }
+    }
+
+    /// Scaffold a second project beside this one whose only source is read
+    /// from a SQLite extract, a transport local serving cannot bind.
+    fn sqlite_extract_starter(&self) -> PathBuf {
+        let project = self
+            .root
+            .parent()
+            .expect("temporary parent")
+            .join("sqlite-project");
+        assert_success(
+            &evidencectl()
+                .args([
+                    "new",
+                    project.to_str().expect("UTF-8 project path"),
+                    "--transport",
+                    "sqlite-extract",
+                    "--profile",
+                    "local",
+                ])
+                .output()
+                .expect("create SQLite starter"),
+            "create SQLite starter",
+        );
+        project
+    }
+
+    /// A search path holding no tool at all, so resolving `docker` from it
+    /// must fail.
+    fn directory_without_tools(&self) -> PathBuf {
+        let path = self.root.join("no-tools");
+        fs::create_dir(&path).expect("tool-free directory");
+        path
     }
 
     fn tool_that_never_serves(&self) -> PathBuf {

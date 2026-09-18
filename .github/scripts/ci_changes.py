@@ -76,6 +76,7 @@ SHARDS = {
     "developer-tools": (
         "registry-thunderid-tooling",
         "registry-cli-docs",
+        "registry-cli-reference",
         "registry-language-server",
     ),
     "render": ("registry-render",),

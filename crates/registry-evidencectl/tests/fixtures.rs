@@ -49,7 +49,10 @@ fn write_project(root: &Path, fixture_paths: &[&str]) -> PathBuf {
 ///   the file named by `$ARGV_LOG`;
 /// - exits 1 with a fixed diagnostic on stderr when its step name equals
 ///   `$FAIL_STEP` (`check`, or `evaluate:<fixture path>`), and exits 0
-///   otherwise;
+///   otherwise; a failing step also prints the structured failing-case line
+///   the real binary promises when `$FAIL_CASE` is set, with
+///   `$FAIL_EXPECTED`/`$FAIL_OBSERVED` as the two classes and no parenthetical
+///   when they are unset;
 /// - prints the real `evidence evaluate` summary line, with `$CASES` cases,
 ///   when `$CASES` is set and the step is an evaluation.
 fn write_stub_evidence(dir: &Path) -> PathBuf {
@@ -96,6 +99,14 @@ fi
 
 if [ "$step" = "${{FAIL_STEP:-}}" ]; then
   printf 'stub failure for %s\n' "$step" >&2
+  if [ -n "${{FAIL_CASE:-}}" ]; then
+    if [ -n "${{FAIL_EXPECTED:-}}" ]; then
+      printf 'case %s: stub failure for %s (expected class %s, observed class %s)\n' \
+        "$FAIL_CASE" "$step" "$FAIL_EXPECTED" "${{FAIL_OBSERVED:-}}" >&2
+    else
+      printf 'case %s: stub failure for %s\n' "$FAIL_CASE" "$step" >&2
+    fi
+  fi
   exit 1
 fi
 
@@ -391,6 +402,142 @@ fn one_failing_fixture_is_reported_with_its_stderr_and_the_rest_still_run() {
     );
 }
 
+/// A failing fixture names the case the binary reported, in the JSON report
+/// and in the human diagnostics alike, parsed from the structured line the
+/// binary promises and never invented by the driver.
+#[test]
+fn a_failing_fixture_carries_the_case_and_classes_the_binary_named() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+    let tail = "case positive-mismatch: stub failure for evaluate:fixtures/a.yaml \
+                (expected class string, observed class integer)";
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("FAIL_STEP", "evaluate:fixtures/a.yaml")
+        .env("FAIL_CASE", "positive-mismatch")
+        .env("FAIL_EXPECTED", "string")
+        .env("FAIL_OBSERVED", "integer")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert_eq!(fixtures[0]["passed"], serde_json::Value::Bool(false));
+    assert_eq!(
+        fixtures[0]["failing_case"],
+        serde_json::json!({
+            "id": "positive-mismatch",
+            "cause": "stub failure for evaluate:fixtures/a.yaml",
+            "expected_class": "string",
+            "observed_class": "integer",
+        }),
+        "the report must carry what the binary said, not a second opinion"
+    );
+    // Naming a case is not counting one: a failed fixture still reports no
+    // evaluated-case figure of its own.
+    assert!(
+        fixtures[0].get("evaluated_cases").is_none(),
+        "a named failing case fabricated a count: {}",
+        fixtures[0]
+    );
+    assert_eq!(report["evaluated_cases"], serde_json::json!(0));
+
+    // The human mode relays the same line through the captured stderr.
+    let human = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("FAIL_STEP", "evaluate:fixtures/a.yaml")
+        .env("FAIL_CASE", "positive-mismatch")
+        .env("FAIL_EXPECTED", "string")
+        .env("FAIL_OBSERVED", "integer")
+        .output()
+        .expect("run evidencectl for human diagnostics");
+    assert!(stdout_of(&human).contains(tail), "{}", stdout_of(&human));
+}
+
+/// A failing case whose comparison reached no value class says exactly that:
+/// the identifier and the cause, with no class fields to misread.
+#[test]
+fn a_failing_case_without_classes_carries_no_class_fields() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("FAIL_STEP", "evaluate:fixtures/a.yaml")
+        .env("FAIL_CASE", "expectation-stage")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert_eq!(
+        fixtures[0]["failing_case"],
+        serde_json::json!({
+            "id": "expectation-stage",
+            "cause": "stub failure for evaluate:fixtures/a.yaml",
+        })
+    );
+}
+
+/// A binary that fails without the structured line keeps the report honest:
+/// no failing case is named, and the captured stderr still says everything
+/// the binary did.
+#[test]
+fn an_unstructured_failure_names_no_case() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["fixtures", "run", "--project"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .arg("--json")
+        .env("ARGV_LOG", &argv_log)
+        .env("FAIL_STEP", "evaluate:fixtures/a.yaml")
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_of(&output).trim()).expect("parse JSON report");
+    let fixtures = report["fixtures"].as_array().expect("fixtures array");
+    assert!(
+        fixtures[0].get("failing_case").is_none(),
+        "an unstructured failure named a case anyway: {}",
+        fixtures[0]
+    );
+    assert!(fixtures[0]["stderr"]
+        .as_str()
+        .expect("failing fixture carries stderr")
+        .contains("stub failure for evaluate:fixtures/a.yaml"));
+}
+
 #[test]
 fn json_output_is_one_parseable_document_on_stdout_with_expected_pass_fail_values() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -532,6 +679,44 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
         !output.status.success(),
         "a run that counted no case reported success: {stdout}"
     );
+}
+
+/// The global `--format json` spelling must keep stdout a single JSON
+/// document too: an agent parses stdout directly, and the human progress
+/// lines belong on stderr where every other JSON writer keeps them.
+#[test]
+fn the_global_format_json_flag_keeps_test_stdout_one_json_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["test", "--format", "json"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "3")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    let stdout = stdout_of(&output);
+    let stdout_lines: Vec<&str> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        stdout_lines.len(),
+        1,
+        "stdout must carry exactly one JSON document: {stdout}"
+    );
+    assert!(!stdout.contains("PASS:"), "{stdout}");
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_lines[0]).expect("parse JSON report");
+    assert_eq!(report["passed"], serde_json::Value::Bool(true));
+    assert_eq!(report["evaluated_cases"], serde_json::json!(3));
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr text");
+    assert!(stderr.contains("PASS: check"), "{stderr}");
 }
 
 /// A run whose steps all pass but whose fixtures evaluated nothing is the one
@@ -978,6 +1163,109 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
     assert_eq!(invocations.len(), 2, "check plus one fixture");
 }
 
+/// The documented local authoring journey, end to end: scaffold a project,
+/// create its first local target without pre-creating `targets/`, then check
+/// and explain the project against that target.
+///
+/// `target new --local` names the governed signing key in governance and
+/// writes the same key beside it from one read, so the target it publishes is
+/// the one the offline check accepts: `check --target` and `explain --target`
+/// must both complete rather than refuse, which is what a fresh adopter sees
+/// before any hand-authored governance exists.
+#[test]
+fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    let created = evidencectl()
+        .args(["new"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    assert!(
+        !project.join("targets").exists(),
+        "init scaffolds no targets/ directory; target new must create it"
+    );
+
+    let target = project.join("targets/local");
+    let created = evidencectl()
+        .args(["target", "new"])
+        .arg(&target)
+        .arg("--project")
+        .arg(&project)
+        .arg("--local")
+        .output()
+        .expect("create the first local target");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    // The governed key reference and the written key file must name the same
+    // material, drawn from the project's own signing key.
+    let governance: serde_json::Value = serde_norway::from_slice(
+        &fs::read(target.join("governance.yaml")).expect("governance is written"),
+    )
+    .expect("governance parses");
+    let active = governance["signing"]["activePublicJwkFile"]
+        .as_str()
+        .expect("governance names its active key");
+    assert_eq!(
+        fs::read(target.join(active)).expect("the named key is written"),
+        fs::read(project.join("secrets/signing-p256-public.jwk.json"))
+            .expect("the project signing key"),
+        "governance and the written key file come from one read"
+    );
+
+    // The stub answers the version handshake, the provider-publication
+    // compiler, and the bundle-only check seam with the report shape
+    // `evidencectl check --target` parses.
+    let stub = root.join("evidence");
+    let stub_script = format!(
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"${{1:-}}\" = \"--version\" ]; then\n",
+            "  printf 'evidence %s\\n' \"{version}\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "case \"$1\" in\n",
+            "  render-discovery-description) printf 'stub catalog\\n'; exit 0 ;;\n",
+            "  bundle-check) printf '%s\\n' '{report}'; exit 0 ;;\n",
+            "esac\n",
+            "exit 0\n",
+        ),
+        version = registry_platform_buildinfo::DISPLAY_VERSION,
+        report = r#"{"bundleRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirement:record-status:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}"#,
+    );
+    fs::write(&stub, stub_script).expect("write check stub");
+    let mut permissions = fs::metadata(&stub).expect("stat stub").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&stub, permissions).expect("chmod stub");
+    let checked = evidencectl()
+        .args(["check"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("check against the fresh target");
+    assert!(checked.status.success(), "{}", stderr_of(&checked));
+    let stdout = stdout_of(&checked);
+    assert!(stdout.contains("deployment-closure"), "{stdout}");
+
+    let explained = evidencectl()
+        .args(["explain"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("explain against the fresh target");
+    assert!(explained.status.success(), "{}", stderr_of(&explained));
+    let stdout = stdout_of(&explained);
+    assert!(stdout.contains("Status: complete"), "{stdout}");
+    assert!(stdout.contains("record-status"), "{stdout}");
+}
+
 #[test]
 fn local_target_created_before_questions_uses_current_local_caller_governance() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1041,4 +1329,33 @@ fn local_target_created_before_questions_uses_current_local_caller_governance() 
         .unwrap();
     assert!(!rejected.status.success());
     assert!(stderr_of(&rejected).contains("assuranceProfile local"));
+}
+
+/// `target new --local` defaults `--project` to the current directory, so a
+/// run started outside an Evidence project is refused. The refusal comes
+/// before any key generation: a command that creates nothing leaves no
+/// keypair in a directory the operator never authored as a project.
+#[test]
+fn target_new_local_outside_a_project_refuses_before_writing_key_material() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let output = evidencectl()
+        .args(["target", "new"])
+        .arg("targets/local")
+        .arg("--local")
+        .current_dir(&root)
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("Evidence project marker"), "{stderr}");
+    assert!(
+        !root.join("secrets").exists(),
+        "a refused target new wrote key material: {stderr}"
+    );
+    assert!(
+        !root.join("targets").exists(),
+        "a refused target new created a target parent: {stderr}"
+    );
 }

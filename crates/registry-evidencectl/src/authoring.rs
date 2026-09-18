@@ -46,7 +46,7 @@ pub(crate) use registry_evidence_authoring::{
     },
     validate::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
-        validate_question,
+        validate_answer_schema_document, validate_question,
     },
     validate_authored_answer, Finding,
 };
@@ -131,7 +131,7 @@ pub(crate) struct CompiledAccessPolicy {
 /// A field-addressed refusal from a typed authored document.
 #[derive(Debug)]
 pub(crate) struct AuthoredDiagnostic {
-    pub(crate) code: &'static str,
+    pub(crate) code: String,
     pub(crate) path: String,
     pub(crate) message: String,
 }
@@ -394,13 +394,18 @@ pub(crate) fn valid_local_audience(value: &str) -> bool {
 }
 
 fn validate_local_dev_sources(sources: &BTreeMap<String, Value>) -> Result<()> {
-    if sources
-        .values()
-        .any(|source| source.get("transport").and_then(Value::as_str) == Some("sqlite-extract"))
-    {
-        bail!(
-            "local serving does not bind SQLite extracts; prove this editable project with `evidencectl test <dir>`"
-        );
+    for (source_id, source) in sources {
+        if source.get("transport").and_then(Value::as_str) == Some("sqlite-extract") {
+            return Err(crate::dev::DevRefusal {
+                operational: false,
+                code: "evidence.dev.local-transport-refused",
+                path: format!("sources/{source_id}.yaml:/transport"),
+                message: "Local serving does not bind SQLite extracts.".to_owned(),
+                suggested_action: "Prove this editable project offline with `evidencectl test <dir>`, or re-author the source over an HTTP transport before `evidencectl dev start`."
+                    .to_owned(),
+            }
+            .into());
+        }
     }
     Ok(())
 }
@@ -438,7 +443,7 @@ pub(crate) fn compile_target_project(
     let deployment_target_root = fs::canonicalize(deployment_target_root)
         .context("resolving deployment target directory")?;
     validate_private_empty_staging(staging_root)?;
-    let inputs = read_inputs(&project_root, false)?;
+    let mut inputs = read_inputs(&project_root, false)?;
     let production = match governed_bundle
         .get("assuranceProfile")
         .and_then(Value::as_str)
@@ -449,6 +454,20 @@ pub(crate) fn compile_target_project(
             "deployment governance assuranceProfile must be local, production, or evidence-grade"
         ),
     };
+    if !production {
+        // A local target is a local bundle, so it takes its authority from the
+        // authored access policies `dev` compiles rather than from every
+        // question. A production or evidence-grade target is governed by its
+        // reviewed deployment governance and reads no local access at all.
+        let question_ids = inputs
+            .questions
+            .iter()
+            .map(|authored| authored.question.id.clone())
+            .collect::<BTreeSet<_>>();
+        let local_access = read_local_access(&project_root, &question_ids)?;
+        inputs.access_policies = local_access.access_policies;
+        inputs.active_client_policies = local_access.active_client_policies;
+    }
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
     if production {
@@ -633,7 +652,7 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
                         format!("{instance_path}/{member}")
                     };
                     return Err(AuthoredDiagnostic {
-                        code: "source-member-unknown",
+                        code: "evidence.source.member-unknown".to_owned(),
                         path: format!("sources/{source_id}.yaml:{member_path}"),
                         message: "the compiled source contains a member outside the closed Evidence source shape".to_owned(),
                     }
@@ -659,11 +678,12 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
             instance_path.push_str(member);
         }
         return Err(AuthoredDiagnostic {
-            code: if additional_member.is_some() && instance_path.starts_with("/sources/") {
-                "source-member-unknown"
+            code: (if additional_member.is_some() && instance_path.starts_with("/sources/") {
+                "evidence.source.member-unknown"
             } else {
-                "authoring-bundle-shape"
-            },
+                "evidence.authoring.bundle-shape"
+            })
+            .to_owned(),
             path: compiled_bundle_authoring_path(&instance_path),
             message: "the compiled authoring does not satisfy the closed Evidence bundle shape"
                 .to_owned(),
@@ -708,7 +728,7 @@ pub(crate) fn validate_offline_local_access(
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let question: Question =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "question-parse",
+                code: "evidence.question.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(&project_root, &path),
                     &error.path().to_string(),
@@ -721,7 +741,7 @@ pub(crate) fn validate_offline_local_access(
         )?;
         if path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             return Err(AuthoredDiagnostic {
-                code: "question-id-filename-mismatch",
+                code: "evidence.question.id-filename-mismatch".to_owned(),
                 path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
                 message: "question id must match its questions/<id>.yaml filename".to_owned(),
             }
@@ -729,7 +749,7 @@ pub(crate) fn validate_offline_local_access(
         }
         if !question_ids.insert(question.id) {
             return Err(AuthoredDiagnostic {
-                code: "question-id-duplicate",
+                code: "evidence.question.id-duplicate".to_owned(),
                 path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
                 message: "question ids must be unique".to_owned(),
             }
@@ -753,6 +773,13 @@ struct Inputs {
     sources: BTreeMap<String, Value>,
     schemas: BTreeMap<String, Value>,
     questions: Vec<AuthoredQuestion>,
+    access_policies: Vec<AuthoredAccessPolicy>,
+    active_client_policies: BTreeMap<String, Vec<String>>,
+}
+
+/// The authored access a local bundle takes its authority profiles from.
+#[derive(Default)]
+struct LocalAccess {
     access_policies: Vec<AuthoredAccessPolicy>,
     active_client_policies: BTreeMap<String, Vec<String>>,
 }
@@ -984,7 +1011,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         let deserializer = serde_norway::Deserializer::from_slice(&question_bytes);
         let question: Question =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "question-parse",
+                code: "evidence.question.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &question_path),
                     &error.path().to_string(),
@@ -995,6 +1022,24 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             validate_question(&question),
             &project_relative_path(project_root, &question_path),
         )?;
+        // The answer schema document is checked beside its own file rather than
+        // beside the question that named it: the departure is in the schema,
+        // and the finding already carries the field inside it.
+        for answer in &question.answers {
+            if answer.answer_type != AnswerType::ReviewedStructuredValue {
+                continue;
+            }
+            let schema_path = answer
+                .schema
+                .as_deref()
+                .expect("the authoring form requires an answer schema path");
+            let schema_key = Path::new(schema_path)
+                .file_stem()
+                .and_then(|stem| stem.to_str());
+            if let Some(document) = schema_key.and_then(|key| schemas.get(key)) {
+                first_finding(validate_answer_schema_document(document), schema_path)?;
+            }
+        }
         if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             bail!("question id must match its questions/<id>.yaml filename");
         }
@@ -1022,18 +1067,10 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             derivation,
         });
     }
-    let access_policies = if require_local_secrets {
-        read_access_policies(project_root, &question_ids)?
+    let local_access = if require_local_secrets {
+        read_local_access(project_root, &question_ids)?
     } else {
-        Vec::new()
-    };
-    let active_client_policies = if access_policies
-        .iter()
-        .any(|policy| policy.task_grant.is_some())
-    {
-        crate::access::active_client_policies(project_root)?
-    } else {
-        BTreeMap::new()
+        LocalAccess::default()
     };
 
     if require_local_secrets {
@@ -1055,8 +1092,8 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         sources,
         schemas,
         questions,
-        access_policies,
-        active_client_policies,
+        access_policies: local_access.access_policies,
+        active_client_policies: local_access.active_client_policies,
     })
 }
 
@@ -1078,6 +1115,33 @@ fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
         bail!("local signing public JWK kid must equal its RFC 7638 thumbprint");
     }
     Ok((format!("public-keys/{kid}.jwk.json"), bytes))
+}
+
+/// Read the project's local signing public JWK, creating the keypair once
+/// when the project has none.
+///
+/// `init` scaffolds this key for every new project. A project that lost it,
+/// or was authored without it, gets the same create-only generation here —
+/// under the same names and modes `init` uses — so the governed key reference
+/// this compiler renders and the key material on disk always agree. An
+/// existing key is never regenerated.
+pub(crate) fn ensure_local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
+    let public = project_root
+        .join(SECRETS_DIRECTORY)
+        .join(LOCAL_SIGNING_PUBLIC_FILENAME);
+    match fs::symlink_metadata(&public) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::keygen::generate_signing_keypair(&project_root.join(SECRETS_DIRECTORY))
+                .context("generating the local project signing key")?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("inspecting local signing public JWK {}", public.display())
+            });
+        }
+    }
+    local_signing_public_jwk(project_root)
 }
 
 fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
@@ -1173,7 +1237,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             .get("transport")
             .and_then(Value::as_str)
             .ok_or_else(|| AuthoredDiagnostic {
-                code: "source-transport-missing",
+                code: "evidence.source.transport-missing".to_owned(),
                 path: format!("sources/{source_id}.yaml:/transport"),
                 message: "every production source must declare its transport".to_owned(),
             })?;
@@ -1189,7 +1253,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                     .is_some_and(|kind| kind != "none" && kind != "review-required");
                 if !https || !authenticated {
                     return Err(AuthoredDiagnostic {
-                        code: "source-production-channel",
+                        code: "evidence.source.production-channel".to_owned(),
                         path: if !https {
                             format!("sources/{source_id}.yaml:/baseUrl")
                         } else {
@@ -1212,7 +1276,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             "sqlite-extract" => {}
             _ => {
                 return Err(AuthoredDiagnostic {
-                    code: "source-production-transport",
+                    code: "evidence.source.production-transport".to_owned(),
                     path: format!("sources/{source_id}.yaml:/transport"),
                     message: "the production source transport has no stated production conditions"
                         .to_owned(),
@@ -1222,6 +1286,27 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The authored access policies a local bundle takes its authority from, with
+/// the client assignments a task grant among them is checked against.
+///
+/// A project that authored no policy has neither, and the compile falls back
+/// to the implicit caller profile over every question.
+fn read_local_access(project_root: &Path, question_ids: &BTreeSet<String>) -> Result<LocalAccess> {
+    let access_policies = read_access_policies(project_root, question_ids)?;
+    let active_client_policies = if access_policies
+        .iter()
+        .any(|policy| policy.task_grant.is_some())
+    {
+        crate::access::active_client_policies(project_root)?
+    } else {
+        BTreeMap::new()
+    };
+    Ok(LocalAccess {
+        access_policies,
+        active_client_policies,
+    })
 }
 
 fn read_access_policies(
@@ -1277,7 +1362,7 @@ fn read_access_policies(
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let policy: AccessPolicy =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "access-policy-parse",
+                code: "evidence.access-policy.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &path),
                     &error.path().to_string(),
@@ -1301,7 +1386,7 @@ fn read_access_policies(
             .any(|question| !question_ids.contains(question))
         {
             return Err(AuthoredDiagnostic {
-                code: "access-policy-question-missing",
+                code: "evidence.access-policy.question-missing".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &path),
                     "questions",
@@ -1416,13 +1501,35 @@ fn read_named_objects(
 fn first_finding(findings: Vec<Finding>, artifact: &str) -> Result<()> {
     if let Some(finding) = findings.into_iter().next() {
         return Err(AuthoredDiagnostic {
-            code: finding.code,
-            path: format!("{artifact}:{}", finding.field),
+            code: dotted_code(finding.code),
+            path: authored_finding_path(artifact, &finding.field),
             message: finding.message,
         }
         .into());
     }
     Ok(())
+}
+
+/// One grammar for refusal codes across the CLI: dotted, namespaced names.
+/// The authoring crate's finding codes are its own closed vocabulary, so a
+/// bare code surfaces under the authoring namespace instead of bare.
+pub(crate) fn dotted_code(code: &str) -> String {
+    if code.contains('.') {
+        code.to_owned()
+    } else {
+        format!("evidence.authoring.{code}")
+    }
+}
+
+/// Cite an authored finding's field as the JSON-pointer path every other
+/// diagnostic grammar uses; the document itself is named by its artifact
+/// alone.
+fn authored_finding_path(artifact: &str, field: &registry_evidence_authoring::FieldPath) -> String {
+    if field.is_root() {
+        artifact.to_owned()
+    } else {
+        format!("{artifact}:{}", field.to_json_pointer())
+    }
 }
 
 fn project_relative_path(project_root: &Path, path: &Path) -> String {
@@ -1623,7 +1730,12 @@ fn compile_plan_with_connections(
             })
         }
         CompileProfile::Production(governance) => {
-            let bundle = render_production_bundle(&questions, governance)?;
+            let bundle = render_production_bundle(
+                &questions,
+                &access_policies,
+                &active_client_policies,
+                governance,
+            )?;
             Ok(CompilePlan {
                 questions,
                 access_policies,
@@ -2131,8 +2243,10 @@ fn compile_referenced_question(
         .expect("referenced source was validated");
     let source_value = sources
         .get(source_id)
-        .ok_or_else(|| {
-            anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
+        .ok_or_else(|| AuthoredDiagnostic {
+            code: "evidence.question.source-missing".to_owned(),
+            path: format!("questions/{}.yaml:/source/ref", question.id),
+            message: format!("question source ref `{source_id}` has no sources/{source_id}.yaml"),
         })?
         .clone();
     validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
@@ -2207,7 +2321,7 @@ fn compile_referenced_subjects(
     let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
     let mut combinations = 1_usize;
-    for subject in authored {
+    for (subject_index, subject) in authored.into_iter().enumerate() {
         let profiles = if subject.profiles.is_empty() {
             vec![match &subject.profile {
                 Some(profile) => profile.clone(),
@@ -2227,8 +2341,15 @@ fn compile_referenced_subjects(
         for profile in profiles {
             let value = selectors
                 .get(&profile)
-                .ok_or_else(|| {
-                    anyhow!("referenced source question uses missing selectors/{profile}.yaml")
+                .ok_or_else(|| AuthoredDiagnostic {
+                    code: "evidence.question.selector-missing".to_owned(),
+                    path: format!(
+                        "questions/{}.yaml:/subjectProfiles/{subject_index}",
+                        question.id
+                    ),
+                    message: format!(
+                        "referenced source question uses missing selectors/{profile}.yaml"
+                    ),
                 })?
                 .clone();
             let declared_fields = value
@@ -3493,15 +3614,19 @@ fn render_governance_parts(
 }
 
 /// Local target baseline for source-first authoring. Actual local grants are
-/// compiled from authored questions and access policies by `dev`.
-pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
-    let (key, _) = local_signing_public_jwk(project)?;
+/// compiled from authored questions and access policies by `dev`, and from
+/// the authored questions again wherever the baseline is compiled into a
+/// bundle (`check`, `explain`, `fixtures run`, `build` with `--target`).
+///
+/// The signing key reference is supplied by the caller so the governance
+/// content and the key file written beside it come from one read of one key.
+pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Value> {
     let mut governance = render_local_bundle(
         &[],
         &[],
         &BTreeMap::new(),
         LocalServicePorts::new(8080, 8081)?,
-        &key,
+        active_public_jwk_file,
         LOCAL_AUDIENCE,
         &LocalAdmission::default(),
     )?;
@@ -3537,28 +3662,8 @@ fn render_local_bundle(
         .iter()
         .map(|question| (question.source_id.clone(), question.source_value.clone()))
         .collect::<Map<_, _>>();
-    let authority_profiles = if access_policies.is_empty() {
-        Map::from_iter([(
-            AUTHORITY_PROFILE_ID.to_owned(),
-            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
-        )])
-    } else {
-        access_policies
-            .iter()
-            .map(|policy| {
-                let covered = policy.questions.iter().map(|question_id| {
-                    questions
-                        .iter()
-                        .find(|question| question.question_id == *question_id)
-                        .expect("access policy questions were validated")
-                });
-                Ok((
-                    policy.requester_tag.clone(),
-                    render_policy_authority_profile(policy, covered, active_client_policies)?,
-                ))
-            })
-            .collect::<Result<Map<_, _>>>()?
-    };
+    let authority_profiles =
+        render_local_authority_profiles(questions, access_policies, active_client_policies)?;
     let requirements = questions
         .iter()
         .map(|question| question.requirement.clone())
@@ -3657,6 +3762,42 @@ fn local_resource_identity(audience: &str, role: &str) -> String {
     } else {
         format!("{audience}#{role}")
     }
+}
+
+/// The authority profiles a local bundle carries: one per authored access
+/// policy, holding only the grants of the questions that policy names, or a
+/// single implicit caller profile over every question when the project
+/// authored no policy at all.
+///
+/// Every local bundle this compiler renders, for `dev` and for a generated
+/// `target` baseline alike, takes its profiles from here, so no compiled
+/// target carries authority wider than the policies the author wrote.
+fn render_local_authority_profiles(
+    questions: &[QuestionPlan],
+    access_policies: &[AuthoredAccessPolicy],
+    active_client_policies: &BTreeMap<String, Vec<String>>,
+) -> Result<Map<String, Value>> {
+    if access_policies.is_empty() {
+        return Ok(Map::from_iter([(
+            AUTHORITY_PROFILE_ID.to_owned(),
+            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
+        )]));
+    }
+    access_policies
+        .iter()
+        .map(|policy| {
+            let covered = policy.questions.iter().map(|question_id| {
+                questions
+                    .iter()
+                    .find(|question| question.question_id == *question_id)
+                    .expect("access policy questions were validated")
+            });
+            Ok((
+                policy.requester_tag.clone(),
+                render_policy_authority_profile(policy, covered, active_client_policies)?,
+            ))
+        })
+        .collect::<Result<Map<_, _>>>()
 }
 
 fn render_policy_authority_profile<'a>(
@@ -3777,7 +3918,12 @@ fn render_authority_profile<'a>(
     }))
 }
 
-fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
+fn render_production_bundle(
+    questions: &[QuestionPlan],
+    access_policies: &[AuthoredAccessPolicy],
+    active_client_policies: &BTreeMap<String, Vec<String>>,
+    mut governance: Value,
+) -> Result<Value> {
     let object = governance
         .as_object_mut()
         .ok_or_else(|| anyhow!("deployment governance must be an object"))?;
@@ -3806,6 +3952,61 @@ fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -
                 .collect(),
         ),
     );
+    // A local baseline target carries no authored grants or response formats:
+    // `dev` compiles the actual local ones from the authored questions, so the
+    // baseline this compile renders must do the same or the bundle it produces
+    // carries an authority profile with no grants and a bundle with no enabled
+    // format, both of which the Evidence contract refuses. Only the generated
+    // empty baseline is filled; an authored local governance that declares real
+    // grants or formats is kept exactly as reviewed.
+    //
+    // A project that authored access policies has the empty baseline profiles
+    // replaced by the profiles those policies grant, exactly as `dev` renders
+    // them, so the target never holds an implicit caller profile over every
+    // question the author never granted together.
+    if object.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
+        if object
+            .get("responseFormats")
+            .and_then(Value::as_array)
+            .is_some_and(|formats| formats.is_empty())
+        {
+            let compiled = questions
+                .iter()
+                .flat_map(|question| question.response_formats.iter().copied())
+                .map(QuestionResponseFormat::as_str)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            object.insert("responseFormats".to_owned(), json!(compiled));
+        }
+        if let Some(profiles) = object
+            .get_mut("authorityProfiles")
+            .and_then(Value::as_object_mut)
+        {
+            let generated = |profile: &Value| {
+                profile
+                    .get("grants")
+                    .and_then(Value::as_array)
+                    .is_some_and(|grants| grants.is_empty())
+            };
+            if access_policies.is_empty() {
+                for (name, profile) in profiles.iter_mut() {
+                    if generated(profile) {
+                        let compiled = render_authority_profile(name, questions.iter())?;
+                        profile["grants"] = compiled["grants"].clone();
+                    }
+                }
+            } else if profiles.values().any(generated) {
+                let mut granted = render_local_authority_profiles(
+                    questions,
+                    access_policies,
+                    active_client_policies,
+                )?;
+                profiles.retain(|_, profile| !generated(profile));
+                profiles.append(&mut granted);
+            }
+        }
+    }
     Ok(governance)
 }
 
@@ -3933,7 +4134,8 @@ fn write_bundle(
     }
     let config_path = bundle.join("evidence.yaml");
     write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
-    let description = render_discovery_description(evidence_bin, &config_path)?;
+    let description =
+        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
     // Evidence prints a description only for a bundle that declares a
     // publication, and prints nothing for one that does not. Which of the two
     // this is was decided by the bundle written just above, so nothing back
@@ -4045,9 +4247,15 @@ fn write_bundle(
             }
         }
     }
+    let active_public_jwk_file = plan
+        .bundle
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     for path in auxiliary_artifacts(&plan.bundle)? {
         if written_paths.insert(path.clone()) {
-            let artifact_root = if path.starts_with("public-keys/") {
+            let governed_public_key = path.starts_with("public-keys/");
+            let artifact_root = if governed_public_key {
                 deployment_target_root.unwrap_or(project_root)
             } else {
                 project_root
@@ -4056,18 +4264,55 @@ fn write_bundle(
                 artifact_root,
                 &path,
                 MAX_SOURCE_ARTIFACT_BYTES,
-                if path.starts_with("public-keys/") {
+                if governed_public_key {
                     "governed deployment public key"
                 } else {
                     "referenced bundle artifact"
                 },
-            )?;
+            )
+            .map_err(|error| {
+                governed_public_key_fault(&path, active_public_jwk_file.as_deref(), error)
+            })?;
             ensure_generated_parent(&bundle, &path)?;
             write_private_file(&bundle.join(path), &bytes)?;
         }
     }
     set_bundle_modes(&bundle, 0o500, 0o400)?;
     Ok(bundle)
+}
+
+/// Refuse a missing governed public key as a field-addressed diagnostic.
+///
+/// The compile copies the public key files governance names out of the
+/// deployment target, so an absent key means the target is incomplete, not
+/// that the project is unreadable. Naming the governance field that selected
+/// the missing file lets `check` and `explain` refuse with the same shape they
+/// use for every other authored defect; other read failures pass through.
+fn governed_public_key_fault(
+    path: &str,
+    active: Option<&str>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let missing = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
+    });
+    if !missing {
+        return error;
+    }
+    AuthoredDiagnostic {
+        code: "evidence.target.signing-key-missing".to_owned(),
+        path: if Some(path) == active {
+            "governance.yaml:/signing/activePublicJwkFile".to_owned()
+        } else {
+            "governance.yaml:/signing/publishedPublicJwkFiles".to_owned()
+        },
+        message: format!(
+            "the deployment target does not provide the governed public key file {path}"
+        ),
+    }
+    .into()
 }
 
 fn read_project_artifact(
@@ -4215,7 +4460,11 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
     bail!("Evidence rejected the compiled local generation: {diagnostic}")
 }
 
-fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Result<Vec<u8>> {
+fn render_discovery_description(
+    evidence_bin: &Path,
+    config_path: &Path,
+    target_authored: bool,
+) -> Result<Vec<u8>> {
     let mut command = Command::new(evidence_bin);
     command
         .arg("render-discovery-description")
@@ -4235,11 +4484,26 @@ fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Resu
         }
         return Ok(run.stdout);
     }
+    // Relay the Evidence binary's own message — its validation is closed and
+    // value-free, and it names the publication field that refused — but carry
+    // it as a field-addressed refusal so `check` and `explain` report the
+    // governed document and field instead of a generic offline-check refusal.
     let diagnostic = child_diagnostic(&run.stderr);
-    if diagnostic.is_empty() {
-        bail!("Evidence rejected provider publication compilation");
+    let message = if diagnostic.is_empty() {
+        "Evidence rejected provider publication compilation".to_owned()
+    } else {
+        format!("Evidence rejected provider publication compilation: {diagnostic}")
+    };
+    Err(AuthoredDiagnostic {
+        code: "evidence.target.publication-invalid".to_owned(),
+        path: if target_authored {
+            "governance.yaml:/publication".to_owned()
+        } else {
+            "evidence.yaml:/publication".to_owned()
+        },
+        message,
     }
-    bail!("Evidence rejected provider publication compilation: {diagnostic}")
+    .into())
 }
 
 /// The longest provider publication description evidencectl accepts from the
@@ -5233,6 +5497,135 @@ properties:
     }
 
     #[test]
+    fn surfaced_authoring_findings_use_one_code_and_path_grammar() {
+        use registry_evidence_authoring::{FieldPath, Finding};
+
+        let bare = first_finding(
+            vec![Finding::new(
+                FieldPath::root().key("disclosure").key("allow"),
+                "disclosure-allow",
+                "sentence",
+            )],
+            "questions/x.yaml",
+        )
+        .expect_err("first finding");
+        let diagnostic = bare
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.authoring.disclosure-allow");
+        assert_eq!(diagnostic.path, "questions/x.yaml:/disclosure/allow");
+
+        let rooted = first_finding(
+            vec![Finding::new(
+                FieldPath::root(),
+                "question-identifier",
+                "sentence",
+            )],
+            "questions/x.yaml",
+        )
+        .expect_err("root finding");
+        assert_eq!(
+            rooted
+                .downcast_ref::<AuthoredDiagnostic>()
+                .expect("authored diagnostic")
+                .path,
+            "questions/x.yaml"
+        );
+
+        let dotted = first_finding(
+            vec![Finding::new(
+                FieldPath::root().index(1),
+                "evidence.answer-schema.open-object",
+                "sentence",
+            )],
+            "schemas/x.yaml",
+        )
+        .expect_err("dotted finding");
+        let diagnostic = dotted
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
+        assert_eq!(diagnostic.path, "schemas/x.yaml:/1");
+
+        // Pointer tokens escape the characters RFC 6901 reserves.
+        assert_eq!(
+            FieldPath::root()
+                .map_key("a/b")
+                .key("c~d")
+                .to_json_pointer(),
+            "/a~1b/c~0d"
+        );
+    }
+
+    #[test]
+    fn refuses_an_open_object_answer_schema_naming_the_schema_file() {
+        let fixture = Fixture::new(
+            OPENAPI,
+            BIRTH_CERTIFICATE_QUESTION,
+            BIRTH_CERTIFICATE_ANSWER,
+            true,
+        );
+        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
+        fs::write(
+            fixture.project.join("schemas/birth-certificate.yaml"),
+            BIRTH_CERTIFICATE_SCHEMA.replace("additionalProperties: false\n", ""),
+        )
+        .expect("open birth certificate schema");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an open object answer schema must not compile");
+
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
+            .expect("the refusal is an authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
+        assert_eq!(
+            diagnostic.path, "schemas/birth-certificate.yaml:/additionalProperties",
+            "the refusal must name the schema document and its field"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "an object answer schema must set additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn refuses_an_object_answer_schema_that_declares_no_properties() {
+        let fixture = Fixture::new(
+            OPENAPI,
+            BIRTH_CERTIFICATE_QUESTION,
+            BIRTH_CERTIFICATE_ANSWER,
+            true,
+        );
+        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
+        fs::write(
+            fixture.project.join("schemas/birth-certificate.yaml"),
+            BIRTH_CERTIFICATE_SCHEMA.replace(
+                "required: [givenName, dateOfBirth]\nproperties:\n  givenName: {type: string, minLength: 1, maxLength: 200}\n  dateOfBirth: {type: string, format: date}\n",
+                "",
+            ),
+        )
+        .expect("propertyless birth certificate schema");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a propertyless object answer schema must not compile");
+
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
+            .expect("the refusal is an authored diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "evidence.answer-schema.declared-properties"
+        );
+        assert_eq!(
+            diagnostic.path, "schemas/birth-certificate.yaml:/properties",
+            "the refusal must name the schema document and its field"
+        );
+    }
+
+    #[test]
     fn inline_openapi_question_compiles_multiple_role_bound_subjects() {
         let fixture = Fixture::new(
             RELATIONSHIP_OPENAPI,
@@ -5812,9 +6205,13 @@ factSchema: schemas/source-facts.schema.yaml
         let sources =
             BTreeMap::from([("records".to_owned(), json!({"transport": "sqlite-extract"}))]);
         let error = validate_local_dev_sources(&sources)
-            .expect_err("local serving accepted an unbound statement source")
-            .to_string();
-        assert!(error.contains("evidencectl test <dir>"));
+            .expect_err("local serving accepted an unbound statement source");
+        let refusal = error
+            .downcast_ref::<crate::dev::DevRefusal>()
+            .expect("the refusal is typed so both output formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.local-transport-refused");
+        assert_eq!(refusal.path, "sources/records.yaml:/transport");
+        assert!(refusal.suggested_action.contains("evidencectl test <dir>"));
 
         validate_local_dev_sources(&BTreeMap::from([(
             "records".to_owned(),
@@ -6011,6 +6408,319 @@ factSchema: schemas/source-facts.schema.yaml
             "Asia/Bangkok"
         );
         assert_eq!(compiled.fixture_paths, ["fixtures/adult-status.yaml"]);
+    }
+
+    /// The generated local baseline is compiled, not authored: its empty
+    /// grants and empty response formats are filled from the project's
+    /// questions exactly as a `dev` compile would, or every check, explain,
+    /// and fixtures run against the target would be refused by the Evidence
+    /// contract for an empty collection.
+    #[test]
+    fn a_local_baseline_target_compiles_its_grants_and_formats_from_the_questions() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        assert!(
+            governed["authorityProfiles"]["local-caller"]["grants"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "the generated baseline carries no grants"
+        );
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("the baseline compiles against its own project");
+        let grants = compiled.bundle["authorityProfiles"]["local-caller"]["grants"]
+            .as_array()
+            .unwrap();
+        assert!(!grants.is_empty(), "grants are compiled from the questions");
+        assert_eq!(
+            grants[0]["requirement"],
+            "urn:authority:requirement:adult-status:v1"
+        );
+        assert_eq!(
+            compiled.bundle["responseFormats"],
+            json!(["signed-jws"]),
+            "formats are compiled from the questions"
+        );
+    }
+
+    /// An authored local governance keeps the grants and formats it declares:
+    /// only the generated empty baseline is filled, so an operator's reviewed
+    /// authority is never silently widened or replaced.
+    #[test]
+    fn an_authored_local_governance_keeps_its_own_grants_and_formats() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let authored_grants = json!([{
+            "requirement": "urn:authority:requirement:adult-status:v1",
+            "purpose": "age-check",
+            "audienceFrom": "authenticated-requester",
+            "subjects": [{"role": "person", "selectorProfile": "person-reference-v1", "valueOrigin": "authenticated-token"}],
+        }]);
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        let mut governed = governed;
+        governed["authorityProfiles"]["local-caller"]["grants"] = authored_grants.clone();
+        governed["responseFormats"] = json!(["signed-jws", "unsigned-json"]);
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("authored local governance compiles unchanged");
+        assert_eq!(
+            compiled.bundle["authorityProfiles"]["local-caller"]["grants"], authored_grants,
+            "authored grants are preserved exactly"
+        );
+        assert_eq!(
+            compiled.bundle["responseFormats"],
+            json!(["signed-jws", "unsigned-json"]),
+            "authored formats are preserved exactly"
+        );
+    }
+
+    /// A generated local baseline carries the authority the project's access
+    /// policies grant. A policy naming one of two questions compiles into a
+    /// profile that answers that question alone, so no target holds authority
+    /// wider than a policy the author wrote.
+    #[test]
+    fn a_local_baseline_target_compiles_only_the_grants_its_access_policies_name() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        add_governed_age_bracket_question(&fixture);
+        fixture.add_access_policy("age-checks", &["adult-status"]);
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("the baseline compiles against its own project");
+        let profiles = compiled.bundle["authorityProfiles"]
+            .as_object()
+            .expect("authority profiles");
+        let tag = access_policy_requester_tag("age-checks", &["adult-status".to_owned()]).unwrap();
+        assert_eq!(
+            profiles.keys().collect::<Vec<_>>(),
+            [&tag],
+            "the policy replaces the generated baseline profile"
+        );
+        let requirements = profiles[&tag]["grants"]
+            .as_array()
+            .expect("compiled grants")
+            .iter()
+            .map(|grant| grant["requirement"].as_str().expect("grant requirement"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requirements,
+            ["urn:authority:requirement:adult-status:v1"],
+            "the question the policy does not name is never granted"
+        );
+    }
+
+    /// Author the referenced-people project shape the two baseline tests use:
+    /// one governed question with stable deployment governance and a fixture.
+    fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
+        let question = write_referenced_people_project(fixture, authentication);
+        let mut question: Value = serde_norway::from_str(&question).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
+            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
+            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
+        });
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(fixture.project.join("fixtures")).unwrap();
+        fs::write(
+            fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+    }
+
+    /// Author a second governed question beside the baseline project's first,
+    /// so a target compile holds two question grants an access policy may
+    /// name one of.
+    fn add_governed_age_bracket_question(fixture: &Fixture) {
+        let mut question: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:age-bracket:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:age-bracket:v1",
+            "kind": "information-requirement",
+            "referenceFrameworks": ["urn:authority:framework:age-bracket:v1"],
+            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 900,
+            "observationTimezone": "Asia/Bangkok", "fixtures": "fixtures/age-bracket.yaml",
+            "disclosureFamilies": ["urn:authority:disclosure-family:age-bracket:v1"]
+        });
+        fixture.add_question(
+            &serde_norway::to_string(&question).unwrap(),
+            AGE_BRACKET_ANSWER,
+        );
+        fs::write(
+            fixture.project.join("fixtures/age-bracket.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_missing_referenced_source_is_refused_as_a_field_addressed_diagnostic() {
+        let inline = r#"source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+"#;
+        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
+        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let authored = AuthoredQuestion {
+            question,
+            derivation: ANSWER.to_owned(),
+        };
+        let error = match compile_referenced_question(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            authored,
+        ) {
+            Ok(_) => panic!("the referenced source is absent"),
+            Err(error) => error,
+        };
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is field-addressed");
+        assert_eq!(diagnostic.code, "evidence.question.source-missing");
+        assert_eq!(diagnostic.path, "questions/adult-status.yaml:/source/ref");
+        assert!(
+            diagnostic
+                .message
+                .contains("question source ref `people` has no sources/people.yaml"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_missing_selector_profile_is_refused_as_a_field_addressed_diagnostic() {
+        let inline = r#"source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+"#;
+        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
+        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let source: Value = serde_norway::from_str(&format!(
+            "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
+        ))
+        .unwrap();
+        let sources = BTreeMap::from([("people".to_owned(), source)]);
+        let authored = AuthoredQuestion {
+            question,
+            derivation: ANSWER.to_owned(),
+        };
+        let error = match compile_referenced_question(
+            &BTreeMap::new(),
+            &sources,
+            &BTreeMap::new(),
+            authored,
+        ) {
+            Ok(_) => panic!("the referenced selector profile is absent"),
+            Err(error) => error,
+        };
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is field-addressed");
+        assert_eq!(diagnostic.code, "evidence.question.selector-missing");
+        assert_eq!(
+            diagnostic.path, "questions/adult-status.yaml:/subjectProfiles/0",
+            "the path names the subject alternative index"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("missing selectors/person-reference-v1.yaml"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_missing_governed_public_key_is_refused_as_a_field_addressed_diagnostic() {
+        let not_found: anyhow::Error = std::io::Error::from(std::io::ErrorKind::NotFound).into();
+        let wrapped = not_found.context("opening governed deployment public key");
+        let active = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
+        let error = governed_public_key_fault(active, Some(active), wrapped);
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("a missing key names its governance field");
+        assert_eq!(diagnostic.code, "evidence.target.signing-key-missing");
+        assert_eq!(
+            diagnostic.path,
+            "governance.yaml:/signing/activePublicJwkFile"
+        );
+        assert!(
+            diagnostic.message.contains(active),
+            "{}",
+            diagnostic.message
+        );
+
+        let published = "public-keys/retired.jwk.json";
+        let error = governed_public_key_fault(
+            published,
+            Some(active),
+            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+        );
+        assert_eq!(
+            error.downcast_ref::<AuthoredDiagnostic>().unwrap().path,
+            "governance.yaml:/signing/publishedPublicJwkFiles"
+        );
+
+        // A read failure that is not an absent file stays operational.
+        let denied: anyhow::Error =
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied).into();
+        let error = governed_public_key_fault(active, Some(active), denied);
+        assert!(error.downcast_ref::<AuthoredDiagnostic>().is_none());
     }
 
     /// Build the same referenced-people target project as
@@ -7818,7 +8528,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
         let diagnostic = format!("{error:#}");
         assert!(
@@ -7835,7 +8545,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
         assert_eq!(
             format!("{error:#}"),
@@ -7874,7 +8584,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7923,7 +8633,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7952,7 +8662,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("an oversized description must be refused");
 
         assert!(format!("{error:#}").contains("longer than"), "{error:#}");
@@ -7969,7 +8679,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -7994,7 +8704,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");

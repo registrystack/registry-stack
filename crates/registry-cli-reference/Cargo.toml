@@ -1,0 +1,16 @@
+[package]
+name = "registry-cli-reference"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Deterministic generated reference data for one Registry Stack CLI tree."
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+serde.workspace = true

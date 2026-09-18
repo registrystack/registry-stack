@@ -10,8 +10,9 @@ use anyhow::{anyhow, Result};
 use chrono::DateTime;
 use clap::{ArgGroup, Args, Subcommand};
 use serde::{Deserialize, Deserializer};
+use serde_json::json;
 
-use crate::dev;
+use crate::{dev, OutputFormat};
 
 const CORE_VIEW_SCHEMA: &str = "registry.evidence.local-audit-operation/v1";
 const MAX_CORE_OUTPUT_BYTES: usize = 256 * 1024;
@@ -43,13 +44,13 @@ pub struct ShowArgs {
     evidence_bin: Option<PathBuf>,
 }
 
-pub fn run(command: AuditCommand) -> Result<ExitCode> {
+pub fn run(command: AuditCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        AuditCommand::Show(args) => show(args),
+        AuditCommand::Show(args) => show(args, format),
     }
 }
 
-fn show(args: ShowArgs) -> Result<ExitCode> {
+fn show(args: ShowArgs, format: OutputFormat) -> Result<ExitCode> {
     if !args.last_operation {
         return Err(failed());
     }
@@ -64,10 +65,36 @@ fn show(args: ShowArgs) -> Result<ExitCode> {
     let view: CoreAuditOperation = serde_json::from_slice(&output).map_err(|_| failed())?;
     let rendered = render(&view, &stopped.questions)?;
 
-    std::io::stdout()
-        .lock()
-        .write_all(rendered.as_bytes())
-        .map_err(|_| failed())?;
+    match format {
+        OutputFormat::Human => std::io::stdout()
+            .lock()
+            .write_all(rendered.as_bytes())
+            .map_err(|_| failed())?,
+        // The core document is the minimized audit view the Evidence binary
+        // itself published, and `render` has already validated it against the
+        // closed shape, so the report embeds it beside the same refusal-safe
+        // lines the human renderer prints.
+        OutputFormat::Json => {
+            let operation: serde_json::Value =
+                serde_json::from_slice(&output).map_err(|_| failed())?;
+            std::io::stdout()
+                .lock()
+                .write_all(
+                    format!(
+                        "{}\n",
+                        json!({
+                            "command": "audit show",
+                            "ok": true,
+                            "status": "complete",
+                            "operation": operation,
+                            "rendered": rendered.lines().collect::<Vec<_>>(),
+                        })
+                    )
+                    .as_bytes(),
+                )
+                .map_err(|_| failed())?;
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 

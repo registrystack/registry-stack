@@ -133,11 +133,13 @@ pub struct EditorArgs {
 }
 
 /// What one run wrote, for an author reading the terminal or a script reading
-/// JSON.
+/// JSON. The outcome member is renamed for the JSON envelope, where `status`
+/// names the command outcome every report shares.
 #[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct EditorSetupReport {
     pub schema_version: &'static str,
+    #[serde(rename = "editorStatus")]
     pub status: &'static str,
     pub project_directory: String,
     pub workspace_directory: String,
@@ -209,17 +211,32 @@ std::thread_local! {
     };
 }
 
-pub fn run(args: EditorArgs) -> Result<ExitCode> {
+pub fn run(args: EditorArgs, format: crate::OutputFormat) -> Result<ExitCode> {
     let report = setup_workspace_editor(
         &args.project,
         args.workspace.as_deref().unwrap_or(&args.project),
     )?;
-    println!(
-        "Editor schema mappings are {} for {}.",
-        report.status, report.workspace_directory
-    );
-    for file in &report.files {
-        println!("  {file}");
+    match format {
+        crate::OutputFormat::Human => {
+            println!(
+                "Editor schema mappings are {} for {}.",
+                report.status, report.workspace_directory
+            );
+            for file in &report.files {
+                println!("  {file}");
+            }
+        }
+        crate::OutputFormat::Json => {
+            let mut value =
+                serde_json::to_value(&report).context("rendering the editor setup report")?;
+            let members = value
+                .as_object_mut()
+                .expect("the editor report serializes as a JSON object");
+            members.insert("command".to_owned(), json!("tooling editor"));
+            members.insert("ok".to_owned(), json!(true));
+            members.insert("status".to_owned(), json!("complete"));
+            println!("{value}");
+        }
     }
     Ok(ExitCode::SUCCESS)
 }

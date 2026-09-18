@@ -14,8 +14,10 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::{Args, Subcommand, ValueEnum};
 use p256::ecdsa::SigningKey;
 use registry_platform_crypto::{GeneratedKeyAlgorithm, PrivateJwk, PublicJwk};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use zeroize::Zeroizing;
+
+use crate::OutputFormat;
 
 #[derive(Debug, Subcommand)]
 pub enum KeygenCommand {
@@ -157,7 +159,7 @@ const SECRET_FILE_BYTES: usize = 32;
 /// How much randomness a generated bearer token carries, before encoding.
 const TOKEN_ENTROPY_BYTES: usize = 32;
 
-pub fn run(command: KeygenCommand) -> Result<ExitCode> {
+pub fn run(command: KeygenCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         KeygenCommand::Signing(args) => run_keypair(
             generate_p256_keypair()?,
@@ -165,15 +167,17 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
             args.public_output.as_deref(),
             SIGNING_PRIVATE_FILENAME,
             SIGNING_PUBLIC_FILENAME,
+            GenerationReport::Command("keygen signing", format),
         ),
-        KeygenCommand::Secret(args) => run_secret(&args),
-        KeygenCommand::Token(args) => run_token(&args),
+        KeygenCommand::Secret(args) => run_secret(&args, format),
+        KeygenCommand::Token(args) => run_token(&args, format),
         KeygenCommand::Holder(args) => run_keypair(
             generate_p256_keypair()?,
             &args.output_dir,
             args.public_output.as_deref(),
             HOLDER_PRIVATE_FILENAME,
             HOLDER_PUBLIC_FILENAME,
+            GenerationReport::Command("keygen holder", format),
         ),
         KeygenCommand::ClientAssertion(args) => {
             // Before generating: an RSA keypair is expensive, and a name the
@@ -185,9 +189,18 @@ pub fn run(command: KeygenCommand) -> Result<ExitCode> {
                 args.public_output.as_deref(),
                 &private_filename,
                 &public_filename,
+                GenerationReport::Command("keygen client-assertion", format),
             )
         }
     }
+}
+
+/// How one generation reports what it wrote: the CLI command path, rendered
+/// for the selected output format, or silence for internal generation whose
+/// caller reports the whole staged batch itself.
+enum GenerationReport {
+    Command(&'static str, OutputFormat),
+    Silent,
 }
 
 /// Where one client assertion keypair is written.
@@ -248,7 +261,7 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path) -> Result<()> {
         None,
         SIGNING_PRIVATE_FILENAME,
         SIGNING_PUBLIC_FILENAME,
-        false,
+        GenerationReport::Silent,
         PUBLIC_FILE_MODE,
     )?;
     for filename in [AUDIT_HMAC_FILENAME, SUBJECT_BINDING_HMAC_FILENAME] {
@@ -256,9 +269,29 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path) -> Result<()> {
             &SecretArgs {
                 output: out_dir.join(filename),
             },
-            false,
+            GenerationReport::Silent,
         )?;
     }
+    Ok(())
+}
+
+/// Generate only the project signing keypair, under the same names and modes
+/// `init` scaffolds it with.
+///
+/// Local target creation needs the project's signing public JWK to name the
+/// governed key in governance; a project that has none gets one here rather
+/// than a refusal, and an existing key is never regenerated.
+pub(crate) fn generate_signing_keypair(out_dir: &Path) -> Result<()> {
+    ensure_private_dir(out_dir)?;
+    run_keypair_impl(
+        generate_p256_keypair()?,
+        out_dir,
+        None,
+        SIGNING_PRIVATE_FILENAME,
+        SIGNING_PUBLIC_FILENAME,
+        GenerationReport::Silent,
+        PUBLIC_FILE_MODE,
+    )?;
     Ok(())
 }
 
@@ -277,7 +310,7 @@ pub(crate) fn generate_dev_keypair(
         None,
         private_filename,
         public_filename,
-        false,
+        GenerationReport::Silent,
         PRIVATE_FILE_MODE,
     )?;
     Ok((
@@ -404,6 +437,7 @@ fn run_keypair(
     public_out: Option<&Path>,
     private_filename: &str,
     public_filename: &str,
+    report: GenerationReport,
 ) -> Result<ExitCode> {
     run_keypair_impl(
         keypair,
@@ -411,7 +445,7 @@ fn run_keypair(
         public_out,
         private_filename,
         public_filename,
-        true,
+        report,
         PUBLIC_FILE_MODE,
     )
 }
@@ -422,7 +456,7 @@ fn run_keypair_impl(
     public_out: Option<&Path>,
     private_filename: &str,
     public_filename: &str,
-    report: bool,
+    report: GenerationReport,
     public_file_mode: u32,
 ) -> Result<ExitCode> {
     let private_path = out_dir.join(private_filename);
@@ -451,20 +485,37 @@ fn run_keypair_impl(
         public_file_mode,
     )?;
 
-    if report {
-        println!("wrote {}", private_path.display());
-        println!("wrote {}", public_path.display());
-        println!("kid: {}", keypair.kid);
+    if let GenerationReport::Command(command, format) = report {
+        match format {
+            OutputFormat::Human => {
+                println!("wrote {}", private_path.display());
+                println!("wrote {}", public_path.display());
+                println!("kid: {}", keypair.kid);
+            }
+            OutputFormat::Json => println!(
+                "{}",
+                crate::command_report(
+                    command,
+                    json!({
+                        "kid": keypair.kid,
+                        "files": [
+                            private_path.display().to_string(),
+                            public_path.display().to_string(),
+                        ],
+                    })
+                )
+            ),
+        }
     }
 
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_secret(args: &SecretArgs) -> Result<ExitCode> {
-    run_secret_impl(args, true)
+fn run_secret(args: &SecretArgs, format: OutputFormat) -> Result<ExitCode> {
+    run_secret_impl(args, GenerationReport::Command("keygen secret", format))
 }
 
-fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
+fn run_secret_impl(args: &SecretArgs, report: GenerationReport) -> Result<ExitCode> {
     reject_existing(&[&args.output])?;
 
     let secret = generate_secret()?;
@@ -478,8 +529,17 @@ fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
     }
     write_owner_file(&args.output, secret.as_slice(), PRIVATE_FILE_MODE)?;
 
-    if report {
-        println!("wrote {}", args.output.display());
+    if let GenerationReport::Command(command, format) = report {
+        match format {
+            OutputFormat::Human => println!("wrote {}", args.output.display()),
+            OutputFormat::Json => println!(
+                "{}",
+                crate::command_report(
+                    command,
+                    json!({"files": [args.output.display().to_string()]})
+                )
+            ),
+        }
     }
 
     Ok(ExitCode::SUCCESS)
@@ -492,7 +552,7 @@ fn run_secret_impl(args: &SecretArgs, report: bool) -> Result<ExitCode> {
 /// against first, where the alternative is `keygen secret`: the obvious
 /// neighbour, and the wrong tool, because its raw bytes reach an HTTP header
 /// that rejects most of them.
-fn run_token(args: &TokenArgs) -> Result<ExitCode> {
+fn run_token(args: &TokenArgs, format: OutputFormat) -> Result<ExitCode> {
     reject_existing(&[&args.output])?;
 
     let mut entropy = Zeroizing::new([0_u8; TOKEN_ENTROPY_BYTES]);
@@ -512,7 +572,16 @@ fn run_token(args: &TokenArgs) -> Result<ExitCode> {
     }
     write_owner_file(&args.output, token.as_bytes(), PRIVATE_FILE_MODE)?;
 
-    println!("wrote {}", args.output.display());
+    match format {
+        OutputFormat::Human => println!("wrote {}", args.output.display()),
+        OutputFormat::Json => println!(
+            "{}",
+            crate::command_report(
+                "keygen token",
+                json!({"files": [args.output.display().to_string()]})
+            )
+        ),
+    }
 
     Ok(ExitCode::SUCCESS)
 }

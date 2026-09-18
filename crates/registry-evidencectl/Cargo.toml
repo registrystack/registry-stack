@@ -34,6 +34,7 @@ registry-evidence-authoring.workspace = true
 registry-evidence-client.workspace = true
 registry-language-server.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-cli-reference.workspace = true
 registry-platform-crypto.workspace = true
 registry-thunderid-tooling.workspace = true
 p256.workspace = true

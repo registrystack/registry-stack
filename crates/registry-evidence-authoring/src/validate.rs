@@ -16,6 +16,8 @@ use std::{
     path::{Component, Path},
 };
 
+use serde_json::Value;
+
 use crate::{
     finding::{FieldPath, Finding},
     layout::{MAX_CATEGORIES, MAX_CATEGORY_BYTES, MAX_CONCEPTS, SCHEMAS_DIRECTORY},
@@ -662,6 +664,49 @@ pub fn validate_answer_schema_path(value: &str) -> Vec<Finding> {
             FieldPath::root().key("schema"),
             "answer-schema-path",
             "answer schema must be one schemas/<name>.yaml file",
+        );
+    }
+    Vec::new()
+}
+
+/// Check that one authored answer schema closes its object form.
+///
+/// The declared answer schema is the contract the output gate holds a
+/// derivation's structured value to, and the compiler closes the fact schema it
+/// builds the same way. An object answer schema that permits properties it
+/// never declared would let a derivation return keys no reviewer saw, so an
+/// object schema must name the properties it permits and refuse the rest
+/// outright. A schema that does not declare an object type permits no object
+/// property set and is not checked here.
+///
+/// Findings apply to the schema document itself, so the caller renders them
+/// beside `schemas/<name>.yaml` rather than beside the question that named it.
+#[must_use]
+pub fn validate_answer_schema_document(document: &Value) -> Vec<Finding> {
+    let declares_object = match document.get("type") {
+        Some(Value::String(value)) => value == "object",
+        Some(Value::Array(values)) => values.iter().any(|value| value == "object"),
+        _ => false,
+    };
+    if !declares_object {
+        return Vec::new();
+    }
+    if document.get("additionalProperties") != Some(&Value::Bool(false)) {
+        return one(
+            FieldPath::root().key("additionalProperties"),
+            "evidence.answer-schema.open-object",
+            "an object answer schema must set additionalProperties: false",
+        );
+    }
+    if document
+        .get("properties")
+        .and_then(Value::as_object)
+        .is_none()
+    {
+        return one(
+            FieldPath::root().key("properties"),
+            "evidence.answer-schema.declared-properties",
+            "an object answer schema must declare the properties it permits",
         );
     }
     Vec::new()

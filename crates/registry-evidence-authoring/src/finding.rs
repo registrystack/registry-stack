@@ -90,6 +90,40 @@ impl FieldPath {
     pub fn is_root(&self) -> bool {
         self.steps.is_empty()
     }
+
+    /// The path as an RFC 6901 JSON pointer, the grammar the CLI reports
+    /// cite, so a finding names its field the same way every other
+    /// diagnostic does.
+    ///
+    /// Key and mapping-key steps escape the `~` and `/` the pointer grammar
+    /// reserves; the root document is the empty pointer.
+    #[must_use]
+    pub fn to_json_pointer(&self) -> String {
+        let mut pointer = String::new();
+        for step in &self.steps {
+            match step {
+                FieldStep::Key(name) => push_pointer_token(&mut pointer, name),
+                FieldStep::Index(position) => {
+                    pointer.push('/');
+                    pointer.push_str(&position.to_string());
+                }
+                FieldStep::MapKey(name) => push_pointer_token(&mut pointer, name),
+            }
+        }
+        pointer
+    }
+}
+
+/// Append one escaped RFC 6901 reference token.
+fn push_pointer_token(pointer: &mut String, token: &str) {
+    pointer.push('/');
+    for character in token.chars() {
+        match character {
+            '~' => pointer.push_str("~0"),
+            '/' => pointer.push_str("~1"),
+            other => pointer.push(other),
+        }
+    }
 }
 
 impl Display for FieldPath {
