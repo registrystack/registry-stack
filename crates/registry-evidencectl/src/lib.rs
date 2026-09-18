@@ -191,6 +191,10 @@ struct SafeCliFailure {
     path: String,
     message: String,
     suggested_action: String,
+    /// The operational failure chain, carried in both formats so a machine
+    /// reader learns the same cause the human renderer prints. Authored-value
+    /// refusals keep `None`: their detail is not reviewed for disclosure.
+    cause: Option<String>,
 }
 
 impl std::fmt::Display for SafeCliFailure {
@@ -218,6 +222,10 @@ pub fn command() -> clap::Command {
 pub fn main_entry() -> ExitCode {
     let arguments = normalized_process_args();
     let requested_format = requested_output_format(&arguments);
+    if requested_format == OutputFormat::Json && help_requested(&arguments) {
+        write_json_help();
+        return ExitCode::SUCCESS;
+    }
     let cli = match Cli::try_parse_from(arguments) {
         Ok(cli) => cli,
         Err(error)
@@ -375,6 +383,7 @@ pub fn main_entry() -> ExitCode {
                             "artifact": "evidencectl",
                             "path": "$",
                             "message": safe_message,
+                            "cause": detail,
                             "suggestedAction": "Correct the reported problem and retry the command."
                         }]
                     })
@@ -383,6 +392,31 @@ pub fn main_entry() -> ExitCode {
             ExitCode::from(exit)
         }
     }
+}
+
+/// Whether the operator asked for the command tree rather than an operation.
+/// A bare `help` token is accepted in any position so both `help --format
+/// json` and `--format json help` render the catalog; a value spelled exactly
+/// "help" is the one spelling that also selects help.
+fn help_requested(arguments: &[OsString]) -> bool {
+    arguments
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "help" || argument == "--help" || argument == "-h")
+}
+
+/// Render the machine-readable command tree `--format json` help publishes,
+/// using the same walker as the offline CLI reference catalog.
+fn write_json_help() {
+    let catalog = registry_cli_reference::binary_catalog(
+        command(),
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        None,
+    );
+    println!(
+        "{}",
+        serde_json::to_string(&catalog).expect("the command catalog serializes")
+    );
 }
 
 fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
@@ -514,6 +548,7 @@ fn safe_command(
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.to_owned(),
                 suggested_action: suggested_action.to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -528,6 +563,7 @@ fn safe_command(
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
                 suggested_action: suggested_action.to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -542,6 +578,7 @@ fn safe_command(
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
                 suggested_action: diagnostic.suggested_action.clone(),
+                cause: None,
             }
             .into();
         }
@@ -559,6 +596,7 @@ fn safe_command(
                 suggested_action:
                     "Confirm the matching Evidence runtime can finish its check without exceeding the time or output limit, then rerun doctor."
                         .to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -576,6 +614,7 @@ fn safe_command(
             } else {
                 suggested_action.to_owned()
             },
+            cause: operational.then(|| format!("{error:#}")),
         }
         .into()
     })
@@ -592,6 +631,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                     path: "logs".to_owned(),
                     message: "The local Evidence services failed before reaching readiness."
                         .to_owned(),
+                    cause: None,
                     suggested_action: format!(
                         "Inspect the preserved startup logs at {}, correct the failed dependency, and retry dev start.",
                         failure.logs.display()
@@ -609,6 +649,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                         "Local port {} is already in use, so the local {} cannot start.",
                         conflict.port, conflict.service
                     ),
+                    cause: None,
                     suggested_action: format!(
                         "Free 127.0.0.1:{}, or rerun dev start with {} <port>.",
                         conflict.port, conflict.flag
@@ -626,6 +667,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
                     artifact: "local development command".to_owned(),
                     path: "$".to_owned(),
                     message: "Registry Mint development flags were removed.".to_owned(),
+                    cause: None,
                     suggested_action: "Stop any retained Mint session with its matching older evidencectl, then start a fresh session with --issuer-port and the pinned local issuer.".to_owned(),
                 }
                 .into());
@@ -650,23 +692,37 @@ fn write_safe_failure(failure: &SafeCliFailure, format: OutputFormat) {
 }
 
 fn safe_failure_human(failure: &SafeCliFailure) -> String {
+    let cause = failure
+        .cause
+        .as_deref()
+        .map(|cause| format!("\n  cause: {cause}"))
+        .unwrap_or_default();
     format!(
-        "error[{}] {} {}: {}\n  next: {}\n",
-        failure.code, failure.artifact, failure.path, failure.message, failure.suggested_action
+        "error[{}] {} {}: {}\n  next: {}{}\n",
+        failure.code,
+        failure.artifact,
+        failure.path,
+        failure.message,
+        failure.suggested_action,
+        cause
     )
 }
 
 fn safe_failure_json(failure: &SafeCliFailure) -> serde_json::Value {
+    let mut diagnostic = serde_json::json!({
+        "severity": "error",
+        "code": failure.code,
+        "artifact": failure.artifact,
+        "path": failure.path,
+        "message": failure.message,
+        "suggestedAction": failure.suggested_action,
+    });
+    if let Some(cause) = &failure.cause {
+        diagnostic["cause"] = serde_json::Value::String(cause.clone());
+    }
     serde_json::json!({
         "status": if failure.operational { "operational-failure" } else { "domain-refusal" },
-        "diagnostics": [{
-            "severity": "error",
-            "code": failure.code,
-            "artifact": failure.artifact,
-            "path": failure.path,
-            "message": failure.message,
-            "suggestedAction": failure.suggested_action,
-        }]
+        "diagnostics": [diagnostic],
     })
 }
 
@@ -721,6 +777,7 @@ fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<Ex
             Ok(denied) => {
                 let report = serde_json::json!({
                     "command": "check",
+                    "ok": false,
                     "status": "refused",
                     "proof": "none",
                     "project": project,
@@ -745,6 +802,7 @@ fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Resul
             Ok(denied) => {
                 let report = serde_json::json!({
                     "command": "explain",
+                    "ok": false,
                     "status": "refused",
                     "proof": "none",
                     "project": project,
@@ -1000,6 +1058,37 @@ mod tests {
             assert!(human.contains(expected));
             assert!(json.contains(expected));
         }
+    }
+
+    #[test]
+    fn an_operational_failure_carries_its_cause_in_both_formats() {
+        let io_failure = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No such file or directory (os error 2)",
+        ))
+        .context("inspecting target parent");
+        let error = safe_command(
+            Err(io_failure),
+            "evidence.check.failed",
+            "project".to_owned(),
+            "Evidence could not inspect the selected authoring project.",
+            "Correct the selected project or target artifact and rerun check.",
+        )
+        .expect_err("operational refusal");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(failure.operational);
+        let human = safe_failure_human(failure);
+        let json = safe_failure_json(failure).to_string();
+        for report in [&human, &json] {
+            assert!(report.contains("inspecting target parent"), "{report}");
+        }
+        let diagnostic = safe_failure_json(failure)["diagnostics"][0].clone();
+        assert_eq!(
+            diagnostic["cause"].as_str(),
+            Some("inspecting target parent: No such file or directory (os error 2)")
+        );
     }
 
     #[test]

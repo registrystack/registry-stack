@@ -1586,6 +1586,19 @@ where
 {
     let arguments: Vec<OsString> = arguments.into_iter().map(Into::into).collect();
     let machine_mode = requested_json(&arguments);
+    if machine_mode && help_requested(&arguments) {
+        let catalog = registry_cli_reference::binary_catalog(
+            command(),
+            registry_platform_buildinfo::DISPLAY_VERSION,
+            Some(registry_cli_reference::SYMBOLIC_LINK_REFUSAL),
+        );
+        let _ = writeln!(
+            stdout,
+            "{}",
+            serde_json::to_string(&catalog).expect("the command catalog serializes")
+        );
+        return ExitCode::SUCCESS;
+    }
     let cli = match Cli::try_parse_from(&arguments) {
         Ok(cli) => cli,
         Err(error) => {
@@ -3990,6 +4003,17 @@ fn diff_change_path(change: &registry_breg::package::CompiledRegistryChange) -> 
         (Some(entity), None) => format!("changes.{entity}"),
         (None, _) => "changes.registry".to_owned(),
     }
+}
+
+/// Whether the operator asked for the command tree rather than an operation.
+/// A bare `help` token is accepted in any position so both `help --format
+/// json` and `--format json help` render the catalog; a value spelled exactly
+/// "help" is the one spelling that also selects help.
+fn help_requested(arguments: &[OsString]) -> bool {
+    arguments
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "help" || argument == "--help" || argument == "-h")
 }
 
 fn requested_json(arguments: &[OsString]) -> bool {

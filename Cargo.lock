@@ -4487,6 +4487,7 @@ dependencies = [
  "rcgen",
  "registry-breg",
  "registry-breg-client",
+ "registry-cli-reference",
  "registry-evidence-verifier",
  "registry-linkml",
  "registry-manifest-core",
@@ -4698,6 +4699,7 @@ dependencies = [
  "registry-bregctl",
  "registry-casework",
  "registry-caseworkctl",
+ "registry-cli-reference",
  "registry-evidence",
  "registry-evidence-oid4vci",
  "registry-evidencectl",
@@ -4706,6 +4708,14 @@ dependencies = [
  "registry-render",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "registry-cli-reference"
+version = "0.32.0"
+dependencies = [
+ "clap",
+ "serde",
 ]
 
 [[package]]
@@ -5053,6 +5063,7 @@ dependencies = [
  "p256",
  "rand 0.9.5",
  "rand_chacha 0.9.0",
+ "registry-cli-reference",
  "registry-evidence-authoring",
  "registry-evidence-client",
  "registry-language-server",

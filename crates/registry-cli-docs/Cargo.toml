@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+registry-cli-reference.workspace = true
 registry-evidence.workspace = true
 registry-evidence-oid4vci.workspace = true
 registry-evidencectl.workspace = true

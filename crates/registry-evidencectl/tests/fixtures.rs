@@ -534,6 +534,44 @@ fn an_unrecognized_summary_line_is_counted_as_nothing() {
     );
 }
 
+/// The global `--format json` spelling must keep stdout a single JSON
+/// document too: an agent parses stdout directly, and the human progress
+/// lines belong on stderr where every other JSON writer keeps them.
+#[test]
+fn the_global_format_json_flag_keeps_test_stdout_one_json_document() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let project = write_project(dir.path(), &["fixtures/a.yaml"]);
+    let stub = write_stub_evidence(dir.path());
+    let argv_log = dir.path().join("argv.log");
+
+    let output = evidencectl()
+        .args(["test", "--format", "json"])
+        .arg(&project)
+        .arg("--evidence-bin")
+        .arg(&stub)
+        .env("ARGV_LOG", &argv_log)
+        .env("CASES", "3")
+        .env_remove("FAIL_STEP")
+        .output()
+        .expect("run evidencectl");
+
+    let stdout = stdout_of(&output);
+    let stdout_lines: Vec<&str> = stdout.lines().filter(|line| !line.is_empty()).collect();
+    assert_eq!(
+        stdout_lines.len(),
+        1,
+        "stdout must carry exactly one JSON document: {stdout}"
+    );
+    assert!(!stdout.contains("PASS:"), "{stdout}");
+    let report: serde_json::Value =
+        serde_json::from_str(stdout_lines[0]).expect("parse JSON report");
+    assert_eq!(report["passed"], serde_json::Value::Bool(true));
+    assert_eq!(report["evaluated_cases"], serde_json::json!(3));
+
+    let stderr = String::from_utf8(output.stderr).expect("stderr text");
+    assert!(stderr.contains("PASS: check"), "{stderr}");
+}
+
 /// A run whose steps all pass but whose fixtures evaluated nothing is the one
 /// green result that means nothing at all: a reader takes it for proof the
 /// deployment answers its questions, and no question was ever asked.

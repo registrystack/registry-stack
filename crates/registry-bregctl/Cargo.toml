@@ -33,6 +33,7 @@ registry-platform-canonical-json.workspace = true
 registry-platform-httputil.workspace = true
 registry-thunderid-tooling.workspace = true
 registry-platform-buildinfo.workspace = true
+registry-cli-reference.workspace = true
 registry-breg = { workspace = true, features = ["runtime", "tooling"] }
 registry-breg-client.workspace = true
 registry-evidence-verifier.workspace = true
