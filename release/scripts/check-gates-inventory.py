@@ -180,6 +180,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
         "run: products/relay-v2/scripts/check-source-neutrality.sh",
     ),
     ("Base Registry Engine product contract gate", "breg-contracts:"),
+    ("Base Registry Engine WASM executor gate", "breg-wasm:"),
     (
         "Base Registry Engine contract consistency",
         "run: products/breg/scripts/check-contracts.sh",
