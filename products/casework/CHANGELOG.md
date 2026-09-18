@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Hosted decisions can carry a structured result. A hosted kind declares an optional closed
+  `resultSchema` beside its display schema, and an outcome may set `resultRequired`. A Requester may
+  narrow declared top-level fields per item with `resultConstraints` at create time; the constraints
+  are stored verbatim, count in the create idempotency hash, and are refused unless every value they
+  admit is already inside the kind schema. The deciding person submits a `result` with the outcome,
+  which Casework validates against the schema and then the constraints, and the Requester reads it
+  back on the terminal item. Results and their constraints erase with the display payload at
+  `terminalDays`; the accountability record keeps only a sha256 digest of the result until its own
+  `accountabilityDays` closes.
 - The inbox, the next-item result, holdings, the item view, history, and clocks
   stay readable while a subject's source binding has moved within its source
   generation but reconciliation has not applied it yet. The retained occurrence
