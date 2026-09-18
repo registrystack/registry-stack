@@ -30,11 +30,6 @@ use serde_json::{Map as JsonMap, Value};
 use crate::action_handler::{ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome};
 use crate::model::{CompiledAction, CompiledActionHandler};
 
-/// The compilation backend for handler execution. Native is the current
-/// deployment default; making the backend operator configuration is a
-/// decided follow-up.
-const WASM_EXECUTION_BACKEND: Backend = Backend::Native;
-
 /// Named bound on prepared modules retained by one process. A package
 /// carries at most `wasm_handler::MAX_PACKAGE_WASM_MODULES` modules, so this
 /// bounds cross-package reuse, not correctness: an evicted entry only costs
@@ -131,18 +126,21 @@ impl Drop for WasmHandlerRuntime {
 
 struct ModuleCache {
     /// Most-recently-used first; the tail is evicted at the retained bound.
-    entries: Vec<(String, Arc<PreparedModule>)>,
+    /// The key is the module content hash paired with the backend the module
+    /// was compiled for.
+    entries: Vec<((String, Backend), Arc<PreparedModule>)>,
     /// Compilations performed through this cache; test-observable.
     preparations: u64,
 }
 
 impl WasmHandlerRuntime {
-    /// Build the executor, start its epoch ticker, and start with an empty
-    /// cache retaining at most `retained_modules` prepared modules. A ticker
-    /// that cannot start is a start failure: the runtime is not built with
-    /// permanently inert deadlines.
+    /// Build the executor for `backend`, start its epoch ticker, and start
+    /// with an empty cache retaining at most `retained_modules` prepared
+    /// modules. A ticker that cannot start is a start failure: the runtime is
+    /// not built with permanently inert deadlines.
     pub(crate) fn new(
         budgets: WasmExecutionBudgets,
+        backend: Backend,
         retained_modules: usize,
     ) -> Result<Self, WasmRuntimeStartError> {
         let budgets = Budgets {
@@ -153,8 +151,8 @@ impl WasmHandlerRuntime {
             max_output_bytes: WASM_MAXIMUM_OUTCOME_BYTES,
             ..Budgets::default()
         };
-        let executor = Executor::new(WASM_EXECUTION_BACKEND, budgets)
-            .map_err(WasmRuntimeStartError::EngineSetup)?;
+        let executor =
+            Executor::new(backend, budgets).map_err(WasmRuntimeStartError::EngineSetup)?;
         let ticker = EpochTicker::spawn(executor.engine().clone(), DEFAULT_INTERVAL)
             .map_err(WasmRuntimeStartError::Ticker)?;
         Ok(Self {
@@ -179,22 +177,26 @@ impl WasmHandlerRuntime {
 
     /// Resolve the handler's prepared module, compiling it on first use.
     ///
-    /// Identity is the module's content hash: a prepared module is immutable
-    /// and content-addressed, so identical bytes prepare to an identical
-    /// module and different package revisions carrying identical bytes share
-    /// one preparation. Backend and budgets are fixed at runtime
-    /// construction, so a configuration change replaces the runtime and its
-    /// cache together.
+    /// Identity is the module's content hash paired with the executor's
+    /// backend: a prepared module is immutable, content-addressed, and
+    /// compiled for exactly one engine target, so identical bytes under one
+    /// backend share one preparation and a backend change re-prepares rather
+    /// than cross-serving a module compiled for the other engine. Budgets
+    /// are fixed at runtime construction, so a configuration change replaces
+    /// the runtime and its cache together.
     fn prepared_module(
         &self,
         handler: &CompiledActionHandler,
     ) -> Result<Arc<PreparedModule>, ActionHandlerDiagnostic> {
-        let identity = handler.module_sha256.clone().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Source,
-                "A compiled WASM handler carries its module content hash.",
-            )
-        })?;
+        let identity = (
+            handler.module_sha256.clone().ok_or_else(|| {
+                ActionHandlerDiagnostic::new(
+                    ActionHandlerError::Source,
+                    "A compiled WASM handler carries its module content hash.",
+                )
+            })?,
+            self.executor.backend(),
+        );
         let mut cache = self.cache.lock().expect("wasm module cache lock");
         if let Some(position) = cache.entries.iter().position(|(key, _)| *key == identity) {
             // Move-to-front keeps the eviction order least-recently-used.
@@ -247,9 +249,10 @@ fn runtime_not_installed() -> ActionHandlerDiagnostic {
 /// not spawned) is returned, never swallowed into a degraded runtime.
 pub(crate) fn install(
     budgets: WasmExecutionBudgets,
+    backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    let runtime = WasmHandlerRuntime::new(budgets, retained_modules)?;
+    let runtime = WasmHandlerRuntime::new(budgets, backend, retained_modules)?;
     *RUNTIME.write().expect("wasm runtime lock") = Some(Arc::new(runtime));
     Ok(())
 }
@@ -262,13 +265,15 @@ pub(crate) fn shutdown() {
     drop(RUNTIME.write().expect("wasm runtime lock").take());
 }
 
-/// Install the process runtime with the default execution budgets and cache
-/// bound. The server startup path installs the configured runtime itself; an
-/// embedder assembling the HTTP app without that path calls this before
-/// serving, and every evaluation before any install is refused.
+/// Install the process runtime with the default execution budgets, default
+/// backend, and default cache bound. The server startup path installs the
+/// configured runtime itself; an embedder assembling the HTTP app without
+/// that path calls this before serving, and every evaluation before any
+/// install is refused.
 pub fn install_default() -> Result<(), WasmRuntimeStartError> {
     install(
         WasmExecutionBudgets::default(),
+        crate::wasm_handler::execution_backend(crate::wasm_handler::WasmExecutionBackend::default()),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
 }

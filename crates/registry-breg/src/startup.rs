@@ -810,12 +810,14 @@ async fn finish_prepared_server(
     let task_status = config
         .activate_task_status(&registry)
         .map_err(StartupError::RuntimeConfig)?;
-    // The process WASM executor is installed from the operator budgets before
-    // any request can evaluate a WASM handler. Builds without the prototype
-    // feature refuse WASM handlers at admission; the section still parses.
+    // The process WASM executor is installed from the operator budgets and
+    // backend before any request can evaluate a WASM handler. Builds without
+    // the wasm feature refuse WASM handlers at admission; the section still
+    // parses.
     #[cfg(feature = "wasm")]
     crate::wasm_runtime::install(
         crate::wasm_runtime::WasmExecutionBudgets::from(*config.wasm_execution()),
+        crate::wasm_handler::execution_backend(config.wasm_execution().backend()),
         crate::wasm_runtime::MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?;
