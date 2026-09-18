@@ -399,14 +399,37 @@ pub fn main_entry() -> ExitCode {
 }
 
 /// Whether the operator asked for the command tree rather than an operation.
-/// A bare `help` token is accepted in any position so both `help --format
-/// json` and `--format json help` render the catalog; a value spelled exactly
-/// "help" is the one spelling that also selects help.
+/// `--help` and `-h` are recognized in any position, matching clap's own
+/// help flags. A bare `help` token only counts in the subcommand position,
+/// reached by skipping past the global `--format` flag when it comes first,
+/// so `help --format json` and `--format json help` render the catalog while
+/// a value spelled "help" carried by a later argument, such as the client id
+/// in `access client revoke help`, is never mistaken for a help request.
 fn help_requested(arguments: &[OsString]) -> bool {
-    arguments
+    if arguments
         .iter()
         .skip(1)
-        .any(|argument| argument == "help" || argument == "--help" || argument == "-h")
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        return true;
+    }
+    let mut index = 1;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--format" {
+            index += 2;
+            continue;
+        }
+        if argument
+            .to_str()
+            .is_some_and(|value| value.starts_with("--format="))
+        {
+            index += 1;
+            continue;
+        }
+        return argument == "help";
+    }
+    false
 }
 
 /// Render the machine-readable command tree `--format json` help publishes,
@@ -1794,6 +1817,41 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&arguments).is_ok(),
                 "{arguments:?} must keep working"
+            );
+        }
+    }
+
+    #[test]
+    fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
+        fn args(tokens: &[&str]) -> Vec<OsString> {
+            std::iter::once("evidencectl")
+                .chain(tokens.iter().copied())
+                .map(OsString::from)
+                .collect()
+        }
+
+        for tokens in [
+            &["help"][..],
+            &["help", "--format", "json"][..],
+            &["--format", "json", "help"][..],
+            &["--format", "json", "--help"][..],
+            &["--format", "json", "-h"][..],
+            &["--format", "json", "access", "--help"][..],
+        ] {
+            assert!(
+                help_requested(&args(tokens)),
+                "{tokens:?} must be recognized as a help request"
+            );
+        }
+
+        for tokens in [
+            &["--format", "json", "access", "client", "revoke", "help"][..],
+            &["--format", "json", "source", "add", "help"][..],
+            &["access", "client", "revoke", "help"][..],
+        ] {
+            assert!(
+                !help_requested(&args(tokens)),
+                "{tokens:?} carries `help` as a value, not the subcommand"
             );
         }
     }

@@ -148,6 +148,37 @@ fn migrated_json_commands_answer_one_json_document() {
     }
 }
 
+/// A `help`-spelled positional value is not the subcommand token, so it must
+/// reach the command instead of being mistaken for `--format json help`.
+#[test]
+fn a_help_spelled_value_is_not_mistaken_for_the_help_catalog() {
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "--format",
+            "json",
+            "access",
+            "client",
+            "revoke",
+            "help",
+            "--project",
+        ])
+        .arg(directory.path())
+        .output()
+        .expect("run evidencectl");
+
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a client named `help` cannot be revoked in an empty project, so this must not succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("schema_version"),
+        "the `help` value hijacked the command into printing the CLI reference catalog: {stdout}"
+    );
+}
+
 #[test]
 fn source_comparison_failures_emit_exactly_one_json_document() {
     for command in ["diff", "import", "update"] {

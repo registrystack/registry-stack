@@ -38,3 +38,23 @@ fn help_honours_the_global_json_format_with_the_catalog_schema() {
         );
     }
 }
+
+/// A `help`-spelled positional value is not the subcommand token, so it must
+/// reach the command instead of being mistaken for `--format json help`.
+#[test]
+fn a_help_spelled_value_is_not_mistaken_for_the_help_catalog() {
+    let arguments = vec!["bregctl", "--format", "json", "explain", "access", "help"];
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let status = registry_bregctl::run_from(arguments.clone(), &mut stdout, &mut stderr);
+    assert_ne!(
+        status,
+        ExitCode::SUCCESS,
+        "a project directory named `help` does not exist, so this must not succeed"
+    );
+    let rendered = String::from_utf8(stdout).expect("output is UTF-8");
+    assert!(
+        !rendered.contains("schema_version"),
+        "the `help` value hijacked the command into printing the CLI reference catalog: {rendered}"
+    );
+}
