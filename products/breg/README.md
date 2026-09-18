@@ -99,7 +99,10 @@ and properties to select at the terminal. [Governed facility registration and
 transfer](registry-extensibility.md), [Native persisted field
 patterns](native-patterns.md), and [Current membership
 access](membership-access.md) describe modeling patterns a derived or starter
-project can build on.
+project can build on. An action handler can also be a WebAssembly module:
+[WASM action handlers](wasm-action-handlers.md) covers what ships, the
+server-compatibility contract, operator configuration, and the upgrade and
+rollback paths.
 
 ## Pilot operator lifecycle
 
