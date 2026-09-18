@@ -144,7 +144,6 @@ pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
 
 fn new(args: NewArgs) -> Result<ExitCode> {
     reject_existing(&args.directory)?;
-    let parent = created_plain_parent(&args.directory, "target parent")?;
     let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
     if args.settings.is_none() {
         if !args.local {
@@ -157,6 +156,7 @@ fn new(args: NewArgs) -> Result<ExitCode> {
         );
         return Ok(ExitCode::SUCCESS);
     }
+    let parent = created_plain_parent(&args.directory, "target parent")?;
     let settings_arg = args.settings.as_deref().expect("settings checked above");
     let settings_parent = plain_parent(settings_arg, "settings parent")?;
     let settings_name = settings_arg
@@ -319,11 +319,26 @@ pub(crate) fn create_local_target(
     if !source_connections.is_object() {
         bail!("local sourceConnections must be a mapping");
     }
+    // Settle the project and the target output before any key exists. Key
+    // generation writes into the project, so a run refused for a directory
+    // that is not an Evidence project, or for an output that is already
+    // taken, must be refused before it, and leave nothing behind.
+    let project = local_project_root(project)?;
+    let parent = if directory.exists() {
+        let metadata = fs::symlink_metadata(directory)?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            bail!("existing local target must be a plain directory");
+        }
+        None
+    } else {
+        reject_existing(directory)?;
+        Some(created_plain_parent(directory, "target parent")?)
+    };
     // Read the project signing key once (creating it when the project has
     // none) so the kid governance names and the key file written beside it
     // come from the same material. Reading it twice would let a key replaced
     // between the reads publish governance and a key file that disagree.
-    let (relative, key_bytes) = crate::authoring::ensure_local_signing_public_jwk(project)?;
+    let (relative, key_bytes) = crate::authoring::ensure_local_signing_public_jwk(&project)?;
     let mut governance = crate::authoring::local_target_governance(&relative)?;
     governance["sourceConnections"] = source_connections;
     let mut runtime = serde_json::json!({
@@ -338,7 +353,7 @@ pub(crate) fn create_local_target(
         "auditStorage": {"maximumFileBytes": 1073741824_u64},
         "outboundTls": {"systemRoots": true, "trustProfiles": {}},
     });
-    fill_local_paths(project, &governance, &mut runtime)?;
+    fill_local_paths(&project, &governance, &mut runtime)?;
     validate_settings_documents(&governance, &runtime)?;
     // The kid in governance and the staged key file must agree before
     // anything is published; the render and the bytes above share one read,
@@ -363,11 +378,10 @@ pub(crate) fn create_local_target(
         ),
         (relative, key_bytes),
     ];
-    if directory.exists() {
-        let metadata = fs::symlink_metadata(directory)?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            bail!("existing local target must be a plain directory");
-        }
+    let Some(parent) = parent else {
+        // An existing target is a retry: it already holds exactly the files
+        // this render publishes, or it is authored differently and is left
+        // alone.
         for (name, expected) in &files {
             let actual = read_plain_file(
                 &directory.join(name),
@@ -379,9 +393,7 @@ pub(crate) fn create_local_target(
             }
         }
         return Ok(());
-    }
-    reject_existing(directory)?;
-    let parent = created_plain_parent(directory, "target parent")?;
+    };
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-target-")
         .tempdir_in(parent)?;
@@ -398,12 +410,7 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
     if governance.get("assuranceProfile").and_then(Value::as_str) != Some("local") {
         bail!("--local requires governance assuranceProfile local; production paths are never inferred");
     }
-    let project = fs::canonicalize(project).context("resolving local Evidence project")?;
-    read_plain_file(
-        &project.join("evidence-project.yaml"),
-        MAX_SETTINGS_BYTES,
-        "Evidence project marker",
-    )?;
+    let project = local_project_root(project)?;
     let secrets = project.join(crate::authoring::SECRETS_DIRECTORY);
     let local = project.join(".evidence/dev");
     for (components, path) in [
@@ -428,6 +435,20 @@ fn fill_local_paths(project: &Path, governance: &Value, runtime: &mut Value) -> 
             .or_insert_with(|| Value::String(path.to_string_lossy().into_owned()));
     }
     Ok(())
+}
+
+/// Resolve the editable project a local target draws its paths and keys from.
+///
+/// Reading the marker settles that the directory is an Evidence project, so a
+/// caller can refuse a directory that is not one before writing into it.
+fn local_project_root(project: &Path) -> Result<PathBuf> {
+    let project = fs::canonicalize(project).context("resolving local Evidence project")?;
+    read_plain_file(
+        &project.join("evidence-project.yaml"),
+        MAX_SETTINGS_BYTES,
+        "Evidence project marker",
+    )?;
+    Ok(project)
 }
 
 fn validate_settings_documents(governance: &Value, runtime: &Value) -> Result<()> {
@@ -1068,6 +1089,52 @@ runtime:
         let retried: Value =
             serde_norway::from_slice(&fs::read(target.join(&active)).unwrap()).unwrap();
         assert_eq!(retried, generated);
+    }
+
+    #[test]
+    fn local_target_creation_refuses_a_directory_that_is_not_a_project_before_writing_keys() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let outside = canonical.as_path();
+        let error = create_local_target(
+            outside,
+            &outside.join("targets/local"),
+            serde_json::json!({}),
+        )
+        .expect_err("a directory without an Evidence project marker is refused");
+        assert!(
+            format!("{error:#}").contains("Evidence project marker"),
+            "{error:#}"
+        );
+        assert!(
+            !outside.join(crate::authoring::SECRETS_DIRECTORY).exists(),
+            "a refused local target writes no key material"
+        );
+        assert!(!outside.join("targets/local").exists());
+    }
+
+    #[test]
+    fn local_target_creation_refuses_an_occupied_output_before_writing_keys() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.as_path();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        let target = project.join("target");
+        fs::write(&target, "operator authored settings").unwrap();
+        let error = create_local_target(project, &target, serde_json::json!({}))
+            .expect_err("an occupied target output is refused");
+        assert!(
+            format!("{error:#}").contains("must be a plain directory"),
+            "{error:#}"
+        );
+        assert!(
+            !project.join(crate::authoring::SECRETS_DIRECTORY).exists(),
+            "a refused local target writes no key material"
+        );
+        assert_eq!(
+            fs::read_to_string(&target).unwrap(),
+            "operator authored settings"
+        );
     }
 
     #[test]

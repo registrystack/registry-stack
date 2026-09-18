@@ -1330,3 +1330,32 @@ fn local_target_created_before_questions_uses_current_local_caller_governance() 
     assert!(!rejected.status.success());
     assert!(stderr_of(&rejected).contains("assuranceProfile local"));
 }
+
+/// `target new --local` defaults `--project` to the current directory, so a
+/// run started outside an Evidence project is refused. The refusal comes
+/// before any key generation: a command that creates nothing leaves no
+/// keypair in a directory the operator never authored as a project.
+#[test]
+fn target_new_local_outside_a_project_refuses_before_writing_key_material() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let output = evidencectl()
+        .args(["target", "new"])
+        .arg("targets/local")
+        .arg("--local")
+        .current_dir(&root)
+        .output()
+        .expect("run evidencectl");
+
+    assert!(!output.status.success());
+    let stderr = stderr_of(&output);
+    assert!(stderr.contains("Evidence project marker"), "{stderr}");
+    assert!(
+        !root.join("secrets").exists(),
+        "a refused target new wrote key material: {stderr}"
+    );
+    assert!(
+        !root.join("targets").exists(),
+        "a refused target new created a target parent: {stderr}"
+    );
+}
