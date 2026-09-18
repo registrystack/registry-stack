@@ -12,6 +12,7 @@ use registry_platform_crypto::delivery_signature::{
     verify_v1, SignatureFields, MIN_HMAC_SHA256_KEY_BYTES,
 };
 use registry_platform_crypto::domain_separated_sha256;
+use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -754,7 +755,21 @@ impl SourceAdapter for BregAdapter {
             Duration::from_secs(300),
         )
         .map_err(|_| SourceAdapterError::Invalid)?;
-        let body = decode_exact_json(&request.body).map_err(|_| SourceAdapterError::Invalid)?;
+        // The delivery body is one shared hook envelope. Its identity is read
+        // back from the bytes and held against the signed attributes the
+        // signature already covered, so a body and its headers can never
+        // describe two different events.
+        let envelope =
+            HookEnvelope::from_canonical_bytes(&request.body, &EnvelopeLimits::default())
+                .map_err(|_| SourceAdapterError::Invalid)?;
+        if envelope.id != h("ce-id")?
+            || envelope.event_type != h("ce-type")?
+            || envelope.source != h("ce-source")?
+            || envelope.dataschema != h("ce-dataschema")?
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        let body = envelope.data;
         if body.get("trigger").and_then(Value::as_str) != Some("request_lifecycle")
             || body.get("entity").and_then(Value::as_str) != Some(self.config.entity.as_str())
         {

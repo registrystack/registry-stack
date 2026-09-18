@@ -11,6 +11,7 @@ use registry_casework_core::{
     EventRequest, RoutingSourceMetadata, SourceAdapter, SourceAdapterError,
 };
 use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
+use registry_platform_hooks::{Causation, EnvelopeLimits, EventSubject, HookEnvelope};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use wiremock::{
@@ -28,6 +29,12 @@ const REASON_CANARY: &str = "REASON-MUST-DIE-WITH-INTAKE";
 const TRACEPARENT: &str = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
 const REGISTRY_REVISION: &str =
     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const EVENT_ID: &str = "00000000-0000-4000-8000-000000000099";
+const EVENT_TIME: &str = "2026-09-10T01:00:00Z";
+const DATA_SCHEMA: &str =
+    "urn:registrystack:registry:test:event:casework-lifecycle-v1:schema:sha256:aaa";
+const RECORD_REFERENCE: &str =
+    "hmac-sha256:00000000000000000000000000000000000000000000000000000000000000aa";
 
 fn adapter(source_id: &str, event_source: &str, event_type: &str) -> BregAdapter {
     adapter_at(source_id, event_source, event_type, "http://127.0.0.1:9")
@@ -134,8 +141,10 @@ async fn mount_metadata(server: &MockServer, revision: &str) {
         .await;
 }
 
-fn body(deduplication_key: &str) -> Vec<u8> {
-    serde_json::to_vec(&json!({
+/// The product projection a Base Registry Engine delivery carries as the
+/// envelope's `data`.
+fn data(deduplication_key: &str) -> Value {
+    json!({
         "trigger": "request_lifecycle",
         "entity": "correction",
         "recordId": RECORD_ID,
@@ -145,7 +154,25 @@ fn body(deduplication_key: &str) -> Vec<u8> {
             "deduplicationKey": deduplication_key,
             "reason": REASON_CANARY
         }
-    }))
+    })
+}
+
+/// The canonical envelope bytes the delivery body is.
+fn envelope_body(event_source: &str, event_type: &str, data: Value) -> Vec<u8> {
+    HookEnvelope {
+        id: EVENT_ID.to_owned(),
+        event_type: event_type.to_owned(),
+        source: event_source.to_owned(),
+        time: OffsetDateTime::parse(EVENT_TIME, &Rfc3339).unwrap(),
+        subject: EventSubject {
+            record_reference: RECORD_REFERENCE.to_owned(),
+            record_revision: 42,
+        },
+        dataschema: DATA_SCHEMA.to_owned(),
+        data,
+        causation: Causation::root(EVENT_ID),
+    }
+    .to_canonical_bytes(&EnvelopeLimits::default())
     .unwrap()
 }
 
@@ -154,16 +181,31 @@ fn signed_request(
     event_source: &str,
     event_type: &str,
     delivery_time: &str,
+    data: Value,
+) -> EventRequest {
+    signed_bytes(
+        source_id,
+        event_source,
+        event_type,
+        delivery_time,
+        envelope_body(event_source, event_type, data),
+    )
+}
+
+fn signed_bytes(
+    source_id: &str,
+    event_source: &str,
+    event_type: &str,
+    delivery_time: &str,
     body: Vec<u8>,
 ) -> EventRequest {
     let request_target = format!("/events/sources/{source_id}");
     let fields = SignatureFields {
-        id: "00000000-0000-4000-8000-000000000099",
+        id: EVENT_ID,
         source: event_source,
         event_type,
-        time: "2026-09-10T01:00:00Z",
-        data_schema:
-            "urn:registrystack:registry:test:event:casework-lifecycle-v1:schema:sha256:aaa",
+        time: EVENT_TIME,
+        data_schema: DATA_SCHEMA,
         generation: "1",
         attempt: "1",
         delivery_time,
@@ -205,7 +247,7 @@ async fn signed_transition_returns_only_source_qualified_invalidation_metadata()
             EVENT_SOURCE_A,
             EVENT_TYPE,
             &now(),
-            body("deduplication-1"),
+            data("deduplication-1"),
         ))
         .await
         .unwrap();
@@ -215,7 +257,7 @@ async fn signed_transition_returns_only_source_qualified_invalidation_metadata()
             EVENT_SOURCE_B,
             EVENT_TYPE,
             &now(),
-            body("deduplication-1"),
+            data("deduplication-1"),
         ))
         .await
         .unwrap();
@@ -244,14 +286,14 @@ async fn signed_but_wrong_source_or_event_type_is_refused() {
             EVENT_SOURCE_B,
             EVENT_TYPE,
             &now(),
-            body("deduplication-1"),
+            data("deduplication-1"),
         ),
         signed_request(
             "source_a",
             EVENT_SOURCE_A,
             "another-lifecycle-v1",
             &now(),
-            body("deduplication-1"),
+            data("deduplication-1"),
         ),
     ] {
         assert_eq!(
@@ -300,7 +342,7 @@ async fn route_target_and_route_segment_are_closed_before_intake() {
         EVENT_SOURCE_A,
         EVENT_TYPE,
         &now(),
-        body("deduplication-1"),
+        data("deduplication-1"),
     );
     assert_eq!(
         adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
@@ -317,7 +359,7 @@ async fn case_insensitive_duplicate_signed_header_is_refused() {
         EVENT_SOURCE_A,
         EVENT_TYPE,
         &now(),
-        body("deduplication-1"),
+        data("deduplication-1"),
     );
     request.headers.push(("CE-ID".into(), "duplicate".into()));
     assert_eq!(
@@ -341,7 +383,7 @@ async fn stale_delivery_and_body_tampering_are_refused() {
                 EVENT_SOURCE_A,
                 EVENT_TYPE,
                 &stale,
-                body("deduplication-1"),
+                data("deduplication-1"),
             ))
             .await,
         Err(SourceAdapterError::Invalid)
@@ -352,12 +394,90 @@ async fn stale_delivery_and_body_tampering_are_refused() {
         EVENT_SOURCE_A,
         EVENT_TYPE,
         &now(),
-        body("deduplication-1"),
+        data("deduplication-1"),
     );
-    tampered.body = body("attacker-substitution");
+    tampered.body = envelope_body(EVENT_SOURCE_A, EVENT_TYPE, data("attacker-substitution"));
     assert_eq!(
         receiver.verify_transition(tampered).await,
         Err(SourceAdapterError::Invalid)
+    );
+}
+
+#[tokio::test]
+async fn a_pre_envelope_delivery_body_is_refused() {
+    let projection = serde_json::to_vec(&data("deduplication-1")).unwrap();
+    let request = signed_bytes("source_a", EVENT_SOURCE_A, EVENT_TYPE, &now(), projection);
+    assert_eq!(
+        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+            .verify_transition(request)
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "the projection alone is no longer a delivery body"
+    );
+}
+
+#[tokio::test]
+async fn an_envelope_that_disagrees_with_its_signed_identity_is_refused() {
+    let receiver = adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE);
+    let foreign = envelope_body(EVENT_SOURCE_B, EVENT_TYPE, data("deduplication-1"));
+    assert_eq!(
+        receiver
+            .verify_transition(signed_bytes(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                foreign,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope source that differs from the signed header is refused"
+    );
+    let wrong_type = envelope_body(
+        EVENT_SOURCE_A,
+        "another-lifecycle-v1",
+        data("deduplication-1"),
+    );
+    assert_eq!(
+        receiver
+            .verify_transition(signed_bytes(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                wrong_type,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope type that differs from the signed header is refused"
+    );
+}
+
+#[tokio::test]
+async fn a_non_canonical_envelope_is_refused() {
+    let mut envelope: Value = serde_json::from_slice(&envelope_body(
+        EVENT_SOURCE_A,
+        EVENT_TYPE,
+        data("deduplication-1"),
+    ))
+    .unwrap();
+    envelope
+        .as_object_mut()
+        .unwrap()
+        .insert("padding".to_owned(), Value::Null);
+    let request = signed_bytes(
+        "source_a",
+        EVENT_SOURCE_A,
+        EVENT_TYPE,
+        &now(),
+        serde_json::to_vec(&envelope).unwrap(),
+    );
+    assert_eq!(
+        adapter("source_a", EVENT_SOURCE_A, EVENT_TYPE)
+            .verify_transition(request)
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope with a member the contract does not declare is refused"
     );
 }
 

@@ -5008,6 +5008,7 @@ dependencies = [
  "registry-casework-core",
  "registry-platform-config",
  "registry-platform-crypto",
+ "registry-platform-hooks",
  "registry-platform-httputil",
  "schemars",
  "serde",
