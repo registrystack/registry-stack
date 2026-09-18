@@ -232,7 +232,7 @@ mod tests {
                 action
                     .handler
                     .as_ref()
-                    .and_then(|handler| handler.script.clone())
+                    .and_then(|handler| handler.script().map(str::to_owned))
             })
             .map(|script| ModuleAssetSource {
                 module: None,
@@ -361,7 +361,7 @@ mod tests {
                 action
                     .handler
                     .as_ref()
-                    .and_then(|handler| handler.script.clone())
+                    .and_then(|handler| handler.script().map(str::to_owned))
             })
             .map(|script| ModuleAssetSource {
                 module: None,

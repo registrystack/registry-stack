@@ -1483,7 +1483,7 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
             action
                 .handler
                 .as_ref()
-                .and_then(|handler| handler.script.clone())
+                .and_then(|handler| handler.script().map(str::to_owned))
                 .map(|script| registry_breg::contract::ModuleAssetSource {
                     module: None,
                     path: script.clone(),

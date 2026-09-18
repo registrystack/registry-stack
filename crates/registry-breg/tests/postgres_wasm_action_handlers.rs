@@ -24,7 +24,7 @@ use registry_breg::{
         VerifiedClaimValue, VerifiedRequestClaims,
     },
     compiler::{compile_project_with_assets, CompileProfile},
-    contract::{parse_project_yaml, ActionHandlerKindSource, ModuleAssetSource},
+    contract::{parse_project_yaml, ModuleAssetSource},
     cursor::CursorCodec,
     mutation::MutationFaultPoint,
     postgres::{
@@ -34,6 +34,7 @@ use registry_breg::{
     },
 };
 use registry_platform_audit::AuditProfile;
+use registry_platform_hooks::HookHandlerSource;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -107,9 +108,10 @@ async fn setup() -> (
             .handler
             .as_mut()
             .unwrap();
-        handler.kind = ActionHandlerKindSource::Wasm;
-        handler.script = None;
-        handler.module = Some(module_path.to_owned());
+        handler.handler = HookHandlerSource::Wasm {
+            module: module_path.to_owned(),
+            abi: handler.abi().map(str::to_owned),
+        };
     }
     // A third action with its own module that always returns the declared
     // refusal, granted to the registrar beside the other invokes.
@@ -120,7 +122,11 @@ async fn setup() -> (
         .unwrap()
         .clone();
     refuse.id = "refuse-person".to_owned();
-    refuse.handler.as_mut().unwrap().module = Some("handlers/refuse-person.wasm".to_owned());
+    let refuse_handler = refuse.handler.as_mut().unwrap();
+    refuse_handler.handler = HookHandlerSource::Wasm {
+        module: "handlers/refuse-person.wasm".to_owned(),
+        abi: refuse_handler.abi().map(str::to_owned),
+    };
     project.actions.push(refuse);
     let registrar = project
         .access_profiles

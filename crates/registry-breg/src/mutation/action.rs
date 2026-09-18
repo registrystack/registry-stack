@@ -2217,7 +2217,7 @@ mod tests {
                 action
                     .handler
                     .as_ref()
-                    .and_then(|handler| handler.script.clone())
+                    .and_then(|handler| handler.script().map(str::to_owned))
             })
             .map(|script| crate::contract::ModuleAssetSource {
                 module: None,
