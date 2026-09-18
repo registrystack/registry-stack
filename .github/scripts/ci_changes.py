@@ -436,6 +436,7 @@ ROOT_RUST_INPUTS = {
 # table, so a new privileged workflow cannot silently bypass the policy gate.
 SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/codeql.yml": frozenset({"release_tool"}),
+    ".github/workflows/mirror-buildkit.yml": frozenset({"release_tool"}),
     ".github/workflows/docs-pages.yml": frozenset(
         {"docs", "release_source_proof", "release_tool"}
     ),

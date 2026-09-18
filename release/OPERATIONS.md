@@ -166,6 +166,33 @@ version stays in the package and every applied run reports it again. GitHub
 documents one route for this limit, a GitHub Support request, so removing
 the version is a decision to file one, not a tooling change.
 
+### Mirror the pinned BuildKit image
+
+CI builders and release image recipes pin the BuildKit executor image by
+digest. The pin resolves to `ghcr.io/registrystack/buildkit`, a public mirror
+of the upstream `moby/buildkit` image, so builds never depend on Docker Hub
+authentication availability. The mirror is digest-preserving: the mirrored tag
+must resolve to exactly the upstream digest, and the builder recipes verify
+that property themselves.
+
+When a pin bump changes the BuildKit version or digest in
+`.github/workflows/ci.yml`, the release workflows, and
+`release/scripts/build-release-image.sh`, mirror the new digest before landing
+the bump, then confirm the package stays public:
+
+```sh
+gh api --method POST repos/registrystack/registry-stack/dispatches \
+  -f event_type=mirror-buildkit \
+  -F 'client_payload[tag]=v0.31.2' \
+  -F 'client_payload[digest]=sha256:<the-new-pinned-digest>'
+```
+
+The mirror run refuses to copy when the upstream tag no longer resolves to the
+requested digest, and fails when the mirrored digest differs or the package
+visibility is not public. Provision the `buildkit` package identity once with
+the classic-PAT bootstrap above, then change it to public in the organization
+package settings and grant `registrystack/registry-stack` Actions access.
+
 ### Provision client registries
 
 Registry Stack v0.22.0 through v0.26.0 promoted separate Evidence, Relay, and,
