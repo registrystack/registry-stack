@@ -159,6 +159,13 @@ fn data(deduplication_key: &str) -> Value {
 
 /// The canonical envelope bytes the delivery body is.
 fn envelope_body(event_source: &str, event_type: &str, data: Value) -> Vec<u8> {
+    envelope(event_source, event_type, data)
+        .to_canonical_bytes(&EnvelopeLimits::default())
+        .unwrap()
+}
+
+/// The canonical envelope a delivery body is.
+fn envelope(event_source: &str, event_type: &str, data: Value) -> HookEnvelope {
     HookEnvelope {
         id: EVENT_ID.to_owned(),
         event_type: event_type.to_owned(),
@@ -172,8 +179,6 @@ fn envelope_body(event_source: &str, event_type: &str, data: Value) -> Vec<u8> {
         data,
         causation: Causation::root(EVENT_ID),
     }
-    .to_canonical_bytes(&EnvelopeLimits::default())
-    .unwrap()
 }
 
 fn signed_request(
@@ -450,6 +455,68 @@ async fn an_envelope_that_disagrees_with_its_signed_identity_is_refused() {
             .await,
         Err(SourceAdapterError::Invalid),
         "an envelope type that differs from the signed header is refused"
+    );
+    let wrong_id = {
+        let mut envelope = envelope(EVENT_SOURCE_A, EVENT_TYPE, data("deduplication-1"));
+        let id = "00000000-0000-4000-8000-000000000098";
+        envelope.id = id.to_owned();
+        envelope.causation = Causation::root(id);
+        envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .unwrap()
+    };
+    assert_eq!(
+        receiver
+            .verify_transition(signed_bytes(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                wrong_id,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope id that differs from the signed header is refused"
+    );
+    let wrong_dataschema = {
+        let mut envelope = envelope(EVENT_SOURCE_A, EVENT_TYPE, data("deduplication-1"));
+        envelope.dataschema = format!("{DATA_SCHEMA}-disagreed");
+        envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .unwrap()
+    };
+    assert_eq!(
+        receiver
+            .verify_transition(signed_bytes(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                wrong_dataschema,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope dataschema that differs from the signed header is refused"
+    );
+    let wrong_time = {
+        let mut envelope = envelope(EVENT_SOURCE_A, EVENT_TYPE, data("deduplication-1"));
+        envelope.time = OffsetDateTime::parse("2026-09-10T01:00:01Z", &Rfc3339).unwrap();
+        envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .unwrap()
+    };
+    assert_eq!(
+        receiver
+            .verify_transition(signed_bytes(
+                "source_a",
+                EVENT_SOURCE_A,
+                EVENT_TYPE,
+                &now(),
+                wrong_time,
+            ))
+            .await,
+        Err(SourceAdapterError::Invalid),
+        "an envelope time that differs from the signed header is refused"
     );
 }
 
