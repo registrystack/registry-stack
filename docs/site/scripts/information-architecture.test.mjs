@@ -74,6 +74,7 @@ const sidebarFactory = new Function(
   'openAPISidebarGroups',
   'flattenSidebarGroups',
   'hasCasework',
+  'hasRender',
   `return [${sidebarSource}];`,
 );
 const sidebarArguments = [
@@ -86,7 +87,7 @@ const sidebarArguments = [
   generatedAPI,
   flattenSidebarGroups,
 ];
-const sidebar = sidebarFactory(...sidebarArguments, true);
+const sidebar = sidebarFactory(...sidebarArguments, true, true);
 
 function section(label) {
   const group = sidebar.find((item) => item.label === label);
@@ -198,6 +199,7 @@ test('uses the product navigation in its published order', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
+    'Registry Render',
     'Registry Discovery',
     'Operations',
     'Design',
@@ -210,21 +212,23 @@ test('selects Casework routes, sidebar, and API from the docset product manifest
     current: 'latest',
     released: 'v0.29.0',
     docsets: [
-      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' } } },
+      { id: 'latest', status: 'current', availability: 'unreleased', path: '/dev/', products: { 'registry-casework': { ref: 'HEAD' }, 'registry-render': { ref: 'HEAD' } } },
       { id: 'v0.29.0', status: 'archived', availability: 'released', path: '/v/0.29.0/', products: {} },
       { id: 'v0.30.0', status: 'archived', availability: 'candidate', path: '/v/0.30.0/', products: { 'registry-casework': { ref: 'v0.30.0' } } },
     ],
   };
-  for (const [id, env, hasCasework] of [
-    ['latest', {}, true],
-    ['v0.29.0', {}, false],
-    ['v0.30.0', {}, true],
-    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true],
+  for (const [id, env, hasCasework, hasRender] of [
+    ['latest', {}, true, true],
+    ['v0.29.0', {}, false, false],
+    ['v0.30.0', {}, true, false],
+    ['v0.30.0', { DOCS_RELEASED_ARCHIVE: 'true' }, true, false],
   ]) {
     const context = resolveDocsetBuildContext(docsets, { DOCS_DOCSET: id, ...env });
     assert.equal(context.hasCasework, hasCasework, id);
-    assert.equal(sidebarFactory(...sidebarArguments, context.hasCasework)
-      .some((item) => item.label === 'Registry Casework'), hasCasework, id);
+    assert.equal(context.hasRender, hasRender, id);
+    const docsetSidebar = sidebarFactory(...sidebarArguments, context.hasCasework, context.hasRender);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Casework'), hasCasework, id);
+    assert.equal(docsetSidebar.some((item) => item.label === 'Registry Render'), hasRender, id);
     assert.equal(new Function('hasCasework', 'caseworkOpenApiSchema', `return ${apiConfigSource};`)
       (context.hasCasework, caseworkOpenApiSchema).length, hasCasework ? 2 : 1, id);
     const redirects = caseworkRedirects(context.hasCasework, context.currentDocsetRedirect);
@@ -318,6 +322,7 @@ test('uses the formal product names for top-level sections', () => {
     'Registry Relay',
     'Base Registry Engine',
     'Registry Casework',
+    'Registry Render',
     'Registry Discovery',
   ]) {
     assert.ok(topLevelSection(sidebarSource, product), `could not isolate ${product}`);
@@ -331,6 +336,7 @@ test('uses the formal product names for top-level sections', () => {
     for (const [shortForm, formal] of [
       ['Relay', 'Registry Relay'],
       ['Discovery', 'Registry Discovery'],
+      ['Render', 'Registry Render'],
       ['BReg', 'Base Registry Engine'],
       ['Evidence', 'Evidence Gateway'],
     ]) {
@@ -350,6 +356,7 @@ test('publishes one overview route for every section that has one', () => {
     ['Registry Relay', "slug: 'configure'"],
     ['Base Registry Engine', "slug: 'start/breg-quickstart'"],
     ['Registry Casework', "slug: 'start/casework'"],
+    ['Registry Render', "slug: 'start/registry-render'"],
     ['Operations', "slug: 'operate/advanced'"],
     ['Reference', "slug: 'reference'"],
   ]) {

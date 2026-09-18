@@ -65,6 +65,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
   const isSearchExcludedBuild =
     isHistoricalArchiveBuild || selectedDocset.availability === 'unreleased';
   const hasCasework = Boolean(selectedDocset.products?.['registry-casework']);
+  const hasRender = Boolean(selectedDocset.products?.['registry-render']);
   const currentDocset = docsets.docsets.find((entry) => entry.id === docsets.current);
   if (!currentDocset) throw new Error(`current docs docset "${docsets.current}" not found`);
   /** @param {string} path */
@@ -83,6 +84,7 @@ export function resolveDocsetBuildContext(docsets, env = process.env) {
     isHistoricalArchiveBuild,
     isSearchExcludedBuild,
     hasCasework,
+    hasRender,
     internalRedirect,
     currentDocsetRedirect,
   };
@@ -95,6 +97,7 @@ const {
   isHistoricalArchiveBuild,
   isSearchExcludedBuild,
   hasCasework,
+  hasRender,
   internalRedirect,
   currentDocsetRedirect,
 } = resolveDocsetBuildContext(docsetsManifest);
@@ -538,6 +541,16 @@ export default defineConfig({
             { label: 'API contract', slug: 'reference/apis/registry-casework' },
             ...openAPISidebarGroups.slice(1, 2),
             { label: 'Client API reference', slug: 'reference/client-api' },
+          ],
+        }] : []),
+        ...(hasRender ? [{
+          label: 'Registry Render',
+          collapsed: true,
+          items: [
+            { label: 'Overview', slug: 'start/registry-render' },
+            { label: 'Render your first document', slug: 'tutorials/first-render-document' },
+            { label: 'How Render stays byte-stable', slug: 'explanation/render-determinism' },
+            { label: 'Run serve mode', slug: 'operate/registry-render' },
           ],
         }] : []),
         {

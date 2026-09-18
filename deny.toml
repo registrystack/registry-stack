@@ -23,6 +23,35 @@ ignore = [
     # string flow, before accepting untrusted scripts, or if upstream publishes
     # further security findings.
     "RUSTSEC-2026-0249",
+    # The following advisories all arrive through the Typst rendering tree
+    # (`typst`/`typst-pdf`/`krilla`/`typst-library`), which
+    # `registry-render` pins at 0.15.1 with a lockfile matched to the Typst
+    # release for byte-stable PDF output. None is fixable in this workspace
+    # without moving the Typst pin (which is itself a reviewed golden-hash
+    # diff). Rendering is offline and template input is governed and
+    # hash-covered, so none of these is reachable from request data; the
+    # ignores record accepted residual risk from the pinned tree, not fixes.
+    # Reviewed 2026-09-17. Review all of these when the Typst pin moves, if
+    # patched releases appear that Typst adopts, or if Render starts feeding
+    # attacker-influenced input to the affected code paths.
+    # bincode 1.3.3 (via syntect/two-face in typst-library): unmaintained.
+    "RUSTSEC-2025-0141",
+    # paste 1.0.15 (via biblatex/hayagriva in typst-library): unmaintained.
+    "RUSTSEC-2024-0436",
+    # quick-xml 0.38.4 (via krilla's XMP writer): two DoS-class findings
+    # (RUSTSEC-2026-0194, RUSTSEC-2026-0195). The XML it processes is
+    # krilla-generated metadata, never request text; upgrading ahead of the
+    # Typst pin would diverge from the release lockfile and change PDF XMP
+    # bytes, breaking the merge-gate byte-equality contract.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+    # rustybuzz 0.20.1 (via krilla, text shaping): unmaintained advisory.
+    "RUSTSEC-2026-0206",
+    # ttf-parser 0.25.1 (via krilla/fontdb; also a direct render dependency
+    # for label-coverage checks): unmaintained advisory.
+    "RUSTSEC-2026-0192",
+    # yaml-rust 0.4.5 (via syntect/two-face in typst-library): unmaintained.
+    "RUSTSEC-2024-0320",
 ]
 
 [licenses]

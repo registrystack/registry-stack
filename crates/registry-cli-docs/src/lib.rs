@@ -92,6 +92,7 @@ pub fn catalog() -> Catalog {
             None,
             Some(SYMBOLIC_LINK_REFUSAL),
         ),
+        command_reference(registry_render::command(), None, None),
         command_reference(registry_relay_v2::command(), None, None),
         command_reference(registry_relayctl::command(), None, None),
     ];
@@ -616,10 +617,28 @@ mod tests {
                 "evidence",
                 "evidence-oid4vci",
                 "evidencectl",
+                "registry-render",
                 "relay",
                 "relayctl",
             ]
         );
+    }
+
+    #[test]
+    fn registry_render_publishes_its_bundle_and_serve_commands() {
+        let catalog = catalog();
+        for invocation in [
+            "registry-render init",
+            "registry-render check",
+            "registry-render validate",
+            "registry-render seal",
+            "registry-render compile",
+            "registry-render serve",
+            "registry-render healthcheck",
+            "registry-render audit-verify",
+        ] {
+            assert!(!find_command(&catalog.binaries, invocation).usage.is_empty());
+        }
     }
 
     #[test]
@@ -712,6 +731,7 @@ mod tests {
         let rendered = serde_json::to_string(&catalog()).expect("render catalog");
         for hidden in [
             "__dev-supervisor",
+            "__worker",
             "bundle-check",
             "bundle-evaluate",
             "prepare-local-relying-procedure",

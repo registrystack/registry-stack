@@ -1,0 +1,78 @@
+---
+title: Registry Render overview
+description: What Registry Render is, what byte-stable means for a printed document, and which of its three running modes fits the job you are doing.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-17"
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you print registry data on paper, or hand a PDF to a person who was never one of your systems,
+Registry Render turns that data into a governed document. Render is a deterministic PDF renderer:
+the same sealed template bundle and the same request produce the same PDF bytes, every time, with
+the hashes and the audit trail an institution needs to stand behind the printed artifact.
+
+{/* Evidence: crates/registry-render/src/lib.rs, render and RenderRequest;
+    products/render/README.md. */}
+
+The byte-stability promise is the product. A receipt rendered in September and re-rendered from
+the same inputs in March is bit-for-bit identical, so a sha256 printed in an audit record still
+matches the paper in the folder, and a retry after a network failure can never deliver two
+different documents for one decision. [How Registry Render stays
+byte-stable](../../explanation/render-determinism/) explains the mechanisms behind that promise.
+
+Render holds no database and makes no outbound calls. Everything a template can read comes from two
+places: the sealed bundle on disk (templates, labels, schemas, fonts, vendored packages) and the
+request itself (the data, the images, and the issuance time). The issuance time, `issuedAt`, is the
+document's own claim about when it was issued and is the only clock a render ever sees; nothing in
+the output depends on the machine's wall clock.
+
+{/* Evidence: crates/registry-render/src/world.rs, RenderWorld and today;
+    products/render/PAYLOAD.md. */}
+
+## Three ways to run it
+
+Render runs as one `registry-render` binary with subcommands, as a small HTTP service, and as a Rust
+library:
+
+- **Offline, at a terminal.** `registry-render compile` renders one document from a bundle directory and a
+  data file, for branch printing, template authoring, and CI checks on the templates themselves.
+- **As a service.** `registry-render serve` exposes one rendering endpoint behind a static API key, renders
+  in supervised worker processes it can kill at a timeout, and appends one value-free audit event
+  per render before it answers.
+- **As a library.** The `registry_render` crate renders in process for embedding, with the same
+  validation and the same problem vocabulary.
+
+{/* Evidence: crates/registry-render/src/cli.rs, Command;
+    crates/registry-render/src/server.rs, serve;
+    crates/registry-render/src/lib.rs, render_with_limits. */}
+
+[Render your first document](../../tutorials/first-render-document/) walks one bundle from scaffold
+to a served PDF in one sitting. [Run Registry Render in serve
+mode](../../operate/registry-render/) covers the deployment contract for the service.
+
+## What it is not
+
+Render renders documents; it does not govern records. It is not a document store, an e-signature
+or verifiable-credential issuer, an HTML converter, or an imposition engine, and it makes no
+authorization decisions about who may see which field. The field list a template prints is a
+disclosure decision that belongs to the bundle author: everything placed on paper leaves every
+access profile behind, and the QR a template prints can point a member of the public at a
+verification page. Render's own surface is the rendering contract, sealed and audited.
+
+{/* Evidence: products/render/DEFINITION-OF-DONE.md;
+    products/render/integrations/app-kit/README.md. */}
+
+Templates are plain Typst, authored with upstream tooling, and sealed into a bundle with
+per-file hashes before serving. A bundle plus a render binary is the whole deployment surface:
+no migration, no broker, no cache.
+
+## Next
+
+- [Render your first document](../../tutorials/first-render-document/)
+- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
+- [Run Registry Render in serve mode](../../operate/registry-render/)

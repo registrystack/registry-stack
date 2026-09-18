@@ -1,0 +1,277 @@
+---
+title: Render your first document
+description: Scaffold a Registry Render bundle, render offline, seal it, serve it on loopback, render over HTTP, and check that both renders are the same bytes.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: "2026-09-17"
+doc_type: tutorial
+persona:
+  - operator
+locale: en
+standards_referenced: []
+---
+
+If you are evaluating Registry Render as the renderer for your registry's printed documents, start
+with one bundle and one letter. You will scaffold a working bundle, render it offline, seal it,
+serve it on your machine, render the same document over HTTP, and check that the served PDF is
+byte-identical to the offline one. Along the way you will see the two hashes worth storing on a
+record and the audit trail the service keeps.
+
+Everything you keep goes into one directory, `render-work`. You need macOS or Linux, the Rust
+toolchain, a Registry Stack checkout, and `curl`. Expect 20 minutes.
+
+{/* Evidence: crates/registry-render/src/cli.rs, Command;
+    products/render/README.md. */}
+
+## Build the binary
+
+From the root of your checkout, build with the workspace lockfile, because the pinned compression
+stack is part of Render's byte contract:
+
+```sh
+cargo build --release --locked -p registry-render
+target/release/registry-render --version
+```
+
+You know this worked when the version line names the release and the Typst pin:
+
+```text
+registry-render 0.32.0-dev (typst 0.15.1)
+```
+
+The version string appears in every audit event this service writes, so the binary you build now
+is the provenance of everything you render in this tutorial.
+
+{/* Evidence: crates/registry-render/src/lib.rs, display_version and TYPST_PIN. */}
+
+## Scaffold a bundle
+
+```sh
+target/release/registry-render init render-work/bundle
+```
+
+The command prints the scaffold's location and a suggested first render. You now have a bundle
+directory with a manifest, a letter template, a JSON Schema for its data, label files, starter
+fonts with their license, and a fixture payload. The template is plain Typst: open
+`render-work/bundle/templates/letter.typ` in any Typst-aware editor and the same file renders in
+both.
+
+## Render offline
+
+```sh
+target/release/registry-render compile \
+  --bundle render-work/bundle \
+  --type letter \
+  --data render-work/bundle/fixtures/data.json \
+  --issued-at 2026-09-16T10:32:00Z \
+  --out render-work/letter.pdf
+```
+
+`--issued-at` is the document's issuance claim and the only clock a render uses, which is why the
+tutorial pins it instead of using the current time. You know this worked when the command prints
+the output line with both hashes:
+
+```text
+wrote render-work/letter.pdf (13292 bytes, pdf sha256 1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f, data sha256 ad8d63dc40da68da4b3bc96144969c6ec85000cb460d9cbfe37c82688a944523)
+```
+
+The compile also prints a note that the bundle is unsealed. That is expected while authoring:
+compile accepts unsealed bundles, serve does not. If it fails instead, the problem names the file
+and the line, with exit code 12.
+
+{/* Evidence: crates/registry-render/src/cli.rs, Compile and parse_issued_at;
+    crates/registry-render/src/problem.rs, exit_code. */}
+
+## Seal the bundle
+
+```sh
+target/release/registry-render seal --bundle render-work/bundle
+target/release/registry-render check --bundle render-work/bundle
+```
+
+`registry-render seal` writes a per-file sha256 for every governed file into the bundle's
+manifest, and `registry-render check` verifies structure, hashes, label script coverage, and
+label key sets. You know both worked when check prints the document line and the bundle line:
+
+```text
+document letter           v1  entry templates/letter.typ  labels [en]  pdf plain
+bundle render-work/bundle v1 hash 1c15a689885df6ac (19 fonts, 1 documents, 14 governed files)
+```
+
+The seal is what serve trusts, not the directory listing: after sealing, a changed file is refused
+by name. Seal again after any intentional template edit.
+
+{/* Evidence: crates/registry-render/src/bundle.rs, seal and load_sealed;
+    crates/registry-render/src/check.rs, run. */}
+
+## Serve on your machine
+
+Create two secrets and one runtime file. The API key is what callers present; the audit key signs
+the ledger. Both must be owner-only files, and the API key must be at least 32 bytes of ASCII:
+
+```sh
+mkdir -p render-work/deploy
+openssl rand -hex 32 > render-work/deploy/api.key
+chmod 600 render-work/deploy/api.key
+openssl rand -hex 32 > render-work/deploy/audit.key
+chmod 600 render-work/deploy/audit.key
+```
+
+Then write `render-work/deploy/runtime.yaml`. Every path in it is relative to the file's own
+directory, the same anchor the `secret:file/…` references use, so the file works from any working
+directory:
+
+```sh
+cat > render-work/deploy/runtime.yaml <<'EOF'
+apiVersion: render.registrystack.org/v1alpha1
+kind: RenderRuntime
+server:
+  bind: 127.0.0.1:64123
+bundle:
+  path: ../bundle
+auth:
+  apiKeyRef: secret:file/api.key
+limits:
+  renderTimeoutSeconds: 20
+  maxOutputBytes: 8388608
+  maxRequestBodyBytes: 8388608
+  maxConcurrency: 2
+audit:
+  directory: ../audit
+  integrityKeyRef: secret:file/audit.key
+EOF
+```
+
+Port 64123 is this tutorial's choice; any free loopback port works, because serve refuses to bind
+anything that is not loopback or private. Start it:
+
+```sh
+target/release/registry-render serve --runtime render-work/deploy/runtime.yaml &
+curl -s http://127.0.0.1:64123/health
+```
+
+You know it is serving when health answers with the bundle hash and the renderer version:
+
+```text
+{"bundleHash":"1c15a689885df6ac2e0d0fd35f3a58a960a00ba7cd6a6b731c8a7c9516af6ffe","bundleVersion":1,"rendererVersion":"0.32.0-dev (typst 0.15.1)","status":"ok","typstPin":"0.15.1"}
+```
+
+If startup fails instead, check the two relative paths: serve resolves `bundle.path` and
+`audit.directory` from the runtime file's directory, wherever you launched it from.
+
+{/* Evidence: crates/registry-render/src/runtime.rs, RenderRuntime and validate_bind;
+    crates/registry-render/src/audit.rs, RenderAudit. */}
+
+## Render over HTTP
+
+Write the request body next to your work and POST it with the API key:
+
+```sh
+cat > render-work/request.json <<'EOF'
+{"issuedAt":"2026-09-16T10:32:00Z","data":{"reference":"LTR-2026-000001","body":"Hello from the scaffold. Replace me.","footer-note":"demo document"}}
+EOF
+
+curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
+  -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/pdf" \
+  -o render-work/served.pdf \
+  -D render-work/headers.txt \
+  -d @render-work/request.json
+
+grep -i x-registry render-work/headers.txt
+```
+
+The headers carry the contract: `x-registry-pdf-sha256` is the artifact's hash, and
+`x-registry-data-sha256` is the hash of the exact request the artifact renders. Now the check this
+whole tutorial builds toward:
+
+```sh
+shasum -a 256 render-work/letter.pdf render-work/served.pdf
+cmp render-work/letter.pdf render-work/served.pdf && echo "cmp: identical"
+```
+
+Both hashes are the same line, and `cmp` prints nothing of its own:
+
+```text
+1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f  render-work/letter.pdf
+1e2dc9c981d19ef62549c3100395a106bc8fb30e01bef21c26844e45a0c29f9f  render-work/served.pdf
+cmp: identical
+```
+
+The offline render and the served render never shared a process, and the bytes are identical:
+that is the product's promise in one command. On Linux, `sha256sum` replaces `shasum -a 256`.
+
+{/* Evidence: crates/registry-render/src/server.rs, render_route;
+    crates/registry-render/tests/serve.rs, render_returns_pdf_with_hash_headers_matching_golden. */}
+
+## Two refusals worth seeing
+
+While the server is up, try the two failures every deployment sees first.
+
+A wrong API key:
+
+```sh
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:64123/v1/render/letter \
+  -H "Authorization: Bearer wrong-key-0000000000000000000000000000" \
+  -H "Content-Type: application/json" \
+  -d @render-work/request.json
+```
+
+Answers `401`, and the refusal is written to the ledger, so a probe storm is visible after the
+fact.
+
+A missing issuance time, which is the one field Render will not invent for you:
+
+```sh
+curl -s -X POST http://127.0.0.1:64123/v1/render/letter \
+  -H "Authorization: Bearer $(cat render-work/deploy/api.key)" \
+  -H "Content-Type: application/json" \
+  -d '{"data":{}}'
+```
+
+Answers `400` with a problem document whose `title` is `issued-at-missing`. Both refusals you just
+caused are in the ledger, which is the next thing you will check.
+
+{/* Evidence: crates/registry-render/src/problem.rs, ProblemKind;
+    crates/registry-render/tests/serve.rs, unauthorized_requests_are_refused_and_audited. */}
+
+## Stop and verify the audit trail
+
+Stop the server with SIGTERM (`kill` on the job, or Ctrl+C in its terminal), then verify the
+ledger. The writer holds the active segment while the server runs, so verify after shutdown, when
+every segment including the newest one is covered:
+
+```sh
+target/release/registry-render audit-verify --runtime render-work/deploy/runtime.yaml
+```
+
+You know it worked when it counts your session:
+
+```text
+audit chain verified: 3 record(s) across 1 segment(s)
+```
+
+Three records: one successful render and the two refusals you provoked. Every event carries the
+hashes, versions, the caller's key fingerprint, and no document data.
+
+{/* Evidence: crates/registry-render/src/audit.rs, verify_chain;
+    crates/registry-render/tests/serve.rs, audit_chain_verifies_from_the_cli. */}
+
+## Clean up
+
+Stop the server if it is still running, then remove the working directory:
+
+```sh
+rm -rf render-work
+```
+
+Your checkout keeps nothing else: no database, no state outside `render-work`.
+
+## Next
+
+- [Run Registry Render in serve mode](../../operate/registry-render/)
+- [How Registry Render stays byte-stable](../../explanation/render-determinism/)
+- [Registry Render overview](../../start/registry-render/)

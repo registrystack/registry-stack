@@ -18,6 +18,7 @@ const binaries = [
   'evidencectl',
   'mint',
   'evidence-oid4vci',
+  'registry-render',
 ];
 
 /** @param {string} path */
