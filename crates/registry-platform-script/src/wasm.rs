@@ -184,6 +184,10 @@ pub enum InvokeError {
         len: usize,
         memory_bytes: usize,
     },
+    /// `result_len` returned a negative length.
+    OutputLengthNegative(i32),
+    /// `result_ptr` returned a negative pointer.
+    OutputPointerNegative(i32),
     /// The epoch deadline fired before the guest returned.
     DeadlineExceeded,
     /// The fuel budget ran out before the guest returned.
@@ -250,6 +254,14 @@ impl fmt::Display for InvokeError {
                 f,
                 "guest outcome range {ptr}..{} lies outside guest memory ({memory_bytes} bytes)",
                 ptr.saturating_add(*len)
+            ),
+            Self::OutputLengthNegative(len) => write!(
+                f,
+                "guest result_len returned {len}; the guest ABI requires a non-negative length"
+            ),
+            Self::OutputPointerNegative(ptr) => write!(
+                f,
+                "guest result_ptr returned {ptr}; the guest ABI requires a non-negative pointer"
             ),
             Self::DeadlineExceeded => {
                 write!(f, "epoch deadline reached before the guest returned")
@@ -525,7 +537,10 @@ impl CallInstance {
             .result_len
             .call(&mut self.store, ())
             .map_err(map_trap)?;
-        let len = usize::try_from(raw_len.max(0)).unwrap_or(usize::MAX);
+        if raw_len < 0 {
+            return Err(InvokeError::OutputLengthNegative(raw_len));
+        }
+        let len = usize::try_from(raw_len).unwrap_or(usize::MAX);
         if len > self.max_output_bytes {
             return Err(InvokeError::OutputTooLarge {
                 len,
@@ -536,8 +551,11 @@ impl CallInstance {
             .result_ptr
             .call(&mut self.store, ())
             .map_err(map_trap)?;
+        if raw_ptr < 0 {
+            return Err(InvokeError::OutputPointerNegative(raw_ptr));
+        }
         let memory_bytes = self.memory.data_size(&self.store);
-        let result_ptr = usize::try_from(raw_ptr.max(0)).unwrap_or(usize::MAX);
+        let result_ptr = usize::try_from(raw_ptr).unwrap_or(usize::MAX);
         let in_bounds = result_ptr
             .checked_add(len)
             .is_some_and(|end| end <= memory_bytes);
