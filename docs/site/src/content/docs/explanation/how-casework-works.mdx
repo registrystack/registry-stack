@@ -55,6 +55,14 @@ The starter project ships one such kind, a generic decision with two outcomes, w
 {/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedKindPolicy, HostedPolicyDigest, and standalone_decision_starter_kind;
     crates/registry-casework/src/hosted.rs, decide_hosted_item. */}
 
+A hosted decision may carry a structured result beside the outcome.
+The kind's `resultSchema` types that result the same way its display schema types the facts, and the Requester's `resultConstraints` narrow the item's fields to a subset the schema already admits, so a calling service can offer its person a choice or a range without ever defining a field of its own.
+The deciding person enters the values with the outcome, Casework validates them against the schema first and the narrowing second, and the Requester reads the result back on the terminal item.
+The result follows the terminal retention clock, and the accountability record keeps only a digest of it.
+
+{/* Evidence: crates/registry-casework-core/src/hosted.rs, validate_result_constraints and
+    validate_result; crates/registry-casework/src/hosted.rs, erase_expired_hosted_at. */}
+
 ## Who may act
 
 Four profiles exist, and a request selects exactly one of them.

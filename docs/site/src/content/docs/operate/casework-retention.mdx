@@ -28,9 +28,9 @@ erases it for one exact source request.
 
 | State | Kept for | What removes it |
 | --- | --- | --- |
-| Hosted item payload, requester notes, and staff hosted history | `terminalDays` from the moment the item completed or was cancelled | The runtime retention pass |
-| Requester terminal feed events | The same `terminalDays` from the terminal time | The runtime retention pass |
-| Protected accountability record: the raw issuer-qualified deciding identity and the staff reason | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
+| Hosted item payload, the decision result and its result constraints, requester notes, and staff hosted history | `terminalDays` from the moment the item completed or was cancelled | The runtime retention pass |
+| Requester terminal feed events, including a completed item's recorded result | The same `terminalDays` from the terminal time | The runtime retention pass |
+| Protected accountability record: the raw issuer-qualified deciding identity, the staff reason, and only a sha256 digest of a recorded result | `accountabilityDays` from the same terminal time, never shorter than `terminalDays` | The runtime retention pass |
 | Hosted idempotency response | Until the item payload expires, then a payload-free tombstone until the accountability deadline | The runtime retention pass, after which the key is free again |
 | Source-backed subjects, work items, private drafts, attempts, receipts, history, and durable events | No expiry; they stay for the life of the database | `caseworkctl retention erase --apply` |
 | The keyed audit JSONL file and its rotated siblings | Your retention policy alone | No Casework command |
@@ -50,8 +50,15 @@ maintenance loop, so about once a minute. It works in bounded batches of at most
 table per pass, skipping locked rows, which keeps it from competing with live traffic and means a
 large backlog drains over several passes rather than in one. It deletes expired terminal events,
 deletes the notes and staff hosted history of an expired item, clears that item's requester binding
-and display, and deletes the protected accountability record at its own later expiry. A failed pass
-logs a warning and the next tick retries.
+and display together with its result constraints, and deletes the protected accountability record
+at its own later expiry. A failed pass logs a warning and the next tick retries.
+
+A structured decision result is decision data, not source record content, but it follows the same
+clock as the display payload it was decided on: the result a terminal event carries is deleted with
+the event at `terminalDays`, and the constraints the Requester supplied at create time are nulled
+beside the display. What outlives them is the accountability record's sha256 digest of the result,
+which proves that a specific result was decided without keeping its content until
+`accountabilityDays` closes.
 
 {/* Evidence: crates/registry-casework/src/runtime.rs, serve_from_path();
     crates/registry-casework/src/hosted.rs, erase_expired_hosted_at() and RETENTION_BATCH_SIZE. */}

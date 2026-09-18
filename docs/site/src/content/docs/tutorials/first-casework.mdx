@@ -485,6 +485,9 @@ item to further decisions.
 `terminalAt` starts the retention clock the `decision` kind declares.
 Sending `{"outcome":"rejected"}` instead would have been refused without a `reason`, because the
 template marks that outcome `reasonRequired`.
+This tutorial's kind asks for no structured result; a kind that declares a `resultSchema` expects a
+`result` beside the outcome, and [Author a Casework policy](../../configure/casework/) shows how to
+declare one and what a Requester may narrow.
 
 {/* Evidence: crates/registry-casework/src/http.rs, decide_hosted_item();
     crates/registry-casework-core/src/hosted.rs, HostedDecisionRequest;

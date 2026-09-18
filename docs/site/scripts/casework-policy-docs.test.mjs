@@ -8,8 +8,8 @@ import { parse } from 'yaml';
 const here = dirname(fileURLToPath(import.meta.url));
 const guide = readFileSync(resolve(here, '../src/content/docs/configure/casework.mdx'), 'utf8');
 
-function fencedYamlUnder(heading) {
-  const start = guide.indexOf(`## ${heading}`);
+function fencedYamlUnder(heading, marker = '## ') {
+  const start = guide.indexOf(`${marker}${heading}`);
   assert.notEqual(start, -1, `missing ${heading} heading`);
   const section = guide.slice(start).split(/\n## /u, 1)[0];
   const fence = section.match(/```yaml\n([\s\S]*?)\n```/u);
@@ -36,4 +36,38 @@ test('the documented local Casework callers form a complete valid directory seed
       assert.ok(clients.has(client), `directory references undeclared client ${client}`);
     }
   }
+});
+
+test('the documented hosted kind parses as a complete policy with its result schema', () => {
+  const kind = fencedYamlUnder('### Hosted kinds', '').hostedKinds[0];
+
+  for (const key of [
+    'id',
+    'version',
+    'queue',
+    'decidingProfiles',
+    'retention',
+    'displaySchema',
+    'resultSchema',
+    'outcomes',
+  ]) {
+    assert.ok(Object.hasOwn(kind, key), `hosted kind is missing ${key}`);
+  }
+  assert.equal(kind.retention.terminalDays, 90);
+  assert.equal(kind.retention.accountabilityDays, 365);
+  for (const schema of [kind.displaySchema, kind.resultSchema]) {
+    assert.equal(schema.type, 'object');
+    assert.equal(schema.additionalProperties, false, 'both schemas stay closed');
+    assert.ok(Object.keys(schema.properties).length > 0);
+  }
+  for (const property of Object.values(kind.resultSchema.properties)) {
+    assert.equal(typeof property.type, 'string', 'result fields declare one inline type');
+  }
+  assert.deepEqual(
+    new Set(kind.outcomes.flatMap((outcome) => Object.keys(outcome))),
+    new Set(['id', 'label', 'reasonRequired', 'resultRequired']),
+    'outcome keys stay within the policy grammar',
+  );
+  const confirmed = kind.outcomes.find((outcome) => outcome.id === 'confirmed');
+  assert.equal(confirmed.resultRequired, true);
 });
