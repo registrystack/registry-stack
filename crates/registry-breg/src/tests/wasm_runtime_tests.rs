@@ -17,6 +17,7 @@ use crate::action_handler::{
 use crate::compiler::{compile_project_with_assets, CompileProfile};
 use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::{CompiledAction, CompiledActionHandler, CompiledActionHandlerKind};
+use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
     install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
     MAXIMUM_RETAINED_PREPARED_MODULES,
@@ -39,6 +40,41 @@ fn hex_escape(bytes: &[u8]) -> String {
 
 fn compiled_wat(wat: &str) -> Vec<u8> {
     wat::parse_str(wat).expect("guest wat compiles to a binary module")
+}
+
+/// Unsigned LEB128 encoding, for the hand-built section header below.
+fn leb128(mut value: usize) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            encoded.push(byte);
+            return encoded;
+        }
+        encoded.push(byte | 0x80);
+    }
+}
+
+/// A structurally valid module of at least `minimum_len` bytes: the guest
+/// plus one trailing custom section, which every conforming consumer ignores.
+fn module_padded_to(minimum_len: usize, guest: &[u8]) -> Vec<u8> {
+    let mut bytes = guest.to_vec();
+    if bytes.len() >= minimum_len {
+        return bytes;
+    }
+    for header_len in 1..=5 {
+        let payload_len = minimum_len - bytes.len() - 1 - header_len;
+        if leb128(payload_len).len() == header_len {
+            bytes.push(0x00);
+            bytes.extend(leb128(payload_len));
+            bytes.extend(leb128(1));
+            bytes.push(b'p');
+            bytes.resize(minimum_len, 0);
+            return bytes;
+        }
+    }
+    panic!("no LEB128 header length fits {minimum_len}");
 }
 
 /// A wat guest whose outcome window holds `document` verbatim; the same
@@ -291,11 +327,14 @@ fn retained_module_bound_is_enforced() {
 }
 
 #[test]
-fn configured_budgets_match_the_compile_time_ceiling_and_platform_defaults() {
+fn configured_budgets_match_the_default_module_ceiling_and_platform_defaults() {
+    // The execution default is the authored admission default, strictly under
+    // the structural ceiling the compiler and the package closure enforce.
     assert_eq!(
         WasmExecutionBudgets::DEFAULT_MAX_MODULE_BYTES,
-        crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
+        crate::wasm_handler::DEFAULT_WASM_MODULE_BYTES
     );
+    assert!(WasmExecutionBudgets::DEFAULT_MAX_MODULE_BYTES < MAXIMUM_WASM_MODULE_BYTES);
     let platform = Budgets::default();
     assert_eq!(
         WasmExecutionBudgets::DEFAULT_MAX_GUEST_MEMORY_BYTES,
@@ -306,6 +345,36 @@ fn configured_budgets_match_the_compile_time_ceiling_and_platform_defaults() {
         platform.max_module_bytes
     );
     assert_eq!(MAXIMUM_RETAINED_PREPARED_MODULES, 32);
+}
+
+/// The configured ceiling governs the load of a compiled package's module
+/// into the runtime: a module within the structural ceiling (admission
+/// accepted it) but over this deployment's configured ceiling is refused at
+/// prepare as a resource refusal, not a module-source refusal.
+#[test]
+fn a_module_within_structural_bounds_but_over_the_configured_ceiling_is_refused_at_prepare() {
+    let _guard = INSTALL_LOCK.lock().unwrap();
+    install(
+        WasmExecutionBudgets {
+            max_module_bytes: 1024,
+            max_guest_memory_bytes: WasmExecutionBudgets::DEFAULT_MAX_GUEST_MEMORY_BYTES,
+        },
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
+    .expect("the configured runtime installs");
+    // The guest is the ordinary outcome fixture; the padding custom section
+    // only lifts it past the 1 KiB configured ceiling, never out of the
+    // structural envelope admission already accepted.
+    let document = r#"{"refusal":{"code":"blank-name"}}"#;
+    let module_bytes = module_padded_to(2048, &compiled_wat(&outcome_guest(document)));
+    let action = wasm_person_action(&module_bytes);
+    let diagnostic =
+        evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap_err();
+    assert_eq!(diagnostic.kind, ActionHandlerError::Resource);
+    // Replacing the configured runtime ends its ownership; the next
+    // evaluation lazily builds a fresh default runtime.
+    shutdown();
+    assert!(!installed());
 }
 
 /// The operator configuration section maps straight onto the execution

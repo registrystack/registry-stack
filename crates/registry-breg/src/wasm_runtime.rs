@@ -59,10 +59,10 @@ const WASM_MAXIMUM_REQUEST_BYTES: usize =
 /// far-future deadline. Fuel still bounds every call regardless.
 const MAXIMUM_EPOCH_DEADLINE_TICKS: u64 = u32::MAX as u64;
 
-/// The operator-configurable execution budgets. Defaults mirror the
-/// compile-time module admission ceiling and the platform guest-memory
-/// default; a build that changes either default changes them in lockstep
-/// (pinned by tests beside this module).
+/// The operator-configurable execution budgets. Defaults mirror the default
+/// execution-time module ceiling and the platform guest-memory default; a
+/// build that changes either default changes them in lockstep (pinned by
+/// tests beside this module).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct WasmExecutionBudgets {
     /// Byte ceiling for one handler module, checked again at prepare time.
@@ -73,7 +73,7 @@ pub(crate) struct WasmExecutionBudgets {
 
 impl WasmExecutionBudgets {
     pub(crate) const DEFAULT_MAX_MODULE_BYTES: usize =
-        crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
+        crate::wasm_handler::DEFAULT_WASM_MODULE_BYTES;
     pub(crate) const DEFAULT_MAX_GUEST_MEMORY_BYTES: usize =
         crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES;
 }

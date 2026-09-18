@@ -645,7 +645,7 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
 }
 
 #[test]
-fn wasm_execution_budgets_default_to_the_authoring_module_ceiling() {
+fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(
         &fixture.secret_root,
@@ -654,11 +654,14 @@ fn wasm_execution_budgets_default_to_the_authoring_module_ceiling() {
     );
     let config =
         parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
-    // The default module ceiling is the compile-time admission ceiling, so a
-    // module authoring admission accepted always fits execution defaults.
+    // The default module ceiling is the authored admission default, so a
+    // module an ordinary build admitted always fits execution defaults; the
+    // structural ceiling stays strictly above it and is operator-reachable,
+    // never bypassed.
+    assert_eq!(config.wasm_execution().max_module_bytes(), 2 * 1024 * 1024);
     assert_eq!(
-        config.wasm_execution().max_module_bytes(),
-        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+        5 * 1024 * 1024
     );
     assert_eq!(
         config.wasm_execution().max_guest_memory_bytes(),
@@ -666,10 +669,15 @@ fn wasm_execution_budgets_default_to_the_authoring_module_ceiling() {
     );
 
     let configured = format!(
-        "{base}wasmExecution:\n  maxModuleBytes: 5242880\n  maxGuestMemoryBytes: 536870912\n"
+        "{base}wasmExecution:\n  maxModuleBytes: {}\n  maxGuestMemoryBytes: 536870912\n",
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
     );
-    let config = parse_runtime_config(&configured).expect("bounded budgets parse");
-    assert_eq!(config.wasm_execution().max_module_bytes(), 5_242_880);
+    let config =
+        parse_runtime_config(&configured).expect("the structural ceiling itself configures");
+    assert_eq!(
+        config.wasm_execution().max_module_bytes(),
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64
+    );
     assert_eq!(
         config.wasm_execution().max_guest_memory_bytes(),
         536_870_912

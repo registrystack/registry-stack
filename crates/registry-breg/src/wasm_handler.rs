@@ -10,12 +10,19 @@
 //! refuses it with a diagnostic naming the violation. Admission never
 //! executes a guest; the runtime still refuses to execute a WASM handler.
 
-/// Default byte ceiling for one authored WASM handler module.
+/// Structural byte ceiling for one authored WASM handler module.
 ///
-/// The configurable larger ceiling for pre-initialized library handlers is a
-/// future operator decision; ordinary handler modules compile under this
-/// default.
-pub const MAXIMUM_WASM_MODULE_BYTES: usize = 2 * 1024 * 1024;
+/// This is the ceiling enforced wherever no operator configuration exists:
+/// the compiler admission and the package closure. A deployment whose
+/// operator raises the execution ceiling may load modules up to this size;
+/// it can never admit anything the authoring admission refused.
+pub const MAXIMUM_WASM_MODULE_BYTES: usize = 5 * 1024 * 1024;
+
+/// Default byte ceiling for one WASM handler module at execution time: the
+/// value both the runtime configuration section and the process executor
+/// budgets start from when the operator configures nothing. Ordinary handler
+/// modules compile well under it.
+pub const DEFAULT_WASM_MODULE_BYTES: usize = 2 * 1024 * 1024;
 
 /// Ceiling on WASM handler modules carried by one package.
 pub const MAX_PACKAGE_WASM_MODULES: usize = 16;
@@ -66,9 +73,11 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
     use registry_platform_script::wasm::{Backend, Budgets, Executor, InvokeError};
 
-    // The same engine configuration the runtime's prepare path uses, so a
-    // module admitted here is a module the runtime could prepare: threads,
-    // relaxed SIMD, and memory64 off; NaN canonicalization on.
+    // The same engine configuration the runtime's prepare path uses, with
+    // the structural module ceiling: authoring validates anything an
+    // operator could configure, and the configured ceiling is enforced again
+    // when the module is loaded into the runtime. Threads, relaxed SIMD, and
+    // memory64 off; NaN canonicalization on.
     let budgets = Budgets {
         max_module_bytes: MAXIMUM_WASM_MODULE_BYTES,
         ..Budgets::default()
