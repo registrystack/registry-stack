@@ -2925,8 +2925,10 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
     assert!(protected.hooks.contains_key("classified-created-event"));
     assert_eq!(registry.event_deliveries().deliveries.len(), 1);
     assert_eq!(
-        registry.event_deliveries().deliveries[0].destination_id,
-        "classified-operations-destination"
+        registry.event_deliveries().deliveries[0]
+            .destination_id
+            .as_deref(),
+        Some("classified-operations-destination")
     );
     assert_eq!(
         registry

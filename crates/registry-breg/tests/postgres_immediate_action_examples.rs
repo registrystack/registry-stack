@@ -479,7 +479,7 @@ impl TestPackage {
                 .event_deliveries()
                 .deliveries
                 .iter()
-                .all(|delivery| delivery.destination_id == "facility-events"));
+                .all(|delivery| delivery.destination_id.as_deref() == Some("facility-events")));
             write_private(&secrets.join("event-key"), &[0x65; 32]);
             "eventDestinations:
   facility-events:

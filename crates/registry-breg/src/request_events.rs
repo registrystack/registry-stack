@@ -16,8 +16,8 @@ use crate::contract::{EventConditionSource, EventTrigger, HookSource};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::CompiledEventDelivery;
 use crate::outbox::{
-    capture_envelope, capture_time, envelope_payload, insert_webhook_delivery, CapturedEvent,
-    EnvelopeBinding, OutboxError, WebhookCapture,
+    activate_delivery, capture_envelope, capture_time, envelope_payload, insert_webhook_delivery,
+    CapturedEvent, EnvelopeBinding, OutboxError, WebhookCapture,
 };
 
 #[doc(hidden)]
@@ -162,21 +162,9 @@ pub async fn insert_request_lifecycle_events(
             &envelope,
             delivery.map(|delivery| delivery.maximum_payload_bytes),
         )?;
-        let activated = if let Some(delivery) = delivery {
-            let destination = destinations
-                .and_then(|destinations| destinations.lookup(&delivery.destination_id))
-                .ok_or(OutboxError::Unavailable)?;
-            let deployed_attempt_timeout = u32::try_from(destination.attempt_timeout().as_millis())
-                .map_err(|_| OutboxError::Unavailable)?;
-            if deployed_attempt_timeout > delivery.attempt_timeout_ms
-                || destination.maximum_attempts() > delivery.maximum_attempts
-            {
-                return Err(OutboxError::Unavailable);
-            }
-            Some((delivery, destination))
-        } else {
-            None
-        };
+        let activated = delivery
+            .map(|delivery| activate_delivery(delivery, destinations))
+            .transpose()?;
         let retention_milliseconds = i64::try_from(event.payload_retention.as_millis())
             .ok()
             .filter(|value| (86_400_000..=2_592_000_000).contains(value))
@@ -212,16 +200,13 @@ pub async fn insert_request_lifecycle_events(
             verify_existing_event(transaction, event_id, &envelope).await?;
             continue;
         }
-        if let Some((delivery, destination)) = activated {
+        if let Some(activated) = activated {
             insert_webhook_delivery(
                 transaction,
                 event_id,
                 WebhookCapture {
-                    delivery,
+                    activated: &activated,
                     payload: &payload,
-                    destination_binding_digest: destination.binding_digest(),
-                    deployed_attempt_timeout: destination.attempt_timeout(),
-                    deployed_maximum_attempts: destination.maximum_attempts(),
                     package_revision: event.package_revision,
                     schema_fingerprint: event.schema_fingerprint,
                 },

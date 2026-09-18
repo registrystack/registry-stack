@@ -7,11 +7,25 @@
 //! `HookDeclaration`, and the phases and handler kinds the engine cannot run
 //! are refused rather than compiled into something that never fires.
 
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::{parse_module_json, parse_project_json, HookSource};
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{
+    parse_module_json, parse_project_json, HookSource, ModuleAssetSource,
+};
 use registry_breg::diagnostics::CompileFailure;
-use registry_platform_hooks::{HookDeclaration, HookHandlerSource, HookPhase};
+use registry_breg::model::CompiledHookHandlerKind;
+use registry_platform_hooks::{HookDeclaration, HookHandlerKind, HookHandlerSource, HookPhase};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+fn hex_lower(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
 
 fn project_with_hooks(hooks: Value) -> Value {
     json!({
@@ -46,10 +60,27 @@ fn url_hook() -> Value {
     })
 }
 
+const RHAI_HOOK_SOURCE: &str = "fn handle(ctx) { #{\"answer\": \"none\"} }";
+
+fn rhai_asset(path: &str, source: &str) -> ModuleAssetSource {
+    ModuleAssetSource {
+        module: None,
+        path: path.to_owned(),
+        bytes: source.as_bytes().to_vec(),
+    }
+}
+
 fn compile(value: &Value) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
+    compile_with_assets(value, &[])
+}
+
+fn compile_with_assets(
+    value: &Value,
+    assets: &[ModuleAssetSource],
+) -> Result<registry_breg::CompiledRegistry, CompileFailure> {
     let project = parse_project_json(&serde_json::to_vec(value).expect("project serializes"))
         .expect("project parses");
-    compile_project(&project, &[], CompileProfile::Authoring)
+    compile_project_with_assets(&project, &[], assets, CompileProfile::Authoring)
 }
 
 fn parse_failure(value: &Value) -> CompileFailure {
@@ -131,12 +162,166 @@ fn an_entity_hook_refuses_the_before_phase() {
 }
 
 #[test]
-fn an_entity_hook_refuses_a_local_handler_kind() {
+fn a_before_phase_hook_still_refuses_the_url_handler_kind() {
+    let mut hook = url_hook();
+    hook["phase"] = json!("before");
+    let failure = compile(&project_with_hooks(json!([hook]))).expect_err("before url is refused");
+    assert_diagnostic(&failure, "hook.handler.kind.unsupported", "before");
+}
+
+#[test]
+fn an_after_phase_hook_compiles_a_rhai_handler_into_a_local_delivery() {
     let mut hook = url_hook();
     hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
                              "abi": "registry.hook-handler/v1"});
-    let failure = compile(&project_with_hooks(json!([hook]))).expect_err("rhai is refused");
-    assert_diagnostic(&failure, "hook.handler.kind.unsupported", "url");
+    let compiled = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[rhai_asset("hooks/case.rhai", RHAI_HOOK_SOURCE)],
+    )
+    .expect("a rhai hook compiles");
+    let delivery = &compiled.event_deliveries().deliveries[0];
+    assert_eq!(None, delivery.destination_id);
+    assert_eq!(HookHandlerKind::Rhai, delivery.handler_kind());
+    let handler = delivery.handler.as_ref().expect("handler compiled");
+    assert_eq!(CompiledHookHandlerKind::Rhai, handler.kind);
+    assert_eq!("registry.hook-handler/v1", handler.abi);
+    assert!(
+        handler.digest.starts_with("sha256:"),
+        "handler digest is not a sha256 spelling: {}",
+        handler.digest
+    );
+    assert_eq!(RHAI_HOOK_SOURCE.as_bytes(), handler.bytes.as_slice());
+}
+
+#[test]
+fn an_after_phase_rhai_hook_requires_its_script_asset() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+                             "abi": "registry.hook-handler/v1"});
+    let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
+    assert_diagnostic(&failure, "hook.handler.source_missing", "hooks/case.rhai");
+}
+
+#[test]
+fn an_after_phase_rhai_hook_requires_a_handle_entry_point() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+                             "abi": "registry.hook-handler/v1"});
+    let failure = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[rhai_asset("hooks/case.rhai", "fn other(ctx) { #{} }")],
+    )
+    .expect_err("a script without handle is refused");
+    assert_diagnostic(&failure, "hook.handler.entrypoint", "handle");
+}
+
+#[test]
+fn an_after_phase_rhai_hook_refuses_a_handler_abi_version_one_does_not_define() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "rhai", "script": "hooks/case.rhai",
+                             "abi": "registry.hook-handler/v2"});
+    let failure = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[rhai_asset("hooks/case.rhai", RHAI_HOOK_SOURCE)],
+    )
+    .expect_err("an unknown handler abi is refused");
+    assert_diagnostic(
+        &failure,
+        "hook.handler.abi.unsupported",
+        "registry.hook-handler/v1",
+    );
+}
+
+/// A structurally valid handler guest: the platform byte ABI's exact export
+/// set, so the module also passes admission in a wasm-enabled build.
+fn wasm_guest_module() -> Vec<u8> {
+    wat::parse_str(
+        r#"(module
+  (memory (export "memory") 1)
+  (data (i32.const 1024) "{\"answer\":\"none\"}")
+  (func (export "alloc") (param $len i32) (result i32) (i32.const 4096))
+  (func (export "handle") (param $ptr i32) (param $len i32) (result i32) (i32.const 0))
+  (func (export "result_ptr") (result i32) (i32.const 1024))
+  (func (export "result_len") (result i32) (i32.const 16))
+)"#,
+    )
+    .expect("guest wat compiles")
+}
+
+#[test]
+fn an_after_phase_wasm_hook_compiles_into_a_local_delivery() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+                             "abi": "registry.hook-handler/v1"});
+    let module = wasm_guest_module();
+    let compiled = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[ModuleAssetSource {
+            module: None,
+            path: "hooks/case.wasm".to_owned(),
+            bytes: module.clone(),
+        }],
+    )
+    .expect("a wasm hook compiles");
+    let delivery = &compiled.event_deliveries().deliveries[0];
+    assert_eq!(None, delivery.destination_id);
+    assert_eq!(HookHandlerKind::Wasm, delivery.handler_kind());
+    let handler = delivery.handler.as_ref().expect("handler compiled");
+    assert_eq!(CompiledHookHandlerKind::Wasm, handler.kind);
+    assert_eq!("registry.hook-handler/v1", handler.abi);
+    assert_eq!(module, handler.bytes);
+    assert_eq!(
+        handler.digest,
+        format!("sha256:{}", hex_lower(&Sha256::digest(&module))),
+        "the handler identity digest covers the reviewed module bytes"
+    );
+}
+
+#[test]
+fn an_after_phase_wasm_hook_requires_its_module_asset() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+                             "abi": "registry.hook-handler/v1"});
+    let failure = compile(&project_with_hooks(json!([hook]))).expect_err("the asset is missing");
+    assert_diagnostic(
+        &failure,
+        "hook.handler.module_asset_missing",
+        "hooks/case.wasm",
+    );
+}
+
+#[test]
+fn an_after_phase_wasm_hook_refuses_module_text() {
+    let mut hook = url_hook();
+    hook["handler"] = json!({"kind": "wasm", "module": "hooks/case.wasm",
+                             "abi": "registry.hook-handler/v1"});
+    let failure = compile_with_assets(
+        &project_with_hooks(json!([hook])),
+        &[ModuleAssetSource {
+            module: None,
+            path: "hooks/case.wasm".to_owned(),
+            // WebAssembly text is not admitted, even though it parses.
+            bytes: b"(module)".to_vec(),
+        }],
+    )
+    .expect_err("module text is refused");
+    assert_diagnostic(
+        &failure,
+        "hook.handler.module_invalid",
+        "WebAssembly binary",
+    );
+}
+
+#[test]
+fn a_url_hook_still_compiles_with_its_destination_and_no_handler() {
+    let compiled = compile(&project_with_hooks(json!([url_hook()]))).expect("a url hook compiles");
+    let delivery = &compiled.event_deliveries().deliveries[0];
+    assert_eq!(Some("case-operations"), delivery.destination_id.as_deref());
+    assert_eq!(HookHandlerKind::Url, delivery.handler_kind());
+    assert!(
+        delivery.handler.is_none(),
+        "a url delivery holds no program"
+    );
 }
 
 #[test]

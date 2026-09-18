@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use registry_platform_hooks::HookHandlerKind;
 use serde::{Deserialize, Serialize};
 
 use crate::artifacts::GeneratedArtifacts;
@@ -913,7 +914,16 @@ pub struct CompiledEventDelivery {
     pub entity_id: String,
     pub event_id: String,
     pub trigger: crate::contract::EventTrigger,
-    pub destination_id: String,
+    /// The bound destination this delivery is sent to. Present for the `url`
+    /// handler kind and absent for a local kind, which is sent nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_id: Option<String>,
+    /// The reviewed program this delivery runs in the post-commit worker.
+    /// Present for the `rhai` and `wasm` handler kinds and absent for `url`,
+    /// which holds no program. Exactly one of this and `destination_id` is
+    /// present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<CompiledHookHandler>,
     pub projection_fields: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
@@ -936,6 +946,69 @@ pub struct CompiledEventDelivery {
     pub maximum_payload_bytes: u32,
     pub dead_letter: WebhookDeadLetterMode,
     pub operator_replay: bool,
+}
+
+impl CompiledEventDelivery {
+    /// The handler kind this delivery binds, read from the one of the two
+    /// bindings it carries.
+    #[must_use]
+    pub fn handler_kind(&self) -> HookHandlerKind {
+        self.handler
+            .as_ref()
+            .map_or(HookHandlerKind::Url, |handler| handler.kind.shared())
+    }
+
+    /// The delivery row's handler identity digest: the destination binding
+    /// digest for the `url` kind, and the reviewed program's digest for a
+    /// local kind.
+    #[must_use]
+    pub fn handler_digest(&self) -> Option<&str> {
+        self.handler.as_ref().map(|handler| handler.digest.as_str())
+    }
+}
+
+/// The compiled backend tag of a local hook handler. The engine holds the
+/// reviewed program and runs it in the post-commit worker, so a local kind
+/// binds no destination and sends nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledHookHandlerKind {
+    Rhai,
+    Wasm,
+}
+
+impl CompiledHookHandlerKind {
+    /// The shared handler-kind spelling the delivery row stores.
+    #[must_use]
+    pub const fn shared(self) -> HookHandlerKind {
+        match self {
+            Self::Rhai => HookHandlerKind::Rhai,
+            Self::Wasm => HookHandlerKind::Wasm,
+        }
+    }
+}
+
+/// The reviewed local program one hook delivery runs.
+///
+/// `digest` is the delivery row's handler identity. A retained delivery runs
+/// exactly the program it was captured under, or it is refused: the worker
+/// compares this value against the digest the row recorded, the way it
+/// compares a destination's binding digest for the `url` kind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledHookHandler {
+    pub kind: CompiledHookHandlerKind,
+    pub abi: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_module: Option<String>,
+    /// The script or module path, project-local.
+    #[serde(skip)]
+    pub source_path: String,
+    /// `sha256:<hex>` over the reviewed bytes.
+    pub digest: String,
+    /// The reviewed bytes, rederived when the package is loaded.
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

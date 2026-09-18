@@ -246,21 +246,9 @@ pub(crate) async fn insert_configured_events(
             &envelope,
             delivery.map(|delivery| delivery.maximum_payload_bytes),
         )?;
-        let activated = if let Some(delivery) = delivery {
-            let destination = destinations
-                .and_then(|destinations| destinations.lookup(&delivery.destination_id))
-                .ok_or(OutboxError::Unavailable)?;
-            let deployed_attempt_timeout = u32::try_from(destination.attempt_timeout().as_millis())
-                .map_err(|_| OutboxError::Unavailable)?;
-            if deployed_attempt_timeout > delivery.attempt_timeout_ms
-                || destination.maximum_attempts() > delivery.maximum_attempts
-            {
-                return Err(OutboxError::Unavailable);
-            }
-            Some((delivery, destination))
-        } else {
-            None
-        };
+        let activated = delivery
+            .map(|delivery| activate_delivery(delivery, destinations))
+            .transpose()?;
         let retention_milliseconds = i64::try_from(mutation.payload_retention.as_millis())
             .ok()
             .filter(|value| (86_400_000..=2_592_000_000).contains(value))
@@ -296,16 +284,13 @@ pub(crate) async fn insert_configured_events(
         if changed != 1 {
             return Err(OutboxError::Unavailable);
         }
-        if let Some((delivery, destination)) = activated {
+        if let Some(activated) = activated {
             insert_webhook_delivery(
                 transaction,
                 event_id,
                 WebhookCapture {
-                    delivery,
+                    activated: &activated,
                     payload: &payload,
-                    destination_binding_digest: destination.binding_digest(),
-                    deployed_attempt_timeout: destination.attempt_timeout(),
-                    deployed_maximum_attempts: destination.maximum_attempts(),
                     package_revision: mutation.package_revision,
                     schema_fingerprint: mutation.schema_fingerprint,
                 },
@@ -372,13 +357,59 @@ fn scalar_value(value: &EventScalarValue) -> Value {
 }
 
 pub(crate) struct WebhookCapture<'a> {
-    pub delivery: &'a CompiledEventDelivery,
+    pub activated: &'a ActivatedDelivery<'a>,
     pub payload: &'a [u8],
-    pub destination_binding_digest: &'a str,
-    pub deployed_attempt_timeout: std::time::Duration,
-    pub deployed_maximum_attempts: u8,
     pub package_revision: &'a str,
     pub schema_fingerprint: &'a str,
+}
+
+/// One compiled delivery paired with the identity and budgets it is captured
+/// under.
+///
+/// A `url` delivery takes them from the operator's bound destination. A local
+/// delivery has no destination to bind, so it is captured under the reviewed
+/// program's digest and the compiled budgets themselves.
+pub(crate) struct ActivatedDelivery<'a> {
+    pub delivery: &'a CompiledEventDelivery,
+    pub binding_digest: &'a str,
+    pub attempt_timeout: std::time::Duration,
+    pub maximum_attempts: u8,
+}
+
+pub(crate) fn activate_delivery<'a>(
+    delivery: &'a CompiledEventDelivery,
+    destinations: Option<&'a ActivatedEventDestinationRegistry>,
+) -> Result<ActivatedDelivery<'a>, OutboxError> {
+    let Some(logical_destination_id) = delivery.destination_id.as_deref() else {
+        // A local handler is bound to its reviewed program, not to an
+        // operator destination, and the compiled budgets are the deployed
+        // ones because no configuration can lower them.
+        let binding_digest = delivery.handler_digest().ok_or(OutboxError::Unavailable)?;
+        return Ok(ActivatedDelivery {
+            delivery,
+            binding_digest,
+            attempt_timeout: std::time::Duration::from_millis(u64::from(
+                delivery.attempt_timeout_ms,
+            )),
+            maximum_attempts: delivery.maximum_attempts,
+        });
+    };
+    let destination = destinations
+        .and_then(|destinations| destinations.lookup(logical_destination_id))
+        .ok_or(OutboxError::Unavailable)?;
+    let deployed_attempt_timeout = u32::try_from(destination.attempt_timeout().as_millis())
+        .map_err(|_| OutboxError::Unavailable)?;
+    if deployed_attempt_timeout > delivery.attempt_timeout_ms
+        || destination.maximum_attempts() > delivery.maximum_attempts
+    {
+        return Err(OutboxError::Unavailable);
+    }
+    Ok(ActivatedDelivery {
+        delivery,
+        binding_digest: destination.binding_digest(),
+        attempt_timeout: destination.attempt_timeout(),
+        maximum_attempts: destination.maximum_attempts(),
+    })
 }
 
 /// Capture one webhook delivery through the platform delivery INSERT, under
@@ -389,30 +420,34 @@ pub(crate) async fn insert_webhook_delivery(
     capture: WebhookCapture<'_>,
 ) -> Result<(), OutboxError> {
     let WebhookCapture {
-        delivery,
+        activated,
         payload,
-        destination_binding_digest,
-        deployed_attempt_timeout,
-        deployed_maximum_attempts,
         package_revision,
         schema_fingerprint,
     } = capture;
+    let &ActivatedDelivery {
+        delivery,
+        binding_digest,
+        attempt_timeout,
+        maximum_attempts,
+    } = activated;
     let retry_delays_ms = delivery
         .retry_delays_ms
         .iter()
         .copied()
         .map(i64::from)
         .collect::<Vec<_>>();
-    let deployed_attempt_timeout_ms = i64::try_from(deployed_attempt_timeout.as_millis())
-        .map_err(|_| OutboxError::Unavailable)?;
+    let deployed_attempt_timeout_ms =
+        i64::try_from(attempt_timeout.as_millis()).map_err(|_| OutboxError::Unavailable)?;
     registry_platform_hooks::delivery::insert_delivery(
         transaction,
         DELIVERY_SCHEMA,
         event_id,
         DeliveryCapture {
             compiled_delivery_id: &delivery.id,
-            logical_destination_id: &delivery.destination_id,
-            destination_binding_digest,
+            handler_kind: delivery.handler_kind(),
+            logical_destination_id: delivery.destination_id.as_deref(),
+            destination_binding_digest: binding_digest,
             package_revision,
             schema_fingerprint,
             data_schema: &delivery.data_schema,
@@ -428,7 +463,7 @@ pub(crate) async fn insert_webhook_delivery(
             maximum_payload_bytes: i64::from(delivery.maximum_payload_bytes),
             payload,
             deployed_attempt_timeout_ms,
-            deployed_maximum_attempts: i16::from(deployed_maximum_attempts),
+            deployed_maximum_attempts: i16::from(maximum_attempts),
             dead_letter: dead_letter_name(delivery.dead_letter),
             operator_replay: delivery.operator_replay,
         },

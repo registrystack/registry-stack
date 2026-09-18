@@ -1272,23 +1272,27 @@ pub(super) fn external_event_destinations(
     compiled: &registry_breg::CompiledRegistry,
     bindings: &BTreeMap<String, LocalEventDestination>,
 ) -> Result<Value> {
+    // A local handler carries a reviewed program instead of a destination,
+    // so only the url deliveries need a binding here.
     let inventory = compiled
         .event_deliveries()
         .deliveries
         .iter()
-        .map(|delivery| delivery.destination_id.clone())
+        .filter_map(|delivery| delivery.destination_id.clone())
         .collect::<BTreeSet<_>>();
     if inventory != bindings.keys().cloned().collect() {
         bail!("local event destinations must bind every compiled destination ID exactly");
     }
     let mut destinations = BTreeMap::new();
     for delivery in &compiled.event_deliveries().deliveries {
-        let (classification, timeout, attempts) =
-            destinations.entry(&delivery.destination_id).or_insert((
-                delivery.classification_ceiling,
-                delivery.attempt_timeout_ms,
-                delivery.maximum_attempts,
-            ));
+        let Some(destination_id) = delivery.destination_id.as_ref() else {
+            continue;
+        };
+        let (classification, timeout, attempts) = destinations.entry(destination_id).or_insert((
+            delivery.classification_ceiling,
+            delivery.attempt_timeout_ms,
+            delivery.maximum_attempts,
+        ));
         *classification = (*classification).max(delivery.classification_ceiling);
         *timeout = (*timeout).min(delivery.attempt_timeout_ms);
         *attempts = (*attempts).min(delivery.maximum_attempts);
@@ -1317,12 +1321,16 @@ pub(super) fn webhook_secret(root: &Path) -> Result<()> {
 fn event_destinations(compiled: &registry_breg::CompiledRegistry, port: u16) -> Value {
     let mut destinations = BTreeMap::new();
     for delivery in &compiled.event_deliveries().deliveries {
-        let (classification, timeout, attempts) =
-            destinations.entry(&delivery.destination_id).or_insert((
-                delivery.classification_ceiling,
-                delivery.attempt_timeout_ms,
-                delivery.maximum_attempts,
-            ));
+        // A local handler holds a reviewed program instead of a destination
+        // and so needs no binding here.
+        let Some(destination_id) = delivery.destination_id.as_ref() else {
+            continue;
+        };
+        let (classification, timeout, attempts) = destinations.entry(destination_id).or_insert((
+            delivery.classification_ceiling,
+            delivery.attempt_timeout_ms,
+            delivery.maximum_attempts,
+        ));
         *classification = (*classification).max(delivery.classification_ceiling);
         *timeout = (*timeout).min(delivery.attempt_timeout_ms);
         *attempts = (*attempts).min(delivery.maximum_attempts);

@@ -28,10 +28,12 @@ use registry_platform_hooks::delivery::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryConfig, DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliveryService, DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode,
-    DeliveryWorker, DestinationAnswer, HookDestination,
+    DeliveryWorker, DestinationAnswer, HandlerRunFailure, HookDestination, HookHandlerBinding,
 };
+use registry_platform_hooks::{ErrorCategory, MAX_OUTPUT_BYTES};
 use registry_platform_httputil::destination::{
-    DestinationRequestError, DestinationSendError, EventDeliveryHeaders, EventDestinationRequest,
+    DestinationRequestError, DestinationResponseError, DestinationSendError, EventDeliveryHeaders,
+    EventDestinationRequest,
 };
 use tokio::sync::watch;
 use tokio_postgres::Transaction;
@@ -42,6 +44,7 @@ use crate::audit::{
     WebhookAuditPhase,
 };
 use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
+use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::package::load_package;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
@@ -120,9 +123,14 @@ impl WebhookOperatorService {
         let audit_profile = config
             .audit_profile()
             .map_err(|_| WebhookOperatorError::Unavailable)?;
+        let handlers = Arc::new(HookHandlerRegistry::new(
+            startup.package().registry(),
+            &startup.expected_identity().package_revision,
+        ));
         let delivery = WebhookDeliveryService::new(
             pool,
             destinations,
+            handlers,
             startup.expected_identity().clone(),
             startup.lock_key(),
             config.operational_timeouts().record_lock,
@@ -165,6 +173,7 @@ impl WebhookOperatorService {
 struct BregDeliverySeams {
     pool: RuntimePool,
     destinations: Arc<ActivatedEventDestinationRegistry>,
+    handlers: Arc<HookHandlerRegistry>,
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
@@ -174,6 +183,7 @@ struct BregDeliverySeams {
 #[async_trait::async_trait]
 impl DeliverySeams for BregDeliverySeams {
     type Destination = DestinationBinding;
+    type Handler = BregHookHandler;
 
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
         let client = self
@@ -240,6 +250,10 @@ impl DeliverySeams for BregDeliverySeams {
         self.destinations
             .lookup_shared(logical_destination_id)
             .map(DestinationBinding)
+    }
+
+    fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
+        self.handlers.handler(binding)
     }
 
     async fn record_audit(
@@ -368,11 +382,38 @@ impl HookDestination for DestinationBinding {
         remaining: Duration,
     ) -> Result<DestinationAnswer, DestinationSendError> {
         let response = self.0.policy().send(request, remaining).await?;
-        if response.status().is_success() {
-            Ok(DestinationAnswer::Delivered)
-        } else {
-            Ok(DestinationAnswer::NonSuccess)
+        let status = response.status().as_u16();
+        if !response.status().is_success() {
+            return Ok(DestinationAnswer::NonSuccess { status });
         }
+        // A remote hook handler answers in its response body, so the body is
+        // read under the handler output ceiling rather than discarded. A body
+        // that cannot be taken is classified with the same table a local run
+        // is classified by, never reported as a successful delivery.
+        match response.read_bounded(MAX_OUTPUT_BYTES).await {
+            Ok(body) => Ok(DestinationAnswer::Delivered {
+                body: body.to_event_answer(),
+            }),
+            Err(error) => Ok(DestinationAnswer::AnswerRefused(HandlerRunFailure {
+                category: answer_read_category(error),
+            })),
+        }
+    }
+}
+
+/// Why a 2xx response body could not be taken as the handler's answer, in the
+/// shared hook taxonomy: over the ceiling is a resource refusal, past the
+/// attempt deadline is a deadline, and a read that broke mid-body is the
+/// destination becoming unreachable part-way. `BodyLimitTooHigh` cannot arise
+/// because the ceiling passed above is the handler output ceiling, which the
+/// platform response bound already exceeds.
+fn answer_read_category(error: DestinationResponseError) -> ErrorCategory {
+    match error {
+        DestinationResponseError::BodyTooLarge | DestinationResponseError::BodyLimitTooHigh => {
+            ErrorCategory::Resource
+        }
+        DestinationResponseError::DeadlineExceeded => ErrorCategory::Deadline,
+        DestinationResponseError::BodyReadFailed => ErrorCategory::Unavailable,
     }
 }
 
@@ -406,6 +447,12 @@ fn audit_outcome(outcome: DeliveryAuditOutcome) -> WebhookAuditOutcome {
         DeliveryAuditOutcome::PayloadExpired => WebhookAuditOutcome::PayloadExpired,
         DeliveryAuditOutcome::WorkerInterrupted => WebhookAuditOutcome::WorkerInterrupted,
         DeliveryAuditOutcome::ReplayRequested => WebhookAuditOutcome::ReplayRequested,
+        DeliveryAuditOutcome::HandlerBindingRefused => WebhookAuditOutcome::HandlerBindingRefused,
+        DeliveryAuditOutcome::HandlerDeadline => WebhookAuditOutcome::HandlerDeadline,
+        DeliveryAuditOutcome::HandlerResource => WebhookAuditOutcome::HandlerResource,
+        DeliveryAuditOutcome::HandlerExecution => WebhookAuditOutcome::HandlerExecution,
+        DeliveryAuditOutcome::HandlerSource => WebhookAuditOutcome::HandlerSource,
+        DeliveryAuditOutcome::HandlerUnavailable => WebhookAuditOutcome::HandlerUnavailable,
     }
 }
 
@@ -450,6 +497,7 @@ impl WebhookDeliveryService {
     pub fn new(
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
+        handlers: Arc<HookHandlerRegistry>,
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
@@ -463,6 +511,7 @@ impl WebhookDeliveryService {
         let seams = BregDeliverySeams {
             pool,
             destinations,
+            handlers,
             expected,
             lock_key,
             lock_timeout,
