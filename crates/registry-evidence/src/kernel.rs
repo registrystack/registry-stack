@@ -83,6 +83,16 @@ pub enum KernelError {
     Script,
     #[error("the derived Evidence values violate the requirement contract")]
     Output,
+    /// A derived structured value named a property its reviewed schema does
+    /// not declare.
+    ///
+    /// The same output-gate refusal as [`Self::Output`], carried separately so
+    /// the offline diagnostic can say which key was undeclared. The property
+    /// name travels without its value: it is a structural name the schema
+    /// never declared, and nothing about what the derivation put under it is
+    /// kept.
+    #[error("the derived Evidence values name an undeclared property: {0}")]
+    UndeclaredOutputProperty(String),
     #[error("the Evidence payload metadata is invalid")]
     Evidence,
 }
@@ -375,6 +385,33 @@ fn batch_selector_items_are_exact(
     })
 }
 
+/// One reviewed answer schema as the kernel holds it: the compiled validator
+/// plus the property names its top level declares, when it declares any.
+///
+/// The declared names are kept beside the compiled form so the output gate can
+/// refuse a key the schema never declared even where the schema document itself
+/// predates the closed-authoring rule and still permits one. A schema whose top
+/// level declares no `properties` object has no known property set, and only
+/// its compiled validation applies.
+struct ReviewedSchema {
+    compiled: JSONSchema,
+    declared_properties: Option<BTreeSet<String>>,
+}
+
+impl ReviewedSchema {
+    fn compile(artifact: &str, schema: &Value) -> Result<Self, KernelError> {
+        let compiled = compile_schema(artifact, schema)?;
+        let declared_properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .map(|properties| properties.keys().cloned().collect::<BTreeSet<_>>());
+        Ok(Self {
+            compiled,
+            declared_properties,
+        })
+    }
+}
+
 /// A kernel compiled entirely from the bytes captured in one immutable bundle.
 pub struct OfflineKernel {
     bundle: Arc<Bundle>,
@@ -389,7 +426,7 @@ pub struct OfflineKernel {
     derivations: BTreeMap<String, CompiledDerivation>,
     response_schemas: BTreeMap<String, JSONSchema>,
     fact_schemas: BTreeMap<String, JSONSchema>,
-    reviewed_schemas: BTreeMap<String, JSONSchema>,
+    reviewed_schemas: BTreeMap<String, ReviewedSchema>,
     codelist_handles: BTreeMap<String, BTreeMap<String, CodelistHandle>>,
 }
 
@@ -597,7 +634,10 @@ impl OfflineKernel {
         for (path, schema) in bundle.fact_schemas.iter() {
             if let Some(identifier) = schema.get("$id").and_then(Value::as_str) {
                 if reviewed_schemas
-                    .insert(identifier.to_owned(), compile_schema(path, schema)?)
+                    .insert(
+                        identifier.to_owned(),
+                        ReviewedSchema::compile(path, schema)?,
+                    )
                     .is_some()
                 {
                     return Err(refuse_artifact(path, "schema declares a duplicate $id"));
@@ -1304,7 +1344,7 @@ fn gate_values(
     derived: Vec<DerivedConceptValue>,
     projection: ValueProjection<'_>,
     codelists: &BTreeMap<String, Codelist>,
-    reviewed_schemas: &BTreeMap<String, JSONSchema>,
+    reviewed_schemas: &BTreeMap<String, ReviewedSchema>,
 ) -> Result<ValidatedValues, KernelError> {
     if derived.is_empty() || derived.len() > 16 {
         return Err(KernelError::Output);
@@ -1360,7 +1400,7 @@ fn validate_value(
     value: &DerivedValue,
     projection: &ValueProjection<'_>,
     codelists: &BTreeMap<String, Codelist>,
-    reviewed_schemas: &BTreeMap<String, JSONSchema>,
+    reviewed_schemas: &BTreeMap<String, ReviewedSchema>,
 ) -> Result<PublicValue, KernelError> {
     match concept.form {
         ConceptForm::Boolean => match value {
@@ -1543,7 +1583,7 @@ fn validate_bucket(
 fn validate_structured(
     concept: &ConceptConfig,
     value: &DerivedValue,
-    schemas: &BTreeMap<String, JSONSchema>,
+    schemas: &BTreeMap<String, ReviewedSchema>,
 ) -> Result<PublicValue, KernelError> {
     let object = match value {
         DerivedValue::Json(Value::Object(object)) => object,
@@ -1571,8 +1611,18 @@ fn validate_structured(
         return Err(KernelError::Output);
     }
     let schema = schemas.get(schema_id).ok_or(KernelError::Bundle)?;
+    // Defense in depth for the closed-authoring rule: where the reviewed
+    // schema's top level declares its property set, a key outside that set is
+    // refused here even if the schema document predates the rule and still
+    // permits undeclared properties. Checked before the compiled validation so
+    // the refusal can name the key rather than only the shape it broke.
+    if let Some(declared) = &schema.declared_properties {
+        if let Some(undeclared) = fields.keys().find(|key| !declared.contains(key.as_str())) {
+            return Err(KernelError::UndeclaredOutputProperty(undeclared.clone()));
+        }
+    }
     let fields_value = Value::Object(fields.clone());
-    if !schema.is_valid(&fields_value) {
+    if !schema.compiled.is_valid(&fields_value) {
         return Err(KernelError::Output);
     }
     Ok(PublicValue::Structured(StructuredValue {
@@ -2847,7 +2897,7 @@ fn extract_batch(response, context) {
         assert!(matches!(projected, PublicValue::List(_)));
 
         let schema_id = "urn:example:structured";
-        let schema = compile_schema(
+        let schema = ReviewedSchema::compile(
             "schemas/structured.schema.yaml",
             &json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -2883,6 +2933,74 @@ fn extract_batch(response, context) {
             &schemas,
         )
         .is_ok());
+        // A closed schema refuses a key it never declared, naming the key.
+        assert_eq!(
+            validate_value(
+                &structured,
+                &DerivedValue::Json(
+                    json!({"form":"reviewed-structured-value","schema":schema_id,"fields":{"status":"A","effective_date":"2026-02-28","observed_at":"2026-02-28T12:00:00Z","note":"a value the gate must not reprint"}})
+                ),
+                &projection(),
+                &codelists,
+                &schemas,
+            ),
+            Err(KernelError::UndeclaredOutputProperty("note".to_owned()))
+        );
+        // A schema that predates the closed-authoring rule still declares its
+        // property set, so the same key is refused there too: the gate, not the
+        // document, closes the form.
+        let open_schema = ReviewedSchema::compile(
+            "schemas/open-structured.schema.yaml",
+            &json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": schema_id,
+                "type": "object",
+                "required": ["status", "effective_date", "observed_at"],
+                "properties": {
+                    "status": {"type": "string", "enum": ["A"]},
+                    "effective_date": {"type": "string", "format": "date"},
+                    "observed_at": {"type": "string", "format": "date-time"}
+                }
+            }),
+        )
+        .expect("open schema compiles");
+        let open_schemas = BTreeMap::from([(schema_id.to_owned(), open_schema)]);
+        assert_eq!(
+            validate_value(
+                &structured,
+                &DerivedValue::Json(
+                    json!({"form":"reviewed-structured-value","schema":schema_id,"fields":{"status":"A","effective_date":"2026-02-28","observed_at":"2026-02-28T12:00:00Z","undeclared_member": 1}})
+                ),
+                &projection(),
+                &codelists,
+                &open_schemas,
+            ),
+            Err(KernelError::UndeclaredOutputProperty(
+                "undeclared_member".to_owned()
+            ))
+        );
+        // A top level that declares no property set at all has no known set to
+        // check against, so only the compiled validation applies.
+        let setless_schema = ReviewedSchema::compile(
+            "schemas/setless-structured.schema.yaml",
+            &json!({
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": schema_id
+            }),
+        )
+        .expect("setless schema compiles");
+        let setless_schemas = BTreeMap::from([(schema_id.to_owned(), setless_schema)]);
+        assert!(
+            validate_value(
+                &structured,
+                &DerivedValue::Json(json!({"form":"reviewed-structured-value","schema":schema_id,"fields":{"anything":"passes the compiled form"}})),
+                &projection(),
+                &codelists,
+                &setless_schemas,
+            )
+            .is_ok(),
+            "a schema with no known property set is not closed by the gate"
+        );
     }
 
     #[test]
@@ -3207,7 +3325,7 @@ fn extract_batch(response, context) {
         );
 
         let aggregate_schema_id = "urn:example:fixture:schema:aggregate:v1";
-        let aggregate_schema = compile_schema(
+        let aggregate_schema = ReviewedSchema::compile(
             "schemas/aggregate.schema.yaml",
             &json!({
                 "$schema": "https://json-schema.org/draft/2020-12/schema",

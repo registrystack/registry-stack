@@ -48,6 +48,23 @@ pub enum ValueClass {
     List,
 }
 
+impl ValueClass {
+    /// The closed spelling of this class, the same one the serialized form
+    /// carries, for the rendered line a failure prints.
+    fn label(self) -> &'static str {
+        match self {
+            Self::BooleanFalse => "boolean-false",
+            Self::BooleanTrue => "boolean-true",
+            Self::Integer => "integer",
+            Self::String => "string",
+            Self::Bucket => "bucket",
+            Self::EntityReference => "entity-reference",
+            Self::Structured => "structured",
+            Self::List => "list",
+        }
+    }
+}
+
 /// Why the observed result reached its closed class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -259,8 +276,67 @@ pub struct FixtureReport<'a> {
     /// Absent when the run failed before it reached a count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evaluated_cases: Option<usize>,
+    /// The case that failed the run, when one did.
+    ///
+    /// The run's own operator message is fixed and names no case, so this is
+    /// what joins the two: the identifier, the fixed message attributed to it,
+    /// and the value classes each side of its comparison had reached.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failing_case: Option<CaseFailure>,
     #[serde(flatten)]
     pub trace: &'a FixtureTrace,
+}
+
+/// One failing case of a run, named with the closed vocabulary the trace uses.
+///
+/// The `cause` is the fixed operator message the run failed with, attributed to
+/// the case that was still running when it was raised. The classes come from
+/// the expected-versus-observed comparison that case reached; an absent class
+/// says that side of the comparison reached no value. Nothing here is a value:
+/// an identifier, a fixed sentence, and classes are the whole of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaseFailure {
+    pub id: String,
+    pub cause: String,
+    /// The value class the case declared, when its comparison reached one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_class: Option<ValueClass>,
+    /// The value class the evaluation observed, reduced the same way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observed_class: Option<ValueClass>,
+}
+
+impl CaseFailure {
+    /// The one stderr line a failing run prints for this case.
+    ///
+    /// The grammar is a promise to a driver that parses stderr: `case`, the
+    /// identifier, the fixed cause, and the classes in parentheses, with
+    /// `absent` standing in for a side that reached no class.
+    pub fn render_line(&self) -> String {
+        match (self.expected_class, self.observed_class) {
+            (Some(expected), Some(observed)) => format!(
+                "case {}: {} (expected class {}, observed class {})",
+                self.id,
+                self.cause,
+                expected.label(),
+                observed.label()
+            ),
+            (Some(expected), None) => format!(
+                "case {}: {} (expected class {}, observed absent)",
+                self.id,
+                self.cause,
+                expected.label()
+            ),
+            (None, Some(observed)) => format!(
+                "case {}: {} (expected absent, observed class {})",
+                self.id,
+                self.cause,
+                observed.label()
+            ),
+            (None, None) => format!("case {}: {}", self.id, self.cause),
+        }
+    }
 }
 
 /// The case a failure is attributed to when it happened outside every case.
@@ -355,6 +431,34 @@ impl FixtureTrace {
         };
         case.failure = Some(message.to_owned());
         case.settled = true;
+    }
+
+    /// The cases a failed run holds a failure for, in evaluation order.
+    ///
+    /// Read after [`Self::fail`] attributed the run's message, so each entry
+    /// carries the identifier that message belongs to beside the classes its
+    /// comparison reached. A run stops at its first failure, so the vec holds
+    /// one entry today; the shape is a vec because nothing about the
+    /// attribution promises it always will.
+    pub fn case_failures(&self) -> Vec<CaseFailure> {
+        self.cases
+            .iter()
+            .filter_map(|case| {
+                let cause = case.failure.as_ref()?;
+                Some(CaseFailure {
+                    id: case.id.clone(),
+                    cause: cause.clone(),
+                    expected_class: case
+                        .expected_result
+                        .as_ref()
+                        .and_then(|result| result.value_classes.first().copied()),
+                    observed_class: case
+                        .observed_result
+                        .as_ref()
+                        .and_then(|result| result.value_classes.first().copied()),
+                })
+            })
+            .collect()
     }
 
     /// The case stages attach to, opening a scope entry if none is running.
@@ -576,6 +680,7 @@ mod tests {
         let report = FixtureReport {
             passed: true,
             evaluated_cases: Some(13),
+            failing_case: None,
             trace: &trace,
         };
         let serialized = serde_json::to_value(&report).expect("the report is representable");
@@ -585,6 +690,10 @@ mod tests {
         // Flattened, not nested: the trace's own `cases` array stays the top
         // level key a reader walks.
         assert_eq!(serialized["cases"][0]["id"], serde_json::json!("positive"));
+        assert!(
+            serialized.get("failingCase").is_none(),
+            "a passing run named a failing case"
+        );
     }
 
     #[test]
@@ -652,9 +761,11 @@ mod tests {
         trace.begin_case("no-match");
         trace.record(Stage::Extract, StageStatus::NoMatch, "no match");
         trace.fail("fixture kernel failure did not match its public problem");
+        let failures = trace.case_failures();
         let report = FixtureReport {
             passed: false,
             evaluated_cases: None,
+            failing_case: failures.first().cloned(),
             trace: &trace,
         };
         let serialized = serde_json::to_value(&report).expect("the report is representable");
@@ -664,6 +775,61 @@ mod tests {
         assert_eq!(
             serialized["cases"][0]["failure"],
             serde_json::json!("fixture kernel failure did not match its public problem")
+        );
+        assert_eq!(
+            serialized["failingCase"]["id"],
+            serde_json::json!("no-match")
+        );
+        assert_eq!(
+            serialized["failingCase"]["cause"],
+            serde_json::json!("fixture kernel failure did not match its public problem")
+        );
+    }
+
+    /// The failure a run reports names the case, the fixed cause, and classes.
+    ///
+    /// Both rendered forms carry the same closed vocabulary, so the line a
+    /// driver parses and the document a reader opens cannot drift apart. A side
+    /// of the comparison that reached no value says `absent` rather than
+    /// inventing a class for it.
+    #[test]
+    fn a_failing_case_renders_one_line_with_its_classes_and_never_a_value() {
+        let mut trace = FixtureTrace::default();
+        trace.begin_case("scalar-mismatch");
+        trace.diagnose(
+            ResultClassification::new(ResultClass::Match, vec![ValueClass::String]),
+            ResultClassification::new(ResultClass::Match, vec![ValueClass::Integer]),
+            ReasonCode::UniqueMatch,
+            Some(FindingCode::ResultValueMismatch),
+        );
+        trace.fail("reference scalar value did not match");
+        let failures = trace.case_failures();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(
+            failures[0].render_line(),
+            "case scalar-mismatch: reference scalar value did not match \
+             (expected class string, observed class integer)"
+        );
+        let serialized = serde_json::to_value(&failures[0]).expect("the failure serializes");
+        assert_eq!(serialized["expectedClass"], serde_json::json!("string"));
+        assert_eq!(serialized["observedClass"], serde_json::json!("integer"));
+
+        // A comparison that reached values on only one side names absence.
+        let mut absent = CaseFailure {
+            id: "missing-concept".to_owned(),
+            cause: "reference concept value did not match".to_owned(),
+            expected_class: Some(ValueClass::String),
+            observed_class: None,
+        };
+        assert_eq!(
+            absent.render_line(),
+            "case missing-concept: reference concept value did not match \
+             (expected class string, observed absent)"
+        );
+        absent.expected_class = None;
+        assert_eq!(
+            absent.render_line(),
+            "case missing-concept: reference concept value did not match"
         );
     }
 

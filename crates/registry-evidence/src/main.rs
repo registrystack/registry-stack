@@ -261,11 +261,17 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // is a fixed message that says a case failed but never which one or
             // why; `CliError` carries no dynamic payload and does not gain one
             // here. Attributing that message to the case that was still running
-            // is what joins the two without changing either.
-            if explain {
-                if let Err(error) = &summary {
-                    trace.fail(error.0);
+            // is what joins the two without changing either, and the structured
+            // stderr line below reads that attribution back for every failing
+            // run, explained or not: the case, the fixed cause, and the value
+            // classes each side of its comparison had reached, never a value.
+            if let Err(error) = &summary {
+                trace.fail(error.0);
+                for failure in trace.case_failures() {
+                    eprintln!("{}", failure.render_line());
                 }
+            }
+            if explain {
                 match explain_format.unwrap_or_default() {
                     ExplainFormat::Text => print!("{}", trace.render()),
                     // The JSON document is the whole of standard output, so the
@@ -330,10 +336,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )
             .await;
             validate_trace_canaries(&trace)?;
-            if explain {
-                if let Err(error) = &summary {
-                    trace.fail(error.0);
+            // The same attribution and structured failure line the deployment
+            // evaluation prints, read by the fixture driver that owns this
+            // seam: it parses the line rather than the trace.
+            if let Err(error) = &summary {
+                trace.fail(error.0);
+                for failure in trace.case_failures() {
+                    eprintln!("{}", failure.render_line());
                 }
+            }
+            if explain {
                 match explain_format.unwrap_or_default() {
                     ExplainFormat::Text => print!("{}", trace.render()),
                     ExplainFormat::Json => {
@@ -1123,7 +1135,9 @@ fn audit_verification_failure(error: EvidenceAuditError) -> (String, CliError) {
 /// Render one fixture run as the single JSON document the JSON form prints.
 ///
 /// The verdict comes from the run's own result rather than from the trace, so a
-/// document can never report a pass the command did not report.
+/// document can never report a pass the command did not report. The failing
+/// case is the one the run's message was attributed to after the canaries were
+/// checked, so a failed document names it and a passed one carries nothing.
 fn fixture_report_json(
     trace: &FixtureTrace,
     summary: Result<&FixtureSummary, &CliError>,
@@ -1134,6 +1148,9 @@ fn fixture_report_json(
             .ok()
             .map(|summary| summary.evaluated_cases)
             .or_else(|| (trace.case_count() > 0).then(|| trace.case_count())),
+        failing_case: (summary.is_err())
+            .then(|| trace.case_failures())
+            .and_then(|failures| failures.first().cloned()),
         trace,
     };
     serde_json::to_string_pretty(&report)
@@ -2016,6 +2033,20 @@ fn record_derivation(
                 declared_concept_lines(requirement),
             );
             Err(KernelError::Output)
+        }
+        Err(KernelError::UndeclaredOutputProperty(property)) => {
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                "the derivation script ran and returned values",
+            );
+            trace.record_with(
+                Stage::Validate,
+                StageStatus::Failed,
+                format!("the output gate rejected an undeclared structured key {property:?}"),
+                declared_concept_lines(requirement),
+            );
+            Err(KernelError::UndeclaredOutputProperty(property))
         }
         Err(error) => {
             trace.record(
@@ -4374,7 +4405,9 @@ fn classify_observed_result(
                     ReasonCode::SourceProtocolRefused,
                 ),
                 KernelError::Script => (ResultClass::ServiceUnavailable, ReasonCode::ScriptRefused),
-                KernelError::Output => (ResultClass::ServiceUnavailable, ReasonCode::OutputRefused),
+                KernelError::Output | KernelError::UndeclaredOutputProperty(_) => {
+                    (ResultClass::ServiceUnavailable, ReasonCode::OutputRefused)
+                }
                 KernelError::Bundle | KernelError::Artifact(_) => {
                     (ResultClass::ServiceUnavailable, ReasonCode::BundleRefused)
                 }
@@ -4570,6 +4603,7 @@ fn compare_case_outcome(
                 "service.unavailable",
                 Err(registry_evidence::kernel::KernelError::Script
                     | registry_evidence::kernel::KernelError::Output
+                    | registry_evidence::kernel::KernelError::UndeclaredOutputProperty(_)
                     | registry_evidence::kernel::KernelError::Bundle
                     | registry_evidence::kernel::KernelError::Artifact(_)
                     | registry_evidence::kernel::KernelError::Requirement

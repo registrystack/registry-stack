@@ -72,6 +72,22 @@ struct StepOutcome {
     stderr: Option<String>,
     evaluated_cases: Option<usize>,
     trace: Option<JsonValue>,
+    failing_case: Option<FailingCase>,
+}
+
+/// The structured failing-case line `evidence` prints on stderr when a run
+/// fails, carried into the report it names.
+///
+/// `absent` classes stay absent: a side of the comparison that reached no
+/// value is reported as exactly that, and no count is invented beside it.
+#[derive(Debug, Serialize)]
+struct FailingCase {
+    id: String,
+    cause: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_class: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -90,6 +106,10 @@ struct FixtureReport {
     /// Absent when the fixture failed, or when `evidence` reported no count.
     #[serde(skip_serializing_if = "Option::is_none")]
     evaluated_cases: Option<usize>,
+    /// The case the binary named on stderr when this fixture failed, parsed
+    /// from the structured line it promises and never invented here.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failing_case: Option<FailingCase>,
     /// What `evidence evaluate --explain` printed, verbatim, and only when a
     /// trace was asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -202,6 +222,7 @@ fn run_fixtures(args: RunArgs) -> Result<ExitCode> {
                 passed: outcome.passed,
                 stderr: outcome.stderr,
                 evaluated_cases: outcome.evaluated_cases,
+                failing_case: outcome.failing_case,
                 trace: outcome.trace,
             });
         }
@@ -474,17 +495,20 @@ fn run_evidence_step(
                     .or_else(|| evaluated_cases(&stdout)),
                 stderr: None,
                 trace,
+                failing_case: None,
             }
         }
         Ok(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+            let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
             let trace = structured_trace(&stdout);
             StepOutcome {
                 passed: false,
                 evaluated_cases: structured_evaluated_cases(trace.as_ref())
                     .or_else(|| evaluated_cases(&stdout)),
                 trace,
-                stderr: Some(String::from_utf8_lossy(&output.stderr).into_owned()),
+                failing_case: stderr.lines().find_map(parse_failing_case),
+                stderr: Some(stderr),
             }
         }
         Err(error) => StepOutcome {
@@ -492,8 +516,55 @@ fn run_evidence_step(
             stderr: Some(format!("failed to run {}: {error}", evidence_bin.display())),
             evaluated_cases: None,
             trace: None,
+            failing_case: None,
         },
     }
+}
+
+/// Parse one structured failing-case line as `evidence` prints it on stderr.
+///
+/// The grammar is the runtime's promise, not this driver's choice:
+/// `case <id>: <cause>` with the expected-versus-observed classes in
+/// parentheses, where `absent` stands for a side that reached no value. The
+/// driver makes no semantic decision, so a line that does not match is left
+/// alone: the captured stderr beside it still says everything the binary said.
+fn parse_failing_case(line: &str) -> Option<FailingCase> {
+    let rest = line.strip_prefix("case ")?;
+    let (id, rest) = rest.split_once(": ")?;
+    if id.is_empty() || id.len() > 128 || id.contains(char::is_control) {
+        return None;
+    }
+    let Some((cause, comparison)) = rest.rsplit_once(" (expected ") else {
+        return Some(FailingCase {
+            id: id.to_owned(),
+            cause: rest.to_owned(),
+            expected_class: None,
+            observed_class: None,
+        });
+    };
+    let comparison = comparison.strip_suffix(')')?;
+    let (expected, observed) = comparison.split_once(", observed ")?;
+    Some(FailingCase {
+        id: id.to_owned(),
+        cause: cause.to_owned(),
+        expected_class: comparison_class(expected)?,
+        observed_class: comparison_class(observed)?,
+    })
+}
+
+/// One side of a structured comparison: `class <name>` or `absent`.
+///
+/// The inner `None` is the declared absence; the outer `None` is a side the
+/// grammar does not recognize, which refuses the whole line rather than
+/// half-reading it.
+fn comparison_class(side: &str) -> Option<Option<String>> {
+    if side == "absent" {
+        return Some(None);
+    }
+    side.strip_prefix("class ")
+        .filter(|name| !name.is_empty() && name.len() <= 32)
+        .filter(|name| !name.chars().any(char::is_whitespace))
+        .map(|name| Some(name.to_owned()))
 }
 
 fn structured_evaluated_cases(trace: Option<&JsonValue>) -> Option<usize> {
@@ -598,4 +669,77 @@ fn indented(stderr: Option<&str>) -> Vec<String> {
         return vec!["    (no output captured)".to_owned()];
     }
     text.lines().map(|line| format!("    {line}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_failing_case;
+
+    fn parsed(line: &str) -> Option<(String, String, Option<String>, Option<String>)> {
+        parse_failing_case(line).map(|failure| {
+            (
+                failure.id,
+                failure.cause,
+                failure.expected_class,
+                failure.observed_class,
+            )
+        })
+    }
+
+    #[test]
+    fn the_grammar_the_runtime_prints_parses_into_its_fields() {
+        assert_eq!(
+            parsed(
+                "case positive: reference scalar value did not match \
+                    (expected class string, observed class integer)"
+            )
+            .as_ref()
+            .map(|(id, cause, expected, observed)| {
+                (
+                    id.as_str(),
+                    cause.as_str(),
+                    expected.as_deref(),
+                    observed.as_deref(),
+                )
+            }),
+            Some((
+                "positive",
+                "reference scalar value did not match",
+                Some("string"),
+                Some("integer")
+            ))
+        );
+        assert_eq!(
+            parsed(
+                "case gone: reference concept value did not match \
+                    (expected class string, observed absent)"
+            )
+            .as_ref()
+            .map(|(_, _, expected, observed)| (expected.as_deref(), observed.as_deref())),
+            Some((Some("string"), None))
+        );
+        assert_eq!(
+            parsed("case plain: fixture kernel failure did not match its public problem")
+                .as_ref()
+                .map(|(_, _, expected, observed)| (expected.is_none(), observed.is_none())),
+            Some((true, true))
+        );
+    }
+
+    #[test]
+    fn anything_else_on_stderr_stays_unparsed() {
+        for line in [
+            "evidence: reference scalar value did not match",
+            "case positive",
+            "case : empty identifier",
+            "case ok: cause (expected something, observed else)",
+            "case ok: cause (expected class , observed class integer)",
+            "a case line that merely mentions the word case",
+        ] {
+            assert!(
+                parse_failing_case(line).is_none(),
+                "{line:?} was parsed as a structured failing case"
+            );
+        }
+    }
 }

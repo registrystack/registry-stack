@@ -46,7 +46,7 @@ pub(crate) use registry_evidence_authoring::{
     },
     validate::{
         collection_pointers, question_subjects, valid_local_identifier, validate_access_policy,
-        validate_question,
+        validate_answer_schema_document, validate_question,
     },
     validate_authored_answer, Finding,
 };
@@ -1000,6 +1000,24 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             validate_question(&question),
             &project_relative_path(project_root, &question_path),
         )?;
+        // The answer schema document is checked beside its own file rather than
+        // beside the question that named it: the departure is in the schema,
+        // and the finding already carries the field inside it.
+        for answer in &question.answers {
+            if answer.answer_type != AnswerType::ReviewedStructuredValue {
+                continue;
+            }
+            let schema_path = answer
+                .schema
+                .as_deref()
+                .expect("the authoring form requires an answer schema path");
+            let schema_key = Path::new(schema_path)
+                .file_stem()
+                .and_then(|stem| stem.to_str());
+            if let Some(document) = schema_key.and_then(|key| schemas.get(key)) {
+                first_finding(validate_answer_schema_document(document), schema_path)?;
+            }
+        }
         if question_path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             bail!("question id must match its questions/<id>.yaml filename");
         }
@@ -5234,6 +5252,74 @@ properties:
         assert_eq!(
             concept["sdJwtVc"],
             json!({"claim": "birthCertificate", "disclosure": "top-level"})
+        );
+    }
+
+    #[test]
+    fn refuses_an_open_object_answer_schema_naming_the_schema_file() {
+        let fixture = Fixture::new(
+            OPENAPI,
+            BIRTH_CERTIFICATE_QUESTION,
+            BIRTH_CERTIFICATE_ANSWER,
+            true,
+        );
+        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
+        fs::write(
+            fixture.project.join("schemas/birth-certificate.yaml"),
+            BIRTH_CERTIFICATE_SCHEMA.replace("additionalProperties: false\n", ""),
+        )
+        .expect("open birth certificate schema");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("an open object answer schema must not compile");
+
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
+            .expect("the refusal is an authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
+        assert_eq!(
+            diagnostic.path, "schemas/birth-certificate.yaml:.additionalProperties",
+            "the refusal must name the schema document and its field"
+        );
+        assert_eq!(
+            diagnostic.message,
+            "an object answer schema must set additionalProperties: false"
+        );
+    }
+
+    #[test]
+    fn refuses_an_object_answer_schema_that_declares_no_properties() {
+        let fixture = Fixture::new(
+            OPENAPI,
+            BIRTH_CERTIFICATE_QUESTION,
+            BIRTH_CERTIFICATE_ANSWER,
+            true,
+        );
+        fs::create_dir(fixture.project.join("schemas")).expect("schemas");
+        fs::write(
+            fixture.project.join("schemas/birth-certificate.yaml"),
+            BIRTH_CERTIFICATE_SCHEMA.replace(
+                "required: [givenName, dateOfBirth]\nproperties:\n  givenName: {type: string, minLength: 1, maxLength: 200}\n  dateOfBirth: {type: string, format: date}\n",
+                "",
+            ),
+        )
+        .expect("propertyless birth certificate schema");
+
+        let error = compile_local_project(&fixture.project, &fixture.staging, &fixture.evidence)
+            .expect_err("a propertyless object answer schema must not compile");
+
+        let diagnostic = error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<AuthoredDiagnostic>())
+            .expect("the refusal is an authored diagnostic");
+        assert_eq!(
+            diagnostic.code,
+            "evidence.answer-schema.declared-properties"
+        );
+        assert_eq!(
+            diagnostic.path, "schemas/birth-certificate.yaml:.properties",
+            "the refusal must name the schema document and its field"
         );
     }
 
