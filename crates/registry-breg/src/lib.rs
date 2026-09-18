@@ -129,6 +129,8 @@ pub mod tooling;
 #[cfg(feature = "wasm-executor-prototype")]
 pub(crate) mod wasm_executor_probe;
 pub mod wasm_handler;
+#[cfg(feature = "wasm-executor-prototype")]
+pub(crate) mod wasm_runtime;
 #[cfg(feature = "runtime")]
 pub mod webhook;
 

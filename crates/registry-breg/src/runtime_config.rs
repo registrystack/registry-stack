@@ -76,6 +76,18 @@ const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS: u64 = 30_000;
 const DEFAULT_RECORD_LOCK_MILLISECONDS: u64 = 5_000;
 const DEFAULT_MIGRATION_LOCK_MILLISECONDS: u64 = 30_000;
 const DEFAULT_MIGRATION_STATEMENT_MILLISECONDS: u64 = 60_000;
+/// Default and floor for the execution-time module ceiling: the compile-time
+/// admission ceiling an authored module already satisfied.
+const MINIMUM_WASM_EXECUTION_MODULE_BYTES: u64 = 1_024;
+const DEFAULT_WASM_EXECUTION_MODULE_BYTES: u64 =
+    crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64;
+/// Ceiling for deployments that carry larger pre-initialized modules; the
+/// authoring admission ceiling stays at its own compile-time constant.
+const MAXIMUM_WASM_EXECUTION_MODULE_BYTES: u64 = 5 * 1_048_576;
+const MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_048_576;
+const DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 =
+    crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES as u64;
+const MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_073_741_824;
 #[cfg(feature = "schema")]
 const MAX_DATABASE_POOL_SIZE: u64 = 128;
 #[cfg(feature = "schema")]
@@ -161,6 +173,8 @@ pub enum RuntimeConfigError {
     InvalidAttachmentVerification,
     #[error("runtime configuration contains invalid operational bounds")]
     InvalidBounds,
+    #[error("runtime configuration contains invalid WASM execution budgets")]
+    InvalidWasmExecution,
     #[error("runtime configuration secret resolution failed")]
     Secret,
 }
@@ -225,6 +239,7 @@ impl RuntimeConfigError {
             Self::InvalidAttachmentStorage => "runtime_config.invalid_attachment_storage",
             Self::InvalidAttachmentVerification => "runtime_config.invalid_attachment_verification",
             Self::InvalidBounds => "runtime_config.invalid_bounds",
+            Self::InvalidWasmExecution => "runtime_config.invalid_wasm_execution",
             Self::Secret => "runtime_config.secret",
         }
     }
@@ -260,6 +275,7 @@ impl RuntimeConfigError {
             Self::InvalidAttachmentStorage => "/attachmentStorage",
             Self::InvalidAttachmentVerification => "/attachmentVerification",
             Self::InvalidBounds => "/operationalTimeouts",
+            Self::InvalidWasmExecution => "/wasmExecution",
         }
     }
 }
@@ -387,6 +403,7 @@ pub struct RuntimeConfig {
         std::collections::BTreeMap<String, crate::action_evidence_config::EvidenceProviderConfig>,
     event_delivery: EventDeliveryConfig,
     operational_timeouts: OperationalTimeouts,
+    wasm_execution: WasmExecutionConfig,
     metrics_listener: Option<MetricsListenerConfig>,
 }
 
@@ -418,6 +435,7 @@ impl RuntimeConfig {
             .map_err(|_| RuntimeConfigError::InvalidEventDestination)?;
         let event_delivery = EventDeliveryConfig::from_raw(raw.event_delivery)?;
         let operational_timeouts = OperationalTimeouts::from_raw(raw.operational_timeouts)?;
+        let wasm_execution = WasmExecutionConfig::from_raw(raw.wasm_execution)?;
         let metrics_listener = raw
             .metrics_listener
             .map(MetricsListenerConfig::from_raw)
@@ -441,6 +459,7 @@ impl RuntimeConfig {
             evidence_providers: raw.evidence_providers,
             event_delivery,
             operational_timeouts,
+            wasm_execution,
             metrics_listener,
         })
     }
@@ -571,6 +590,10 @@ impl RuntimeConfig {
         &self.operational_timeouts
     }
 
+    pub fn wasm_execution(&self) -> &WasmExecutionConfig {
+        &self.wasm_execution
+    }
+
     /// The operator-private metrics listener binding, when one is configured.
     pub fn metrics_listener(&self) -> Option<&MetricsListenerConfig> {
         self.metrics_listener.as_ref()
@@ -697,6 +720,7 @@ impl fmt::Debug for RuntimeConfig {
             .field("event_destinations", &self.event_destinations)
             .field("event_delivery", &self.event_delivery)
             .field("operational_timeouts", &self.operational_timeouts)
+            .field("wasm_execution", &self.wasm_execution)
             .field("metrics_listener", &self.metrics_listener)
             .finish()
     }
@@ -1805,6 +1829,43 @@ impl OperationalTimeouts {
     }
 }
 
+/// Operator budgets for process WASM handler execution. Parsed and validated
+/// in every build so the runtime configuration contract is independent of the
+/// server's compiled features; builds without the WASM executor prototype
+/// keep refusing WASM handlers at evaluation admission whatever these values
+/// say.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct WasmExecutionConfig {
+    max_module_bytes: u64,
+    max_guest_memory_bytes: u64,
+}
+
+impl WasmExecutionConfig {
+    pub(crate) fn from_raw(raw: RawWasmExecutionConfig) -> Result<Self> {
+        if raw.max_module_bytes < MINIMUM_WASM_EXECUTION_MODULE_BYTES
+            || raw.max_module_bytes > MAXIMUM_WASM_EXECUTION_MODULE_BYTES
+            || raw.max_guest_memory_bytes < MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
+            || raw.max_guest_memory_bytes > MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
+        {
+            return Err(RuntimeConfigError::InvalidWasmExecution);
+        }
+        Ok(Self {
+            max_module_bytes: raw.max_module_bytes,
+            max_guest_memory_bytes: raw.max_guest_memory_bytes,
+        })
+    }
+
+    /// Byte ceiling for one handler module at execution time.
+    pub fn max_module_bytes(&self) -> u64 {
+        self.max_module_bytes
+    }
+
+    /// Byte ceiling for guest memory growth during one call.
+    pub fn max_guest_memory_bytes(&self) -> u64 {
+        self.max_guest_memory_bytes
+    }
+}
+
 #[derive(Clone)]
 pub struct SqlRoles {
     migration: SqlIdentifier,
@@ -1889,6 +1950,10 @@ struct RawRuntimeConfig {
     /// Optional operational request, shutdown, locking, and migration timeout tuning.
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
+    /// Optional WASM handler execution budgets. Parsed in every build;
+    /// executed only in builds with the WASM executor prototype feature.
+    #[serde(default)]
+    wasm_execution: RawWasmExecutionConfig,
     /// Optional operator-private metrics listener. Absent by default, which
     /// serves no metrics surface at all.
     #[serde(default)]
@@ -2189,6 +2254,27 @@ impl Default for RawOperationalTimeouts {
     }
 }
 
+#[cfg_attr(feature = "schema", derive(serde::Serialize, schemars::JsonSchema))]
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct RawWasmExecutionConfig {
+    /// Defaults to the compile-time module admission ceiling (2 MiB).
+    #[serde(default = "default_wasm_execution_max_module_bytes")]
+    max_module_bytes: u64,
+    /// Defaults to the platform guest-memory ceiling (32 MiB).
+    #[serde(default = "default_wasm_execution_max_guest_memory_bytes")]
+    max_guest_memory_bytes: u64,
+}
+
+impl Default for RawWasmExecutionConfig {
+    fn default() -> Self {
+        Self {
+            max_module_bytes: default_wasm_execution_max_module_bytes(),
+            max_guest_memory_bytes: default_wasm_execution_max_guest_memory_bytes(),
+        }
+    }
+}
+
 impl Default for RawJwksCacheConfig {
     fn default() -> Self {
         Self {
@@ -2260,6 +2346,14 @@ const fn default_migration_lock_milliseconds() -> u64 {
 
 const fn default_migration_statement_milliseconds() -> u64 {
     DEFAULT_MIGRATION_STATEMENT_MILLISECONDS
+}
+
+const fn default_wasm_execution_max_module_bytes() -> u64 {
+    DEFAULT_WASM_EXECUTION_MODULE_BYTES
+}
+
+const fn default_wasm_execution_max_guest_memory_bytes() -> u64 {
+    DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES
 }
 
 #[cfg(feature = "schema")]
@@ -2429,6 +2523,16 @@ fn install_schema_constraints(schema: &mut Value) {
             "/$defs/RawOperationalTimeouts/properties/migrationStatementMilliseconds",
             1,
             3_600_000,
+        ),
+        (
+            "/$defs/RawWasmExecutionConfig/properties/maxModuleBytes",
+            MINIMUM_WASM_EXECUTION_MODULE_BYTES,
+            MAXIMUM_WASM_EXECUTION_MODULE_BYTES,
+        ),
+        (
+            "/$defs/RawWasmExecutionConfig/properties/maxGuestMemoryBytes",
+            MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
+            MAXIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES,
         ),
         (
             "/$defs/RawEventDestinationDeliveryCeilings/properties/attemptTimeoutMilliseconds",
