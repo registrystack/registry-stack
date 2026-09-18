@@ -57,6 +57,7 @@ members = [
     "crates/registry-linkml",
 ]
 exclude = [
+    "products/breg/wasm-handler-sdk",
     "products/platform/fuzz",
     "products/manifest/fuzz",
 ]
