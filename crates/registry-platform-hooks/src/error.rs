@@ -2,8 +2,8 @@
 
 //! The run-time failure taxonomy every product reports for hook failures, so
 //! that every product reports the same thing for the same failure, and the
-//! bounded rendering every diagnostic in this crate puts untrusted text
-//! through.
+//! bounded, escaped rendering every diagnostic in this crate puts untrusted
+//! text through.
 
 /// One of the five run-time failure categories.
 ///
@@ -75,9 +75,10 @@ pub(crate) const TRUNCATION_MARKER: &str = "...(truncated)";
 /// [`MAX_DISPLAYED_TOKEN_BYTES`].
 ///
 /// A handler, a remote destination, or an authored document may put a value of
-/// any length where a diagnostic names it: a member name, a variant name, an
-/// event id. Every such value passes through here, so every `Display` string
-/// the crate produces is host-generated and of bounded length.
+/// any length, and of any bytes, where a diagnostic names it: a member name, a
+/// variant name, an event id. Every such value passes through here, so every
+/// `Display` string the crate produces is host-generated, of bounded length,
+/// and free of control characters.
 pub(crate) fn bounded_token(token: &str) -> String {
     bounded(token, MAX_DISPLAYED_TOKEN_BYTES)
 }
@@ -89,26 +90,50 @@ pub(crate) fn bounded_token(token: &str) -> String {
 /// survives, so the message still says that a string arrived where a sequence
 /// was required without repeating the string. Every remaining delimited run,
 /// such as the member name an `unknown field` clause quotes, is bounded to
-/// [`MAX_DISPLAYED_TOKEN_BYTES`], and the whole message is bounded to
-/// [`MAX_DISPLAYED_MESSAGE_BYTES`].
+/// [`MAX_DISPLAYED_TOKEN_BYTES`], the whole message is bounded to
+/// [`MAX_DISPLAYED_MESSAGE_BYTES`], and control characters are escaped
+/// throughout.
 pub(crate) fn redacted_message(message: &str) -> String {
     let dropped = drop_unexpected_values(message);
     bounded(&bound_delimited_runs(&dropped), MAX_DISPLAYED_MESSAGE_BYTES)
 }
 
-/// Truncate `text` to `max` bytes on a character boundary, marking the cut.
+/// Escape `text`'s control characters, then truncate it to `max` bytes on a
+/// character boundary, marking the cut.
+///
+/// The ceiling applies to what is rendered, so it is measured after escaping:
+/// an escape is longer than the character it replaces.
 fn bounded(text: &str, max: usize) -> String {
-    if text.len() <= max {
-        return text.to_owned();
+    let rendered = escape_control_characters(text);
+    if rendered.len() <= max {
+        return rendered;
     }
     let mut end = max;
-    while !text.is_char_boundary(end) {
+    while !rendered.is_char_boundary(end) {
         end -= 1;
     }
     let mut cut = String::with_capacity(end + TRUNCATION_MARKER.len());
-    cut.push_str(&text[..end]);
+    cut.push_str(&rendered[..end]);
     cut.push_str(TRUNCATION_MARKER);
     cut
+}
+
+/// Replace every control character with its escape.
+///
+/// A diagnostic is read on a terminal and written to a log line. Untrusted text
+/// that kept its control characters could start a new line, return to the start
+/// of one, drive a terminal escape sequence, or end a C string in a reader
+/// downstream; escaped, it is the text a reader sees and nothing more.
+fn escape_control_characters(text: &str) -> String {
+    let mut rendered = String::with_capacity(text.len());
+    for character in text.chars() {
+        if character.is_control() {
+            rendered.extend(character.escape_debug());
+        } else {
+            rendered.push(character);
+        }
+    }
+    rendered
 }
 
 /// Keep the parts of a deserializer message a reader needs, the shape word and
@@ -266,6 +291,37 @@ mod tests {
         let kept = rendered.len() - TRUNCATION_MARKER.len();
         assert!(kept <= MAX_DISPLAYED_TOKEN_BYTES, "{kept} bytes kept");
         assert_eq!(kept % 4, 0, "the cut landed inside a character");
+    }
+
+    #[test]
+    fn control_characters_in_a_token_are_escaped() {
+        let rendered = bounded_token("case\n\r\u{1b}[31mred\0");
+        assert_eq!(rendered, r"case\n\r\u{1b}[31mred\0");
+        assert!(
+            !rendered.chars().any(char::is_control),
+            "a hostile token cannot inject a control character into a log line: {rendered}"
+        );
+    }
+
+    #[test]
+    fn control_characters_in_a_message_are_escaped() {
+        let rendered = redacted_message("unknown field `case\n\r\u{1b}[31mred\0`, expected `id`");
+        assert!(!rendered.chars().any(char::is_control), "{rendered}");
+        assert!(rendered.contains(r"case\n\r\u{1b}[31mred\0"), "{rendered}");
+    }
+
+    #[test]
+    fn the_token_bound_applies_to_what_is_rendered() {
+        // Every byte of the input renders as two, so the escaped form is what
+        // the ceiling has to be measured against.
+        let rendered = bounded_token(&"\n".repeat(MAX_DISPLAYED_TOKEN_BYTES));
+        assert_eq!(
+            rendered,
+            format!(
+                r"{}{TRUNCATION_MARKER}",
+                r"\n".repeat(MAX_DISPLAYED_TOKEN_BYTES / 2)
+            )
+        );
     }
 
     #[test]

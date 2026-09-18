@@ -428,7 +428,7 @@ mod tests {
             HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
                 .expect("parses");
         let error = parsed.validate().expect_err("before with url is refused");
-        assert_eq!(error.code(), "hook.before_phase_remote_handler");
+        assert_eq!(error.code(), "hook.declaration.before_phase_remote_handler");
         assert_eq!(error.index(), Some(1));
     }
 
