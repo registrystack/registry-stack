@@ -6,7 +6,7 @@
 # registry workspace forbids.
 [workspace]
 resolver = "2"
-members = ["sdk"]
+members = ["sdk", "template"]
 
 [workspace.package]
 version = "0.1.0"
