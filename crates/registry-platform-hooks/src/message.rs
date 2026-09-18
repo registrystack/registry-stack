@@ -19,7 +19,7 @@ use thiserror::Error;
 
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict, JcsError};
 
-use crate::error::ErrorCategory;
+use crate::error::{bounded_token, redacted_message, ErrorCategory};
 
 /// The library default for the handler output ceiling, in bytes.
 ///
@@ -217,7 +217,7 @@ impl<'de> Deserialize<'de> for HookMessage {
                 })
             }
             unknown => Err(D::Error::unknown_variant(
-                unknown,
+                &bounded_token(unknown),
                 &["proposal", "none", "refusal"],
             )),
         }
@@ -236,7 +236,9 @@ where
     fields
         .keys()
         .find(|key| !allowed.contains(&key.as_str()))
-        .map_or(Ok(()), |key| Err(D::Error::unknown_field(key, allowed)))
+        .map_or(Ok(()), |key| {
+            Err(D::Error::unknown_field(&bounded_token(key), allowed))
+        })
 }
 
 impl HookMessage {
@@ -267,7 +269,34 @@ impl HookMessage {
         if canonical.as_slice() != bytes {
             return Err(HookMessageError::NotCanonical);
         }
-        serde_json::from_value(value).map_err(HookMessageError::Shape)
+        serde_json::from_value(value)
+            .map_err(|error| HookMessageError::Shape(redacted_message(&error.to_string())))
+    }
+
+    /// Encode one handler message as canonical JSON (RFC 8785).
+    ///
+    /// The same output ceiling the decode path enforces applies here, so a
+    /// message a caller builds in memory can never exceed a bound a message
+    /// arriving from a handler would have been refused for.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HookMessageError`] when the message carries a proposal that
+    /// cannot be canonicalized, or when the encoded bytes exceed the ceiling.
+    pub fn to_canonical_json(
+        &self,
+        limits: &HandlerOutputLimits,
+    ) -> Result<Vec<u8>, HookMessageError> {
+        let value = serde_json::to_value(self)
+            .map_err(|error| HookMessageError::Shape(redacted_message(&error.to_string())))?;
+        let bytes = canonicalize_json(&value).map_err(HookMessageError::Canonical)?;
+        if bytes.len() > limits.max_output_bytes {
+            return Err(HookMessageError::OutputTooLarge {
+                size: bytes.len(),
+                max: limits.max_output_bytes,
+            });
+        }
+        Ok(bytes)
     }
 }
 
@@ -284,9 +313,10 @@ pub enum HookMessageError {
     /// The message is valid JSON but not canonical.
     #[error("handler message is not canonical JSON")]
     NotCanonical,
-    /// The message violates the message shape.
+    /// The message violates the message shape. The deserializer's own
+    /// wording, with the untrusted values it repeats redacted and bounded.
     #[error("handler message violates the hook message shape: {0}")]
-    Shape(#[from] serde_json::Error),
+    Shape(String),
     /// The message carries a number that cannot be canonicalized.
     #[error("handler message is not canonicalizable: {0}")]
     Canonical(#[from] JcsError),
@@ -323,7 +353,10 @@ impl HookMessageError {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
+    use crate::error::MAX_DISPLAYED_TOKEN_BYTES;
     use serde_json::json;
 
     fn canonical_bytes(value: &Value) -> Vec<u8> {
@@ -356,17 +389,23 @@ mod tests {
             })
         );
 
-        let value = serde_json::to_value(&message).expect("serializes");
-        assert_eq!(canonical_bytes(&value), bytes);
+        assert_eq!(
+            message.to_canonical_json(&limits).expect("encodes"),
+            bytes,
+            "the encoder reproduces the bytes it decoded"
+        );
     }
 
     #[test]
     fn none_is_the_notification_answer() {
         let limits = HandlerOutputLimits::default();
         let bytes = canonical_bytes(&json!({"answer": "none"}));
+        let message = HookMessage::from_canonical_json(&bytes, &limits).expect("decodes");
+        assert_eq!(message, HookMessage::Nothing);
         assert_eq!(
-            HookMessage::from_canonical_json(&bytes, &limits).expect("decodes"),
-            HookMessage::Nothing
+            message.to_canonical_json(&limits).expect("encodes"),
+            bytes,
+            "the encoder reproduces the bytes it decoded"
         );
     }
 
@@ -388,8 +427,11 @@ mod tests {
             "no verified evidence for the residence requirement"
         );
 
-        let value = serde_json::to_value(&message).expect("serializes");
-        assert_eq!(canonical_bytes(&value), bytes);
+        assert_eq!(
+            message.to_canonical_json(&limits).expect("encodes"),
+            bytes,
+            "the encoder reproduces the bytes it decoded"
+        );
     }
 
     #[test]
@@ -480,6 +522,31 @@ mod tests {
     }
 
     #[test]
+    fn the_encode_path_flips_the_output_ceiling_at_a_non_default_value() {
+        let bytes = canonical_bytes(&proposal_message());
+        let limits = HandlerOutputLimits::default();
+        let message = HookMessage::from_canonical_json(&bytes, &limits).expect("decodes");
+
+        let tight = HandlerOutputLimits {
+            max_output_bytes: bytes.len() - 1,
+        };
+        let error = message
+            .to_canonical_json(&tight)
+            .expect_err("refused above the non-default ceiling");
+        assert_eq!(error.code(), "hook.message.output_too_large");
+        assert_eq!(error.category(), ErrorCategory::Resource);
+
+        let generous = HandlerOutputLimits {
+            max_output_bytes: bytes.len(),
+        };
+        assert_eq!(
+            message.to_canonical_json(&generous).expect("encodes"),
+            bytes,
+            "accepted below (at) the non-default ceiling"
+        );
+    }
+
+    #[test]
     fn the_size_check_runs_before_parsing() {
         let limits = HandlerOutputLimits {
             max_output_bytes: 8,
@@ -556,6 +623,101 @@ mod tests {
         );
         assert_eq!(MAX_REFUSAL_CODE_BYTES, 128);
         assert_eq!(MAX_REFUSAL_SUMMARY_BYTES, 1_024);
+    }
+
+    #[test]
+    fn the_text_ceiling_flips_at_a_non_default_value() {
+        // The two named bounds are the refusal code and summary; a third,
+        // arbitrary ceiling proves the bound is the parameter and not a
+        // constant the type happens to agree with.
+        let at_bound = BoundedText::<4>::new("abcd".to_owned()).expect("exactly at the bound");
+        assert_eq!(at_bound.as_str(), "abcd");
+        assert_eq!(
+            BoundedText::<4>::new("abcde".to_owned()).expect_err("one byte over"),
+            BoundedTextError::TooLong { size: 5, max: 4 }
+        );
+        let error = serde_json::from_value::<BoundedText<4>>(json!("abcde"))
+            .expect_err("the decode path enforces the same bound");
+        assert!(error.to_string().contains("4-byte ceiling"), "{error}");
+    }
+
+    #[test]
+    fn an_untrusted_answer_never_reaches_display_unbounded() {
+        let limits = HandlerOutputLimits::default();
+        // Under the output ceiling, so the shape check is the one that
+        // reports, and far over the token ceiling a diagnostic may repeat.
+        let huge = "x".repeat(64 * 1024);
+        let bytes = canonical_bytes(&json!({"answer": huge}));
+        let rendered = HookMessage::from_canonical_json(&bytes, &limits)
+            .expect_err("the answer set is closed")
+            .to_string();
+        assert!(rendered.len() < 1_024, "{} bytes rendered", rendered.len());
+        assert!(
+            !rendered.contains(&"x".repeat(MAX_DISPLAYED_TOKEN_BYTES + 1)),
+            "no run of the input longer than the token ceiling survives"
+        );
+    }
+
+    #[test]
+    fn an_untrusted_member_name_never_reaches_display_unbounded() {
+        let limits = HandlerOutputLimits::default();
+        let huge = "x".repeat(64 * 1024);
+        let bytes = canonical_bytes(&json!({"answer": "none", huge.clone(): true}));
+        let rendered = HookMessage::from_canonical_json(&bytes, &limits)
+            .expect_err("no extra fields")
+            .to_string();
+        assert!(rendered.len() < 1_024, "{} bytes rendered", rendered.len());
+        assert!(
+            !rendered.contains(&"x".repeat(MAX_DISPLAYED_TOKEN_BYTES + 1)),
+            "no run of the input longer than the token ceiling survives"
+        );
+    }
+
+    #[test]
+    fn an_untrusted_refusal_code_never_reaches_display_unbounded() {
+        let limits = HandlerOutputLimits::default();
+        let huge = "x".repeat(64 * 1024);
+        let bytes = canonical_bytes(&json!({
+            "answer": "refusal",
+            "code": huge,
+            "summary": "s",
+        }));
+        let rendered = HookMessage::from_canonical_json(&bytes, &limits)
+            .expect_err("an over-bound code is refused")
+            .to_string();
+        assert!(rendered.len() < 1_024, "{} bytes rendered", rendered.len());
+        assert!(
+            !rendered.contains(&"x".repeat(MAX_DISPLAYED_TOKEN_BYTES + 1)),
+            "no run of the input longer than the token ceiling survives"
+        );
+    }
+
+    #[test]
+    fn every_message_code_is_distinct_and_in_its_namespace() {
+        let variants = [
+            HookMessageError::OutputTooLarge { size: 1, max: 0 },
+            HookMessageError::Json(
+                parse_json_strict(b"{").expect_err("a truncated object is not strict JSON"),
+            ),
+            HookMessageError::NotCanonical,
+            HookMessageError::Shape(String::new()),
+            HookMessageError::Canonical(
+                canonicalize_json(&json!({"count": 9007199254740993_u64}))
+                    .expect_err("a lossy integer is not canonicalizable"),
+            ),
+        ];
+        let codes: Vec<&str> = variants.iter().map(HookMessageError::code).collect();
+        assert_eq!(
+            codes.iter().collect::<BTreeSet<_>>().len(),
+            codes.len(),
+            "codes are distinct: {codes:?}"
+        );
+        for code in codes {
+            assert!(
+                code.starts_with("hook.message."),
+                "{code} is outside the namespace"
+            );
+        }
     }
 
     #[test]
