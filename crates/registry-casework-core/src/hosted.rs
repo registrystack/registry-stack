@@ -723,12 +723,27 @@ pub struct HostedValidationError {
 
 impl HostedValidationError {
     pub fn new(path: impl Into<String>, reason: HostedValidationReason) -> Self {
+        Self::with_fallback(path, reason, "$.display")
+    }
+
+    /// A result-scoped failure falls back to the result root so a field name
+    /// that cannot travel in a response header never relabels the error as a
+    /// display failure.
+    fn result_error(path: impl Into<String>, reason: HostedValidationReason) -> Self {
+        Self::with_fallback(path, reason, RESULT_PATH)
+    }
+
+    fn with_fallback(
+        path: impl Into<String>,
+        reason: HostedValidationReason,
+        fallback: &str,
+    ) -> Self {
         let path = path.into();
         Self {
             path: if path.len() <= 256 && path.bytes().all(valid_path_byte) {
                 path
             } else {
-                "$.display".to_owned()
+                fallback.to_owned()
             },
             reason,
         }
@@ -822,13 +837,13 @@ fn validate_display(schema: &Value, display: &Value) -> Result<(), HostedValidat
 
 fn validate_result(schema: &Value, result: &Value) -> Result<(), HostedValidationError> {
     if !result.is_object() {
-        return Err(HostedValidationError::new(
+        return Err(HostedValidationError::result_error(
             RESULT_PATH,
             HostedValidationReason::ObjectRequired,
         ));
     }
     if !bounded_json(result, MAXIMUM_HOSTED_DISPLAY_DEPTH) {
-        return Err(HostedValidationError::new(
+        return Err(HostedValidationError::result_error(
             RESULT_PATH,
             HostedValidationReason::MaximumDepthExceeded,
         ));
@@ -836,7 +851,7 @@ fn validate_result(schema: &Value, result: &Value) -> Result<(), HostedValidatio
     if !registry_platform_canonical_json::canonicalize_json(result)
         .is_ok_and(|bytes| bytes.len() <= MAXIMUM_HOSTED_RESULT_BYTES)
     {
-        return Err(HostedValidationError::new(
+        return Err(HostedValidationError::result_error(
             RESULT_PATH,
             HostedValidationReason::MaximumBytesExceeded,
         ));
@@ -845,7 +860,7 @@ fn validate_result(schema: &Value, result: &Value) -> Result<(), HostedValidatio
         .with_draft(Draft::Draft202012)
         .compile(schema)
         .map_err(|_| {
-            HostedValidationError::new(RESULT_PATH, HostedValidationReason::SchemaMismatch)
+            HostedValidationError::result_error(RESULT_PATH, HostedValidationReason::SchemaMismatch)
         })?;
     if let Err(errors) = compiled.validate(result) {
         let path = errors
@@ -860,7 +875,7 @@ fn validate_result(schema: &Value, result: &Value) -> Result<(), HostedValidatio
                 }
             })
             .unwrap_or_else(|| RESULT_PATH.to_owned());
-        return Err(HostedValidationError::new(
+        return Err(HostedValidationError::result_error(
             path,
             HostedValidationReason::SchemaMismatch,
         ));
@@ -992,9 +1007,10 @@ fn validate_result_constraints(
     Ok(())
 }
 
-/// Bound keywords must sit inside the property's own schema bounds and may only
-/// narrow a property whose type the schema declares inline, so a `$ref` property
-/// can carry choices but never bounds.
+/// Bound keywords must sit inside the property's own schema bounds and may
+/// only narrow a plain inline property, so a `$ref` or composed property can
+/// carry choices but never bounds: its effective bounds are not statically
+/// visible here, and the kind schema stays the sole authority.
 fn check_constraint_bounds(
     field_path: &str,
     subschema: &Value,
@@ -1012,7 +1028,7 @@ fn check_constraint_bounds(
     let minimum = constraint.get("minimum");
     let maximum = constraint.get("maximum");
     if minimum.is_some() || maximum.is_some() {
-        if !declares_type(&["number", "integer"]) {
+        if !declares_type(&["number", "integer"]) || !plain_inline_bounds(subschema) {
             return Err(constraint_invalid(field_path));
         }
         let minimum = minimum
@@ -1050,7 +1066,7 @@ fn check_constraint_bounds(
     let min_length = constraint.get("minLength");
     let max_length = constraint.get("maxLength");
     if min_length.is_some() || max_length.is_some() {
-        if !declares_type(&["string"]) {
+        if !declares_type(&["string"]) || !plain_inline_bounds(subschema) {
             return Err(constraint_invalid(field_path));
         }
         let min_length = min_length
@@ -1094,6 +1110,18 @@ fn validate_constraint_value(compiled: &JSONSchema, field: &str, value: &Value) 
     compiled.validate(&Value::Object(instance)).map_err(|_| ())
 }
 
+/// A bound keyword is verifiable only against a subschema whose bounds are
+/// written inline: a `$ref` sibling or a composition keyword can carry its
+/// own effective bounds that static containment cannot see.
+fn plain_inline_bounds(subschema: &Value) -> bool {
+    subschema.as_object().is_some_and(|object| {
+        !object.contains_key("$ref")
+            && !object.contains_key("allOf")
+            && !object.contains_key("anyOf")
+            && !object.contains_key("oneOf")
+    })
+}
+
 /// Applies the accepted narrowing to a decision result. A field the result does
 /// not carry is not widened by its constraint; only present fields are checked.
 fn validate_result_narrowing(
@@ -1110,7 +1138,7 @@ fn validate_result_narrowing(
         };
         let field_path = result_field_path(RESULT_PATH, field);
         let violated = || {
-            HostedValidationError::new(
+            HostedValidationError::result_error(
                 field_path.clone(),
                 HostedValidationReason::ConstraintViolated,
             )
@@ -1178,7 +1206,11 @@ fn result_field_path(prefix: &str, field: &str) -> String {
 }
 
 fn constraint_invalid(path: impl Into<String>) -> HostedValidationError {
-    HostedValidationError::new(path, HostedValidationReason::ConstraintInvalid)
+    HostedValidationError::with_fallback(
+        path,
+        HostedValidationReason::ConstraintInvalid,
+        RESULT_CONSTRAINTS_PATH,
+    )
 }
 
 fn is_false(value: &bool) -> bool {
@@ -1783,6 +1815,57 @@ mod tests {
             .check(&standalone_decision_starter_kind())
             .expect_err("constraints without a schema");
         assert_eq!(error.reason, HostedValidationReason::ResultNotDeclared);
+    }
+
+    #[test]
+    fn bound_constraints_require_plain_inline_properties() {
+        let mut policy = standalone_decision_starter_kind();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "score": {"type": "integer", "$ref": "#/$defs/score"},
+                "note": {"type": "string", "allOf": [{"maxLength": 50}]}
+            },
+            "$defs": {"score": {"minimum": 0}}
+        }));
+        // A bound on a property whose effective bounds hide behind a $ref
+        // sibling or a composition keyword is refused at create; the kind
+        // schema stays the authority and decide never gets to arbitrate it.
+        let error = result_constraints_request(json!({"score": {"minimum": -5}}))
+            .check(&policy)
+            .expect_err("bound beside a $ref sibling");
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        assert_eq!(error.path, "$.resultConstraints/score");
+        let error = result_constraints_request(json!({"note": {"maxLength": 200}}))
+            .check(&policy)
+            .expect_err("bound behind allOf");
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        assert_eq!(error.path, "$.resultConstraints/note");
+    }
+
+    #[test]
+    fn result_errors_fall_back_to_the_result_root_not_display() {
+        let mut policy = standalone_decision_starter_kind();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["batch status"],
+            "properties": {"batch status": {"type": "integer"}}
+        }));
+        policy.outcomes[0].result_required = true;
+        let snapshot = policy.snapshot().expect("space-named result schema");
+        // The field name cannot travel in a response header, so the bounded
+        // path falls back to the result root and never to the display root.
+        let error = HostedDecisionRequest {
+            outcome: "confirmed".to_owned(),
+            reason: None,
+            result: Some(json!({"batch status": "not-a-number"})),
+        }
+        .check(&snapshot, None)
+        .expect_err("invalid value under a space-named result field");
+        assert_eq!(error.reason, HostedValidationReason::SchemaMismatch);
+        assert_eq!(error.path, "$.result");
     }
 
     #[test]
