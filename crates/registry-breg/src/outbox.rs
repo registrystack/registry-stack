@@ -12,7 +12,7 @@ use tokio_postgres::Transaction;
 use uuid::Uuid;
 
 use crate::contract::{
-    Classification, EventConditionSource, EventScalarValue, EventSource, EventTrigger,
+    Classification, EventConditionSource, EventScalarValue, EventTrigger, HookSource,
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
@@ -43,7 +43,7 @@ pub(crate) struct OutboxMutation<'a> {
 
 pub(crate) async fn insert_configured_events(
     transaction: &Transaction<'_>,
-    events: &BTreeMap<String, EventSource>,
+    events: &BTreeMap<String, HookSource>,
     deliveries: &[CompiledEventDelivery],
     destinations: Option<&ActivatedEventDestinationRegistry>,
     mutation: OutboxMutation<'_>,

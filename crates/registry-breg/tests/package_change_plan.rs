@@ -821,7 +821,7 @@ fn metadata_only_access_or_disclosure_changes_create_empty_applicable_plans() {
 fn complete_extension_surface_modules_are_order_independent() {
     let field_module = parse_module_yaml(br#"{"id":"field-extension","version":"1","extendEntities":[{"entity":"asset","fields":[{"id":"status","type":"string","maxLength":16,"classification":"internal"}],"constraints":[{"kind":"unique","id":"status-unique","fields":["status"]}],"indexes":[{"id":"status-idx","fields":["status"]}]}]}"#)
         .expect("field extension parses");
-    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"events":[{"id":"asset-created","trigger":"created","projection":["code","status"],"webhook":{"destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
+    let event_module = parse_module_yaml(br#"{"id":"event-extension","version":"1","extendEntities":[{"entity":"asset","accessProfiles":[{"id":"auditor","principalClaim":"principal","operations":["get","list"],"readableFields":["code","status"],"writableFields":[], "rowBoundaries": []}],"hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","status"],"handler":{"kind":"url","destinationId":"package-change-events"}}]}],"entities":[{"id":"site","primaryDataset":"neutral-registry","route":"sites","mutationMode":"create_only","fields":[{"id":"code","type":"string","maxLength":8,"classification":"internal"}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"], "rowBoundaries": []}]}]}"#)
         .expect("event extension parses");
     let project_bytes = format!(
         r#"{{"apiVersion":"registry.registrystack.org/v1alpha1","kind":"RegistryProject","registry":{{"id":"neutral-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://package.example.test"}},"package":{{"environment":"local","instanceId":"{INSTANCE}","sequence":2,"sourceRevision":"{SOURCE_REVISION}"}},"manifestProjection":{{"accessProfile":"reader","classificationCeiling":"internal","catalog":{{"baseUrl":"https://package.example.test","title":"Neutral Registry Catalog","publisher":{{"id":"neutral-registry-authority","name":"Package Test Publisher"}}}},"publicService":{{"id":"neutral-registry-service","title":"Neutral Registry Catalog"}},"datasets":[{{"id":"neutral-registry","title":"Neutral Registry Dataset","owner":"Package Test Publisher","status":"active"}}],"dataServices":[{{"id":"neutral-registry-data-service","title":"Neutral Registry Catalog","endpointUrl":"https://package.example.test","servesDatasets":["neutral-registry"]}}]}},"entities":[{{"id":"asset","primaryDataset":"neutral-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}]}}],"accessProfiles":[{{"id":"reader","default":true,"principalClaim":"principal","permissions":[{{"rowBoundaries": [], "entity":"asset","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}],"modules":[{{"id":"field-extension","version":"1","digest":"{}"}},{{"id":"event-extension","version":"1","digest":"{}"}}]}}"#,
@@ -853,7 +853,7 @@ fn complete_extension_surface_modules_are_order_independent() {
     assert!(asset.constraints.contains_key("status-unique"));
     assert!(asset.indexes.contains_key("status-idx"));
     assert!(asset.access_profiles.contains_key("auditor"));
-    assert!(asset.events.contains_key("asset-created"));
+    assert!(asset.hooks.contains_key("asset-created"));
     assert!(first.entities().contains_key("site"));
 }
 
@@ -1639,7 +1639,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#""id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
-            r#","events":[{"id":"asset-created","trigger":"created","projection":["code"],"webhook":{"destinationId":"package-change-events"}}]"#,
+            r#","hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"package-change-events"}}]"#,
         ),
         Variant::MetadataOnlyChanged => asset_entity_with_mode(
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"restricted"},{"id":"valid-from","type":"date","required":true,"classification":"internal","validTimeRole":"valid_from"},{"id":"valid-to","type":"date","classification":"internal"}"#,
@@ -1648,7 +1648,7 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
             r#""id":"reader","principalClaim":"subject","requiredScopes":["asset:read"],"operations":["create","get","list"],"readableFields":["code","valid-from","valid-to"],"writableFields":["code","valid-from","valid-to"]"#,
             "",
             "",
-            r#","events":[{"id":"asset-created","trigger":"created","projection":["code","rank"],"webhook":{"destinationId":"package-change-events"}}]"#,
+            r#","hooks":[{"phase":"after","id":"asset-created","trigger":"created","projection":["code","rank"],"handler":{"kind":"url","destinationId":"package-change-events"}}]"#,
         ),
         Variant::Base | Variant::NewEntity => asset_entity(
             base_asset_fields(),

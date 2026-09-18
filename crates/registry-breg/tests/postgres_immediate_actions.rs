@@ -2167,7 +2167,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"legal-name","apiName":"legalName","type":"string","maxLength":160,"required":true,"classification":"restricted"},
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{"id":"person-created","trigger":"created","projection":["person-code"]}]
+            "hooks":[{"phase":"after","id":"person-created","trigger":"created","projection":["person-code"]}]
           },{
             "id":"household","primaryDataset":"test-dataset","route":"households","mutationMode":"mutable",
             "fields":[
@@ -2176,7 +2176,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"contact-person","apiName":"contactPerson","type":"reference","target":"person","classification":"restricted"},
               {"id":"status-note","apiName":"statusNote","type":"string","maxLength":160,"classification":"restricted"}
             ],
-            "events":[{"id":"household-patched","trigger":"patched","projection":["contact-person"]}]
+            "hooks":[{"phase":"after","id":"household-patched","trigger":"patched","projection":["contact-person"]}]
           },{
             "id":"group-membership","primaryDataset":"test-dataset","route":"group-memberships","mutationMode":"mutable",
             "fields":[
@@ -2184,7 +2184,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"household","type":"reference","target":"household","required":true,"classification":"restricted"},
               {"id":"jurisdiction","apiName":"jurisdiction","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{"id":"membership-created","trigger":"created","projection":["person","household"]}]
+            "hooks":[{"phase":"after","id":"membership-created","trigger":"created","projection":["person","household"]}]
           }],
           "actions":[{
             "id":"register-household-contact",

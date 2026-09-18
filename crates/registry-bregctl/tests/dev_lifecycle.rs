@@ -201,11 +201,11 @@ fn installed_dev_receives_retries_replays_and_retains_authored_events() {
         .iter_mut()
         .find(|entity| entity["id"] == "record")
         .unwrap();
-    record["events"] = json!([
-        {"id":"record-created-a", "trigger":"created", "projection":["status"],
-         "webhook":{"destinationId":"receiver-a"}},
-        {"id":"record-created-b", "trigger":"created", "projection":["status"],
-         "webhook":{"destinationId":"receiver-b"}}
+    record["hooks"] = json!([
+        {"phase":"after","id":"record-created-a", "trigger":"created", "projection":["status"],
+         "handler":{"kind":"url","destinationId":"receiver-a"}},
+        {"phase":"after","id":"record-created-b", "trigger":"created", "projection":["status"],
+         "handler":{"kind":"url","destinationId":"receiver-b"}}
     ]);
     write(
         &project.join("registry.yaml"),

@@ -101,8 +101,9 @@ pub enum HookHandlerSource {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         abi: Option<String>,
     },
-    /// A logical destination bound to a URL and a secret at runtime. Key in
-    /// runtime `hookDestinations`; the project carries no URL or secret.
+    /// A logical destination bound to a URL and a secret at runtime. The
+    /// runtime names the binding it looks the key up in; the project carries
+    /// no URL or secret.
     Url {
         /// Key in the runtime destination binding.
         destination_id: String,

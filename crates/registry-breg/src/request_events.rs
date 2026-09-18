@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use crate::contract::{EventConditionSource, EventSource, EventTrigger};
+use crate::contract::{EventConditionSource, EventTrigger, HookSource};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::CompiledEventDelivery;
 use crate::outbox::{insert_webhook_delivery, OutboxError, WebhookCapture};
@@ -39,7 +39,7 @@ pub struct RequestLifecycleEvent<'a> {
 #[doc(hidden)]
 pub async fn insert_request_lifecycle_events(
     transaction: &Transaction<'_>,
-    events: &BTreeMap<String, EventSource>,
+    events: &BTreeMap<String, HookSource>,
     deliveries: &[CompiledEventDelivery],
     destinations: Option<&ActivatedEventDestinationRegistry>,
     event: RequestLifecycleEvent<'_>,

@@ -374,7 +374,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                  "classification":"restricted"}
             ],
             "constraints":[{"kind":"unique","fields":["code"]}],
-            "events":[{"id":"entry-created","trigger":"created","projection":["code"]}]
+            "hooks":[{"phase":"after","id":"entry-created","trigger":"created","projection":["code"]}]
         }],
         "accessProfiles":[{
             "id":PROFILE, "principalClaim":"registry_principal",

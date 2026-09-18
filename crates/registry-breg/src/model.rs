@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
-    EventSource, FieldTypeSource, ManifestProjectionCatalogSource,
+    FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
     ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
     ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
     ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
@@ -774,7 +774,7 @@ pub struct CompiledEntity {
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
-    pub events: BTreeMap<String, EventSource>,
+    pub hooks: BTreeMap<String, HookSource>,
 }
 
 /// Governed catalogue projection with every resource reference resolved once.

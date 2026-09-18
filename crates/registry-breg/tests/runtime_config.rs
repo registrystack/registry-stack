@@ -202,9 +202,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             |(index, (destination_id, _timeout_ms, _maximum_attempts))| {
                 let mut event = json!({
                     "id": format!("case-event-{index}"),
+                    "phase": "after",
                     "trigger": if index == 0 { "created" } else { "patched" },
                     "projection": ["label"],
-                    "webhook": {
+                    "handler": {
+                        "kind": "url",
                         "destinationId": destination_id
                     }
                 });
@@ -233,7 +235,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
                 {"id": "label", "type": "string", "maxLength": 64, "classification": "internal"},
                 {"id": "eligibility", "type": "string", "maxLength": 32, "classification": "restricted"}
             ],
-            "events": events
+            "hooks": events
         }]
     });
     let parsed = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
@@ -2040,7 +2042,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
         &fixture.trust_anchor,
     );
     let bindings = r#"evidenceProviders:
-  events:
+  hooks:
     baseUrl: https://evidence-endpoint-canary.example
     trustBindingId: evidence-trust-canary
     tokenRef: secret:file/evidence-token-canary
@@ -2061,12 +2063,12 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     // malformed binding values and missing members.
     for raw in [
         valid.replace("    tokenRef:", "    fields: []\n    tokenRef:"),
-        valid.replace("    tokenRef:", "    events: []\n    tokenRef:"),
+        valid.replace("    tokenRef:", "    hooks: []\n    tokenRef:"),
         valid.replace(
             "    tokenRef:",
             "    token: inline-secret-canary\n    tokenRef:",
         ),
-        format!("{base}evidenceProviders:\n  events: []\n"),
+        format!("{base}evidenceProviders:\n  hooks: []\n"),
         format!("{base}evidenceProviders:\n  entities: {{}}\n"),
     ] {
         let error = parse_runtime_config_with_env(&raw, env_lookup)
@@ -2074,7 +2076,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
         assert_eq!(error, RuntimeConfigError::Document);
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
-    for member in ["events", "entities"] {
+    for member in ["hooks", "entities"] {
         let raw = format!("{valid}{member}: []\n");
         assert_eq!(
             parse_runtime_config_with_env(&raw, env_lookup)

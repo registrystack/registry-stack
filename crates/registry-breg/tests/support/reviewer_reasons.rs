@@ -618,10 +618,12 @@ fn compile_reason_registry(stages: usize, operator_erase: bool) -> registry_breg
     if operator_erase {
         request["changeRequest"]["retention"] = json!({"mode": "operator_erase"});
     }
-    request["events"] = json!([{
+    request["hooks"] = json!([{
+        "phase": "after",
         "id":"review-returned", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["reject","request_revision"], "toStates":["rejected","needs_changes"], "stages":["review"]}
     }, {
+        "phase": "after",
         "id":"review-decided", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["approve","apply"], "toStates":["submitted","approved","applied"]}
     }]);

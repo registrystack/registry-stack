@@ -418,7 +418,7 @@ impl MutationCoordinator {
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
             insert_configured_events(
                 transaction.transaction(),
-                &entity.events,
+                &entity.hooks,
                 &exact_entity_event_deliveries(registry, entity)?,
                 self.event_destinations.as_deref(),
                 OutboxMutation {

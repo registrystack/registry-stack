@@ -3333,8 +3333,9 @@ entities:
         type: string
         maxLength: 64
         classification: public
-    events:
+    hooks:
       - id: case-created
+        phase: after
         trigger: created
         projection: [label]
 "#,
@@ -3367,11 +3368,13 @@ entities:
         type: string
         maxLength: 64
         classification: public
-    events:
+    hooks:
       - id: case-created
+        phase: after
         trigger: created
         projection: [label]
-        webhook:
+        handler:
+          kind: url
           destinationId: case-operations
 "#,
     );

@@ -8,7 +8,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::contract::{
-    EventConditionSource, EventSource, EventTrigger, FieldTypeSource, MutationMode, Operation,
+    EventConditionSource, EventTrigger, FieldTypeSource, HookSource, MutationMode, Operation,
     PackageIdentitySource, ProvenanceFieldSource,
 };
 use crate::diagnostics::Diagnostic;
@@ -170,7 +170,7 @@ pub(crate) fn generate_artifacts(
             .get(&delivery.entity_id)
             .expect("compiled event delivery refers to a compiled entity");
         let event = entity
-            .events
+            .hooks
             .get(&delivery.event_id)
             .expect("compiled event delivery refers to a compiled event");
         let binding = event_data_schema_binding(registry_id, entity, event)?;
@@ -285,7 +285,7 @@ fn sanitize_effective_model_planners(value: &mut Value) {
 pub(crate) fn event_data_schema_binding(
     registry_id: &str,
     entity: &CompiledEntity,
-    event: &EventSource,
+    event: &HookSource,
 ) -> Result<EventDataSchemaBinding, Diagnostic> {
     let mut value_properties = Map::new();
     for field_id in &event.projection {
@@ -615,7 +615,7 @@ fn review_stage_id_schema() -> Value {
     })
 }
 
-fn request_lifecycle_event_schema(event: &EventSource) -> Value {
+fn request_lifecycle_event_schema(event: &HookSource) -> Value {
     let mut transition =
         json!({"type": "string", "enum": crate::compiler::REQUEST_LIFECYCLE_TRANSITIONS});
     let mut to_state = request_state_schema();

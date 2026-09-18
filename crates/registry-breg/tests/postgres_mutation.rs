@@ -2291,10 +2291,10 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"note","type":"string","maxLength":128,"required":false,"classification":"public"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ],
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
-              {"id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
+              {"phase":"after","id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
             ]
           },{
             "id":"log","primaryDataset":"test-dataset","route":"logs","mutationMode":"create_only","classification":"public",

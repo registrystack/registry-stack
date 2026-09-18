@@ -871,7 +871,8 @@ fn lifecycle_rhai_registry(review_required: bool) -> registry_breg::CompiledRegi
         .iter_mut()
         .find(|entity| entity["id"] == "person-name-change-request")
         .unwrap();
-    request["events"] = json!([{
+    request["hooks"] = json!([{
+        "phase": "after",
         "id":"automatic-name-change-applied", "trigger":"request_lifecycle", "projection":["handling"],
         "when":{"kind":"request_lifecycle","toStates":["applied"]}
     }]);

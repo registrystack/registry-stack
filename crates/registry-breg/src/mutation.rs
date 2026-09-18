@@ -595,13 +595,14 @@ fn exact_entity_event_deliveries(
     let mut delivered_events = BTreeSet::new();
     for delivery in &deliveries {
         let event = entity
-            .events
+            .hooks
             .get(&delivery.event_id)
             .ok_or(MutationError::InvalidRequest)?;
-        let webhook = event
-            .webhook
-            .as_ref()
-            .ok_or(MutationError::InvalidRequest)?;
+        let Some(crate::contract::HookHandlerSource::Url { destination_id }) =
+            event.handler.as_ref()
+        else {
+            return Err(MutationError::InvalidRequest);
+        };
         let expected_projection = event.projection.iter().cloned().collect::<Vec<_>>();
         let classification_ceiling = event
             .projection
@@ -617,7 +618,7 @@ fn exact_entity_event_deliveries(
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
             || delivery.trigger != event.trigger
-            || delivery.destination_id != webhook.destination_id
+            || delivery.destination_id != *destination_id
             || delivery.projection_fields != expected_projection
             || delivery.when != event.when
             || delivery.classification_ceiling != classification_ceiling
@@ -648,16 +649,16 @@ fn exact_entity_event_deliveries(
         }
     }
     if entity
-        .events
+        .hooks
         .values()
-        .any(|event| event.webhook.is_some() && !delivered_events.contains(event.id.as_str()))
+        .any(|event| event.handler.is_some() && !delivered_events.contains(event.id.as_str()))
     {
         return Err(MutationError::InvalidRequest);
     }
     Ok(deliveries)
 }
 
-fn event_condition_fields(event: &crate::contract::EventSource) -> impl Iterator<Item = &String> {
+fn event_condition_fields(event: &crate::contract::HookSource) -> impl Iterator<Item = &String> {
     let mut fields = BTreeSet::new();
     if let Some(crate::contract::EventConditionSource::Fields {
         changed,
@@ -674,7 +675,7 @@ fn event_condition_fields(event: &crate::contract::EventSource) -> impl Iterator
 
 fn expected_maximum_event_payload_bytes(
     entity: &CompiledEntity,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Option<u32> {
     crate::compiler::maximum_compiled_event_payload_bytes(entity, event)
 }
@@ -1388,7 +1389,7 @@ impl MutationCoordinator {
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
         insert_configured_events(
             transaction.transaction(),
-            &request.plan.entity.events,
+            &request.plan.entity.hooks,
             &request.plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
@@ -1632,7 +1633,7 @@ impl MutationCoordinator {
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
             insert_configured_events(
                 transaction.transaction(),
-                &item_plan.entity.events,
+                &item_plan.entity.hooks,
                 &item_plan.event_deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {

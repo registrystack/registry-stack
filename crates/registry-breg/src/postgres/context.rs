@@ -3325,7 +3325,7 @@ mod tests {
                 temporal: None,
                 indexes: Vec::new(),
                 access_profiles: Vec::new(),
-                events: Vec::new(),
+                hooks: Vec::new(),
             }],
             actions: Vec::new(),
             access_profiles: vec![

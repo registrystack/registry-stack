@@ -134,6 +134,17 @@ fn classify_change(
     }
 }
 
+/// The bound destination of a hook that delivers to one, for change summaries.
+///
+/// A hook with no handler, or one this engine does not deliver, summarizes as
+/// null rather than inventing a destination the operator never declared.
+fn hook_destination_id(hook: &crate::contract::HookSource) -> Option<&String> {
+    match hook.handler.as_ref() {
+        Some(crate::contract::HookHandlerSource::Url { destination_id }) => Some(destination_id),
+        Some(_) | None => None,
+    }
+}
+
 fn access_change_details(
     baseline: &CompiledRegistry,
     candidate: &CompiledRegistry,
@@ -164,7 +175,7 @@ fn access_change_details(
         ),
         Code::EventChanged => {
             let summarize = |entity: Option<&crate::model::CompiledEntity>| {
-                entity.and_then(|e| e.events.get(member)).map(|e| json!({"projection": e.projection, "destinationId": e.webhook.as_ref().map(|w| &w.destination_id)})).unwrap_or(Value::Null)
+                entity.and_then(|e| e.hooks.get(member)).map(|e| json!({"projection": e.projection, "destinationId": hook_destination_id(e)})).unwrap_or(Value::Null)
             };
             (summarize(before_entity), summarize(after_entity))
         }

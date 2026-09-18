@@ -286,9 +286,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               "startField":"valid-from",
               "endField":"valid-to"
             }],
-            "events":[
-              {"id":"membership-created","trigger":"created","projection":["subject","group","valid-from","valid-to"]},
-              {"id":"membership-patched","trigger":"patched","projection":["subject","group","valid-from","valid-to"]}
+            "hooks":[
+              {"phase":"after","id":"membership-created","trigger":"created","projection":["subject","group","valid-from","valid-to"]},
+              {"phase":"after","id":"membership-patched","trigger":"patched","projection":["subject","group","valid-from","valid-to"]}
             ]
           }],
           "accessProfiles":[{

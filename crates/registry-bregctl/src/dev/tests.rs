@@ -2275,10 +2275,10 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         .iter_mut()
         .find(|entity| entity["id"] == "record")
         .unwrap();
-    entity["events"] = json!([
-        {"id":"record-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"local-hook"}},
-        {"id":"record-patched-v1","trigger":"patched","projection":["label"],"webhook":{"destinationId":"local-hook"}},
-        {"id":"record-second-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"second-hook"}}
+    entity["hooks"] = json!([
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-patched-v1","trigger":"patched","projection":["label"],"handler":{"kind":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-second-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"second-hook"}}
     ]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
@@ -2379,9 +2379,10 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
         .iter_mut()
         .find(|entity| entity["id"] == "record")
         .unwrap();
-    entity["events"] = json!([{
+    entity["hooks"] = json!([{
+        "phase": "after",
         "id":"record-created-v1","trigger":"created","projection":["code"],
-        "webhook":{"destinationId":"openfn"}
+        "handler":{"kind":"url","destinationId":"openfn"}
     }]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();

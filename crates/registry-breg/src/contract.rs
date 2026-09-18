@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jsonschema::{Draft, JSONSchema};
 use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+pub use registry_platform_hooks::{HookHandlerSource, HookPhase};
 use serde::{
     de::DeserializeOwned, de::Error as _, de::IntoDeserializer, Deserialize, Deserializer,
     Serialize,
@@ -373,7 +374,7 @@ pub struct EntitySource {
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
-    pub events: Vec<EventSource>,
+    pub hooks: Vec<HookSource>,
     #[serde(default)]
     pub temporal: Option<TemporalSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -437,7 +438,7 @@ pub struct EntityExtensionSource {
     #[cfg_attr(feature = "schema", schemars(skip))]
     pub access_profiles: Vec<AccessProfileSource>,
     #[serde(default)]
-    pub events: Vec<EventSource>,
+    pub hooks: Vec<HookSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub selector_profiles: Vec<SelectorProfileSource>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2279,22 +2280,36 @@ pub enum BoundaryOperator {
     In,
 }
 
+/// One declared hook on an entity.
+///
+/// The shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`
+/// and `when` closed to the vocabulary this compiler validates, and with
+/// `handler` optional. A hook that declares no handler is still recorded in
+/// the outbox and delivered nowhere; production compilation refuses that.
+///
+/// Entity hooks run after the triggering transaction commits, so `phase` is
+/// written and the compiler refuses any value it cannot run.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct EventSource {
-    /// Stable event contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
+pub struct HookSource {
+    /// Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.
     pub id: String,
-    /// Committed record change that can produce this event.
+    /// When the hook runs relative to the triggering transaction.
+    pub phase: HookPhase,
+    /// Committed record change that can produce this hook.
     pub trigger: EventTrigger,
-    /// Declared field identifiers to include in `values`. System event metadata is included separately.
-    pub projection: BTreeSet<String>,
-    /// Optional field tests, combined with AND. Omit to emit on every matching trigger.
+    /// Optional field tests, combined with AND. Omit to run on every matching trigger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
-    /// Logical delivery destination. Production compilation requires a webhook.
+    /// Declared field identifiers to include in `values`. System event metadata is included separately.
+    pub projection: BTreeSet<String>,
+    /// Governed, destination-neutral delivery. `destinationId` is a key in
+    /// runtime `eventDestinations`; the project carries no URL or secret, and
+    /// deployment configuration may tighten the bounds it binds but cannot
+    /// supply or widen this authority. Production compilation requires it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webhook: Option<WebhookSource>,
+    pub handler: Option<HookHandlerSource>,
 }
 
 /// Closed Version 1 event selection language.
@@ -2343,18 +2358,6 @@ pub enum EventScalarValue {
     Boolean(bool),
     Number(serde_json::Number),
     String(String),
-}
-
-/// Governed, destination-neutral webhook subscription.
-///
-/// Deployment configuration may bind `destination_id` to transport details
-/// and tighten these bounds, but cannot supply or widen this authority.
-#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct WebhookSource {
-    /// Key in runtime `eventDestinations`; the project carries no URL or secret.
-    pub destination_id: String,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -2798,7 +2801,13 @@ pub fn parse_project_json(bytes: &[u8]) -> Result<RegistryProject, CompileFailur
 }
 
 pub fn parse_module_json(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    parse_json(bytes, "module")
+    match parse_json(bytes, "module") {
+        Ok(module) => Ok(module),
+        Err(failure) => Err(removed_module_field_diagnostics(
+            parse_json_strict(bytes).ok().as_ref(),
+        )
+        .unwrap_or(failure)),
+    }
 }
 
 pub fn parse_project_yaml(bytes: &[u8]) -> Result<RegistryProject, CompileFailure> {
@@ -2844,11 +2853,61 @@ fn removed_project_field_diagnostics(value: Option<&Value>) -> Option<CompileFai
             }
         }
     }
+    removed_entity_hook_diagnostics(project, "project", &["entities"], &mut diagnostics);
     (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
 }
 
+fn removed_module_field_diagnostics(value: Option<&Value>) -> Option<CompileFailure> {
+    let module = value?.as_object()?;
+    let mut diagnostics = Vec::new();
+    removed_entity_hook_diagnostics(
+        module,
+        "module",
+        &["entities", "extendEntities"],
+        &mut diagnostics,
+    );
+    (!diagnostics.is_empty()).then(|| CompileFailure::from_errors(diagnostics))
+}
+
+/// Name the replacement when a document still declares the removed `events`
+/// member on an entity or an entity extension.
+///
+/// Without this the closed source shape refuses the member as an unknown
+/// field, which is a correct refusal that does not tell an adopter what to
+/// write instead.
+fn removed_entity_hook_diagnostics(
+    document: &serde_json::Map<String, Value>,
+    root: &str,
+    members: &[&str],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for member in members {
+        let Some(entities) = document.get(*member).and_then(Value::as_array) else {
+            continue;
+        };
+        for (index, entity) in entities.iter().enumerate() {
+            if entity
+                .as_object()
+                .is_some_and(|entity| entity.contains_key("events"))
+            {
+                diagnostics.push(Diagnostic::error(
+                    "entity.events.removed",
+                    format!("{root}.{member}[{index}].events"),
+                    "entities[].events was replaced by entities[].hooks; rename the key to hooks, declare phase: after on every hook, and replace webhook with handler {kind: url, destinationId}",
+                ));
+            }
+        }
+    }
+}
+
 pub fn parse_module_yaml(bytes: &[u8]) -> Result<RegistryModule, CompileFailure> {
-    parse_yaml(bytes, "module")
+    match parse_yaml(bytes, "module") {
+        Ok(module) => Ok(module),
+        Err(failure) => {
+            let value = serde_norway::from_slice::<Value>(bytes).ok();
+            Err(removed_module_field_diagnostics(value.as_ref()).unwrap_or(failure))
+        }
+    }
 }
 
 fn parse_json<T: DeserializeOwned>(bytes: &[u8], root: &str) -> Result<T, CompileFailure> {
