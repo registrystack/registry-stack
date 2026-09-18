@@ -126,8 +126,6 @@ pub(crate) mod stored_bytes;
 pub mod task_grant;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
-#[cfg(feature = "wasm")]
-pub(crate) mod wasm_executor_probe;
 pub mod wasm_handler;
 #[cfg(feature = "wasm")]
 pub mod wasm_runtime;

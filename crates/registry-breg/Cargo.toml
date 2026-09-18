@@ -14,6 +14,14 @@ name = "breg"
 path = "src/main.rs"
 required-features = ["runtime"]
 
+# Measures the binary, image, and dependency footprint of the platform WASM
+# executor. Nothing but an operator running the measurement ever runs it;
+# `required-features` is what keeps a default build of this crate free of the
+# `wasm` feature it exists to weigh.
+[[example]]
+name = "wasm-footprint-probe"
+required-features = ["wasm"]
+
 [[test]]
 name = "postgres_kernel"
 path = "tests/postgres_kernel.rs"
