@@ -8,6 +8,7 @@ use registry_casework::{
 };
 use registry_casework_client::{
     CaseworkAuth, CaseworkClient, CaseworkClientConfig, CaseworkClientError, CaseworkProblemCode,
+    HostedValidationReason,
 };
 use registry_casework_core::{
     AbsenceInput, AbsencesQuery, AssignmentRequest, BootstrapDirectoryRequest,
@@ -933,6 +934,379 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             json!(["create", "read", "note", "read_notes", "cancel", "poll"])
         );
     }
+    server.abort();
+    let _ = server.await;
+    idp.stop().await;
+    schema_admin
+        .batch_execute(&format!("DROP SCHEMA {schema} CASCADE"))
+        .await
+        .unwrap();
+    drop(schema_admin);
+    database_driver.await.unwrap().unwrap();
+}
+
+/// Each new hosted result validation reason reaches the wire the way the
+/// existing nine do: HTTP 400 request.invalid with the snake_case reason in
+/// registry-casework-validation-reason and the instance path in
+/// registry-casework-validation-path. The kind is authored in code so the
+/// shipped standalone example stays result-free.
+#[tokio::test]
+async fn result_validation_reasons_reach_the_wire_as_bounded_headers() {
+    let database_url = std::env::var(DATABASE_ENV).expect("dedicated acceptance database URL");
+    let (schema_admin, connection) = tokio_postgres::connect(&database_url, tokio_postgres::NoTls)
+        .await
+        .expect("connect to acceptance database");
+    let database_driver = tokio::spawn(connection);
+    let schema = format!("hosted_acceptance_{}", uuid::Uuid::new_v4().simple());
+    schema_admin
+        .batch_execute(&format!("CREATE SCHEMA {schema}"))
+        .await
+        .unwrap();
+    let separator = if database_url.contains('?') { '&' } else { '?' };
+    // This fixture keeps its own secret name so it can run beside the journey
+    // test in the same binary without sharing environment state.
+    let secret_name = format!(
+        "CASEWORK_HOSTED_ACCEPTANCE_SCHEMA_{}",
+        uuid::Uuid::new_v4().simple()
+    )
+    .to_ascii_uppercase();
+    std::env::set_var(
+        &secret_name,
+        format!("{database_url}{separator}options=-csearch_path%3D{schema}"),
+    );
+    let resolver = SecretResolver::new([SecretProvider::Environment], "/").unwrap();
+    let database = DatabaseConfig {
+        runtime_url_ref: format!("secret:env/{secret_name}"),
+        migration_url_ref: format!("secret:env/{secret_name}"),
+        trusted_root_certificate_ref: None,
+        test_only_plaintext: true,
+    };
+    let migration = PostgresStore::connect_migration(&database, &resolver).unwrap();
+    migration.migrate().await.unwrap();
+    let store = PostgresStore::connect_runtime(&database, &resolver).unwrap();
+    let mut project: CaseworkProject = serde_norway::from_str(include_str!(
+        "../../../products/casework/examples/standalone-decision/casework.yaml"
+    ))
+    .unwrap();
+    project.hosted_kinds[0].result_schema = Some(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["batchStatus"],
+        "properties": {
+            "batchStatus": {"type": "string", "enum": ["valid", "partial", "invalid"]},
+            "acceptedCount": {"type": "integer", "minimum": 0, "maximum": 100000},
+            "correctedReference": {"type": "string", "maxLength": 120}
+        }
+    }));
+    project.hosted_kinds[0].outcomes[0].result_required = true;
+    let mut plain = project.hosted_kinds[0].clone();
+    plain.id = "decision-plain".to_owned();
+    plain.result_schema = None;
+    for outcome in &mut plain.outcomes {
+        outcome.result_required = false;
+    }
+    let queue = plain.queue.clone();
+    project.hosted_kinds.push(plain);
+    project
+        .access_profiles
+        .iter_mut()
+        .find(|profile| profile.id == "requester")
+        .expect("requester profile")
+        .kinds
+        .push("decision-plain".to_owned());
+    project.check().unwrap();
+    let idp = MockIdp::start().await;
+    let keys = Arc::new(JwksFetcher::new_with_fetch_url_policy(
+        idp.jwks_uri(),
+        JwksFetcherConfig::defaults(),
+        FetchUrlPolicy::dev(),
+    ));
+    let authenticator = Arc::new(CaseworkAuthenticator::new(
+        &project,
+        oidc_verifier_config(idp.issuer(), vec![AUDIENCE.into()]),
+        keys,
+        HumanIdentityConfig::default(),
+    ));
+    let service = CaseworkService::new(
+        store,
+        project.clone(),
+        std::iter::empty::<Arc<dyn SourceAdapter>>(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let app = router(HttpState {
+        service,
+        authenticator,
+        project: Arc::new(project),
+    });
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let client = CaseworkClient::new(CaseworkClientConfig::new(
+        format!("http://{address}").parse().unwrap(),
+    ))
+    .unwrap();
+    let admin = token(&idp, "administrator", "admin", true);
+    let staff = token(&idp, "staff", "staff", true);
+    let requester = token(&idp, "requester", "request", false);
+    client
+        .bootstrap_directory(
+            CaseworkAuth::new(&admin, "administrator"),
+            0,
+            "bootstrap",
+            &BootstrapDirectoryRequest {
+                team_id: "reasons-team".into(),
+                queue_id: queue.clone(),
+                staff: vec![IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "staff".into(),
+                }],
+                supervisors: vec![IssuerPrincipal {
+                    issuer: idp.issuer(),
+                    subject: "supervisor".into(),
+                }],
+            },
+        )
+        .await
+        .unwrap();
+    let expect_reason = |error: CaseworkClientError, reason, path: &str| match error {
+        CaseworkClientError::Problem {
+            status: 400,
+            code: CaseworkProblemCode::RequestInvalid,
+            validation: Some(validation),
+            ..
+        } => {
+            assert_eq!(validation.reason, reason, "reason for path {path}");
+            assert_eq!(validation.path, path);
+        }
+        other => panic!("expected a bounded 400 validation problem, got {other:?}"),
+    };
+
+    // Constraints on a kind that declares no result schema.
+    let undeclared = HostedCreateRequest {
+        kind: "decision-plain".to_owned(),
+        requester_reference: "constraints-without-schema".to_owned(),
+        display: json!({"summary": "No result schema", "reference": "PLAIN-1"}),
+        result_constraints: Some(json!({"batchStatus": {"enum": ["valid"]}})),
+    };
+    expect_reason(
+        client
+            .create_hosted_item(
+                CaseworkAuth::new(&requester, "requester"),
+                "undeclared",
+                &undeclared,
+            )
+            .await
+            .expect_err("constraints without a schema"),
+        HostedValidationReason::ResultNotDeclared,
+        "$.resultConstraints",
+    );
+    // A field the pinned schema does not declare.
+    let unknown_field = HostedCreateRequest {
+        kind: "decision".to_owned(),
+        requester_reference: "unknown-field".to_owned(),
+        display: json!({"summary": "Unknown field", "reference": "REF-1"}),
+        result_constraints: Some(json!({"unknownField": {"enum": ["x"]}})),
+    };
+    expect_reason(
+        client
+            .create_hosted_item(
+                CaseworkAuth::new(&requester, "requester"),
+                "unknown-field",
+                &unknown_field,
+            )
+            .await
+            .expect_err("undeclared constraint field"),
+        HostedValidationReason::FieldNotDeclared,
+        "$.resultConstraints/unknownField",
+    );
+    // A keyword outside the narrowing subset.
+    let mut bad_keyword = HostedCreateRequest {
+        kind: "decision".to_owned(),
+        requester_reference: "bad-keyword".to_owned(),
+        display: json!({"summary": "Bad keyword", "reference": "REF-2"}),
+        result_constraints: Some(json!({"correctedReference": {"pattern": "^A"}})),
+    };
+    expect_reason(
+        client
+            .create_hosted_item(
+                CaseworkAuth::new(&requester, "requester"),
+                "bad-keyword",
+                &bad_keyword,
+            )
+            .await
+            .expect_err("unknown constraint keyword"),
+        HostedValidationReason::ConstraintInvalid,
+        "$.resultConstraints/correctedReference",
+    );
+    // A bound outside the schema's own bounds.
+    bad_keyword.result_constraints =
+        Some(json!({"acceptedCount": {"minimum": 0, "maximum": 200000}}));
+    expect_reason(
+        client
+            .create_hosted_item(
+                CaseworkAuth::new(&requester, "requester"),
+                "bad-bound",
+                &bad_keyword,
+            )
+            .await
+            .expect_err("widening bound"),
+        HostedValidationReason::ConstraintInvalid,
+        "$.resultConstraints/acceptedCount",
+    );
+    // A valid narrowing creates the item; the journey to a decision then
+    // answers the two decision-side reasons over the same headers.
+    let accepted = HostedCreateRequest {
+        kind: "decision".to_owned(),
+        requester_reference: "accepted-narrowing".to_owned(),
+        display: json!({"summary": "Accepted narrowing", "reference": "REF-3"}),
+        result_constraints: Some(json!({"batchStatus": {"enum": ["valid"]}})),
+    };
+    let item = client
+        .create_hosted_item(
+            CaseworkAuth::new(&requester, "requester"),
+            "accepted",
+            &accepted,
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(item.result_constraints, accepted.result_constraints);
+    let open = client
+        .list_hosted_work_items(
+            CaseworkAuth::new(&staff, "staff"),
+            &ListWorkItemsQuery {
+                view: InboxView::MyTeams,
+                sort: registry_casework_core::InboxSort::Due,
+                queue: Some(queue.clone()),
+                source_id: None,
+                subject_kind: None,
+                subject_id: None,
+                reference: None,
+                cursor: None,
+                limit: Some(10),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    let work_item = open
+        .items
+        .iter()
+        .find(|candidate| candidate.item_id == item.item_id)
+        .expect("staff sees the constrained item");
+    let hosted = work_item.hosted.as_ref().expect("hosted context");
+    assert!(hosted.result_schema.is_some());
+    assert_eq!(hosted.result_constraints, accepted.result_constraints);
+    let claimed = client
+        .claim_hosted_work_item(
+            CaseworkAuth::new(&staff, "staff"),
+            &action(work_item, "claim"),
+            "claim-reasons",
+        )
+        .await
+        .unwrap()
+        .value;
+    let decide_action = action(&claimed.item, "confirmed");
+    expect_reason(
+        client
+            .decide_hosted_work_item(
+                CaseworkAuth::new(&staff, "staff"),
+                &decide_action,
+                "missing-result",
+                &HostedDecisionRequest {
+                    outcome: "confirmed".into(),
+                    reason: None,
+                    result: None,
+                },
+            )
+            .await
+            .expect_err("required result missing"),
+        HostedValidationReason::ResultRequired,
+        "$.result",
+    );
+    expect_reason(
+        client
+            .decide_hosted_work_item(
+                CaseworkAuth::new(&staff, "staff"),
+                &decide_action,
+                "violated-narrowing",
+                &HostedDecisionRequest {
+                    outcome: "confirmed".into(),
+                    reason: None,
+                    result: Some(json!({"batchStatus": "partial"})),
+                },
+            )
+            .await
+            .expect_err("result outside the narrowing"),
+        HostedValidationReason::ConstraintViolated,
+        "$.result/batchStatus",
+    );
+    // A result on the schema-less kind is refused the same way at decision.
+    let plain_request = HostedCreateRequest {
+        kind: "decision-plain".to_owned(),
+        requester_reference: "plain-decision".to_owned(),
+        display: json!({"summary": "Plain kind", "reference": "PLAIN-2"}),
+        result_constraints: None,
+    };
+    let plain_item = client
+        .create_hosted_item(
+            CaseworkAuth::new(&requester, "requester"),
+            "plain",
+            &plain_request,
+        )
+        .await
+        .unwrap()
+        .value;
+    let plain_open = client
+        .get_hosted_work_item(CaseworkAuth::new(&staff, "staff"), plain_item.item_id)
+        .await
+        .unwrap()
+        .value;
+    let plain_claimed = client
+        .claim_hosted_work_item(
+            CaseworkAuth::new(&staff, "staff"),
+            &action(&plain_open, "claim"),
+            "claim-plain",
+        )
+        .await
+        .unwrap()
+        .value;
+    expect_reason(
+        client
+            .decide_hosted_work_item(
+                CaseworkAuth::new(&staff, "staff"),
+                &action(&plain_claimed.item, "confirmed"),
+                "plain-result",
+                &HostedDecisionRequest {
+                    outcome: "confirmed".into(),
+                    reason: None,
+                    result: Some(json!({"batchStatus": "valid"})),
+                },
+            )
+            .await
+            .expect_err("result on a schema-less kind"),
+        HostedValidationReason::ResultNotDeclared,
+        "$.result",
+    );
+    // The bounded journey still completes: the narrowed result is answered.
+    let decided = client
+        .decide_hosted_work_item(
+            CaseworkAuth::new(&staff, "staff"),
+            &decide_action,
+            "decide-result",
+            &HostedDecisionRequest {
+                outcome: "confirmed".into(),
+                reason: Some("checked".into()),
+                result: Some(json!({"batchStatus": "valid", "acceptedCount": 7})),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        decided.result,
+        Some(json!({"batchStatus": "valid", "acceptedCount": 7}))
+    );
     server.abort();
     let _ = server.await;
     idp.stop().await;
