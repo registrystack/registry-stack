@@ -314,6 +314,136 @@ fn checksum_failure_preserves_the_existing_toolset() {
 
 #[cfg(unix)]
 #[test]
+fn installer_switches_all_commands_through_one_toolset_pointer() {
+    let fixture = InstallerFixture::new();
+
+    let output = fixture.run();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+    for binary in BINARIES {
+        assert_eq!(
+            fs::read_link(fixture.install_dir.join(binary)).unwrap(),
+            PathBuf::from(format!(".evidence-current/{binary}")),
+            "{binary} must be a stable command link through the toolset pointer"
+        );
+    }
+    assert!(
+        fs::symlink_metadata(fixture.install_dir.join(".evidence-current"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    fixture.assert_active_toolset_is_traversable();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_atomic_pointer_switch_preserves_the_previous_toolset() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_previous_toolset();
+
+    // Migrating the legacy direct binaries renames the pointer once before the
+    // switch, so on such a fixture the switch is the second rename onto it.
+    let output = fixture.run_failing_pointer_switch(2);
+
+    assert!(!output.status.success());
+    for binary in BINARIES {
+        assert_eq!(
+            fs::read_to_string(fixture.install_dir.join(binary)).unwrap(),
+            format!("{binary} previous binary\n"),
+            "{binary} must still resolve to the file it resolved to before"
+        );
+    }
+    fixture.assert_active_toolset_is_traversable();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_atomic_pointer_switch_preserves_a_command_the_pointer_does_not_carry() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_pointer_toolset_without_adopter_commands();
+
+    // The pointer is already a symbolic link, so no migration precedes the
+    // switch and the switch is the first rename onto it.
+    let output = fixture.run_failing_pointer_switch(1);
+
+    assert!(!output.status.success());
+    for binary in BINARIES {
+        assert_eq!(
+            fs::read_to_string(fixture.install_dir.join(binary)).unwrap(),
+            format!("{binary} previous binary\n"),
+            "{binary} must still resolve to the file it resolved to before"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_command_the_pointer_does_not_carry_is_adopted_after_the_switch() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_pointer_toolset_without_adopter_commands();
+
+    let output = fixture.run();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    fixture.assert_toolset_installed();
+    for binary in ["evidencectl", "evidence-oid4vci"] {
+        assert!(
+            fixture.install_dir.join(binary).is_symlink(),
+            "an adopted command must become a stable command link"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_legacy_flat_toolset_is_adopted_behind_the_pointer() {
+    let fixture = InstallerFixture::new();
+    fixture.preinstall_previous_toolset();
+
+    let output = fixture.run();
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // The whole legacy toolset is adopted: every command becomes a stable link
+    // through the pointer, and the pointer carries the new toolset.
+    fixture.assert_toolset_installed();
+    assert!(
+        fs::symlink_metadata(fixture.install_dir.join(".evidence-current"))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the migrated pointer must be a symbolic link"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(TEST_VERSION),
+        "completion must name the installed version: {stdout}"
+    );
+    let install_dir = fixture.install_dir.display().to_string();
+    assert!(
+        stdout.contains(install_dir.as_str()),
+        "completion must name the install directory: {stdout}"
+    );
+    assert!(
+        stdout.contains(".evidence-current"),
+        "completion must name the toolset pointer: {stdout}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn partial_replacement_rolls_back_the_previous_toolset() {
     let fixture = InstallerFixture::new();
     fixture.preinstall_previous_toolset();
@@ -554,6 +684,29 @@ fi
 printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
 "#,
         );
+        // The fixture presents a Linux host whatever the workstation runs, so
+        // the installer's GNU pointer switch asks for mv -T. A macOS
+        // workstation spells that same guarantee mv -h, so translate it there
+        // and pass it through untouched on a Linux runner. Stock macOS bash
+        // 3.2 also runs this shim, so it keeps to constructs bash 3.2 parses.
+        write_executable(
+            &fake_bin.join("mv"),
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
+  exec /bin/mv "$@"
+fi
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    -Tf | -fT) arguments+=(-f -h) ;;
+    -T) arguments+=(-h) ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+exec /bin/mv "${arguments[@]}"
+"#,
+        );
         let fixture = Self {
             _temp: temp,
             fake_bin,
@@ -609,6 +762,34 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
         }
     }
 
+    /// A machine an earlier toolset installed through the pointer, carrying
+    /// adopter commands installed outside the pointer. The pointer is already
+    /// a symbolic link, so the one-time migration does not run.
+    fn preinstall_pointer_toolset_without_adopter_commands(&self) {
+        let toolset = self.install_dir.join(".evidence-toolset.earlier");
+        fs::create_dir_all(&toolset).unwrap();
+        let path = toolset.join("evidence");
+        fs::write(&path, "evidence previous binary\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(
+            ".evidence-current/evidence",
+            self.install_dir.join("evidence"),
+        )
+        .unwrap();
+        for binary in ["evidencectl", "evidence-oid4vci"] {
+            fs::write(
+                self.install_dir.join(binary),
+                format!("{binary} previous binary\n"),
+            )
+            .unwrap();
+        }
+        std::os::unix::fs::symlink(
+            ".evidence-toolset.earlier",
+            self.install_dir.join(".evidence-current"),
+        )
+        .unwrap();
+    }
+
     fn assert_previous_toolset_intact(&self) {
         for binary in BINARIES {
             let contents = fs::read_to_string(self.install_dir.join(binary)).unwrap();
@@ -623,11 +804,31 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
     fn assert_toolset_installed(&self) {
         for binary in BINARIES {
             let path = self.install_dir.join(binary);
+            assert_eq!(
+                fs::read_link(&path).unwrap(),
+                PathBuf::from(format!(".evidence-current/{binary}")),
+                "{binary} must be a stable command link through the toolset pointer"
+            );
             let contents = fs::read_to_string(&path).unwrap();
             assert_eq!(contents, format!("{binary} release binary\n"));
             let mode = fs::metadata(&path).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o755, "{binary} must be executable");
         }
+        assert!(
+            fs::symlink_metadata(self.install_dir.join(".evidence-current"))
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the toolset pointer must be a symbolic link"
+        );
+    }
+
+    fn assert_active_toolset_is_traversable(&self) {
+        let permissions = fs::metadata(self.install_dir.join(".evidence-current"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(permissions & 0o111, 0o111);
     }
 
     fn assert_nothing_installed(&self) {
@@ -641,6 +842,49 @@ printf 'ldd (GNU libc) %s\n' "${FAKE_GLIBC:-2.41}"
 
     fn run(&self) -> std::process::Output {
         self.command().output().unwrap()
+    }
+
+    /// Runs an install whose `nth` rename onto the toolset pointer fails.
+    fn run_failing_pointer_switch(&self, nth: u32) -> std::process::Output {
+        write_executable(
+            &self.fake_bin.join("mv"),
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+destination=""
+for argument in "$@"; do
+  destination="$argument"
+done
+if [[ "$destination" == */.evidence-current ]]; then
+  count=0
+  if [[ -f "$FAKE_MV_COUNT" ]]; then
+    read -r count < "$FAKE_MV_COUNT"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "$count" > "$FAKE_MV_COUNT"
+  if [[ "$count" -eq "$FAKE_MV_FAIL_AT" ]]; then
+    exit 73
+  fi
+fi
+if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
+  exec "$REAL_MV" "$@"
+fi
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    -Tf | -fT) arguments+=(-f -h) ;;
+    -T) arguments+=(-h) ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+exec "$REAL_MV" "${arguments[@]}"
+"#,
+        );
+        self.command()
+            .env("REAL_MV", "/bin/mv")
+            .env("FAKE_MV_COUNT", self._temp.path().join("pointer-mv-count"))
+            .env("FAKE_MV_FAIL_AT", nth.to_string())
+            .output()
+            .unwrap()
     }
 
     fn run_with_second_mv_failure(&self) -> std::process::Output {
@@ -661,7 +905,18 @@ printf '%s\n' "$count" > "$FAKE_MV_COUNT_FILE"
 if [[ "$count" -eq 2 ]]; then
   exit 73
 fi
-exec "$REAL_MV" "$@"
+if [[ "$(/usr/bin/uname -s)" != Darwin ]]; then
+  exec "$REAL_MV" "$@"
+fi
+arguments=()
+for argument in "$@"; do
+  case "$argument" in
+    -Tf | -fT) arguments+=(-f -h) ;;
+    -T) arguments+=(-h) ;;
+    *) arguments+=("$argument") ;;
+  esac
+done
+exec "$REAL_MV" "${arguments[@]}"
 "#,
         );
         let mut command = self.command();

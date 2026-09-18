@@ -41,6 +41,20 @@ fn installer_switches_both_commands_through_one_toolset_pointer() {
             .is_symlink()
     );
     fixture.assert_active_toolset_is_traversable();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(TEST_VERSION),
+        "completion must name the installed version: {stdout}"
+    );
+    let install_dir = fixture.install_dir.display().to_string();
+    assert!(
+        stdout.contains(install_dir.as_str()),
+        "completion must name the install directory: {stdout}"
+    );
+    assert!(
+        stdout.contains(".breg-current"),
+        "completion must name the toolset pointer: {stdout}"
+    );
 }
 
 #[test]

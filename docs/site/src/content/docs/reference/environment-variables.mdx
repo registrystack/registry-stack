@@ -99,15 +99,16 @@ and the bundle it binds.
 ### Evidence Gateway toolset installer
 
 The Evidence Gateway toolset installer stages `evidence`, `evidencectl`, and
-`evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before replacement begins. If a
-replacement fails, it attempts to restore the previous three-binary set. Checksum verification does
+`evidence-oid4vci`, then verifies every binary against `SHA256SUMS` before anything reaches the
+install directory. The commands switch version together through a single toolset-pointer rename,
+and a failed switch leaves the previously installed toolset active. Checksum verification does
 not authenticate `SHA256SUMS`; follow the tag-frozen [`release/VERIFY.md`](https://github.com/registrystack/registry-stack/blob/v0.21.0/release/VERIFY.md) procedure when authenticity
 matters. The installer reads these variables; the installed binaries do not.
 
 | Name | Purpose | Default or required |
 | --- | --- | --- |
 | `EVIDENCECTL_VERSION` | Registry Stack tag whose Evidence Gateway toolset assets are installed. A published installer pins its own tag. | Defaults to the installer's pinned tag. |
-| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the three binaries. | Defaults to `~/.local/bin`. |
+| `EVIDENCECTL_INSTALL_DIR` | Directory that receives the toolset and the `evidence`, `evidencectl`, and `evidence-oid4vci` command symlinks. | Defaults to `~/.local/bin`. |
 | `EVIDENCECTL_ASSET_DIR` | Directory of already-downloaded release assets to use instead of downloading. | Optional. |
 
 ## Evidence OID4VCI supporting service
