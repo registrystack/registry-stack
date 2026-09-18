@@ -8,10 +8,10 @@
 //!
 //! Every test that prepares or invokes a module runs under both execution
 //! backends: `prepare` compiles through the engine, so even validation-only
-//! cases exercise the backend's compilation strategy. Two tests pin Native:
-//! the ticker-lifecycle test, which runs no guest, and the budget-default
-//! test whose bounded-spin guest cannot finish inside a 250 ms default under
-//! the Pulley interpreter.
+//! cases exercise the backend's compilation strategy. One test pins Native:
+//! the budget-default test whose bounded-spin guest cannot finish inside a
+//! 250 ms default under the Pulley interpreter (verified: it traps under
+//! Pulley).
 #![cfg(feature = "wasm")]
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -227,13 +227,15 @@ fn per_call_epoch_deadline_replaces_a_smaller_budget_default() {
 
 #[test]
 fn ticker_stop_joins_and_double_stop_is_harmless() {
-    let exec = executor(Backend::Native);
-    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
-        .expect("the epoch ticker starts");
-    thread::sleep(Duration::from_millis(5));
-    // stop() joins the ticker thread, so returning proves the thread ended.
-    ticker.stop();
-    ticker.stop();
+    for backend in backends() {
+        let exec = executor(backend);
+        let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
+            .expect("the epoch ticker starts");
+        thread::sleep(Duration::from_millis(5));
+        // stop() joins the ticker thread, so returning proves the thread ended.
+        ticker.stop();
+        ticker.stop();
+    }
 }
 
 #[test]
@@ -260,20 +262,22 @@ fn huge_initial_memory_is_denied() {
 
 #[test]
 fn declared_memory_minimum_at_the_ceiling_is_allowed() {
-    // 512 pages = exactly 32 MiB: the ceiling is inclusive, so a module
-    // declaring the full budget still prepares and runs.
-    let wat = guest_wat(ECHO_HANDLE, ECHO_LEN).replacen(
-        "(memory (export \"memory\") 1)",
-        "(memory (export \"memory\") 512)",
-        1,
-    );
-    let exec = executor(Backend::Native);
-    let prepared = exec
-        .prepare(wat.as_bytes())
-        .expect("a minimum at the ceiling is within the budget");
-    let ok = exec.invoke(&prepared, b"x").expect("echo");
-    assert_eq!(ok.output, b"x");
-    assert_eq!(ok.stats.memory_bytes, 32 * MIB as u64);
+    for backend in backends() {
+        // 512 pages = exactly 32 MiB: the ceiling is inclusive, so a module
+        // declaring the full budget still prepares and runs.
+        let wat = guest_wat(ECHO_HANDLE, ECHO_LEN).replacen(
+            "(memory (export \"memory\") 1)",
+            "(memory (export \"memory\") 512)",
+            1,
+        );
+        let exec = executor(backend);
+        let prepared = exec
+            .prepare(wat.as_bytes())
+            .expect("a minimum at the ceiling is within the budget");
+        let ok = exec.invoke(&prepared, b"x").expect("echo");
+        assert_eq!(ok.output, b"x");
+        assert_eq!(ok.stats.memory_bytes, 32 * MIB as u64);
+    }
 }
 
 #[test]
@@ -659,30 +663,34 @@ fn out_of_bounds_result_pointer_is_rejected() {
 
 #[test]
 fn negative_result_len_is_rejected() {
-    let exec = executor(Backend::Native);
-    let prepared = exec
-        .prepare(guest_wat("(i32.const 0)", "(i32.const -1)").as_bytes())
-        .expect("wat guest passes validation");
-    match err_of(exec.invoke(&prepared, b"x")) {
-        InvokeError::OutputLengthNegative(len) => assert_eq!(len, -1),
-        err => panic!("wrong error: {err}"),
+    for backend in backends() {
+        let exec = executor(backend);
+        let prepared = exec
+            .prepare(guest_wat("(i32.const 0)", "(i32.const -1)").as_bytes())
+            .expect("wat guest passes validation");
+        match err_of(exec.invoke(&prepared, b"x")) {
+            InvokeError::OutputLengthNegative(len) => assert_eq!(len, -1),
+            err => panic!("wrong error: {err}"),
+        }
     }
 }
 
 #[test]
 fn negative_result_ptr_is_rejected() {
-    let wat = guest_wat("(i32.const 0)", "(i32.const 8)").replacen(
-        "(i32.const 1024))",
-        "(i32.const -16))",
-        1,
-    );
-    let exec = executor(Backend::Native);
-    let prepared = exec
-        .prepare(wat.as_bytes())
-        .expect("wat guest passes validation");
-    match err_of(exec.invoke(&prepared, b"x")) {
-        InvokeError::OutputPointerNegative(ptr) => assert_eq!(ptr, -16),
-        err => panic!("wrong error: {err}"),
+    for backend in backends() {
+        let wat = guest_wat("(i32.const 0)", "(i32.const 8)").replacen(
+            "(i32.const 1024))",
+            "(i32.const -16))",
+            1,
+        );
+        let exec = executor(backend);
+        let prepared = exec
+            .prepare(wat.as_bytes())
+            .expect("wat guest passes validation");
+        match err_of(exec.invoke(&prepared, b"x")) {
+            InvokeError::OutputPointerNegative(ptr) => assert_eq!(ptr, -16),
+            err => panic!("wrong error: {err}"),
+        }
     }
 }
 
@@ -702,17 +710,19 @@ fn module_rejection_summary_keeps_the_summary_limit_not_the_name_limit() {
   (func (export "result_len") (result i32) (i32.const 0))
 )"#
     );
-    let exec = executor(Backend::Native);
-    match err_of(exec.prepare(wat.as_bytes())) {
-        InvokeError::InvalidModule { summary } => {
-            assert!(
-                summary.as_str().len() > 64,
-                "summary was cut at the name limit: {:?}",
-                summary.as_str()
-            );
-            assert!(summary.as_str().len() <= 256);
+    for backend in backends() {
+        let exec = executor(backend);
+        match err_of(exec.prepare(wat.as_bytes())) {
+            InvokeError::InvalidModule { summary } => {
+                assert!(
+                    summary.as_str().len() > 64,
+                    "summary was cut at the name limit: {:?}",
+                    summary.as_str()
+                );
+                assert!(summary.as_str().len() <= 256);
+            }
+            err => panic!("wrong error: {err}"),
         }
-        err => panic!("wrong error: {err}"),
     }
 }
 
