@@ -215,8 +215,23 @@ fn compile_handler(
     };
     let source = collected.source.handler.as_ref()?;
     let path = format!("actions[{}].handler", collected.source.id);
-    if source.abi != crate::contract::ACTION_HANDLER_ABI_V1
-        && source.abi != crate::contract::ACTION_HANDLER_ABI_V2
+    let Some(kind) = source.kind() else {
+        // The shared handler declaration also offers a remote destination. An
+        // action handler runs inside the triggering transaction and has no
+        // executor on this path, so the kind is refused rather than compiled
+        // into a handler that never runs.
+        errors.push(Diagnostic::error(
+            "action.handler.kind.unsupported",
+            format!("{path}.kind"),
+            "an action handler runs in the registry; declare handler kind rhai or wasm",
+        ));
+        return None;
+    };
+    // A declared backend always carries its ABI: the declaration refuses a
+    // handler that leaves it out.
+    let abi = source.abi().unwrap_or_default();
+    if abi != crate::contract::ACTION_HANDLER_ABI_V1
+        && abi != crate::contract::ACTION_HANDLER_ABI_V2
     {
         errors.push(Diagnostic::error(
             "action.handler.abi_invalid",
@@ -224,8 +239,8 @@ fn compile_handler(
             "the action handler ABI is not supported",
         ));
     }
-    let is_wasm = source.kind == crate::contract::ActionHandlerKindSource::Wasm;
-    if is_wasm && source.abi == crate::contract::ACTION_HANDLER_ABI_V2 {
+    let is_wasm = kind == crate::contract::ActionHandlerKindSource::Wasm;
+    if is_wasm && abi == crate::contract::ACTION_HANDLER_ABI_V2 {
         // The Evidence-enabled v2 ABI is out of scope for WASM in this
         // release, in any build. Refuse it before any other WASM-shaped
         // validation could misreport the module.
@@ -301,7 +316,7 @@ fn compile_handler(
                     format!("{input_path}.maxLength"),
                     &format!(
                         "{} input strings support at most {} UTF-8 bytes; set maxLength to {} or less so every Unicode value fits",
-                        source.abi,
+                        abi,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES,
                         crate::rhai_planner::MAXIMUM_STRING_BYTES / 4,
                     ),
@@ -311,7 +326,7 @@ fn compile_handler(
                 errors.push(Diagnostic::error(
                     "action.handler.input.type_unsupported",
                     format!("{input_path}.type"),
-                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", source.abi),
+                    &format!("{} accepts scalar inputs; use scalar fields or fixed effects for crs84-point and structured values", abi),
                 ));
             }
             _ => {}
@@ -624,7 +639,7 @@ fn compile_handler(
             errors.push(Diagnostic::error(code, format!("{path}.script"), &message));
             return None;
         }
-        if crate::action_handler::compile_source_for_abi(script, &source.abi).is_err() {
+        if crate::action_handler::compile_source_for_abi(script, abi).is_err() {
             errors.push(Diagnostic::error(
                 "action.handler.helper_contract",
                 format!("{path}.script"),
@@ -675,7 +690,7 @@ fn compile_handler(
             } else {
                 String::new()
             },
-            abi: source.abi.clone(),
+            abi: abi.to_owned(),
             rhai_version: (!is_wasm)
                 .then(|| crate::change_request::CHANGE_REQUEST_PLANNER_RHAI_VERSION.to_owned()),
             script_sha256: (!is_wasm)
@@ -709,29 +724,17 @@ fn compile_handler(
     ))
 }
 
-/// The authored source reference a Rhai handler must declare: its script path
-/// and nothing else.
+/// The authored source reference a Rhai handler declares: its script path.
+///
+/// The declaration pairs the kind with its source reference, so a rhai
+/// handler carries a script and nothing else; the caller reaches here only
+/// for that kind.
 fn rhai_handler_script_path<'a>(
     source: &'a crate::contract::ActionHandlerSource,
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<&'a str> {
-    if source.module.is_some() {
-        errors.push(Diagnostic::error(
-            "action.handler.module_forbidden",
-            format!("{path}.module"),
-            "a Rhai handler declares its script, not a WASM module",
-        ));
-        return None;
-    }
-    let Some(script) = source.script.as_deref() else {
-        errors.push(Diagnostic::error(
-            "action.handler.script_missing",
-            format!("{path}.script"),
-            "a Rhai handler declares a project-local script path",
-        ));
-        return None;
-    };
+    let script = source.script()?;
     if !crate::change_request::valid_planner_path(script) {
         errors.push(Diagnostic::error(
             "action.handler.source_invalid",
@@ -743,30 +746,18 @@ fn rhai_handler_script_path<'a>(
     Some(script)
 }
 
-/// The authored source reference a WASM handler must declare: its module path
-/// and nothing else.
+/// The authored source reference a WASM handler declares: its module path.
+///
+/// The declaration pairs the kind with its source reference, so a wasm
+/// handler carries a module and nothing else; the caller reaches here only
+/// for that kind.
 #[cfg(feature = "wasm")]
 fn wasm_handler_module_path<'a>(
     source: &'a crate::contract::ActionHandlerSource,
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) -> Option<&'a str> {
-    if source.script.is_some() {
-        errors.push(Diagnostic::error(
-            "action.handler.script_forbidden",
-            format!("{path}.script"),
-            "a WASM handler declares its module, not a Rhai script",
-        ));
-        return None;
-    }
-    let Some(module) = source.module.as_deref() else {
-        errors.push(Diagnostic::error(
-            "action.handler.module_missing",
-            format!("{path}.module"),
-            "a WASM handler declares a project-local module path",
-        ));
-        return None;
-    };
+    let module = source.module()?;
     if !crate::wasm_handler::valid_wasm_module_path(module) {
         errors.push(Diagnostic::error(
             "action.handler.module_source_invalid",

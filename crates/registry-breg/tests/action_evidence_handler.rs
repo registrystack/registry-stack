@@ -24,7 +24,7 @@ fn action(script: &str) -> registry_breg::model::CompiledAction {
             action
                 .handler
                 .as_ref()
-                .and_then(|handler| handler.script.clone())
+                .and_then(|handler| handler.script().map(str::to_owned))
         })
         .map(|handler_script| ModuleAssetSource {
             module: None,

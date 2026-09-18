@@ -387,10 +387,9 @@ pub(crate) fn compile_evidence(
         let path = format!("actions[{}].evidence", action.id);
         if source.evidence.len() > MAX_EVIDENCE_CAPABILITIES
             || (!source.evidence.is_empty()
-                && source
-                    .handler
-                    .as_ref()
-                    .is_none_or(|handler| handler.abi != crate::contract::ACTION_HANDLER_ABI_V2))
+                && source.handler.as_ref().is_none_or(|handler| {
+                    handler.abi() != Some(crate::contract::ACTION_HANDLER_ABI_V2)
+                }))
         {
             errors.push(Diagnostic::error(
                 "action.evidence.ceiling.invalid",

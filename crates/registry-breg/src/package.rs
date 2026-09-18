@@ -2667,13 +2667,10 @@ fn package_compiler_assets(
 }
 
 /// The owned asset path a handler declares: its script for Rhai, its module
-/// for WASM. None means the authored source shape did not survive the compile
-/// this package rederives, a derivation mismatch.
+/// for WASM. None means the handler declares no owned asset, a kind the
+/// compiler refuses before this package is rederived.
 fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option<&str> {
-    match handler.kind {
-        crate::contract::ActionHandlerKindSource::Rhai => handler.script.as_deref(),
-        crate::contract::ActionHandlerKindSource::Wasm => handler.module.as_deref(),
-    }
+    handler.script().or_else(|| handler.module())
 }
 
 fn validate_declared_package_assets(

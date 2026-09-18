@@ -136,6 +136,7 @@
     },
     "ActionHandlerSource": {
       "additionalProperties": false,
+      "description": "The authored action handler: the shared hook handler declaration, with the\nauthorization members a governed action adds.\n\n`handler` is [`HookHandlerSource`], the same declaration an entity hook\ncarries, so this product spells a handler one way. It is flattened, so the\nauthored member set stays `kind`, the source reference the kind names,\n`abi`, `writes`, and `refusals`. `writes` and `refusals` are this\nproduct's own: they bound what the handler may write and the refusals it\nmay return, and no hook declares them.\n\nTwo rules narrow the shared declaration to what this path runs. `abi` is\noptional there and required here, refused at deserialization, because\nevery backend an action may declare speaks one. The `url` kind is refused\nby the compiler at `actions[].handler.kind`, because an action handler\nruns inside the triggering transaction and cannot be remote.",
       "properties": {
         "abi": {
           "enum": [

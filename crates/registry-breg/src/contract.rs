@@ -767,33 +767,195 @@ pub const ACTION_HANDLER_ABI_V2: &str = "registry.action-handler/v2";
 
 pub const ACTION_HANDLER_ABI_V1: &str = "registry.action-handler/v1";
 
+/// The authored action handler: the shared hook handler declaration, with the
+/// authorization members a governed action adds.
+///
+/// `handler` is [`HookHandlerSource`], the same declaration an entity hook
+/// carries, so this product spells a handler one way. It is flattened, so the
+/// authored member set stays `kind`, the source reference the kind names,
+/// `abi`, `writes`, and `refusals`. `writes` and `refusals` are this
+/// product's own: they bound what the handler may write and the refusals it
+/// may return, and no hook declares them.
+///
+/// Two rules narrow the shared declaration to what this path runs. `abi` is
+/// optional there and required here, refused at deserialization, because
+/// every backend an action may declare speaks one. The `url` kind is refused
+/// by the compiler at `actions[].handler.kind`, because an action handler
+/// runs inside the triggering transaction and cannot be remote.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+// Flattening drops the closed member set schemars derives, so the authoring
+// schema restates it: an unknown member of `handler:` is refused by the
+// schema an editor reads as well as by deserialization.
+#[cfg_attr(feature = "schema", schemars(extend("additionalProperties" = false)))]
+#[serde(rename_all = "camelCase")]
 pub struct ActionHandlerSource {
-    pub kind: ActionHandlerKindSource,
-    /// The Rhai handler script path. Declared for rhai handlers only; the
-    /// compiler enforces the pairing with the declared backend.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub script: Option<String>,
-    /// The WASM handler module path, project-local. Declared for wasm
-    /// handlers only; the compiler enforces the pairing with the declared
-    /// backend.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub module: Option<String>,
+    /// Where the handler runs, with the source reference and ABI it declares.
+    #[serde(flatten)]
     #[cfg_attr(
         feature = "schema",
-        schemars(schema_with = "action_handler_abi_schema")
+        schemars(schema_with = "action_handler_half_schema")
     )]
-    pub abi: String,
+    pub handler: HookHandlerSource,
     pub writes: Vec<ActionHandlerWriteSource>,
     #[serde(default)]
     pub refusals: Vec<ActionHandlerRefusalSource>,
 }
 
+impl ActionHandlerSource {
+    /// The declared backend, or `None` for a handler kind an action cannot
+    /// run. Derived from the embedded handler, so the backend is spelled once.
+    #[must_use]
+    pub const fn kind(&self) -> Option<ActionHandlerKindSource> {
+        match self.handler {
+            HookHandlerSource::Rhai { .. } => Some(ActionHandlerKindSource::Rhai),
+            HookHandlerSource::Wasm { .. } => Some(ActionHandlerKindSource::Wasm),
+            HookHandlerSource::Url { .. } => None,
+        }
+    }
+
+    /// The declared handler ABI, absent only for a kind that carries none.
+    #[must_use]
+    pub fn abi(&self) -> Option<&str> {
+        match &self.handler {
+            HookHandlerSource::Rhai { abi, .. } | HookHandlerSource::Wasm { abi, .. } => {
+                abi.as_deref()
+            }
+            HookHandlerSource::Url { .. } => None,
+        }
+    }
+
+    /// The Rhai handler script path, declared by a rhai handler only.
+    #[must_use]
+    pub fn script(&self) -> Option<&str> {
+        match &self.handler {
+            HookHandlerSource::Rhai { script, .. } => Some(script.as_str()),
+            HookHandlerSource::Wasm { .. } | HookHandlerSource::Url { .. } => None,
+        }
+    }
+
+    /// The WASM handler module path, declared by a wasm handler only.
+    #[must_use]
+    pub fn module(&self) -> Option<&str> {
+        match &self.handler {
+            HookHandlerSource::Wasm { module, .. } => Some(module.as_str()),
+            HookHandlerSource::Rhai { .. } | HookHandlerSource::Url { .. } => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ActionHandlerSource {
+    /// Deserialization is manual because serde refuses `deny_unknown_fields`
+    /// beside `flatten`, and the authored member set must stay closed. The
+    /// members the shared declaration owns are handed to it unchanged, so the
+    /// kind and its source reference pair by that one rule, and the members
+    /// this product owns keep deserializing through the caller's
+    /// deserializer, so a refusal inside them still names the member path.
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "camelCase")]
+        enum Field {
+            Kind,
+            Script,
+            Module,
+            Abi,
+            DestinationId,
+            Writes,
+            Refusals,
+        }
+
+        struct ActionHandlerVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ActionHandlerVisitor {
+            type Value = ActionHandlerSource;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("an action handler declaration")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut handler = serde_json::Map::new();
+                let mut declared = BTreeSet::new();
+                let mut writes: Option<Vec<ActionHandlerWriteSource>> = None;
+                let mut refusals: Option<Vec<ActionHandlerRefusalSource>> = None;
+                while let Some(field) = map.next_key::<Field>()? {
+                    let member = match field {
+                        Field::Kind => "kind",
+                        Field::Script => "script",
+                        Field::Module => "module",
+                        Field::Abi => "abi",
+                        Field::DestinationId => "destinationId",
+                        Field::Writes => {
+                            if writes.replace(map.next_value()?).is_some() {
+                                return Err(A::Error::duplicate_field("writes"));
+                            }
+                            continue;
+                        }
+                        Field::Refusals => {
+                            if refusals.replace(map.next_value()?).is_some() {
+                                return Err(A::Error::duplicate_field("refusals"));
+                            }
+                            continue;
+                        }
+                    };
+                    if !declared.insert(member) {
+                        return Err(A::Error::duplicate_field(member));
+                    }
+                    // An explicit null reads as an undeclared member, the
+                    // reading the optional source references already carried.
+                    if let Some(value) = map.next_value::<Option<String>>()? {
+                        handler.insert(member.to_owned(), Value::String(value));
+                    }
+                }
+                let source = ActionHandlerSource {
+                    handler: HookHandlerSource::deserialize(
+                        Value::Object(handler).into_deserializer(),
+                    )
+                    .map_err(A::Error::custom)?,
+                    writes: writes.ok_or_else(|| A::Error::missing_field("writes"))?,
+                    refusals: refusals.unwrap_or_default(),
+                };
+                if source.kind().is_some() && source.abi().is_none() {
+                    return Err(A::Error::missing_field("abi"));
+                }
+                Ok(source)
+            }
+        }
+
+        deserializer.deserialize_map(ActionHandlerVisitor)
+    }
+}
+
+/// The handler half as this product's authoring schema already described it:
+/// the two backends an action may declare, their paired source references,
+/// and the closed ABI list. The shared declaration's own rendering carries a
+/// third kind an action cannot run and leaves the ABI open, so the schema an
+/// author's editor reads is written here rather than derived from it.
 #[cfg(feature = "schema")]
-fn action_handler_abi_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]})
+fn action_handler_half_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    let kind = generator.subschema_for::<ActionHandlerKindSource>();
+    schemars::json_schema!({
+        "type": "object",
+        "properties": {
+            "kind": kind,
+            "script": {
+                "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
+                "type": ["string", "null"],
+            },
+            "module": {
+                "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
+                "type": ["string", "null"],
+            },
+            "abi": {"type": "string", "enum": [ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2]},
+        },
+        "required": ["kind", "abi"],
+    })
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

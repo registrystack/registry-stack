@@ -5465,20 +5465,18 @@ fn partition_handler_source(
     planner_paths: &mut BTreeMap<String, String>,
     wasm_module_paths: &mut BTreeMap<String, String>,
 ) {
-    use registry_breg::contract::ActionHandlerKindSource;
     let Some(handler) = handler else { return };
-    match handler.kind {
-        ActionHandlerKindSource::Rhai => {
-            if let Some(script) = &handler.script {
-                planner_paths.insert(script.clone(), format!("{declaring_path}.handler.script"));
-            }
-        }
-        ActionHandlerKindSource::Wasm => {
-            if let Some(module) = &handler.module {
-                wasm_module_paths
-                    .insert(module.clone(), format!("{declaring_path}.handler.module"));
-            }
-        }
+    if let Some(script) = handler.script() {
+        planner_paths.insert(
+            script.to_owned(),
+            format!("{declaring_path}.handler.script"),
+        );
+    }
+    if let Some(module) = handler.module() {
+        wasm_module_paths.insert(
+            module.to_owned(),
+            format!("{declaring_path}.handler.module"),
+        );
     }
 }
 
@@ -10671,8 +10669,11 @@ mod tests {
             .iter_mut()
             .map(|action| {
                 let handler = action.handler.as_mut().unwrap();
-                handler.abi = registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned();
-                let script = handler.script.clone().unwrap();
+                let script = handler.script().expect("a rhai handler").to_owned();
+                handler.handler = registry_breg::contract::HookHandlerSource::Rhai {
+                    script: script.clone(),
+                    abi: Some(registry_breg::contract::ACTION_HANDLER_ABI_V2.to_owned()),
+                };
                 registry_breg::contract::ModuleAssetSource {
                     module: None,
                     bytes: fs::read(root.join(&script)).unwrap(),

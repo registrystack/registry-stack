@@ -367,24 +367,20 @@ fn a_module_with_a_wrong_export_signature_is_refused_by_name() {
 
 #[test]
 fn wasm_handler_field_discipline_is_reported_per_backend() {
-    // A WASM handler declares its module, never a script.
+    // A WASM handler declares its module, never a script. The declaration
+    // pairs the backend with its source reference, so the refusal arrives
+    // while the project is read.
     let mut with_script = wasm_project();
     with_script["actions"][0]["handler"]["script"] = json!("scripts/handler.rhai");
-    let project = parse_project_json(&serde_json::to_vec(&with_script).unwrap()).unwrap();
-    let failure = compile_project_with_assets(
-        &project,
-        &[],
-        &[ModuleAssetSource {
-            module: None,
-            path: "wasm/handler.wasm".to_owned(),
-            bytes: binary(MINIMAL_ABI_WAT),
-        }],
-        CompileProfile::Authoring,
-    )
-    .map(|_| ())
-    .expect_err("a WASM handler cannot declare a Rhai script");
-    let diagnostic = first_code(&failure, "action.handler.script_forbidden");
-    assert_eq!(diagnostic.path, "actions[register-person].handler.script");
+    let failure = parse_project_json(&serde_json::to_vec(&with_script).unwrap())
+        .map(|_| ())
+        .expect_err("a WASM handler cannot declare a Rhai script");
+    let diagnostic = first_code(&failure, "source.shape.invalid");
+    assert!(
+        diagnostic.message.contains("unknown field `script`"),
+        "the refusal does not name the member the author wrote: {}",
+        diagnostic.message
+    );
 
     // A non-.wasm module path never reaches the asset lookup.
     let mut bad_path = wasm_project();
