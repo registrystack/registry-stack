@@ -8,7 +8,7 @@ pub use config::*;
 use async_trait::async_trait;
 use registry_breg_client::*;
 use registry_casework_core::*;
-use registry_platform_crypto::breg_webhook::{
+use registry_platform_crypto::delivery_signature::{
     verify_v1, SignatureFields, MIN_HMAC_SHA256_KEY_BYTES,
 };
 use registry_platform_crypto::domain_separated_sha256;

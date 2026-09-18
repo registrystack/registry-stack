@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Crypto primitives shared by Registry Platform consumers.
 
-pub mod breg_webhook;
+pub mod delivery_signature;
 
 use async_trait::async_trait;
 use aws_lc_rs::encoding::{AsBigEndian as _, AsDer as _, EcPrivateKeyBin, Pkcs8V1Der};

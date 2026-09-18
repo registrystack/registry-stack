@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Base Registry Engine Version 1 webhook signing and verification.
+//! Version 1 hook delivery signing and verification.
+//!
+//! One HMAC-SHA-256 scheme over the exact wire fields of a signed HTTP hook
+//! delivery, shared by the product that sends a delivery and the receiver
+//! that authenticates one. The scheme carries no product policy: the caller
+//! owns the key material, the destination binding, and the freshness window
+//! it passes as `allowed_skew`.
+//!
+//! The signing domain and the length-prefixed field order below are wire
+//! bytes that deployed receivers already verify, so they keep their Version
+//! 1 spelling whatever the Rust names around them are.
 
 use std::time::{Duration, SystemTime};
 
@@ -9,6 +19,10 @@ use hmac::{Hmac, KeyInit as _, Mac as _};
 use sha2::Sha256;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+/// The Version 1 signing domain, as deployed receivers verify it.
+///
+/// Wire bytes: the spelling is fixed by the receivers that already accept
+/// it, not by what this module or its callers are named.
 const SIGNATURE_DOMAIN: &[u8] = b"breg-webhook-signature-v1";
 const SIGNING_INPUT_VERSION: &[u8] = b"1.0";
 const SIGNATURE_PREFIX: &str = "v1=";
@@ -23,7 +37,7 @@ pub const MAX_METADATA_BYTES: usize = 32_768;
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// Exact fields covered by a Base Registry Engine Version 1 webhook signature.
+/// Exact fields covered by a Version 1 hook delivery signature.
 ///
 /// Values are signed as their wire bytes. Callers must pass the received HTTP
 /// method, request target, content type, headers, and body without normalization.
@@ -225,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn v1_fixed_vector_preserves_the_breg_wire_contract() {
+    fn v1_fixed_vector_preserves_the_wire_contract() {
         assert_eq!(
             sign_v1(KEY, fields()).unwrap(),
             "v1=OzL5k0ghZJb9nPbb-JOVsroWeanipBlZXbeKDd52RcM"
