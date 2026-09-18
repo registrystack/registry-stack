@@ -216,10 +216,13 @@ The public record API exposes no outbox, payload, delivery, or replay route.
 Reuse `registry-platform-httputil` for bounded destination and SSRF policy,
 `registry-platform-canonical-json` for exact bytes, and the existing platform
 audit, secret, configuration, and cryptographic primitives. Improve those
-crates when a missing primitive is genuinely cross-product. Base Registry Engine
-continues to own event meaning, capture, retry state, replay, retention, and
-the versioned signature contract. Do not add a new generic hook, CloudEvents,
-or Rhai platform crate for this slice.
+crates when a missing primitive is genuinely cross-product. The generic hook
+contract, the shared envelope, and the delivery worker's claim, retry,
+dead-letter, expiry, and replay mechanics live in `registry-platform-hooks`,
+and the versioned delivery signature lives in `registry-platform-crypto` as a
+product-neutral module. Base Registry Engine owns event meaning, capture, and
+retention policy, and supplies the product constants, destination bindings,
+and audit records those shared primitives run with.
 
 ## Developer and operator experience
 
