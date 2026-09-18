@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::error::{bounded_token, redacted_message};
+
 /// The one handler ABI defined in hook contract version one.
 pub const HOOK_HANDLER_ABI_V1: &str = "registry.hook-handler/v1";
 
@@ -54,8 +56,8 @@ pub struct HookDeclaration {
     /// vocabulary: the library never defines or validates a trigger.
     pub trigger: String,
     /// The product's condition document, validated by the product against its
-    /// own condition language. Carried opaquely so a product keeps its
-    /// `EventSource.when` shape unchanged on adoption.
+    /// own condition language. Carried opaquely so a product keeps the
+    /// condition shape it already has unchanged on adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Value>,
     /// Declared field identifiers the product may project into `data`.
@@ -67,8 +69,8 @@ pub struct HookDeclaration {
 
 /// Where a hook's handler runs.
 ///
-/// The pairing rule is the one `ActionHandlerSource` enforces: `rhai` requires
-/// `script`, `wasm` requires `module`, `url` requires `destinationId`, and each
+/// The pairing rule: `rhai` requires `script`, `wasm` requires `module`,
+/// `url` requires `destinationId`, and each
 /// kind requires exactly its own fields and nothing else. `abi` is required on
 /// `rhai` and `wasm` and forbidden on `url`; its value is closed and checked at
 /// compile time in [`crate::validate_hooks`].
@@ -136,10 +138,20 @@ impl HooksDocument {
     /// # Errors
     ///
     /// Returns [`HookDeclarationError`] when the bytes are not strict JSON or
-    /// do not match the declaration shape.
+    /// do not match the declaration shape. A shape refusal names the member
+    /// path it failed at, so an author of a long document is told which hook
+    /// to look at.
     pub fn from_strict_json(bytes: &[u8]) -> Result<Self, HookDeclarationError> {
+        use serde::de::IntoDeserializer as _;
+
         let value = parse_json_strict(bytes)?;
-        serde_json::from_value(value).map_err(HookDeclarationError::Shape)
+        serde_path_to_error::deserialize(value.into_deserializer()).map_err(|error| {
+            let path = bounded_token(&error.path().to_string());
+            HookDeclarationError::Shape {
+                path,
+                message: redacted_message(&error.into_inner().to_string()),
+            }
+        })
     }
 
     /// Apply the compile-time rules to the declared hooks, in order.
@@ -160,14 +172,36 @@ pub enum HookDeclarationError {
     /// The document is not strict JSON.
     #[error("hooks document is not strict JSON: {0}")]
     Json(#[from] registry_platform_canonical_json::StrictJsonError),
-    /// The document violates the declaration shape.
-    #[error("hooks document violates the hook declaration shape: {0}")]
-    Shape(#[from] serde_json::Error),
+    /// The document violates the declaration shape, at `path`. The
+    /// deserializer's own wording, with the untrusted values it repeats
+    /// redacted and bounded.
+    #[error("hooks document violates the hook declaration shape at `{path}`: {message}")]
+    Shape {
+        /// The member path the refusal happened at, `.` at the document root.
+        path: String,
+        /// The redacted deserializer wording.
+        message: String,
+    },
+}
+
+impl HookDeclarationError {
+    /// The stable diagnostic code for this refusal.
+    ///
+    /// Codes are part of the contract: operators and products match on them,
+    /// so existing codes never change meaning and new refusals get new codes.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Json(_) => "hook.declaration.not_strict_json",
+            Self::Shape { .. } => "hook.declaration.bad_shape",
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::error::MAX_DISPLAYED_TOKEN_BYTES;
     use serde_json::json;
 
     fn wasm_handler() -> Value {
@@ -403,6 +437,65 @@ mod tests {
         let parsed = HooksDocument::from_strict_json(br#"{"hooks":[]}"#).expect("parses");
         assert!(parsed.hooks.is_empty());
         parsed.validate().expect("no hooks, no refusals");
+    }
+
+    #[test]
+    fn a_shape_violation_names_the_member_path() {
+        let document = json!({
+            "hooks": [
+                {"id": "a-first", "phase": "after", "trigger": "created",
+                 "projection": [], "handler": wasm_handler()},
+                {"id": "b-second", "phase": "after", "trigger": "created",
+                 "projection": [], "handler": {"kind": "wasm", "abi": HOOK_HANDLER_ABI_V1}},
+            ],
+        });
+        let error =
+            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
+                .expect_err("the second handler has no module");
+        assert!(
+            error.to_string().contains("hooks[1].handler"),
+            "the path to the offending member is reported: {error}"
+        );
+    }
+
+    #[test]
+    fn an_untrusted_member_name_never_reaches_display_unbounded() {
+        let huge = "x".repeat(64 * 1024);
+        let raw =
+            serde_json::to_vec(&json!({"hooks": [], huge.clone(): true})).expect("serializes");
+        let rendered = HooksDocument::from_strict_json(&raw)
+            .expect_err("unknown member refused")
+            .to_string();
+        assert!(rendered.len() < 1_024, "{} bytes rendered", rendered.len());
+        assert!(
+            !rendered.contains(&"x".repeat(MAX_DISPLAYED_TOKEN_BYTES + 1)),
+            "no run of the input longer than the token ceiling survives"
+        );
+    }
+
+    #[test]
+    fn every_declaration_code_is_distinct_and_in_its_namespace() {
+        let variants = [
+            HookDeclarationError::Json(
+                parse_json_strict(b"{").expect_err("a truncated object is not strict JSON"),
+            ),
+            HookDeclarationError::Shape {
+                path: String::new(),
+                message: String::new(),
+            },
+        ];
+        let codes: Vec<&str> = variants.iter().map(HookDeclarationError::code).collect();
+        assert_eq!(
+            codes.iter().collect::<BTreeSet<_>>().len(),
+            codes.len(),
+            "codes are distinct: {codes:?}"
+        );
+        for code in codes {
+            assert!(
+                code.starts_with("hook.declaration."),
+                "{code} is outside the namespace"
+            );
+        }
     }
 
     fn wasm_handler_serialized() -> HookHandlerSource {

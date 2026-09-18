@@ -32,7 +32,11 @@ stay with the owning product.
   Delivery attributes (`attempt`, `generation`, `delivery_time`,
   `idempotency_key`, `signature`) are explicitly not envelope fields; they stay
   on the transport headers. The envelope is what the handler reasons over; the
-  attributes are what the worker reasons over.
+  attributes are what the worker reasons over. `id`, `causation.root`, and
+  `causation.parent` are UUIDs and `subject.recordRevision` is greater than
+  zero, refused on both encode and decode; `time` is normalized to UTC at whole
+  milliseconds on encode, so equal instants produce identical bytes; decode
+  requires the bytes to equal their own canonicalization.
 - Causation and the hop guard: `hop` is 0 for a root event and parent hop + 1
   otherwise, the library ceiling is 8, and producing a child beyond the ceiling
   is refused with an error that names the ceiling so the worker can record a
@@ -47,12 +51,16 @@ stay with the owning product.
 ## Budgets
 
 - The envelope carries the same 2 MiB payload bound the delivery store enforces
-  (2,097,152 bytes).
+  (2,097,152 bytes). A per-delivery bound can only tighten it:
+  `EnvelopeLimits::tightened_to` clamps a wider request back to
+  `MAX_ENVELOPE_BYTES`.
 - A handler's returned message carries the executor output ceiling; the library
   default mirrors `registry-platform-script`'s 1 MiB `max_output_bytes` default
   and stays operator-configurable per run.
 - Every configurable budget carries a flip test at a non-default value. A
   budget without one is treated as not enforced.
+- Every diagnostic renders untrusted text bounded: 128 bytes per quoted token
+  and 512 bytes per deserializer message, with unexpected values dropped.
 
 ## Out of scope in version one
 

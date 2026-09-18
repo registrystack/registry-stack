@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-//! Compile-time (load-time) hook rules, in the "refuse what cannot run" style
-//! Scheduling's `HookPolicy` established: a declared hook that could never run
-//! is refused with a pinned diagnostic instead of being accepted and silently
-//! doing nothing.
+//! Compile-time (load-time) hook rules, in the "refuse what cannot run" style:
+//! a declared hook that could never run is refused with a pinned diagnostic
+//! instead of being accepted and silently doing nothing.
 //!
 //! These rules run when a product loads its project configuration, before any
 //! transaction, delivery, or handler exists.
@@ -359,6 +358,88 @@ mod tests {
             valid_hook("wasm-hook"),
         ];
         validate_hooks(&hooks).expect("the version-one ABI is the supported one");
+    }
+
+    #[test]
+    fn the_first_violation_in_declaration_order_is_the_one_reported() {
+        // Two hooks violate two different rules. Declaration order decides
+        // which refusal is reported, not the order the rules are checked in,
+        // so the same pair reports the other hook when it comes first.
+        let remote_before = declaration(
+            "remote-guard",
+            HookPhase::Before,
+            "patched",
+            HookHandlerSource::Url {
+                destination_id: "case-intake".to_owned(),
+            },
+        );
+        let unknown_abi = declaration(
+            "stale-abi",
+            HookPhase::After,
+            "created",
+            handler_with_abi(Some("registry.hook-handler/v2")),
+        );
+
+        let error = validate_hooks(&[
+            valid_hook("runnable"),
+            remote_before.clone(),
+            unknown_abi.clone(),
+        ])
+        .expect_err("the second hook is refused");
+        assert_eq!(error.code(), "hook.before_phase_remote_handler");
+        assert_eq!(error.index(), Some(1));
+
+        let error = validate_hooks(&[valid_hook("runnable"), unknown_abi, remote_before])
+            .expect_err("the second hook is refused");
+        assert_eq!(error.code(), "hook.abi_unknown");
+        assert_eq!(error.index(), Some(1));
+    }
+
+    #[test]
+    fn before_phase_accepts_a_wasm_handler() {
+        let hooks = [declaration(
+            "in-transaction-guard",
+            HookPhase::Before,
+            "patched",
+            handler_with_abi(Some(HOOK_HANDLER_ABI_V1)),
+        )];
+        validate_hooks(&hooks).expect("a local kind runs inside the transaction");
+    }
+
+    #[test]
+    fn every_validation_code_is_distinct_and_in_its_namespace() {
+        let variants = [
+            HookValidationError::EmptyHookId { index: 0 },
+            HookValidationError::DuplicateHookId {
+                index: 0,
+                id: String::new(),
+            },
+            HookValidationError::BeforePhaseRemoteHandler {
+                index: 0,
+                id: String::new(),
+            },
+            HookValidationError::AbiMissing {
+                index: 0,
+                id: String::new(),
+                kind: "wasm",
+                required_abi: HOOK_HANDLER_ABI_V1,
+            },
+            HookValidationError::AbiUnknown {
+                index: 0,
+                id: String::new(),
+                abi: String::new(),
+                required_abi: HOOK_HANDLER_ABI_V1,
+            },
+        ];
+        let codes: Vec<&str> = variants.iter().map(HookValidationError::code).collect();
+        assert_eq!(
+            codes.iter().collect::<BTreeSet<_>>().len(),
+            codes.len(),
+            "codes are distinct: {codes:?}"
+        );
+        for code in codes {
+            assert!(code.starts_with("hook."), "{code} is outside the namespace");
+        }
     }
 
     #[test]
