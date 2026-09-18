@@ -1256,8 +1256,19 @@ Python raises `casework.CaseworkClientError`, an `Exception` whose attributes ar
 
 A validation member carries the bounded `path` of the refused field and one `reason` from a closed
 set: `kind_not_allowed`, `reference_invalid`, `object_required`, `maximum_bytes_exceeded`,
-`maximum_depth_exceeded`, `schema_mismatch`, `outcome_not_declared`, `reason_required`, and
-`text_invalid`. Neither member repeats a submitted value.
+`maximum_depth_exceeded`, `schema_mismatch`, `outcome_not_declared`, `reason_required`,
+`text_invalid`, `result_not_declared`, `result_required`, `field_not_declared`,
+`constraint_invalid`, and `constraint_violated`. Neither member repeats a submitted value.
+
+The five result reasons govern a hosted item's structured result. `result_not_declared` refuses a
+result or a result constraint when the item's kind declares no `resultSchema`. `result_required`
+refuses a decision for an outcome whose `resultRequired` is set when the body carries none.
+`field_not_declared` refuses a result constraint that names a property the kind's schema does not
+declare. `constraint_invalid` refuses a constraint that is not a narrowing of the schema: an
+unknown keyword, a bound outside the declared one or on a property whose type the schema does not
+declare inline, or a choice value the schema refuses. `constraint_violated` refuses a submitted
+result that passes the schema but falls outside the item's constraints. `schema_mismatch` covers a
+value outside the schema itself, and both reasons carry the instance path of the offending field.
 
 {/* Evidence: crates/registry-casework-client/src/error.rs, CaseworkClientError,
     CaseworkProblemCode, CaseworkProtocolFailure, and expected_status(),

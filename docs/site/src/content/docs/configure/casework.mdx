@@ -146,10 +146,26 @@ hostedKinds:
         reference:
           type: string
           maxLength: 120
+    resultSchema:
+      type: object
+      additionalProperties: false
+      required: [batchStatus]
+      properties:
+        batchStatus:
+          type: string
+          enum: [valid, partial, invalid]
+        acceptedCount:
+          type: integer
+          minimum: 0
+          maximum: 100000
+        correctedReference:
+          type: string
+          maxLength: 120
     outcomes:
       - id: confirmed
         label: Confirm
         reasonRequired: false
+        resultRequired: true
       - id: rejected
         label: Return for correction
         reasonRequired: true
@@ -168,8 +184,28 @@ A submitted display payload is validated against it and stays under 16 KiB, so t
 Each entry in `outcomes` is a decision a deciding profile may record, and `reasonRequired: true` makes the free-text reason mandatory for that outcome.
 A kind declares at most 16 outcomes, and a project at most 64 hosted kinds.
 
+A kind may also declare what a decision records, not only what it displays.
+`resultSchema` is an optional closed JSON Schema 2020-12 object checked exactly like `displaySchema`, so the deciding person can hand back structured facts with the outcome, and `resultRequired: true` on an outcome refuses a decision for that outcome until a result is submitted.
+A kind without a `resultSchema` refuses a result and refuses constraints: the outcome stays a choice plus an optional reason, as on a kind that declares none.
+The result travels back to the Requester on the terminal item and survives as long as the display payload does; [Retain, erase, and settle](../../operate/casework-retention/) covers the clocks.
+
+The Requester that creates an item may narrow those result fields for that one item by sending `resultConstraints` beside the display.
+A constraint names one top-level property of `resultSchema` and admits only values the schema already admits, so a Requester can pick among the operator's choices or tighten a bound, and can never introduce a field, add a keyword, or widen a range.
+Each constraint value may use only these keywords, and an unknown keyword is refused rather than ignored:
+
+| Keyword | Value | Applies when the property subschema declares |
+| --- | --- | --- |
+| `enum` | 1 to 64 scalars (string, number, integer, boolean) | any type; shorthand for `oneOf` with no titles |
+| `oneOf` | 1 to 64 entries of `{ const, title }` with the title optional | any type; mutually exclusive with `enum` |
+| `minimum`, `maximum` | number | `type: number` or `type: integer` inline |
+| `minLength`, `maxLength` | non-negative integer | `type: string` inline |
+
+Constraints are stored verbatim and folded into the create idempotency hash, so a replay under the same key with different constraints is a conflict rather than a silent change.
+At decide time Casework validates the submitted result against the schema first and the constraints second, so a value outside the schema is reported as a schema error and a value inside the schema but outside the narrowing as a constraint error, each with the path of the offending field.
+
 {/* Evidence: crates/registry-casework-core/src/hosted.rs, HostedKindPolicy,
-    HostedRetentionPolicy, HostedOutcomePolicy, and check_closed_object_schema(). */}
+    HostedRetentionPolicy, HostedOutcomePolicy, check_closed_object_schema(),
+    HostedCreateRequest.check(), and HostedDecisionRequest.check(). */}
 
 ## Local callers in `dev-clients.yaml`
 
