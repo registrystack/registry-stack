@@ -389,38 +389,89 @@ fn missing_export_is_rejected() {
     }
 }
 
+/// A valid-ABI wat with exactly one export replaced: `broken` names the
+/// export, `replacement` its wat definition. Every other export keeps its
+/// conforming shape, so the reported violation can only be the broken one.
+fn wat_with_export(broken: &str, replacement: &str) -> String {
+    let defaults: [(&str, &str); 5] = [
+        (
+            "alloc",
+            r#"(func (export "alloc") (param i32) (result i32) (i32.const 0))"#,
+        ),
+        (
+            "handle",
+            r#"(func (export "handle") (param i32 i32) (result i32) (i32.const 0))"#,
+        ),
+        (
+            "result_ptr",
+            r#"(func (export "result_ptr") (result i32) (i32.const 0))"#,
+        ),
+        (
+            "result_len",
+            r#"(func (export "result_len") (result i32) (i32.const 0))"#,
+        ),
+        ("memory", r#"(memory (export "memory") 1)"#),
+    ];
+    let body = defaults
+        .iter()
+        .map(|(name, def)| {
+            if *name == broken {
+                replacement.to_owned()
+            } else {
+                (*def).to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n  ");
+    format!("(module\n  {body}\n)")
+}
+
 #[test]
 fn wrong_signature_is_rejected() {
-    let wat = r#"(module
-  (memory (export "memory") 1)
-  (func (export "alloc") (param i64) (result i32) (i32.const 0))
-  (func (export "handle") (param i32 i32) (result i32) (i32.const 0))
-  (func (export "result_ptr") (result i32) (i32.const 0))
-  (func (export "result_len") (result i32) (i32.const 0))
-)"#;
-    for backend in backends() {
-        let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
-            InvokeError::ExportTypeMismatch { name } => assert_eq!(name, "alloc"),
-            err => panic!("wrong error: {err}"),
+    // Only the function exports have signatures; each broken signature is
+    // reported under its own export name.
+    for (broken, replacement) in [
+        (
+            "alloc",
+            r#"(func (export "alloc") (param i64) (result i32) (i32.const 0))"#,
+        ),
+        (
+            "handle",
+            r#"(func (export "handle") (param i32 i32) (result i64) (i64.const 0))"#,
+        ),
+        (
+            "result_ptr",
+            r#"(func (export "result_ptr") (result i64) (i64.const 0))"#,
+        ),
+        (
+            "result_len",
+            r#"(func (export "result_len") (result i64) (i64.const 0))"#,
+        ),
+    ] {
+        let wat = wat_with_export(broken, replacement);
+        for backend in backends() {
+            let exec = executor(backend);
+            match err_of(exec.prepare(wat.as_bytes())) {
+                InvokeError::ExportTypeMismatch { name } => assert_eq!(name, broken, "{wat}"),
+                err => panic!("{broken}: wrong error: {err}"),
+            }
         }
     }
 }
 
 #[test]
 fn wrong_export_kind_is_rejected() {
-    let wat = r#"(module
-  (global (export "memory") i32 (i32.const 0))
-  (func (export "alloc") (param i32) (result i32) (i32.const 0))
-  (func (export "handle") (param i32 i32) (result i32) (i32.const 0))
-  (func (export "result_ptr") (result i32) (i32.const 0))
-  (func (export "result_len") (result i32) (i32.const 0))
-)"#;
-    for backend in backends() {
-        let exec = executor(backend);
-        match err_of(exec.prepare(wat.as_bytes())) {
-            InvokeError::ExportTypeMismatch { name } => assert_eq!(name, "memory"),
-            err => panic!("wrong error: {err}"),
+    // Every ABI export swapped for a global of the same name: each is
+    // reported under its own export name.
+    for broken in ["alloc", "handle", "result_ptr", "result_len", "memory"] {
+        let replacement = format!(r#"(global (export "{broken}") i32 (i32.const 0))"#);
+        let wat = wat_with_export(broken, &replacement);
+        for backend in backends() {
+            let exec = executor(backend);
+            match err_of(exec.prepare(wat.as_bytes())) {
+                InvokeError::ExportTypeMismatch { name } => assert_eq!(name, broken, "{wat}"),
+                err => panic!("{broken}: wrong error: {err}"),
+            }
         }
     }
 }

@@ -511,10 +511,10 @@ impl CallInstance {
             .map_err(map_trap)?;
         if !input.is_empty() {
             // alloc(0) legitimately returns 0; there is nothing to copy.
-            let in_bounds = ptr > 0 && {
-                let end = ptr as usize + input.len();
-                end <= self.memory.data_size(&self.store)
-            };
+            let in_bounds = ptr > 0
+                && (ptr as usize)
+                    .checked_add(input.len())
+                    .is_some_and(|end| end <= self.memory.data_size(&self.store));
             if !in_bounds {
                 return Err(InvokeError::AllocInvalidPointer {
                     ptr,
