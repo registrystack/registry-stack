@@ -52,6 +52,16 @@ const SPIN_HANDLE: &str = r#"(local $i i32)
       (br $spin))
     (i32.const 0)"#;
 
+/// `handle` spins for a bounded number of iterations (tens of milliseconds
+/// natively, far more under Pulley) before returning. Long enough that a
+/// few-tick epoch deadline always fires inside it, short enough that a
+/// tens-of-seconds deadline always lets it finish.
+const BOUNDED_SPIN_HANDLE: &str = r#"(local $i i32)
+    (loop $spin
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br_if $spin (i32.lt_u (local.get $i) (i32.const 20_000_000))))
+    (i32.const 0)"#;
+
 fn budgets(tune: impl FnOnce(&mut Budgets)) -> Budgets {
     let mut budgets = Budgets::default();
     tune(&mut budgets);
@@ -154,6 +164,44 @@ fn epoch_deadline_with_ticker() {
     let err = err_of(exec.invoke(&prepared, b"x"));
     ticker.stop();
     assert!(matches!(err, InvokeError::DeadlineExceeded), "{err}");
+}
+
+#[test]
+fn per_call_epoch_deadline_replaces_a_larger_budget_default() {
+    // The budget default (250 ticks, ~250 ms under a 1 ms ticker) lets the
+    // bounded spin finish; a per-call deadline of 3 ticks must trap it.
+    let exec = executor(Backend::Native);
+    let prepared = exec
+        .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
+        .expect("wat guest passes validation");
+    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+    let ok = exec
+        .invoke(&prepared, b"x")
+        .expect("bounded spin finishes inside the budget default");
+    let err = err_of(exec.invoke_with_epoch_deadline(&prepared, b"x", 3));
+    ticker.stop();
+    assert_eq!(ok.output, Vec::<u8>::new());
+    assert!(matches!(err, InvokeError::DeadlineExceeded), "{err}");
+}
+
+#[test]
+fn per_call_epoch_deadline_replaces_a_smaller_budget_default() {
+    // The budget default (1 tick, ~1 ms under a 1 ms ticker) traps the
+    // bounded spin; a per-call deadline of 60_000 ticks must let the same
+    // call finish.
+    let exec = Executor::new(Backend::Native, budgets(|b| b.epoch_deadline_ticks = 1))
+        .expect("fixed engine config is valid");
+    let prepared = exec
+        .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
+        .expect("wat guest passes validation");
+    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+    let err = err_of(exec.invoke(&prepared, b"x"));
+    let ok = exec
+        .invoke_with_epoch_deadline(&prepared, b"x", 60_000)
+        .expect("bounded spin finishes inside the per-call deadline");
+    ticker.stop();
+    assert!(matches!(err, InvokeError::DeadlineExceeded), "{err}");
+    assert_eq!(ok.output, Vec::<u8>::new());
 }
 
 #[test]

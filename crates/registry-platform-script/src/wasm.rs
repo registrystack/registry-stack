@@ -353,6 +353,20 @@ impl Executor {
         self.start_call(prepared)?.invoke(input)
     }
 
+    /// Run one request through the guest under a per-call epoch deadline that
+    /// replaces [`Budgets::epoch_deadline_ticks`] for this one call. A caller
+    /// mapping a wall-clock deadline onto ticks must know the ticker interval
+    /// that drives the engine's epoch.
+    pub fn invoke_with_epoch_deadline(
+        &self,
+        prepared: &PreparedModule,
+        input: &[u8],
+        epoch_deadline_ticks: u64,
+    ) -> Result<InvokeOk, InvokeError> {
+        self.start_call_with_epoch_deadline(prepared, epoch_deadline_ticks)?
+            .invoke(input)
+    }
+
     /// Open a call: build the fresh store, attach the resource limiter before
     /// instantiation, arm fuel and the epoch deadline, instantiate, and look
     /// up the ABI exports. [`CallInstance::invoke`] completes the call.
@@ -360,6 +374,17 @@ impl Executor {
     /// Exposed separately from [`Executor::invoke`] so a caller can account
     /// for the instantiate phase separately from the invoke phase.
     pub fn start_call(&self, prepared: &PreparedModule) -> Result<CallInstance, InvokeError> {
+        self.start_call_with_epoch_deadline(prepared, self.budgets.epoch_deadline_ticks)
+    }
+
+    /// Open a call with a per-call epoch deadline in ticks counted from the
+    /// engine's current epoch, replacing the budget default. Everything else
+    /// matches [`Executor::start_call`].
+    pub fn start_call_with_epoch_deadline(
+        &self,
+        prepared: &PreparedModule,
+        epoch_deadline_ticks: u64,
+    ) -> Result<CallInstance, InvokeError> {
         let mut store = Store::new(
             &self.engine,
             CallState {
@@ -380,7 +405,7 @@ impl Executor {
             .map_err(|err| InvokeError::EngineSetup {
                 detail: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
             })?;
-        store.set_epoch_deadline(self.budgets.epoch_deadline_ticks);
+        store.set_epoch_deadline(epoch_deadline_ticks);
 
         let instance = Instance::new(&mut store, prepared.module(), &[])
             .map_err(|err| state_denial(&store, err, &self.budgets))?;
