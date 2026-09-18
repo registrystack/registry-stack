@@ -204,6 +204,8 @@ route mapping.
 
 For atomic interval corrections, saved historical queries and their access and
 retention boundaries, see [Corrections and historical queries](HISTORY.md).
+For the entity `events` to `hooks` rewrite, see
+[Breaking authoring change: entity hooks](HISTORY.md).
 
 [Point queries and QGIS](SPATIAL-QUERIES.md) describes GeoJSON output and
 explicitly granted PostGIS-backed bbox queries. The spatial quickstart uses

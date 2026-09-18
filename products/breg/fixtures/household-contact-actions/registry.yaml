@@ -37,7 +37,7 @@ manifestProjection:
 modules:
   - id: "household-contact-actions-core"
     version: "0.1.0"
-    digest: "sha256:b1497bdb8d3ac367a2633a5ea2b8eb945ddd9dfe254d2576310caa3adea4517f"
+    digest: "sha256:8146b4628f43272da518326a46ba33c2df9044376e696751930b5b513d0f9c15"
 
 entities: []
 accessProfiles:

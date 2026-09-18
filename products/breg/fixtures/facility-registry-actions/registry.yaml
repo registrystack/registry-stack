@@ -37,7 +37,7 @@ manifestProjection:
 modules:
   - id: facility-registry-actions-core
     version: 0.1.0
-    digest: "sha256:71acf0a03c62bcbc592c80195f6c171c8f5ee7a0512fdf121ecd1655e245a7d5"
+    digest: "sha256:b6ddb2e5dff71c6fcd04697e74d233a5a3a04f96e22583faea0ace1b7711302d"
 entities: []
 accessProfiles:
   - id: facility-registrar

@@ -2,10 +2,10 @@
 export function eventConfiguration(reference) {
   const module = reference.contracts.find((contract) => contract.id === 'module');
   if (!module) throw new Error('BReg module configuration is missing');
-  const prefix = 'entities[].events[].';
+  const prefix = 'entities[].hooks[].';
   const fields = module.fields
     .filter((field) => field.key_path.startsWith(prefix))
     .map((field) => ({ ...field, key_path: field.key_path.slice(prefix.length) }));
   if (fields.length === 0) throw new Error('BReg event configuration is empty');
-  return [{ ...module, id: 'event', title: 'events[]', field_count: fields.length, fields }];
+  return [{ ...module, id: 'event', title: 'hooks[]', field_count: fields.length, fields }];
 }

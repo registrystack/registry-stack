@@ -115,14 +115,16 @@ WEBHOOK_EVENT_ID = "usual-resident-created-v1"
 WEBHOOK_MODULE_ID = "publicschema-household-demographics"
 WEBHOOK_MODULE_LOCK = "  - id: publicschema-household-demographics\n    version: 0.1.0\n"
 WEBHOOK_ENTITY_INSERTION = "  - entity: household\n"
-WEBHOOK_MODULE_SOURCE = """    events:
+WEBHOOK_MODULE_SOURCE = """    hooks:
       - id: usual-resident-created-v1
+        phase: after
         trigger: created
         projection: [person-code, residency-status]
         when:
           kind: fields
           afterEquals: {residency-status: usual-resident}
-        webhook:
+        handler:
+          kind: url
           destinationId: household-event-receiver
 """
 WEBHOOK_SIGNATURE_DOMAIN = b"breg-webhook-signature-v1"
@@ -166,15 +168,17 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
             "module_id": "business-establishment-summary",
             "module_lock": "  - id: business-establishment-summary\n    version: 0.1.0\n",
             "entity_insertion": "  - entity: business\n",
-            "module_source": """    events:
+            "module_source": """    hooks:
       - id: operating-created-v1
+        phase: after
         trigger: created
         projection: [establishment-code, operating-status]
         when:
           kind: fields
           afterEquals:
             operating-status: operating
-        webhook:
+        handler:
+          kind: url
           destinationId: business-event-receiver
 """,
             "entity": "establishment",
@@ -451,7 +455,7 @@ def _local_project(
         module_path = target / f"modules/{hook['module_id']}/module.yaml"
         module_source = module_path.read_text(encoding="utf-8")
         if (
-            "    events:\n" in module_source
+            "    hooks:\n" in module_source
             or module_source.count(hook["entity_insertion"]) != 1
             or not module_source.endswith("\n")
         ):

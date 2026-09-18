@@ -1,6 +1,6 @@
 ---
 title: Author a registry project
-description: Model your own registry in the project bregctl init writes, from the registry file and its entities to references, validity time, location, modules, and event declarations, and compile it without a database.
+description: Model your own registry in the project bregctl init writes, from the registry file and its entities to references, validity time, location, modules, and hook declarations, and compile it without a database.
 status: current
 owner: registry-docs
 source_repos:
@@ -352,10 +352,10 @@ Review a digest change together with the module diff that caused it.
 
 {/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-bregctl/src/lib.rs, project_lock(). */}
 
-## Events
+## Hooks
 
-An event projects chosen fields of a committed change to a webhook destination the deployment binds by name.
-Events are declared on entities, in the registry file or in a module, and the project carries no receiver URL and no secret:
+A hook projects chosen fields of a committed change to a destination the deployment binds by name.
+Hooks are declared on entities, in the registry file or in a module, and the project carries no receiver URL and no secret:
 
 ```yaml
   - id: record
@@ -373,24 +373,28 @@ Events are declared on entities, in the registry file or in a module, and the pr
         type: vocabulary-code
         vocabulary: record-status
         classification: internal
-    events:
+    hooks:
       - id: record-status-changed-v1
+        phase: after
         trigger: patched
         projection: [code, status]
         when:
           kind: fields
           changed: [status]
-        webhook:
+        handler:
+          kind: url
           destinationId: record-receiver
 ```
 
 | Member | Values |
 |---|---|
 | `id` | The event contract identifier, sent to receivers as the CloudEvents `ce-type`. Use a new id for a payload change receivers must notice. |
+| `phase` | `after`. An entity hook runs after the triggering transaction commits; the engine refuses any other phase. |
 | `trigger` | `created`, `patched`, `tombstoned`, or `request_lifecycle` for change-request state changes. |
 | `when` | Optional. `kind: fields` with `changed`, `beforeEquals`, and `afterEquals`; or `kind: request_lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
 | `projection` | The field ids copied into the event payload's `values`. Restricted fields cannot be projected. |
-| `webhook.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. A production compilation requires every event to name one. |
+| `handler.kind` | `url`. An entity hook delivers to a bound destination; the engine refuses a local handler kind. |
+| `handler.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. A production compilation requires every hook to name one. |
 
 Field ids in `when` and `projection` are the authored ids, and the payload keeps them.
 `changed` is valid only with the `patched` trigger, `beforeEquals` with `patched` and `tombstoned`, and `afterEquals` with `created` and `patched`.
@@ -421,7 +425,7 @@ An event id the project does not deliver fails with `webhook.sample.event_refuse
 `explain events` prints every compiled delivery with its trigger, `when` tests, projection fields, destination, and the retry schedule the runtime will follow.
 Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../../operate/breg-webhooks/); [Send events to a webhook](../../tutorials/send-registry-events-to-a-webhook/) walks through a delivery end to end, and [Base Registry Engine API reference](../../reference/breg-api/#events-and-webhooks) documents the headers, signature, and retry contract.
 
-{/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/contract.rs, EventSource and EventConditionSource; crates/registry-breg/src/webhook.rs; crates/registry-bregctl/src/lib.rs, webhook_sample(). */}
+{/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/contract.rs, HookSource and EventConditionSource; crates/registry-breg/src/webhook.rs; crates/registry-bregctl/src/lib.rs, webhook_sample(). */}
 
 ## Troubleshooting
 
