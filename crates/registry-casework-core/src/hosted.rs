@@ -1170,7 +1170,7 @@ fn is_scalar(value: &Value) -> bool {
 /// A bounded field path for validation headers, falling back to the payload
 /// root when a field name is not a header-safe path segment.
 fn result_field_path(prefix: &str, field: &str) -> String {
-    if field.len() + prefix.len() + 1 <= 256 && field.bytes().all(valid_path_byte) {
+    if field.len() + prefix.len() < 256 && field.bytes().all(valid_path_byte) {
         format!("{prefix}/{field}")
     } else {
         prefix.to_owned()
@@ -1604,7 +1604,7 @@ mod tests {
     fn result_schema_changes_the_digest_and_snapshots_round_trip() {
         let starter = standalone_decision_starter_kind();
         let starter_digest = starter.policy_digest().expect("starter digests");
-        let mut with_result = result_kind_policy();
+        let with_result = result_kind_policy();
         let result_digest = with_result.policy_digest().expect("result kind digests");
         assert_ne!(starter_digest, result_digest);
 
