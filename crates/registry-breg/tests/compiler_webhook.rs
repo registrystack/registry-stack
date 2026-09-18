@@ -183,7 +183,7 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.id, "events.case.case-created.webhook");
     assert_eq!(delivery.entity_id, "case");
     assert_eq!(delivery.event_id, "case-created");
-    assert_eq!(delivery.destination_id, "case-operations");
+    assert_eq!(delivery.destination_id.as_deref(), Some("case-operations"));
     assert_eq!(delivery.projection_fields, ["label", "region"]);
     assert_eq!(delivery.classification_ceiling, Classification::Internal);
     assert!(delivery.when.is_some());

@@ -15,6 +15,7 @@ use std::time::Duration;
 use deadpool_postgres::Client;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::HookHandlerKind;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -600,10 +601,15 @@ fn exact_entity_event_deliveries(
             .hooks
             .get(&delivery.event_id)
             .ok_or(MutationError::InvalidRequest)?;
-        let Some(crate::contract::HookHandlerSource::Url { destination_id }) =
-            event.handler.as_ref()
-        else {
-            return Err(MutationError::InvalidRequest);
+        let (expected_destination_id, expected_handler_kind) = match event.handler.as_ref() {
+            Some(crate::contract::HookHandlerSource::Url { destination_id }) => {
+                (Some(destination_id.as_str()), HookHandlerKind::Url)
+            }
+            // A local kind carries a reviewed program instead of a bound
+            // destination, so the delivery row must carry the declared kind
+            // and no destination at all.
+            Some(handler) => (None, handler.kind()),
+            None => return Err(MutationError::InvalidRequest),
         };
         let expected_projection = event.projection.iter().cloned().collect::<Vec<_>>();
         let classification_ceiling = event
@@ -620,7 +626,8 @@ fn exact_entity_event_deliveries(
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
             || delivery.trigger != event.trigger
-            || delivery.destination_id != *destination_id
+            || delivery.destination_id.as_deref() != expected_destination_id
+            || delivery.handler_kind() != expected_handler_kind
             || delivery.projection_fields != expected_projection
             || delivery.when != event.when
             || delivery.classification_ceiling != classification_ceiling

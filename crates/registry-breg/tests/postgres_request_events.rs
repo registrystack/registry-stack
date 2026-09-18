@@ -358,6 +358,10 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
     let service = WebhookDeliveryService::new(
         pool,
         Arc::clone(&destinations),
+        Arc::new(registry_breg::hook_handler::HookHandlerRegistry::new(
+            &compiled,
+            &identity.package_revision,
+        )),
         identity,
         RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
         Duration::from_secs(2),

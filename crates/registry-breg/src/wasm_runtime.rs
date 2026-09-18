@@ -188,15 +188,27 @@ impl WasmHandlerRuntime {
         &self,
         handler: &CompiledActionHandler,
     ) -> Result<Arc<PreparedModule>, ActionHandlerDiagnostic> {
-        let identity = (
-            handler.module_sha256.clone().ok_or_else(|| {
-                ActionHandlerDiagnostic::new(
-                    ActionHandlerError::Source,
-                    "A compiled WASM handler carries its module content hash.",
-                )
-            })?,
-            self.executor.backend(),
-        );
+        let module_sha256 = handler.module_sha256.as_deref().ok_or_else(|| {
+            ActionHandlerDiagnostic::new(
+                ActionHandlerError::Source,
+                "A compiled WASM handler carries its module content hash.",
+            )
+        })?;
+        self.prepared_module_for(module_sha256, &handler.module_bytes)
+            .map_err(classify_prepare_error)
+    }
+
+    /// Resolve a prepared module by content identity, compiling it on first
+    /// use. Shared by the action handler path and the hook handler path: both
+    /// address a module by its content hash, and a prepared module is
+    /// immutable, so one cache serves both without either learning the
+    /// other's error vocabulary.
+    fn prepared_module_for(
+        &self,
+        module_sha256: &str,
+        module_bytes: &[u8],
+    ) -> Result<Arc<PreparedModule>, InvokeError> {
+        let identity = (module_sha256.to_owned(), self.executor.backend());
         let mut cache = self.cache.lock().expect("wasm module cache lock");
         if let Some(position) = cache.entries.iter().position(|(key, _)| *key == identity) {
             // Move-to-front keeps the eviction order least-recently-used.
@@ -204,11 +216,7 @@ impl WasmHandlerRuntime {
             cache.entries.insert(0, prepared.clone());
             return Ok(prepared.1);
         }
-        let prepared = Arc::new(
-            self.executor
-                .prepare(&handler.module_bytes)
-                .map_err(classify_prepare_error)?,
-        );
+        let prepared = Arc::new(self.executor.prepare(module_bytes)?);
         cache.preparations += 1;
         cache.entries.insert(0, (identity, prepared.clone()));
         cache
@@ -376,6 +384,83 @@ fn evaluate_with_runtime(
     let proposed =
         crate::action_outcome::decode_wasm_outcome(&invoked.output, action.maximum_snapshot_bytes)?;
     crate::action_outcome::validate_proposed_outcome(action, handler, proposed)
+}
+
+/// Evaluate one reviewed WASM hook handler: the envelope in verbatim, the
+/// guest's answer bytes out.
+///
+/// The hook handler contract is narrower than the action handler contract:
+/// the request is the envelope itself rather than an operation wrapper, and
+/// the answer is the handler message the delivery worker parses, so nothing
+/// is decoded here. Only the failure vocabulary is translated, into the hook
+/// error taxonomy the delivery state records.
+#[cfg(feature = "runtime")]
+pub(crate) fn evaluate_wasm_hook(
+    module_sha256: &str,
+    module_bytes: &[u8],
+    envelope: &[u8],
+    deadline: Instant,
+) -> Result<Vec<u8>, registry_platform_hooks::ErrorCategory> {
+    use registry_platform_hooks::ErrorCategory;
+
+    let runtime = RUNTIME
+        .read()
+        .expect("wasm runtime lock")
+        .clone()
+        // Evaluation before any install is a wiring fault, not a property of
+        // the reviewed module: a lazily defaulted runtime would silently
+        // discard the operator budgets and backend startup owns.
+        .ok_or(ErrorCategory::Execution)?;
+    if Instant::now() >= deadline {
+        return Err(ErrorCategory::Deadline);
+    }
+    let prepared = runtime
+        .prepared_module_for(module_sha256, module_bytes)
+        .map_err(hook_prepare_category)?;
+    let invoked = runtime
+        .executor
+        .invoke_with_epoch_deadline(&prepared, envelope, epoch_ticks_until(deadline))
+        .map_err(hook_invoke_category)?;
+    if Instant::now() >= deadline {
+        return Err(ErrorCategory::Deadline);
+    }
+    Ok(invoked.output)
+}
+
+/// A module over the configured ceiling is a resource refusal, an
+/// engine-setup failure is a build fault, and anything else caused by the
+/// module bytes is a source refusal. Same split the action path applies, in
+/// the hook taxonomy.
+#[cfg(feature = "runtime")]
+fn hook_prepare_category(error: InvokeError) -> registry_platform_hooks::ErrorCategory {
+    use registry_platform_hooks::ErrorCategory;
+    match error {
+        // The declared guest memory is checked once at preparation, so an
+        // operator ceiling can be crossed before the module ever runs.
+        InvokeError::ModuleTooLarge { .. }
+        | InvokeError::MemoryLimitExceeded { .. }
+        | InvokeError::TableLimitExceeded { .. } => ErrorCategory::Resource,
+        InvokeError::EngineSetup { .. } => ErrorCategory::Execution,
+        _ => ErrorCategory::Source,
+    }
+}
+
+/// The epoch backstop is the attempt deadline, exhausted budgets are resource
+/// refusals, and everything the guest did or failed to do is an execution
+/// failure. `Unavailable` never appears: a local kind has nothing to reach.
+#[cfg(feature = "runtime")]
+fn hook_invoke_category(error: InvokeError) -> registry_platform_hooks::ErrorCategory {
+    use registry_platform_hooks::ErrorCategory;
+    match error {
+        InvokeError::DeadlineExceeded => ErrorCategory::Deadline,
+        InvokeError::FuelExhausted
+        | InvokeError::StackLimitExceeded
+        | InvokeError::MemoryLimitExceeded { .. }
+        | InvokeError::TableLimitExceeded { .. }
+        | InvokeError::InputTooLarge { .. }
+        | InvokeError::OutputTooLarge { .. } => ErrorCategory::Resource,
+        _ => ErrorCategory::Execution,
+    }
 }
 
 #[cfg(test)]

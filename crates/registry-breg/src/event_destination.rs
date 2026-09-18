@@ -121,7 +121,7 @@ impl ActivatedEventDestinationRegistry {
             .event_deliveries()
             .deliveries
             .iter()
-            .map(|delivery| delivery.destination_id.as_str())
+            .filter_map(|delivery| delivery.destination_id.as_deref())
             .collect::<BTreeSet<_>>();
         let configured_ids = configured.bindings.keys().map(String::as_str).collect();
         if compiled_ids != configured_ids {
@@ -134,7 +134,7 @@ impl ActivatedEventDestinationRegistry {
                 .event_deliveries()
                 .deliveries
                 .iter()
-                .filter(|delivery| delivery.destination_id == *logical_id)
+                .filter(|delivery| delivery.destination_id.as_deref() == Some(logical_id.as_str()))
                 .collect::<Vec<_>>();
             if deliveries.is_empty() {
                 return Err(EventDestinationActivationError::InventoryMismatch);

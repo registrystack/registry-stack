@@ -446,9 +446,11 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
                 AND ((table_name = 'registry_outbox'
                       AND column_name = 'payload_expires_at')
                   OR (table_name = 'registry_webhook_deliveries'
-                      AND column_name = 'data_schema')
+                      AND column_name IN ('data_schema', 'handler_kind',
+                                          'logical_destination_id'))
                   OR (table_name = 'registry_webhook_delivery_state'
-                      AND column_name = 'expired_at'))
+                      AND column_name IN ('expired_at', 'handler_message',
+                                          'handler_message_digest')))
               ORDER BY table_name, column_name",
             &[],
         )
@@ -477,8 +479,28 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
                 "NO".to_owned(),
             ),
             (
+                "registry_webhook_deliveries".to_owned(),
+                "handler_kind".to_owned(),
+                "NO".to_owned(),
+            ),
+            (
+                "registry_webhook_deliveries".to_owned(),
+                "logical_destination_id".to_owned(),
+                "YES".to_owned(),
+            ),
+            (
                 "registry_webhook_delivery_state".to_owned(),
                 "expired_at".to_owned(),
+                "YES".to_owned(),
+            ),
+            (
+                "registry_webhook_delivery_state".to_owned(),
+                "handler_message".to_owned(),
+                "YES".to_owned(),
+            ),
+            (
+                "registry_webhook_delivery_state".to_owned(),
+                "handler_message_digest".to_owned(),
                 "YES".to_owned(),
             ),
         ]
@@ -874,7 +896,10 @@ fn assert_capture_matches(
     identity: &ExpectedRegistryIdentity,
 ) {
     assert_eq!(actual.compiled_delivery_id, compiled.id);
-    assert_eq!(actual.logical_destination_id, compiled.destination_id);
+    assert_eq!(
+        Some(actual.logical_destination_id.as_str()),
+        compiled.destination_id.as_deref()
+    );
     assert_eq!(actual.destination_binding_digest, binding_digest);
     assert_eq!(actual.package_revision, identity.package_revision);
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
@@ -1046,6 +1071,7 @@ async fn assert_delivery_is_transport_and_value_free(
         [
             "event_id",
             "compiled_delivery_id",
+            "handler_kind",
             "logical_destination_id",
             "destination_binding_digest",
             "package_revision",

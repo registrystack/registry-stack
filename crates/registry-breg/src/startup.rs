@@ -789,9 +789,14 @@ async fn finish_prepared_server(
         audit_profile.clone(),
         Arc::clone(&cursor_codec),
     ));
+    let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
+        &registry,
+        &expected.package_revision,
+    ));
     let webhook_delivery = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&event_destinations),
+        hook_handlers,
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,

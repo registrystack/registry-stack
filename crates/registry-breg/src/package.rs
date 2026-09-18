@@ -2673,6 +2673,17 @@ fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option
     handler.script().or_else(|| handler.module())
 }
 
+/// The owned asset path a local hook handler declares: its script for `rhai`,
+/// its module for `wasm`. A `url` handler holds no program and so owns no
+/// asset.
+fn hook_handler_source_path(hook: &crate::contract::HookSource) -> Option<&str> {
+    match hook.handler.as_ref()? {
+        registry_platform_hooks::HookHandlerSource::Rhai { script, .. } => Some(script.as_str()),
+        registry_platform_hooks::HookHandlerSource::Wasm { module, .. } => Some(module.as_str()),
+        registry_platform_hooks::HookHandlerSource::Url { .. } => None,
+    }
+}
+
 fn validate_declared_package_assets(
     project: &RegistryProject,
     modules: &[RegistryModule],
@@ -2701,6 +2712,13 @@ fn validate_declared_package_assets(
                 .iter()
                 .map(|provider| provider.contracts.as_str()),
         )
+        .chain(
+            project
+                .entities
+                .iter()
+                .flat_map(|entity| entity.hooks.iter())
+                .filter_map(hook_handler_source_path),
+        )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
         .iter()
@@ -2725,6 +2743,7 @@ fn validate_declared_package_assets(
             .collect::<BTreeSet<_>>();
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
+            declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));
             if let Some(script) = entity
                 .change_request
                 .as_ref()
@@ -2736,6 +2755,7 @@ fn validate_declared_package_assets(
         }
         for extension in &module.extend_entities {
             declared.extend(extension.derived.iter().map(|derived| derived.sql.as_str()));
+            declared.extend(extension.hooks.iter().filter_map(hook_handler_source_path));
             if let Some(script) = extension
                 .change_request
                 .as_ref()

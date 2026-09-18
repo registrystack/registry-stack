@@ -79,7 +79,10 @@ impl Delivery {
             .map_err(|_| anyhow::anyhow!("compiled local event schema cannot be validated"))?;
         Ok(Self {
             id: delivery.id.clone(),
-            destination_id: delivery.destination_id.clone(),
+            destination_id: delivery
+                .destination_id
+                .clone()
+                .context("local event receiver serves url deliveries only")?,
             data_schema: delivery.data_schema.clone(),
             source: format!(
                 "urn:registrystack:registry:{}:instance:{}",
@@ -104,10 +107,14 @@ impl Receiver {
         {
             bail!("local webhook receiver requires package.environment: local");
         }
+        // The local receiver stands in for a remote destination, so it holds
+        // the url deliveries only; a local handler runs inside the engine and
+        // never reaches an HTTP receiver.
         let deliveries = compiled
             .event_deliveries()
             .deliveries
             .iter()
+            .filter(|delivery| delivery.destination_id.is_some())
             .map(|delivery| {
                 Ok((
                     (delivery.event_id.clone(), delivery.entity_id.clone()),

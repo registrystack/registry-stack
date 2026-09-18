@@ -74,6 +74,8 @@ pub mod history_schema;
 #[cfg(feature = "runtime")]
 pub(crate) mod history_store;
 #[cfg(feature = "runtime")]
+pub mod hook_handler;
+#[cfg(feature = "runtime")]
 pub mod idempotency;
 pub mod immediate_actions;
 pub mod logical_names;
