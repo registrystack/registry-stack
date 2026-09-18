@@ -570,6 +570,10 @@ fn execute_compiled_handler(
     {
         return Err(ActionHandlerError::Deadline.into());
     }
+    // The decode recurses to build the document, so the result is bounded
+    // while it is still a Rhai value; the decoded document then passes the
+    // shared bound every backend's outcome passes.
+    crate::action_outcome::bound_rhai_result(&result, action.maximum_snapshot_bytes)?;
     let document = crate::action_outcome::rhai_document(result);
     crate::action_outcome::bound_document(&document, action.maximum_snapshot_bytes)?;
     let proposed = crate::action_outcome::decode_document(document)?;

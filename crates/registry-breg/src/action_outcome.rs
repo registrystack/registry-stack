@@ -81,7 +81,8 @@ pub(crate) enum ProposedActionOutcome {
 /// Decode a Rhai handler result into the neutral outcome document. Total by
 /// construction: every Rhai kind either maps to a proposal value or becomes
 /// `Inexpressible`, which the validator refuses where the Rhai decode path
-/// refused the kind.
+/// refused the kind. The decode recurses, so a handler result passes
+/// [`bound_rhai_result`] first.
 pub(crate) fn rhai_document(value: Dynamic) -> ProposedValue {
     if value.is_unit() {
         return ProposedValue::Absent;
@@ -163,6 +164,58 @@ pub(crate) fn decode_wasm_outcome(
     let document = json_document(value);
     bound_document(&document, maximum_snapshot_bytes)?;
     decode_document(document)
+}
+
+/// The shared output bound applied to a Rhai handler result while it is
+/// still a Rhai value. Decoding a Rhai value into the neutral document
+/// recurses to build it, so the depth ceiling is checked here, before the
+/// decode descends: a result nested past
+/// [`rhai_planner::MAXIMUM_VALUE_DEPTH`] is refused without either walk
+/// reaching its bottom. Every charge and ceiling matches [`bound_document`],
+/// which the decoded document then passes through with every other backend's
+/// outcome.
+pub(crate) fn bound_rhai_result(
+    value: &Dynamic,
+    maximum_snapshot_bytes: u32,
+) -> Result<(), ActionHandlerError> {
+    let mut remaining = maximum_snapshot_bytes as usize;
+    bound_rhai_value(value, 0, &mut remaining)
+}
+
+fn bound_rhai_value(
+    value: &Dynamic,
+    depth: usize,
+    remaining: &mut usize,
+) -> Result<(), ActionHandlerError> {
+    if depth > rhai_planner::MAXIMUM_VALUE_DEPTH {
+        return Err(ActionHandlerError::Resource);
+    }
+    *remaining = remaining
+        .checked_sub(8)
+        .ok_or(ActionHandlerError::Resource)?;
+    if let Some(text) = value.read_lock::<ImmutableString>() {
+        *remaining = remaining
+            .checked_sub(text.len())
+            .ok_or(ActionHandlerError::Resource)?;
+    } else if let Some(items) = value.read_lock::<Array>() {
+        if items.len() > rhai_planner::MAXIMUM_ARRAY_ITEMS {
+            return Err(ActionHandlerError::Resource);
+        }
+        for item in items.iter() {
+            bound_rhai_value(item, depth + 1, remaining)?;
+        }
+    } else if let Some(members) = value.read_lock::<Map>() {
+        if members.len() > rhai_planner::MAXIMUM_MAP_ENTRIES {
+            return Err(ActionHandlerError::Resource);
+        }
+        for (key, item) in members.iter() {
+            *remaining = remaining
+                .checked_sub(key.len())
+                .ok_or(ActionHandlerError::Resource)?;
+            bound_rhai_value(item, depth + 1, remaining)?;
+        }
+    }
+    Ok(())
 }
 
 /// The shared output bound every backend's outcome must fit inside before it
@@ -830,6 +883,10 @@ fn member_string(value: &ProposedValue) -> Result<String, ChangeRequestPlannerEr
         _ => Err(ChangeRequestPlannerError::Result),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/action_outcome_rhai_bound_tests.rs"]
+mod action_outcome_rhai_bound_tests;
 
 #[cfg(all(test, feature = "wasm"))]
 #[path = "tests/action_outcome_wasm_parity_tests.rs"]
