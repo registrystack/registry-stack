@@ -18,7 +18,14 @@ pub const MAXIMUM_HOSTED_DISPLAY_DEPTH: usize = 16;
 pub const MAXIMUM_HOSTED_REFERENCE_BYTES: usize = 128;
 pub const MAXIMUM_HOSTED_NOTE_BYTES: usize = 2_000;
 pub const MAXIMUM_HOSTED_REASON_BYTES: usize = 2_000;
+pub const MAXIMUM_HOSTED_RESULT_BYTES: usize = 16 * 1024;
+pub const MAXIMUM_HOSTED_RESULT_CONSTRAINTS_BYTES: usize = 16 * 1024;
+pub const MAXIMUM_HOSTED_CONSTRAINT_CHOICES: usize = 64;
+pub const MAXIMUM_HOSTED_CONSTRAINT_TITLE_CHARS: usize = 120;
 pub const MAXIMUM_HOSTED_RETENTION_DAYS: u32 = 3_650;
+
+const RESULT_PATH: &str = "$.result";
+const RESULT_CONSTRAINTS_PATH: &str = "$.resultConstraints";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -29,6 +36,8 @@ pub struct HostedKindPolicy {
     pub deciding_profiles: Vec<String>,
     pub retention: HostedRetentionPolicy,
     pub display_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schema: Option<Value>,
     pub outcomes: Vec<HostedOutcomePolicy>,
 }
 
@@ -48,11 +57,16 @@ impl HostedKindPolicy {
             return Err(HostedPolicyError::Identity);
         }
         self.retention.check()?;
-        check_display_schema(&self.display_schema)?;
+        check_closed_object_schema(&self.display_schema)?;
+        if let Some(result_schema) = &self.result_schema {
+            check_closed_object_schema(result_schema)?;
+        }
         if self.outcomes.is_empty()
             || self.outcomes.len() > MAXIMUM_HOSTED_OUTCOMES
             || !all_unique(self.outcomes.iter().map(|outcome| outcome.id.as_str()))
             || self.outcomes.iter().any(|outcome| !outcome.is_valid())
+            || (self.result_schema.is_none()
+                && self.outcomes.iter().any(|outcome| outcome.result_required))
         {
             return Err(HostedPolicyError::Outcomes);
         }
@@ -61,6 +75,13 @@ impl HostedKindPolicy {
 
     pub fn validate_display(&self, display: &Value) -> Result<(), HostedValidationError> {
         validate_display(&self.display_schema, display)
+    }
+
+    pub fn validate_result_constraints(
+        &self,
+        constraints: &Value,
+    ) -> Result<(), HostedValidationError> {
+        validate_result_constraints(self.result_schema.as_ref(), constraints)
     }
 
     #[must_use]
@@ -85,6 +106,7 @@ impl HostedKindPolicy {
             deciding_profiles: self.deciding_profiles.clone(),
             retention: self.retention.clone(),
             display_schema: self.display_schema.clone(),
+            result_schema: self.result_schema.clone(),
             outcomes: self.outcomes.clone(),
         })
     }
@@ -115,6 +137,8 @@ pub struct HostedOutcomePolicy {
     pub id: String,
     pub label: String,
     pub reason_required: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub result_required: bool,
 }
 
 impl HostedOutcomePolicy {
@@ -142,6 +166,8 @@ pub struct HostedKindPolicySnapshot {
     pub deciding_profiles: Vec<String>,
     pub retention: HostedRetentionPolicy,
     pub display_schema: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schema: Option<Value>,
     pub outcomes: Vec<HostedOutcomePolicy>,
 }
 
@@ -154,6 +180,7 @@ impl HostedKindPolicySnapshot {
             deciding_profiles: self.deciding_profiles.clone(),
             retention: self.retention.clone(),
             display_schema: self.display_schema.clone(),
+            result_schema: self.result_schema.clone(),
             outcomes: self.outcomes.clone(),
         };
         if policy.policy_digest()? != self.identity.digest {
@@ -164,6 +191,13 @@ impl HostedKindPolicySnapshot {
 
     pub fn validate_display(&self, display: &Value) -> Result<(), HostedValidationError> {
         validate_display(&self.display_schema, display)
+    }
+
+    pub fn validate_result_constraints(
+        &self,
+        constraints: &Value,
+    ) -> Result<(), HostedValidationError> {
+        validate_result_constraints(self.result_schema.as_ref(), constraints)
     }
 
     #[must_use]
@@ -300,6 +334,10 @@ pub struct HostedWorkItemContext {
     pub display: Value,
     pub kind_policy_digest: HostedPolicyDigest,
     pub outcomes: Vec<HostedOutcomePolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_schema: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_constraints: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -308,6 +346,8 @@ pub struct HostedCreateRequest {
     pub kind: String,
     pub requester_reference: String,
     pub display: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_constraints: Option<Value>,
 }
 
 impl HostedCreateRequest {
@@ -324,7 +364,11 @@ impl HostedCreateRequest {
                 HostedValidationReason::ReferenceInvalid,
             ));
         }
-        policy.validate_display(&self.display)
+        policy.validate_display(&self.display)?;
+        if let Some(constraints) = &self.result_constraints {
+            policy.validate_result_constraints(constraints)?;
+        }
+        Ok(())
     }
 
     pub fn canonical_bytes(&self) -> Result<Vec<u8>, HostedRequestError> {
@@ -372,11 +416,17 @@ pub struct HostedDecisionRequest {
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
 }
 
 impl HostedDecisionRequest {
-    pub fn check(&self, policy: &HostedKindPolicySnapshot) -> Result<(), HostedValidationError> {
-        let outcome = policy.outcome(&self.outcome).ok_or_else(|| {
+    pub fn check(
+        &self,
+        snapshot: &HostedKindPolicySnapshot,
+        result_constraints: Option<&Value>,
+    ) -> Result<(), HostedValidationError> {
+        let outcome = snapshot.outcome(&self.outcome).ok_or_else(|| {
             HostedValidationError::new("$.outcome", HostedValidationReason::OutcomeNotDeclared)
         })?;
         if self
@@ -400,6 +450,27 @@ impl HostedDecisionRequest {
                 HostedValidationReason::ReasonRequired,
             ));
         }
+        match (&self.result, snapshot.result_schema.as_ref()) {
+            (Some(result), Some(schema)) => {
+                validate_result(schema, result)?;
+                if let Some(constraints) = result_constraints {
+                    validate_result_narrowing(constraints, result)?;
+                }
+            }
+            (Some(_), None) => {
+                return Err(HostedValidationError::new(
+                    RESULT_PATH,
+                    HostedValidationReason::ResultNotDeclared,
+                ));
+            }
+            (None, Some(_)) if outcome.result_required => {
+                return Err(HostedValidationError::new(
+                    RESULT_PATH,
+                    HostedValidationReason::ResultRequired,
+                ));
+            }
+            (None, _) => {}
+        }
         Ok(())
     }
 }
@@ -412,6 +483,8 @@ pub struct RequesterHostedItem {
     pub kind: String,
     pub version: String,
     pub display: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_constraints: Option<Value>,
     pub state: OccurrenceState,
     pub revision: i64,
     pub kind_policy_digest: HostedPolicyDigest,
@@ -445,6 +518,8 @@ pub struct HostedTerminalResult {
     #[serde(flatten)]
     pub terminal: HostedTerminalState,
     pub kind_policy_digest: HostedPolicyDigest,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<Value>,
     pub terminal_at: DateTime<Utc>,
 }
 
@@ -467,6 +542,7 @@ impl<'de> Deserialize<'de> for HostedTerminalResult {
                         actor_ref: wire.actor_ref,
                     },
                     kind_policy_digest: wire.kind_policy_digest,
+                    result: wire.result,
                     terminal_at: wire.terminal_at,
                 })
             }
@@ -481,6 +557,7 @@ impl<'de> Deserialize<'de> for HostedTerminalResult {
                         cancellation_reason: wire.cancellation_reason,
                     },
                     kind_policy_digest: wire.kind_policy_digest,
+                    result: None,
                     terminal_at: wire.terminal_at,
                 })
             }
@@ -502,6 +579,8 @@ struct CompletedTerminalWire {
     outcome: String,
     actor_ref: OpaqueActorRef,
     kind_policy_digest: HostedPolicyDigest,
+    #[serde(default)]
+    result: Option<Value>,
     terminal_at: DateTime<Utc>,
 }
 
@@ -553,6 +632,8 @@ pub struct HostedAccountabilityRecord {
     pub outcome: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_digest: Option<String>,
     pub recorded_at: DateTime<Utc>,
     pub retained_until: DateTime<Utc>,
 }
@@ -579,16 +660,19 @@ pub fn standalone_decision_starter_kind() -> HostedKindPolicy {
                 "reference": {"type": "string", "maxLength": 120}
             }
         }),
+        result_schema: None,
         outcomes: vec![
             HostedOutcomePolicy {
                 id: "confirmed".to_owned(),
                 label: "Confirm".to_owned(),
                 reason_required: false,
+                result_required: false,
             },
             HostedOutcomePolicy {
                 id: "rejected".to_owned(),
                 label: "Return for correction".to_owned(),
                 reason_required: true,
+                result_required: false,
             },
         ],
     }
@@ -624,6 +708,11 @@ pub enum HostedValidationReason {
     OutcomeNotDeclared,
     ReasonRequired,
     TextInvalid,
+    ResultNotDeclared,
+    ResultRequired,
+    FieldNotDeclared,
+    ConstraintInvalid,
+    ConstraintViolated,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -664,7 +753,7 @@ pub enum HostedRequestError {
     Canonical,
 }
 
-fn check_display_schema(schema: &Value) -> Result<(), HostedPolicyError> {
+fn check_closed_object_schema(schema: &Value) -> Result<(), HostedPolicyError> {
     let root = schema.as_object().ok_or(HostedPolicyError::DisplaySchema)?;
     if root.get("type") != Some(&Value::String("object".to_owned()))
         || root.get("additionalProperties") != Some(&Value::Bool(false))
@@ -729,6 +818,371 @@ fn validate_display(schema: &Value, display: &Value) -> Result<(), HostedValidat
         ));
     }
     Ok(())
+}
+
+fn validate_result(schema: &Value, result: &Value) -> Result<(), HostedValidationError> {
+    if !result.is_object() {
+        return Err(HostedValidationError::new(
+            RESULT_PATH,
+            HostedValidationReason::ObjectRequired,
+        ));
+    }
+    if !bounded_json(result, MAXIMUM_HOSTED_DISPLAY_DEPTH) {
+        return Err(HostedValidationError::new(
+            RESULT_PATH,
+            HostedValidationReason::MaximumDepthExceeded,
+        ));
+    }
+    if !registry_platform_canonical_json::canonicalize_json(result)
+        .is_ok_and(|bytes| bytes.len() <= MAXIMUM_HOSTED_RESULT_BYTES)
+    {
+        return Err(HostedValidationError::new(
+            RESULT_PATH,
+            HostedValidationReason::MaximumBytesExceeded,
+        ));
+    }
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(schema)
+        .map_err(|_| {
+            HostedValidationError::new(RESULT_PATH, HostedValidationReason::SchemaMismatch)
+        })?;
+    if let Err(errors) = compiled.validate(result) {
+        let path = errors
+            .into_iter()
+            .next()
+            .map(|error| {
+                let path = error.instance_path.to_string();
+                if path.is_empty() {
+                    RESULT_PATH.to_owned()
+                } else {
+                    format!("{RESULT_PATH}{path}")
+                }
+            })
+            .unwrap_or_else(|| RESULT_PATH.to_owned());
+        return Err(HostedValidationError::new(
+            path,
+            HostedValidationReason::SchemaMismatch,
+        ));
+    }
+    Ok(())
+}
+
+/// A requester may only narrow a kind's declared result fields: every choice
+/// value must already satisfy the kind schema, and every bound must sit inside
+/// the schema's own bounds. The kind schema is the compiled authority, so the
+/// subset rules never re-implement JSON Schema semantics.
+fn validate_result_constraints(
+    schema: Option<&Value>,
+    constraints: &Value,
+) -> Result<(), HostedValidationError> {
+    let schema = schema.ok_or_else(|| {
+        HostedValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            HostedValidationReason::ResultNotDeclared,
+        )
+    })?;
+    if !constraints.is_object() {
+        return Err(HostedValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            HostedValidationReason::ObjectRequired,
+        ));
+    }
+    if !bounded_json(constraints, MAXIMUM_HOSTED_DISPLAY_DEPTH) {
+        return Err(HostedValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            HostedValidationReason::MaximumDepthExceeded,
+        ));
+    }
+    if !registry_platform_canonical_json::canonicalize_json(constraints)
+        .is_ok_and(|bytes| bytes.len() <= MAXIMUM_HOSTED_RESULT_CONSTRAINTS_BYTES)
+    {
+        return Err(HostedValidationError::new(
+            RESULT_CONSTRAINTS_PATH,
+            HostedValidationReason::MaximumBytesExceeded,
+        ));
+    }
+    let properties = schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .ok_or_else(|| constraint_invalid(RESULT_CONSTRAINTS_PATH))?;
+    let mut relaxed = schema.clone();
+    if let Some(object) = relaxed.as_object_mut() {
+        object.remove("required");
+    }
+    let compiled = JSONSchema::options()
+        .with_draft(Draft::Draft202012)
+        .compile(&relaxed)
+        .map_err(|_| constraint_invalid(RESULT_CONSTRAINTS_PATH))?;
+    for (field, constraint) in constraints.as_object().expect("checked as an object above") {
+        let field_path = result_field_path(RESULT_CONSTRAINTS_PATH, field);
+        let subschema = properties.get(field).ok_or_else(|| {
+            HostedValidationError::new(field_path.clone(), HostedValidationReason::FieldNotDeclared)
+        })?;
+        let constraint = constraint
+            .as_object()
+            .ok_or_else(|| constraint_invalid(&field_path))?;
+        for keyword in constraint.keys() {
+            if !matches!(
+                keyword.as_str(),
+                "enum" | "oneOf" | "minimum" | "maximum" | "minLength" | "maxLength"
+            ) {
+                return Err(constraint_invalid(&field_path));
+            }
+        }
+        let has_enum = constraint.contains_key("enum");
+        let has_one_of = constraint.contains_key("oneOf");
+        if has_enum && has_one_of {
+            return Err(constraint_invalid(&field_path));
+        }
+        if has_enum {
+            let values = constraint["enum"]
+                .as_array()
+                .ok_or_else(|| constraint_invalid(&field_path))?;
+            if values.is_empty() || values.len() > MAXIMUM_HOSTED_CONSTRAINT_CHOICES {
+                return Err(constraint_invalid(&field_path));
+            }
+            for value in values {
+                if !is_scalar(value) {
+                    return Err(constraint_invalid(&field_path));
+                }
+                validate_constraint_value(&compiled, field, value)
+                    .map_err(|_| constraint_invalid(&field_path))?;
+            }
+        }
+        if has_one_of {
+            let entries = constraint["oneOf"]
+                .as_array()
+                .ok_or_else(|| constraint_invalid(&field_path))?;
+            if entries.is_empty() || entries.len() > MAXIMUM_HOSTED_CONSTRAINT_CHOICES {
+                return Err(constraint_invalid(&field_path));
+            }
+            for entry in entries {
+                let entry = entry
+                    .as_object()
+                    .ok_or_else(|| constraint_invalid(&field_path))?;
+                let has_const = entry.contains_key("const");
+                let has_title = entry.contains_key("title");
+                if !has_const || entry.len() > 2 || (entry.len() == 2 && !has_title) {
+                    return Err(constraint_invalid(&field_path));
+                }
+                let value = entry
+                    .get("const")
+                    .filter(|value| is_scalar(value))
+                    .ok_or_else(|| constraint_invalid(&field_path))?;
+                if let Some(title) = entry.get("title") {
+                    let title = title
+                        .as_str()
+                        .ok_or_else(|| constraint_invalid(&field_path))?;
+                    if title.chars().count() > MAXIMUM_HOSTED_CONSTRAINT_TITLE_CHARS
+                        || title.chars().any(char::is_control)
+                    {
+                        return Err(HostedValidationError::new(
+                            field_path.clone(),
+                            HostedValidationReason::TextInvalid,
+                        ));
+                    }
+                }
+                validate_constraint_value(&compiled, field, value)
+                    .map_err(|_| constraint_invalid(&field_path))?;
+            }
+        }
+        check_constraint_bounds(&field_path, subschema, constraint)?;
+    }
+    Ok(())
+}
+
+/// Bound keywords must sit inside the property's own schema bounds and may only
+/// narrow a property whose type the schema declares inline, so a `$ref` property
+/// can carry choices but never bounds.
+fn check_constraint_bounds(
+    field_path: &str,
+    subschema: &Value,
+    constraint: &serde_json::Map<String, Value>,
+) -> Result<(), HostedValidationError> {
+    let declares_type = |wanted: &[&str]| {
+        subschema.get("type").is_some_and(|value| match value {
+            Value::String(name) => wanted.contains(&name.as_str()),
+            Value::Array(names) => names
+                .iter()
+                .any(|name| name.as_str().is_some_and(|item| wanted.contains(&item))),
+            _ => false,
+        })
+    };
+    let minimum = constraint.get("minimum");
+    let maximum = constraint.get("maximum");
+    if minimum.is_some() || maximum.is_some() {
+        if !declares_type(&["number", "integer"]) {
+            return Err(constraint_invalid(field_path));
+        }
+        let minimum = minimum
+            .filter(|value| value.is_number())
+            .and_then(Value::as_f64);
+        let maximum = maximum
+            .filter(|value| value.is_number())
+            .and_then(Value::as_f64);
+        if constraint.contains_key("minimum") && minimum.is_none() {
+            return Err(constraint_invalid(field_path));
+        }
+        if constraint.contains_key("maximum") && maximum.is_none() {
+            return Err(constraint_invalid(field_path));
+        }
+        if let Some((minimum, maximum)) = minimum.zip(maximum) {
+            if minimum > maximum {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+        if let Some((minimum, schema_minimum)) =
+            minimum.zip(subschema.get("minimum").and_then(Value::as_f64))
+        {
+            if schema_minimum > minimum {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+        if let Some((maximum, schema_maximum)) =
+            maximum.zip(subschema.get("maximum").and_then(Value::as_f64))
+        {
+            if maximum > schema_maximum {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+    }
+    let min_length = constraint.get("minLength");
+    let max_length = constraint.get("maxLength");
+    if min_length.is_some() || max_length.is_some() {
+        if !declares_type(&["string"]) {
+            return Err(constraint_invalid(field_path));
+        }
+        let min_length = min_length
+            .filter(|value| value.is_number())
+            .and_then(Value::as_u64);
+        let max_length = max_length
+            .filter(|value| value.is_number())
+            .and_then(Value::as_u64);
+        if constraint.contains_key("minLength") && min_length.is_none() {
+            return Err(constraint_invalid(field_path));
+        }
+        if constraint.contains_key("maxLength") && max_length.is_none() {
+            return Err(constraint_invalid(field_path));
+        }
+        if let Some((min_length, max_length)) = min_length.zip(max_length) {
+            if min_length > max_length {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+        if let Some((min_length, schema_min_length)) =
+            min_length.zip(subschema.get("minLength").and_then(Value::as_u64))
+        {
+            if schema_min_length > min_length {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+        if let Some((max_length, schema_max_length)) =
+            max_length.zip(subschema.get("maxLength").and_then(Value::as_u64))
+        {
+            if max_length > schema_max_length {
+                return Err(constraint_invalid(field_path));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_constraint_value(compiled: &JSONSchema, field: &str, value: &Value) -> Result<(), ()> {
+    let mut instance = serde_json::Map::new();
+    instance.insert(field.to_owned(), value.clone());
+    compiled.validate(&Value::Object(instance)).map_err(|_| ())
+}
+
+/// Applies the accepted narrowing to a decision result. A field the result does
+/// not carry is not widened by its constraint; only present fields are checked.
+fn validate_result_narrowing(
+    constraints: &Value,
+    result: &Value,
+) -> Result<(), HostedValidationError> {
+    let Some(fields) = constraints.as_object() else {
+        return Ok(());
+    };
+    let result_fields = result.as_object().expect("result validated as an object");
+    for (field, constraint) in fields {
+        let Some(value) = result_fields.get(field) else {
+            continue;
+        };
+        let field_path = result_field_path(RESULT_PATH, field);
+        let violated = || {
+            HostedValidationError::new(
+                field_path.clone(),
+                HostedValidationReason::ConstraintViolated,
+            )
+        };
+        if let Some(choices) = constraint.get("enum").and_then(Value::as_array) {
+            if !choices.contains(value) {
+                return Err(violated());
+            }
+        }
+        if let Some(entries) = constraint.get("oneOf").and_then(Value::as_array) {
+            if !entries
+                .iter()
+                .filter_map(|entry| entry.get("const"))
+                .any(|allowed| allowed == value)
+            {
+                return Err(violated());
+            }
+        }
+        if let Some(minimum) = constraint.get("minimum").and_then(Value::as_f64) {
+            if value.as_f64().is_some_and(|number| number < minimum) {
+                return Err(violated());
+            }
+        }
+        if let Some(maximum) = constraint.get("maximum").and_then(Value::as_f64) {
+            if value.as_f64().is_some_and(|number| number > maximum) {
+                return Err(violated());
+            }
+        }
+        if let Some(minimum) = constraint.get("minLength").and_then(Value::as_u64) {
+            if value
+                .as_str()
+                .is_some_and(|text| character_count(text) < minimum)
+            {
+                return Err(violated());
+            }
+        }
+        if let Some(maximum) = constraint.get("maxLength").and_then(Value::as_u64) {
+            if value
+                .as_str()
+                .is_some_and(|text| character_count(text) > maximum)
+            {
+                return Err(violated());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn character_count(text: &str) -> u64 {
+    u64::try_from(text.chars().count()).unwrap_or(u64::MAX)
+}
+
+fn is_scalar(value: &Value) -> bool {
+    matches!(value, Value::Bool(_) | Value::Number(_) | Value::String(_))
+}
+
+/// A bounded field path for validation headers, falling back to the payload
+/// root when a field name is not a header-safe path segment.
+fn result_field_path(prefix: &str, field: &str) -> String {
+    if field.len() + prefix.len() + 1 <= 256 && field.bytes().all(valid_path_byte) {
+        format!("{prefix}/{field}")
+    } else {
+        prefix.to_owned()
+    }
+}
+
+fn constraint_invalid(path: impl Into<String>) -> HostedValidationError {
+    HostedValidationError::new(path, HostedValidationReason::ConstraintInvalid)
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn digest_policy(policy: &HostedKindPolicy) -> Result<HostedPolicyDigest, HostedPolicyError> {
@@ -1012,8 +1466,9 @@ mod tests {
         let missing_reason = HostedDecisionRequest {
             outcome: "rejected".to_owned(),
             reason: None,
+            result: None,
         }
-        .check(&snapshot)
+        .check(&snapshot, None)
         .expect_err("rejection requires a reason");
         assert_eq!(missing_reason.path, "$.reason");
         assert_eq!(
@@ -1024,11 +1479,23 @@ mod tests {
         let unknown = HostedDecisionRequest {
             outcome: "later-policy-outcome".to_owned(),
             reason: None,
+            result: None,
         }
-        .check(&snapshot)
+        .check(&snapshot, None)
         .expect_err("outcome is pinned");
         assert_eq!(unknown.path, "$.outcome");
         assert_eq!(unknown.reason, HostedValidationReason::OutcomeNotDeclared);
+    }
+
+    #[test]
+    fn starter_kind_digest_is_pinned_across_the_result_change() {
+        let digest = standalone_decision_starter_kind()
+            .policy_digest()
+            .expect("starter kind digests");
+        assert_eq!(
+            digest.as_str(),
+            "sha256:6f9fbf8b801dda6527aece6bbf34cdc7d0b8ff7899d9e012367302aff1aa3139"
+        );
     }
 
     #[test]
@@ -1064,6 +1531,7 @@ mod tests {
                 actor_ref: OpaqueActorRef::parse("actor_01K4W92K7C8V6M2A").unwrap(),
             },
             kind_policy_digest: digest,
+            result: None,
             terminal_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         };
         let value = serde_json::to_value(&terminal).unwrap();
@@ -1087,6 +1555,7 @@ mod tests {
                 cancellation_reason: "superseded batch".to_owned(),
             },
             kind_policy_digest: standalone_decision_starter_kind().policy_digest().unwrap(),
+            result: None,
             terminal_at: DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
         };
         assert_eq!(
@@ -1096,5 +1565,375 @@ mod tests {
             .unwrap(),
             cancelled
         );
+    }
+
+    /// The result-capable counterpart of the starter kind used by the result
+    /// tests below: declared top-level fields, an inline integer bound, an
+    /// inline length bound, and one `$ref` property.
+    fn result_kind_policy() -> HostedKindPolicy {
+        let mut policy = standalone_decision_starter_kind();
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["batchStatus"],
+            "properties": {
+                "batchStatus": {"type": "string", "enum": ["valid", "partial", "invalid"]},
+                "acceptedCount": {"type": "integer", "minimum": 0, "maximum": 100000},
+                "correctedReference": {"type": "string", "maxLength": 120},
+                "mode": {"$ref": "#/$defs/mode"}
+            },
+            "$defs": {"mode": {"type": "string", "enum": ["fast", "slow"]}}
+        }));
+        policy.outcomes[0].result_required = true;
+        policy
+    }
+
+    fn result_constraints_request(constraints: Value) -> HostedCreateRequest {
+        HostedCreateRequest {
+            kind: "decision".to_owned(),
+            requester_reference: "openfn:run:8f2".to_owned(),
+            display: json!({
+                "summary": "Review the prepared batch",
+                "reference": "batch-0042"
+            }),
+            result_constraints: Some(constraints),
+        }
+    }
+
+    #[test]
+    fn result_schema_changes_the_digest_and_snapshots_round_trip() {
+        let starter = standalone_decision_starter_kind();
+        let starter_digest = starter.policy_digest().expect("starter digests");
+        let mut with_result = result_kind_policy();
+        let result_digest = with_result.policy_digest().expect("result kind digests");
+        assert_ne!(starter_digest, result_digest);
+
+        let snapshot = with_result.snapshot().expect("result kind snapshot");
+        assert_eq!(snapshot.result_schema, with_result.result_schema);
+        assert_eq!(snapshot.verify(), Ok(()));
+        let starter_snapshot = starter.snapshot().expect("starter snapshot");
+        assert_eq!(starter_snapshot.result_schema, None);
+        assert_eq!(starter_snapshot.verify(), Ok(()));
+
+        let mut tampered = snapshot;
+        tampered.result_schema = None;
+        // verify() re-runs the policy checks before comparing digests, so a
+        // tampered snapshot that makes the policy invalid fails either way.
+        assert!(tampered.verify().is_err());
+    }
+
+    #[test]
+    fn result_policy_requires_a_schema_and_bounds_the_result_schema_like_display() {
+        let mut policy = standalone_decision_starter_kind();
+        policy.outcomes[0].result_required = true;
+        assert_eq!(policy.check(), Err(HostedPolicyError::Outcomes));
+
+        let mut policy = result_kind_policy();
+        assert_eq!(policy.check(), Ok(()));
+
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"value": {"$ref": "https://example.test/value.json"}}
+        }));
+        assert_eq!(policy.check(), Err(HostedPolicyError::DisplaySchema));
+
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "details": {"properties": {"allowed": {"type": "string"}}}
+            }
+        }));
+        assert_eq!(policy.check(), Err(HostedPolicyError::DisplaySchema));
+
+        let mut nested = json!({"type": "string"});
+        for _ in 0..MAXIMUM_HOSTED_DISPLAY_DEPTH {
+            nested = json!({"allOf": [nested]});
+        }
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"deep": nested}
+        }));
+        assert_eq!(policy.check(), Err(HostedPolicyError::DisplaySchema));
+
+        policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"notes": {"type": "string", "description": "x".repeat(MAXIMUM_HOSTED_SCHEMA_BYTES)}}
+        }));
+        assert_eq!(policy.check(), Err(HostedPolicyError::DisplaySchema));
+    }
+
+    #[test]
+    fn result_constraints_accept_narrowing_inside_the_kind_schema() {
+        let policy = result_kind_policy();
+        // Enum shorthand on a schema-enum field.
+        assert_eq!(
+            result_constraints_request(json!({"batchStatus": {"enum": ["valid", "partial"]}}))
+                .check(&policy),
+            Ok(())
+        );
+        // oneOf with titles, numeric and length bounds inside the schema bounds.
+        assert_eq!(
+            result_constraints_request(json!({
+                "batchStatus": {
+                    "oneOf": [
+                        {"const": "valid", "title": "All rows valid"},
+                        {"const": "partial", "title": "Some rows rejected"}
+                    ]
+                },
+                "acceptedCount": {"minimum": 0, "maximum": 412},
+                "correctedReference": {"maxLength": 32}
+            }))
+            .check(&policy),
+            Ok(())
+        );
+        // A `$ref` property may carry choices because values validate by instance.
+        assert_eq!(
+            result_constraints_request(json!({"mode": {"enum": ["fast"]}})).check(&policy),
+            Ok(())
+        );
+        // The kind without a schema accepts an ordinary create.
+        assert_eq!(
+            HostedCreateRequest {
+                kind: "decision".to_owned(),
+                requester_reference: "openfn:run:8f2".to_owned(),
+                display: json!({
+                    "summary": "Review the prepared batch",
+                    "reference": "batch-0042"
+                }),
+                result_constraints: None,
+            }
+            .check(&standalone_decision_starter_kind()),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn result_constraints_refuse_widening_unknown_fields_and_keywords() {
+        let policy = result_kind_policy();
+        let refused = |constraints: Value| {
+            result_constraints_request(constraints)
+                .check(&policy)
+                .expect_err("refused constraints")
+        };
+        // Rule 1: an undeclared field.
+        let error = refused(json!({"unknownField": {"enum": ["x"]}}));
+        assert_eq!(error.reason, HostedValidationReason::FieldNotDeclared);
+        assert_eq!(error.path, "$.resultConstraints/unknownField");
+        // Unknown keywords are refused, not ignored.
+        let error = refused(json!({"correctedReference": {"pattern": "^A"}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        let error = refused(json!({"correctedReference": {"properties": {}}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        // Rule 2: an enum value outside the schema.
+        let error = refused(json!({"batchStatus": {"enum": ["valid", "mystery"]}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        assert_eq!(error.path, "$.resultConstraints/batchStatus");
+        let error = refused(json!({"batchStatus": {"oneOf": [{"const": "mystery"}]}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        // Rule 3: bounds must sit inside the schema bounds and not cross.
+        let error = refused(json!({"acceptedCount": {"minimum": -5}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        let error = refused(json!({"acceptedCount": {"maximum": 200000}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        let error = refused(json!({"correctedReference": {"maxLength": 200}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        let error = refused(json!({"acceptedCount": {"minimum": 500, "maximum": 100}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        // Rule 4: bound keywords need an inline type, so a `$ref` property cannot carry one.
+        let error = refused(json!({"mode": {"minimum": 1}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        // The choice cap is one per field.
+        let choices: Vec<Value> = (0..=MAXIMUM_HOSTED_CONSTRAINT_CHOICES)
+            .map(|value| json!(value))
+            .collect();
+        let error = refused(json!({"acceptedCount": {"enum": choices}}));
+        assert_eq!(error.reason, HostedValidationReason::ConstraintInvalid);
+        // Rule 5: titles are bounded like outcome labels.
+        let error = refused(json!({"batchStatus": {"oneOf": [
+            {"const": "valid", "title": "bad\u{0007}title"}
+        ]}}));
+        assert_eq!(error.reason, HostedValidationReason::TextInvalid);
+        let error = refused(json!({"batchStatus": {"oneOf": [
+            {"const": "valid", "title": "x".repeat(MAXIMUM_HOSTED_CONSTRAINT_TITLE_CHARS + 1)}
+        ]}}));
+        assert_eq!(error.reason, HostedValidationReason::TextInvalid);
+        // Rule 6: the same payload bounds as display.
+        let mut long_field_policy = standalone_decision_starter_kind();
+        long_field_policy.result_schema = Some(json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"notes": {"type": "string", "maxLength": 100000}}
+        }));
+        let error = result_constraints_request(json!({"notes": {"enum": ["x".repeat(20_000)]}}))
+            .check(&long_field_policy)
+            .expect_err("oversized constraints");
+        assert_eq!(error.reason, HostedValidationReason::MaximumBytesExceeded);
+        let mut deep = json!(true);
+        for _ in 0..MAXIMUM_HOSTED_DISPLAY_DEPTH {
+            deep = json!({"nested": deep});
+        }
+        let error = refused(json!({"batchStatus": {"enum": [deep]}}));
+        assert_eq!(error.reason, HostedValidationReason::MaximumDepthExceeded);
+        // Rule 7: constraints on a kind without a result schema.
+        let error = result_constraints_request(json!({"batchStatus": {"enum": ["valid"]}}))
+            .check(&standalone_decision_starter_kind())
+            .expect_err("constraints without a schema");
+        assert_eq!(error.reason, HostedValidationReason::ResultNotDeclared);
+    }
+
+    #[test]
+    fn decisions_apply_result_schema_and_constraint_rules_with_paths() {
+        let snapshot = result_kind_policy().snapshot().unwrap();
+        let constraints = json!({
+            "batchStatus": {
+                "oneOf": [
+                    {"const": "valid", "title": "All rows valid"},
+                    {"const": "partial", "title": "Some rows rejected"}
+                ]
+            },
+            "acceptedCount": {"minimum": 0, "maximum": 412}
+        });
+        let decision = |result: Option<Value>, reason: Option<String>| HostedDecisionRequest {
+            outcome: "confirmed".to_owned(),
+            reason,
+            result,
+        };
+
+        let error = decision(None, None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("required result missing");
+        assert_eq!(error.path, "$.result");
+        assert_eq!(error.reason, HostedValidationReason::ResultRequired);
+
+        let error = decision(Some(json!({"batchStatus": "valid"})), None)
+            .check(
+                &standalone_decision_starter_kind().snapshot().unwrap(),
+                None,
+            )
+            .expect_err("result without a kind schema");
+        assert_eq!(error.reason, HostedValidationReason::ResultNotDeclared);
+
+        let error = decision(Some(json!("not-an-object")), None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("result must be an object");
+        assert_eq!(error.reason, HostedValidationReason::ObjectRequired);
+
+        let error = decision(Some(json!({"acceptedCount": "many"})), None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("schema mismatch carries the field path");
+        assert_eq!(error.reason, HostedValidationReason::SchemaMismatch);
+        assert_eq!(error.path, "$.result/acceptedCount");
+
+        let error = decision(Some(json!({"acceptedCount": 1})), None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("schema mismatch carries the root path");
+        assert_eq!(error.reason, HostedValidationReason::SchemaMismatch);
+        assert_eq!(error.path, "$.result");
+
+        // A value outside the schema is a schema error even when it is also
+        // outside the narrowing; order keeps the error honest.
+        let error = decision(Some(json!({"batchStatus": "mystery"})), None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("outside schema names schema_mismatch");
+        assert_eq!(error.reason, HostedValidationReason::SchemaMismatch);
+
+        let error = decision(Some(json!({"batchStatus": "invalid"})), None)
+            .check(&snapshot, Some(&constraints))
+            .expect_err("inside schema outside narrowing names the field");
+        assert_eq!(error.reason, HostedValidationReason::ConstraintViolated);
+        assert_eq!(error.path, "$.result/batchStatus");
+
+        let error = decision(
+            Some(json!({"batchStatus": "valid", "acceptedCount": 500})),
+            None,
+        )
+        .check(&snapshot, Some(&constraints))
+        .expect_err("bound narrowing names the field");
+        assert_eq!(error.reason, HostedValidationReason::ConstraintViolated);
+        assert_eq!(error.path, "$.result/acceptedCount");
+
+        assert_eq!(
+            decision(
+                Some(json!({"batchStatus": "partial", "acceptedCount": 400})),
+                Some("checked".to_owned())
+            )
+            .check(&snapshot, Some(&constraints)),
+            Ok(())
+        );
+
+        // A result is accepted when the outcome does not require it, and the
+        // result-less starter journey is unchanged.
+        let optional = HostedDecisionRequest {
+            outcome: "rejected".to_owned(),
+            reason: Some("return it".to_owned()),
+            result: Some(json!({"batchStatus": "valid"})),
+        };
+        assert_eq!(optional.check(&snapshot, Some(&constraints)), Ok(()));
+        let starter = standalone_decision_starter_kind().snapshot().unwrap();
+        assert_eq!(
+            HostedDecisionRequest {
+                outcome: "confirmed".to_owned(),
+                reason: Some("checked".to_owned()),
+                result: None,
+            }
+            .check(&starter, None),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn terminal_wire_carries_a_result_only_on_completion() {
+        let digest = standalone_decision_starter_kind().policy_digest().unwrap();
+        let mut terminal = HostedTerminalResult {
+            item_id: Uuid::nil(),
+            event_id: Uuid::from_u128(3),
+            requester_reference: "batch-0044".to_owned(),
+            terminal: HostedTerminalState::Completed {
+                outcome: "confirmed".to_owned(),
+                actor_ref: OpaqueActorRef::parse("actor_01K4W92K7C8V6M2A").unwrap(),
+            },
+            kind_policy_digest: digest,
+            result: None,
+            terminal_at: DateTime::from_timestamp(1_700_000_002, 0).unwrap(),
+        };
+        let without = serde_json::to_value(&terminal).unwrap();
+        assert!(without.get("result").is_none());
+        assert_eq!(
+            serde_json::from_value::<HostedTerminalResult>(without.clone()).unwrap(),
+            terminal
+        );
+
+        terminal.result = Some(json!({"batchStatus": "partial", "acceptedCount": 400}));
+        let with = serde_json::to_value(&terminal).unwrap();
+        assert_eq!(with["result"]["batchStatus"], "partial");
+        assert_eq!(
+            serde_json::from_value::<HostedTerminalResult>(with).unwrap(),
+            terminal
+        );
+
+        let cancelled = HostedTerminalResult {
+            item_id: Uuid::nil(),
+            event_id: Uuid::from_u128(4),
+            requester_reference: "batch-0045".to_owned(),
+            terminal: HostedTerminalState::Cancelled {
+                cancellation_reason: "superseded batch".to_owned(),
+            },
+            kind_policy_digest: standalone_decision_starter_kind().policy_digest().unwrap(),
+            result: None,
+            terminal_at: DateTime::from_timestamp(1_700_000_003, 0).unwrap(),
+        };
+        let wire = serde_json::to_value(&cancelled).unwrap();
+        assert!(wire.get("result").is_none());
+        assert_eq!(
+            serde_json::from_value::<HostedTerminalResult>(wire.clone()).unwrap(),
+            cancelled
+        );
+        let mut mixed = wire;
+        mixed["result"] = json!({"batchStatus": "partial"});
+        assert!(serde_json::from_value::<HostedTerminalResult>(mixed).is_err());
     }
 }
