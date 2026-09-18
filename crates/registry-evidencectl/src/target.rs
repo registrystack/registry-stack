@@ -801,18 +801,37 @@ fn created_plain_parent(path: &Path, description: &str) -> Result<PathBuf> {
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
-    match fs::symlink_metadata(parent) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o755)
-                .create(parent)
-                .with_context(|| format!("creating {description} {}", parent.display()))?;
+    // Walk the chain one component at a time. A recursive create follows a
+    // symlinked ancestor, which would publish the target outside the project,
+    // so each existing component is inspected with lstat and each missing one
+    // is created on its own under a component already known to be a plain
+    // directory.
+    let mut walked = PathBuf::new();
+    let mut plain_ancestor = true;
+    let mut creating = false;
+    for component in parent.components() {
+        walked.push(component);
+        if !creating {
+            match fs::symlink_metadata(&walked) {
+                Ok(metadata) => {
+                    plain_ancestor = metadata.is_dir() && !metadata.file_type().is_symlink();
+                    continue;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    if !plain_ancestor {
+                        bail!("{description} must be an existing plain directory");
+                    }
+                    creating = true;
+                }
+                Err(error) => {
+                    return Err(error).with_context(|| format!("inspecting {description}"));
+                }
+            }
         }
-        Err(error) => {
-            return Err(error).with_context(|| format!("inspecting {description}"));
-        }
+        fs::DirBuilder::new()
+            .mode(0o755)
+            .create(&walked)
+            .with_context(|| format!("creating {description} {}", walked.display()))?;
     }
     plain_parent(path, description)
 }
@@ -1045,6 +1064,38 @@ runtime:
         assert!(
             format!("{error:#}").contains("must be an existing plain directory"),
             "{error:#}"
+        );
+    }
+
+    #[test]
+    fn local_target_creation_refuses_a_symlinked_ancestor_of_a_missing_parent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.join("project");
+        fs::create_dir(&project).unwrap();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        fs::create_dir(project.join("secrets")).unwrap();
+        fs::write(
+            project.join("secrets/signing-p256-public.jwk.json"),
+            ES256_PUBLIC_JWK,
+        )
+        .unwrap();
+        let elsewhere = canonical.join("elsewhere");
+        fs::create_dir(&elsewhere).unwrap();
+        symlink(&elsewhere, project.join("targets")).expect("symlink");
+        let error = create_local_target(
+            &project,
+            &project.join("targets/nested/local"),
+            serde_json::json!({}),
+        )
+        .expect_err("a symlinked ancestor of the target parent is refused");
+        assert!(
+            format!("{error:#}").contains("must be an existing plain directory"),
+            "{error:#}"
+        );
+        assert!(
+            !elsewhere.join("nested").exists(),
+            "a refused target creates nothing outside the project"
         );
     }
 
