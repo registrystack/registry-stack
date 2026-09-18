@@ -1557,6 +1557,102 @@ async fn results_flow_from_constraints_through_decision_to_accountability() {
     assert_eq!(accountability_optional.result_digest, None);
 }
 
+/// §3.5: the deciding-profile, idempotency, and If-Match checks run before
+/// any result validation, so a caller who fails one of them never learns
+/// whether the result would have validated.
+#[tokio::test]
+async fn decide_semantic_checks_precede_result_validation() {
+    let fixture = fixture().await;
+    let mut outcomes = default_outcomes();
+    outcomes[0].result_required = true;
+    let service = CaseworkService::new(
+        fixture.service.store().clone(),
+        project("1", outcomes),
+        Vec::<Arc<dyn registry_casework_core::SourceAdapter>>::new(),
+    )
+    .expect("result-requiring service");
+    let created = service
+        .hosted_create(
+            &fixture.requester,
+            &create_request("batch-order"),
+            "create-order",
+        )
+        .await
+        .expect("create");
+    let invalid = || HostedDecisionRequest {
+        outcome: "confirmed".to_owned(),
+        reason: None,
+        result: None,
+    };
+
+    // Unclaimed: the state check answers before result validation.
+    assert!(matches!(
+        service
+            .hosted_decide(
+                &fixture.staff,
+                created.item_id,
+                created.revision,
+                &invalid(),
+                "order-unclaimed",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Conflict))
+    ));
+
+    let claimed = service
+        .hosted_claim(
+            &fixture.staff,
+            created.item_id,
+            created.revision,
+            "claim-order",
+        )
+        .await
+        .expect("claim");
+
+    // Stale revision: If-Match answers before result validation.
+    assert!(matches!(
+        service
+            .hosted_decide(
+                &fixture.staff,
+                created.item_id,
+                created.revision,
+                &invalid(),
+                "order-stale",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::Conflict))
+    ));
+
+    // A reused idempotency key with different input answers before result
+    // validation, on the item that already decided under that key.
+    service
+        .hosted_decide(
+            &fixture.staff,
+            created.item_id,
+            claimed.revision,
+            &HostedDecisionRequest {
+                outcome: "confirmed".to_owned(),
+                reason: Some("checked".to_owned()),
+                result: Some(json!({"batchStatus": "valid"})),
+            },
+            "order-decide",
+        )
+        .await
+        .expect("decide");
+    assert!(matches!(
+        service
+            .hosted_decide(
+                &fixture.staff,
+                created.item_id,
+                claimed.revision,
+                &invalid(),
+                "order-decide",
+            )
+            .await,
+        Err(ServiceError::Store(StoreError::IdempotencyConflict))
+    ));
+}
+
 #[tokio::test]
 async fn create_replay_with_different_constraints_conflicts() {
     let fixture = fixture().await;
