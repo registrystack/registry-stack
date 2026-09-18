@@ -712,6 +712,47 @@ fn wasm_execution_budgets_refuse_out_of_range_values() {
 }
 
 #[test]
+fn wasm_execution_backend_defaults_to_pulley_and_accepts_native() {
+    use registry_breg::wasm_handler::WasmExecutionBackend;
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config =
+        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    assert_eq!(
+        config.wasm_execution().backend(),
+        WasmExecutionBackend::Pulley
+    );
+    let configured = format!("{base}wasmExecution:\n  backend: native\n");
+    let config = parse_runtime_config(&configured).expect("native is an operator choice");
+    assert_eq!(
+        config.wasm_execution().backend(),
+        WasmExecutionBackend::Native
+    );
+}
+
+#[test]
+fn wasm_execution_backend_refuses_unknown_values() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for backend in ["warp", "Pulley", ""] {
+        let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
+        let metadata = parse_runtime_config(&configured)
+            .expect_err("an unknown WASM execution backend is refused")
+            .metadata();
+        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
+        assert_eq!(metadata.path(), "/wasmExecution");
+    }
+}
+
+#[test]
 fn wasm_execution_section_refuses_unknown_members() {
     let fixture = RuntimeFixture::new();
     let base = valid_runtime(
@@ -719,8 +760,7 @@ fn wasm_execution_section_refuses_unknown_members() {
         &fixture.package_root,
         &fixture.trust_anchor,
     );
-    let configured =
-        format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  backend: native\n");
+    let configured = format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  engine: native\n");
     assert_eq!(
         parse_runtime_config(&configured).expect_err("unknown WASM execution member is refused"),
         RuntimeConfigError::Document

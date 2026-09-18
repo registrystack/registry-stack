@@ -32,6 +32,56 @@ pub const MAX_PACKAGE_WASM_MODULES: usize = 16;
 /// runtime configuration section and the process executor budgets start from.
 pub const DEFAULT_WASM_GUEST_MEMORY_BYTES: usize = 32 * 1024 * 1024;
 
+/// The execution backend a deployment compiles WASM handler modules for:
+/// the value both the runtime configuration section and every
+/// backend-resolving path start from when the operator configures nothing.
+/// Pulley, the portable interpreter target, is the default because it holds
+/// the deterministic, executable-memory-free execution envelope every
+/// deployment can run; `native` opts a deployment into host machine code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum WasmExecutionBackend {
+    /// Cranelift lowering to Pulley bytecode, executed by the interpreter.
+    #[default]
+    Pulley,
+    /// Cranelift lowering to host machine code.
+    Native,
+}
+
+impl WasmExecutionBackend {
+    /// The configured spelling of this backend (`pulley`, `native`).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Pulley => "pulley",
+            Self::Native => "native",
+        }
+    }
+
+    /// Parse the configured spelling; every other value is refused by the
+    /// configuration loader as an invalid `wasmExecution` section.
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pulley" => Some(Self::Pulley),
+            "native" => Some(Self::Native),
+            _ => None,
+        }
+    }
+}
+
+/// Resolve the configured execution backend onto the platform executor
+/// backend. One resolution serves admission validation (under the default,
+/// see `structural_violation`) and runtime execution (under the configured
+/// value), so a module is never validated under one engine and executed
+/// under another by configuration drift.
+#[cfg(feature = "wasm-executor-prototype")]
+pub(crate) fn execution_backend(
+    configured: WasmExecutionBackend,
+) -> registry_platform_script::wasm::Backend {
+    match configured {
+        WasmExecutionBackend::Pulley => registry_platform_script::wasm::Backend::Pulley,
+        WasmExecutionBackend::Native => registry_platform_script::wasm::Backend::Native,
+    }
+}
+
 /// Ceiling on the authored WASM module path, matching the planner script
 /// path ceiling the package source-file policy already enforces.
 pub const MAXIMUM_WASM_MODULE_PATH_BYTES: usize = 256;
@@ -71,18 +121,27 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 /// modules; the default build refuses WASM handlers at admission instead.
 #[cfg(feature = "wasm")]
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
-    use registry_platform_script::wasm::{Backend, Budgets, Executor};
+    use registry_platform_script::wasm::{Budgets, Executor};
 
     // The same engine configuration the runtime's prepare path uses, with
     // the structural module ceiling: authoring validates anything an
     // operator could configure, and the configured ceiling is enforced again
     // when the module is loaded into the runtime. Threads, relaxed SIMD, and
     // memory64 off; NaN canonicalization on.
+    //
+    // LIMITATION: pure authoring compilation has no operator configuration
+    // in scope, so admission validates under the same default backend the
+    // configuration section resolves to when the operator configures
+    // nothing; the runtime executes under the resolved configured value.
+    // The ABI check is target-independent, so admission cannot accept a
+    // module the configured backend rejects (or refuse one it accepts); only
+    // the engine the validation compile targets can differ from execution's.
     let budgets = Budgets {
         max_module_bytes: MAXIMUM_WASM_MODULE_BYTES,
         ..Budgets::default()
     };
-    let executor = match Executor::new(Backend::Native, budgets) {
+    let executor = match Executor::new(execution_backend(WasmExecutionBackend::default()), budgets)
+    {
         Ok(executor) => executor,
         Err(error) => return Some(admission_violation(error)),
     };

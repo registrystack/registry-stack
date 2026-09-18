@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use registry_platform_script::wasm::Budgets;
+use registry_platform_script::wasm::{Backend, Budgets};
 use serde_json::{json, Map, Value};
 
 use crate::action_handler::{
@@ -28,6 +28,12 @@ static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn deadline(seconds: u64) -> Instant {
     Instant::now() + Duration::from_secs(seconds)
+}
+
+/// The platform backend the configured default resolves to: the same
+/// resolution startup and admission use.
+fn default_backend() -> Backend {
+    crate::wasm_handler::execution_backend(crate::wasm_handler::WasmExecutionBackend::default())
 }
 
 fn hex_escape(bytes: &[u8]) -> String {
@@ -175,6 +181,7 @@ fn request_envelope_is_the_inputs_document() {
     let _guard = INSTALL_LOCK.lock().unwrap();
     install(
         WasmExecutionBudgets::default(),
+        default_backend(),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .expect("the default runtime installs");
@@ -195,6 +202,7 @@ fn wasm_effects_and_refusals_flow_through_the_shared_validator() {
     let _guard = INSTALL_LOCK.lock().unwrap();
     install(
         WasmExecutionBudgets::default(),
+        default_backend(),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .expect("the default runtime installs");
@@ -238,6 +246,7 @@ fn action_deadline_maps_to_the_epoch_backstop() {
     let _guard = INSTALL_LOCK.lock().unwrap();
     install(
         WasmExecutionBudgets::default(),
+        default_backend(),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .expect("the default runtime installs");
@@ -295,13 +304,13 @@ fn cache_handler_fixture(document: &str) -> CompiledActionHandler {
     }
 }
 
-fn cache_runtime() -> WasmHandlerRuntime {
-    WasmHandlerRuntime::new(WasmExecutionBudgets::default(), 2).expect("engine starts")
+fn cache_runtime(backend: Backend) -> WasmHandlerRuntime {
+    WasmHandlerRuntime::new(WasmExecutionBudgets::default(), backend, 2).expect("engine starts")
 }
 
 #[test]
 fn cache_hit_avoids_recompilation() {
-    let runtime = cache_runtime();
+    let runtime = cache_runtime(Backend::Pulley);
     let handler = cache_handler_fixture(r#"{"refusal":{"code":"blank-name"}}"#);
     let first = runtime.prepared_module(&handler).unwrap();
     let second = runtime.prepared_module(&handler).unwrap();
@@ -311,7 +320,7 @@ fn cache_hit_avoids_recompilation() {
 
 #[test]
 fn identity_mismatch_recompiles() {
-    let runtime = cache_runtime();
+    let runtime = cache_runtime(Backend::Pulley);
     runtime
         .prepared_module(&cache_handler_fixture(
             r#"{"refusal":{"code":"blank-name"}}"#,
@@ -327,7 +336,7 @@ fn identity_mismatch_recompiles() {
 fn retained_module_bound_is_enforced() {
     // Bound of 2: A, B, C compiles three times and evicts A; C stays hot;
     // A misses again while C still hits.
-    let runtime = cache_runtime();
+    let runtime = cache_runtime(Backend::Pulley);
     let a = cache_handler_fixture(r#"{"refusal":{"code":"a"}}"#);
     let b = cache_handler_fixture(r#"{"refusal":{"code":"b"}}"#);
     let c = cache_handler_fixture(r#"{"refusal":{"code":"c"}}"#);
@@ -339,6 +348,35 @@ fn retained_module_bound_is_enforced() {
     assert_eq!(runtime.preparation_count(), 3);
     runtime.prepared_module(&a).unwrap();
     assert_eq!(runtime.preparation_count(), 4);
+}
+
+/// The cache key carries the execution backend beside the content hash, so
+/// a backend change can never cross-serve a module compiled for the other
+/// engine.
+#[test]
+fn the_cache_key_pairs_the_content_hash_with_the_backend() {
+    let runtime = cache_runtime(Backend::Pulley);
+    let handler = cache_handler_fixture(r#"{"refusal":{"code":"blank-name"}}"#);
+    runtime.prepared_module(&handler).unwrap();
+    let cache = runtime.cache.lock().expect("wasm module cache lock");
+    assert_eq!(cache.entries.len(), 1);
+    let ((hash, backend), _) = &cache.entries[0];
+    assert_eq!(hash.as_str(), handler.module_sha256.as_deref().unwrap());
+    assert_eq!(*backend, Backend::Pulley);
+}
+
+/// The same module content prepared under two backends compiles twice: one
+/// preparation per engine, never a shared entry.
+#[test]
+fn the_same_module_content_under_two_backends_prepares_twice() {
+    let native = cache_runtime(Backend::Native);
+    let pulley = cache_runtime(Backend::Pulley);
+    let handler = cache_handler_fixture(r#"{"refusal":{"code":"blank-name"}}"#);
+    let from_native = native.prepared_module(&handler).unwrap();
+    let from_pulley = pulley.prepared_module(&handler).unwrap();
+    assert_eq!(native.preparation_count(), 1);
+    assert_eq!(pulley.preparation_count(), 1);
+    assert!(!Arc::ptr_eq(&from_native, &from_pulley));
 }
 
 #[test]
@@ -376,6 +414,7 @@ fn a_module_within_structural_bounds_but_over_the_configured_ceiling_is_refused_
             max_module_bytes: 1024,
             max_guest_memory_bytes: WasmExecutionBudgets::DEFAULT_MAX_GUEST_MEMORY_BYTES,
         },
+        default_backend(),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .expect("the configured runtime installs");
@@ -395,25 +434,40 @@ fn a_module_within_structural_bounds_but_over_the_configured_ceiling_is_refused_
 }
 
 /// The operator configuration section maps straight onto the execution
-/// budgets, and its defaults ARE the executor defaults the lazy runtime uses.
+/// budgets and the resolved backend, and its defaults ARE the executor
+/// defaults the runtime installs.
 #[test]
 #[cfg(feature = "runtime")]
-fn operator_configuration_maps_onto_the_execution_budgets() {
+fn operator_configuration_maps_onto_the_execution_budgets_and_backend() {
     use crate::runtime_config::{RawWasmExecutionConfig, WasmExecutionConfig};
-    let raw: RawWasmExecutionConfig =
-        serde_json::from_str(r#"{"maxModuleBytes":5242880,"maxGuestMemoryBytes":1048576}"#)
-            .expect("bounded section parses");
-    let budgets = WasmExecutionBudgets::from(
-        WasmExecutionConfig::from_raw(raw).expect("bounded section validates"),
-    );
+    use crate::wasm_handler::WasmExecutionBackend;
+    let raw: RawWasmExecutionConfig = serde_json::from_str(
+        r#"{"maxModuleBytes":5242880,"maxGuestMemoryBytes":1048576,"backend":"native"}"#,
+    )
+    .expect("bounded section parses");
+    let configured = WasmExecutionConfig::from_raw(raw).expect("bounded section validates");
+    let budgets = WasmExecutionBudgets::from(configured);
     assert_eq!(budgets.max_module_bytes, 5_242_880);
     assert_eq!(budgets.max_guest_memory_bytes, 1_048_576);
+    assert_eq!(configured.backend(), WasmExecutionBackend::Native);
+    assert_eq!(
+        crate::wasm_handler::execution_backend(configured.backend()),
+        Backend::Native
+    );
 
     let defaulted = WasmExecutionConfig::from_raw(RawWasmExecutionConfig::default())
         .expect("default section validates");
     assert_eq!(
         WasmExecutionBudgets::from(defaulted),
         WasmExecutionBudgets::default()
+    );
+    assert_eq!(defaulted.backend(), WasmExecutionBackend::default());
+    // The default flip is decided behavior: pulley is the default backend
+    // for both the configuration section and admission validation.
+    assert_eq!(defaulted.backend(), WasmExecutionBackend::Pulley);
+    assert_eq!(
+        crate::wasm_handler::execution_backend(defaulted.backend()),
+        Backend::Pulley
     );
 }
 
@@ -468,6 +522,7 @@ fn install_replaces_and_shutdown_clears_the_process_runtime() {
     let _guard = INSTALL_LOCK.lock().unwrap();
     install(
         WasmExecutionBudgets::default(),
+        default_backend(),
         MAXIMUM_RETAINED_PREPARED_MODULES,
     )
     .unwrap();

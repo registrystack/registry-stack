@@ -1136,6 +1136,11 @@
     "RawWasmExecutionConfig": {
       "additionalProperties": false,
       "properties": {
+        "backend": {
+          "default": "pulley",
+          "description": "The backend handler modules are compiled and executed for: `pulley`\n(default, the portable interpreter target) or `native`. Any other\nvalue is refused as an invalid `wasmExecution` section.",
+          "type": "string"
+        },
         "maxGuestMemoryBytes": {
           "default": 33554432,
           "description": "Defaults to the platform guest-memory ceiling (32 MiB).",
@@ -1306,6 +1311,7 @@
     "wasmExecution": {
       "$ref": "#/$defs/RawWasmExecutionConfig",
       "default": {
+        "backend": "pulley",
         "maxGuestMemoryBytes": 33554432,
         "maxModuleBytes": 2097152
       },

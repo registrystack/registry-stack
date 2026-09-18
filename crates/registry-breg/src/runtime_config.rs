@@ -1831,19 +1831,22 @@ impl OperationalTimeouts {
     }
 }
 
-/// Operator budgets for process WASM handler execution. Parsed and validated
-/// in every build so the runtime configuration contract is independent of the
-/// server's compiled features; builds without the WASM executor prototype
-/// keep refusing WASM handlers at evaluation admission whatever these values
-/// say.
+/// Operator budgets and backend for process WASM handler execution. Parsed
+/// and validated in every build so the runtime configuration contract is
+/// independent of the server's compiled features; builds without the WASM
+/// executor prototype keep refusing WASM handlers at evaluation admission
+/// whatever these values say.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WasmExecutionConfig {
     max_module_bytes: u64,
     max_guest_memory_bytes: u64,
+    backend: crate::wasm_handler::WasmExecutionBackend,
 }
 
 impl WasmExecutionConfig {
     pub(crate) fn from_raw(raw: RawWasmExecutionConfig) -> Result<Self> {
+        let backend = crate::wasm_handler::WasmExecutionBackend::parse(&raw.backend)
+            .ok_or(RuntimeConfigError::InvalidWasmExecution)?;
         if raw.max_module_bytes < MINIMUM_WASM_EXECUTION_MODULE_BYTES
             || raw.max_module_bytes > MAXIMUM_WASM_EXECUTION_MODULE_BYTES
             || raw.max_guest_memory_bytes < MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES
@@ -1854,6 +1857,7 @@ impl WasmExecutionConfig {
         Ok(Self {
             max_module_bytes: raw.max_module_bytes,
             max_guest_memory_bytes: raw.max_guest_memory_bytes,
+            backend,
         })
     }
 
@@ -1865,6 +1869,11 @@ impl WasmExecutionConfig {
     /// Byte ceiling for guest memory growth during one call.
     pub fn max_guest_memory_bytes(&self) -> u64 {
         self.max_guest_memory_bytes
+    }
+
+    /// The backend handler modules are compiled and executed for.
+    pub fn backend(&self) -> crate::wasm_handler::WasmExecutionBackend {
+        self.backend
     }
 }
 
@@ -2267,6 +2276,11 @@ pub(crate) struct RawWasmExecutionConfig {
     /// Defaults to the platform guest-memory ceiling (32 MiB).
     #[serde(default = "default_wasm_execution_max_guest_memory_bytes")]
     max_guest_memory_bytes: u64,
+    /// The backend handler modules are compiled and executed for: `pulley`
+    /// (default, the portable interpreter target) or `native`. Any other
+    /// value is refused as an invalid `wasmExecution` section.
+    #[serde(default = "default_wasm_execution_backend")]
+    backend: String,
 }
 
 impl Default for RawWasmExecutionConfig {
@@ -2274,6 +2288,7 @@ impl Default for RawWasmExecutionConfig {
         Self {
             max_module_bytes: default_wasm_execution_max_module_bytes(),
             max_guest_memory_bytes: default_wasm_execution_max_guest_memory_bytes(),
+            backend: default_wasm_execution_backend(),
         }
     }
 }
@@ -2357,6 +2372,12 @@ const fn default_wasm_execution_max_module_bytes() -> u64 {
 
 const fn default_wasm_execution_max_guest_memory_bytes() -> u64 {
     DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES
+}
+
+fn default_wasm_execution_backend() -> String {
+    crate::wasm_handler::WasmExecutionBackend::default()
+        .as_str()
+        .to_owned()
 }
 
 #[cfg(feature = "schema")]
