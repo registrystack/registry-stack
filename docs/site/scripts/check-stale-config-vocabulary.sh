@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATTERN='registry\.validation\.report\.v1|schema:\s*registry\.validation|checks\[\]\.(product_report|findings)|YAML parsed successfully|auth\.oidc\.(jwks_uri|allowed_typ|leeway_seconds)'
+PATTERN='registry\.validation\.report\.v1|schema:\s*registry\.validation|checks\[\]\.(product_report|findings)|YAML parsed successfully|auth\.oidc\.(jwks_uri|allowed_typ|leeway_seconds)|(extendE|e)ntities\[\]\.events\[\]|webhook\.destinationId'
 PATHS=(
   "$ROOT/README.md"
   "$ROOT/src/content/docs"

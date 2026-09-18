@@ -178,10 +178,10 @@ entities:
 modules:
   - id: publicschema-household-core
     version: 0.1.0
-    digest: "sha256:f9716f538ee10b2922ad845b1f7ec40aa91f1aa167aa66ed99182484ad268b48"
+    digest: "sha256:31091eb61703e1f6fbd27d8ae6671e6139833249655f9f5b73e7e16fcc23fc6d"
   - id: publicschema-household-demographics
     version: 0.1.0
-    digest: "sha256:989bfca8759ac919f7ef689ef92fb463cd7849eb1dfe0362ced4362e17c71051"
+    digest: "sha256:757030499f6d05cb5eb515fcb7fbb32a657bb7e9a8f115f31e18ca69183b8f57"
 accessProfiles:
   - id: household-operator
     default: true

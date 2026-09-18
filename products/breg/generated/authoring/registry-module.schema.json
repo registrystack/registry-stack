@@ -2009,13 +2009,6 @@
         "entity": {
           "type": "string"
         },
-        "events": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/EventSource"
-          },
-          "type": "array"
-        },
         "fields": {
           "default": [],
           "items": {
@@ -2032,6 +2025,13 @@
               "type": "null"
             }
           ]
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HookSource"
+          },
+          "type": "array"
         },
         "indexes": {
           "default": [],
@@ -2127,13 +2127,6 @@
           },
           "type": "array"
         },
-        "events": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/EventSource"
-          },
-          "type": "array"
-        },
         "fields": {
           "default": [],
           "items": {
@@ -2150,6 +2143,13 @@
               "type": "null"
             }
           ]
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HookSource"
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -2303,55 +2303,6 @@
       ],
       "description": "A comparison literal in the closed field-condition language.\n\nObjects and arrays are refused during source parsing. The compiler then\nvalidates each scalar against the declared Registry field type."
     },
-    "EventSource": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "description": "Stable event contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
-          "type": "string"
-        },
-        "projection": {
-          "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "trigger": {
-          "$ref": "#/$defs/EventTrigger",
-          "description": "Committed record change that can produce this event."
-        },
-        "webhook": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WebhookSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Logical delivery destination. Production compilation requires a webhook."
-        },
-        "when": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventConditionSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional field tests, combined with AND. Omit to emit on every matching trigger."
-        }
-      },
-      "required": [
-        "id",
-        "trigger",
-        "projection"
-      ],
-      "type": "object"
-    },
     "EventTrigger": {
       "enum": [
         "created",
@@ -2422,6 +2373,152 @@
       },
       "required": [
         "geometryField"
+      ],
+      "type": "object"
+    },
+    "HookHandlerSource": {
+      "description": "Where a hook's handler runs.\n\nThe pairing rule: `rhai` requires `script`, `wasm` requires `module`,\n`url` requires `destinationId`, and each\nkind requires exactly its own fields and nothing else. `abi` is required on\n`rhai` and `wasm` and forbidden on `url`; its value is closed and checked at\ncompile time in [`crate::validate_hooks`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A reviewed Rhai script in the project.",
+          "properties": {
+            "abi": {
+              "description": "The handler ABI the script speaks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "rhai",
+              "type": "string"
+            },
+            "script": {
+              "description": "Script path in the project.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reviewed WASM module in the project.",
+          "properties": {
+            "abi": {
+              "description": "The handler ABI the module speaks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "wasm",
+              "type": "string"
+            },
+            "module": {
+              "description": "Module path in the project.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "module"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A logical destination bound to a URL and a secret at runtime. The\nruntime names the binding it looks the key up in; the project carries\nno URL or secret.",
+          "properties": {
+            "destinationId": {
+              "description": "Key in the runtime destination binding.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "destinationId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HookPhase": {
+      "description": "When the hook runs relative to the triggering transaction.",
+      "oneOf": [
+        {
+          "const": "before",
+          "description": "Runs inside the triggering transaction and may refuse or shape the\nchange. Local handler kinds only.",
+          "type": "string"
+        },
+        {
+          "const": "after",
+          "description": "Runs after commit in the post-commit worker and cannot affect the\ntriggering transaction.",
+          "type": "string"
+        }
+      ]
+    },
+    "HookSource": {
+      "additionalProperties": false,
+      "description": "One declared hook on an entity.\n\nThe shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`\nand `when` closed to the vocabulary this compiler validates, and with\n`handler` optional. A hook that declares no handler is still recorded in\nthe outbox and delivered nowhere; production compilation refuses that.\n\nEntity hooks run after the triggering transaction commits, so `phase` is\nwritten and the compiler refuses any value it cannot run.",
+      "properties": {
+        "handler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookHandlerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
+        },
+        "id": {
+          "description": "Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/HookPhase",
+          "description": "When the hook runs relative to the triggering transaction."
+        },
+        "projection": {
+          "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventTrigger",
+          "description": "Committed record change that can produce this hook."
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventConditionSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional field tests, combined with AND. Omit to run on every matching trigger."
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "trigger",
+        "projection"
       ],
       "type": "object"
     },
@@ -3082,20 +3179,6 @@
         "type",
         "classification",
         "vocabulary"
-      ],
-      "type": "object"
-    },
-    "WebhookSource": {
-      "additionalProperties": false,
-      "description": "Governed, destination-neutral webhook subscription.\n\nDeployment configuration may bind `destination_id` to transport details\nand tighten these bounds, but cannot supply or widen this authority.",
-      "properties": {
-        "destinationId": {
-          "description": "Key in runtime `eventDestinations`; the project carries no URL or secret.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "destinationId"
       ],
       "type": "object"
     }

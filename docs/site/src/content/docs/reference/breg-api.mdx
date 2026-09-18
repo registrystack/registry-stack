@@ -593,29 +593,31 @@ want the published description of a refusal you have not seen before.
 
 ## Events and webhooks
 
-An event is declared on an entity or a module extension and delivered to a webhook destination
-bound in the runtime configuration. Field paths in the next table are relative to one event
-under `entities[].events[]`; types, defaults, and descriptions come from the generated module
+An event is declared as a hook on an entity or a module extension and delivered to a webhook
+destination bound in the runtime configuration. Field paths in the next table are relative to one
+hook under `entities[].hooks[]`; types, defaults, and descriptions come from the generated module
 schema, and compiler rules follow the table.
 
 <ConfigurationReference contracts={eventConfiguration(configuration)} prefix="breg-events" compact />
 
 Compiler rules:
 
-- Event IDs are unique across the registry.
+- Hook IDs are unique across the registry.
 - A projection names at least one declared field.
+- An entity hook declares `phase: after` and `handler.kind: url`; the compiler refuses a phase or
+  a handler kind it cannot run.
 - Production compilation requires a webhook destination.
 - Conditions and projections use authored field IDs, not the record API's `apiName` spellings.
 - The event's classification is the highest classification of every projected or condition field,
   and a lifecycle event is at least as classified as its request entity.
 
 Destination URLs, keys, network policy, and ceilings live in runtime `eventDestinations`, keyed by
-`webhook.destinationId`. The runtime binds the exact compiled destination set, and each
+`handler.destinationId`. The runtime binds the exact compiled destination set, and each
 destination's `classificationCeiling` must cover the event classification; runtime configuration
 cannot add projected fields.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, EventSource and WebhookSource;
-    crates/registry-breg/src/compiler.rs, validate_events() and compile_event_delivery_inventory();
+{/* Evidence: crates/registry-breg/src/contract.rs, HookSource and HookHandlerSource;
+    crates/registry-breg/src/compiler.rs, validate_hooks() and compile_event_delivery_inventory();
     crates/registry-breg/src/event_destination.rs, EventDestinationConfig.
     Configuration fields selected by docs/site/src/lib/breg-event-reference.mjs, eventConfiguration(),
     from products/breg/generated/authoring/registry-module.schema.json through
@@ -744,8 +746,8 @@ event identity, `ce-source` plus `ce-id`, or on a business key.
 An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
 and an expired payload cannot be replayed.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, claim(), finalize(), replay(), verify_retained_bindings(), WebhookDeliveryService, and WebhookDeliveryStatusKind;
-    crates/registry-platform-hooks/src/delivery/service.rs, delivery_idempotency_key();
+{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, claim(), finalize(), replay(), delivery_idempotency_key(), and verify_retained_bindings();
+    crates/registry-breg/src/webhook.rs, WebhookDeliveryService and WebhookDeliveryStatusKind;
     crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
     crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();
     crates/registry-breg/src/event_destination.rs, EventDestinationDeliveryCeilings;

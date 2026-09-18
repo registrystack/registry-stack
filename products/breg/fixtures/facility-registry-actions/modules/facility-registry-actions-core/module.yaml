@@ -20,16 +20,18 @@ entities:
       - {id: owner, type: string, required: true, maxLength: 80, classification: internal}
     constraints:
       - {kind: unique, fields: [facility-code]}
-    events:
+    hooks:
       - id: facility-registered-v1
+        phase: after
         trigger: created
         projection: [facility-code]
-        webhook: {destinationId: facility-events}
+        handler: {kind: url, destinationId: facility-events}
       - id: facility-owner-changed-v1
+        phase: after
         trigger: patched
         projection: [facility-code]
         when: {kind: fields, changed: [owner]}
-        webhook: {destinationId: facility-events}
+        handler: {kind: url, destinationId: facility-events}
   - id: initial-operator-assignment
     primaryDataset: facility-registry-actions
     route: initial-operator-assignments
@@ -39,11 +41,12 @@ entities:
       - {id: operator, type: reference, target: operator, required: true, classification: internal}
     constraints:
       - {kind: unique, fields: [facility]}
-    events:
+    hooks:
       - id: initial-operator-assigned-v1
+        phase: after
         trigger: created
         projection: [facility, operator]
-        webhook: {destinationId: facility-events}
+        handler: {kind: url, destinationId: facility-events}
 actions:
   - id: register-facility
     requires:

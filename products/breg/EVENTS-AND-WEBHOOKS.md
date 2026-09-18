@@ -31,8 +31,9 @@ only after an authorized mutation commits, with durable audit before egress.
 An event belongs to an entity and declares only what changes product meaning:
 
 ```yaml
-events:
+hooks:
   - id: case-approved-v1
+    phase: after
     trigger: patched
     projection: [status, programme]
     when:
@@ -40,12 +41,15 @@ events:
       changed: [status]
       beforeEquals: {status: pending}
       afterEquals: {status: approved}
-    webhook:
+    handler:
+      kind: url
       destinationId: eligibility-service
 ```
 
 - `id` is the stable external event contract. A breaking payload change uses a
   new versioned id.
+- `phase` is `after`: an entity hook runs after the triggering transaction
+  commits. The compiler refuses `before`, which the runtime cannot run here.
 - `trigger` is one of `created`, `patched`, `tombstoned`, or `request_lifecycle`.
   Only a change-request entity can declare `request_lifecycle`.
 - `projection` is the complete set of record values that may leave the
@@ -59,12 +63,15 @@ events:
 - Lifecycle events use `kind: request_lifecycle` with at least one nonempty
   `transitions`, `toStates`, or `stages` list. Each nonempty list must match;
   field predicates are not available for this trigger.
-- One event has at most one webhook destination. A project that needs fanout
-  uses an external event gateway until native fanout is justified.
+- `handler` declares `kind: url` and the logical `destinationId`. The compiler
+  refuses the local handler kinds the shared declaration also offers, because
+  an entity hook delivers to a bound destination. One event has at most one
+  destination. A project that needs fanout uses an external event gateway until
+  native fanout is justified.
 - Production compilation rejects an event without a delivery because Version
   1 has no supported outbox consumer API.
 
-Modules may add events to an existing entity using the normal deterministic
+Modules may add hooks to an existing entity using the normal deterministic
 entity-extension mechanism. They may not silently replace an event owned by
 another module.
 

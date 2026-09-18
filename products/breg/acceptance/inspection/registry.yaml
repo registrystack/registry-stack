@@ -42,7 +42,7 @@ manifestProjection:
 modules:
   - id: "inspection-core"
     version: "0.1.0"
-    digest: "sha256:01d8e9e41a6b5578d55635cc42d79b34141f6ab6d867128a6bd0aec673c17619"
+    digest: "sha256:ea6e1c8a4a03bffd649e13656cab8135f4269115402e0fcc6b468d24da9aff0f"
 
 entities:
   - id: inspection

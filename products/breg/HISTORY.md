@@ -77,6 +77,70 @@ rewrite, then repeat it with `--write` only after approving the proposed
 preserves an explicit legacy dataset id and otherwise preserves the old
 effective fallback to `registry.id`.
 
+# Breaking authoring change: entity hooks
+
+`entities[].events` and `extendEntities[].events` were replaced by
+`entities[].hooks` and `extendEntities[].hooks`, which declare the shared
+Registry Stack hook shape from `registry-platform-hooks`. A hook adds a
+required `phase` and replaces the `webhook` member with a `handler` union
+tagged by `kind`. The old member is refused by name at compile time with
+`entity.events.removed`, so a project that still authors it fails to compile
+rather than silently losing its events.
+
+Before:
+
+```yaml
+entities:
+  - id: case
+    events:
+      - id: case-approved-v1
+        trigger: patched
+        projection: [status]
+        webhook:
+          destinationId: eligibility-service
+```
+
+After:
+
+```yaml
+entities:
+  - id: case
+    hooks:
+      - id: case-approved-v1
+        phase: after
+        trigger: patched
+        projection: [status]
+        handler:
+          kind: url
+          destinationId: eligibility-service
+```
+
+The rewrite is mechanical: rename the member to `hooks`, add `phase: after` to
+every hook, and replace `webhook: {destinationId: X}` with
+`handler: {kind: url, destinationId: X}`. `id`, `trigger`, `projection`, and
+`when` keep their spelling and meaning. An entity hook runs after the
+triggering transaction commits, so the compiler refuses `phase: before` and
+refuses the local `rhai` and `wasm` handler kinds the shared declaration also
+offers.
+
+Nothing else moves. Runtime `eventDestinations` keeps its name and its keys,
+the delivered CloudEvents request is byte-identical, the `X-Registry-Signature`
+bytes are unchanged, and retained delivery state keyed on the compiled delivery
+id survives a package upgrade. Diagnostic codes still read `event.*`, because
+they name the operator-facing concept rather than the authored member.
+
+Because a module's lock digest covers its parsed document, renaming the member
+changes every locked digest. Run `bregctl project lock PROJECT` after the
+rewrite.
+
+`caseworkctl source add` writes the new shape. A registry connected by an
+earlier `caseworkctl` carries the old member and must be rewritten by hand or
+reconnected.
+
+Projects maintained outside this repository need the same rewrite. The adopter
+demo in [`registrystack/solmara-lab`](https://github.com/registrystack/solmara-lab)
+authors the old member and is not updated by this change.
+
 # Corrections and historical queries
 
 Base Registry Engine retains complete stored-record revisions. A successful mutation
