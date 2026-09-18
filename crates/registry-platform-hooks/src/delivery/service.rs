@@ -25,10 +25,11 @@ use uuid::Uuid;
 use super::seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliverySignatureFields,
-    DeliveryTransitionCode, DestinationAnswer, HookDestination,
+    DeliveryTransitionCode, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
 };
 use crate::delivery_schema;
 use crate::envelope::{EnvelopeLimits, HookEnvelope};
+use crate::{ErrorCategory, HandlerOutputLimits, HookHandlerKind, HookMessage};
 
 impl From<tokio_postgres::Error> for DeliveryError {
     fn from(_error: tokio_postgres::Error) -> Self {
@@ -96,8 +97,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let Some(claim) = self.claim().await? else {
             return Ok(DeliveryOutcome::Idle);
         };
-        let outcome = self.reload_and_send(&claim).await?;
-        self.finalize(&claim, outcome).await
+        let attempt = self.reload_and_send(&claim).await?;
+        self.finalize(&claim, attempt).await
     }
 
     /// Refuse startup or operator use if retained work cannot use its exact
@@ -223,7 +224,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
                 &self.sql(
                     "SELECT state.generation, state.state, delivery.operator_replay,
                         delivery.package_revision, delivery.logical_destination_id,
-                        delivery.destination_binding_digest
+                        delivery.destination_binding_digest, delivery.handler_kind
                  FROM {schema}.registry_webhook_delivery_state AS state
                  JOIN {schema}.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
@@ -244,17 +245,44 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let state = row.try_get::<_, String>(1)?;
         let operator_replay = row.try_get::<_, bool>(2)?;
         let package_revision = bounded_text(&row, 3, 256)?;
-        let logical_destination_id = bounded_text(&row, 4, 64)?;
+        let logical_destination_id = row
+            .try_get::<_, Option<String>>(4)?
+            .filter(|id| id.len() <= 64);
         let destination_binding_digest = bounded_text(&row, 5, 71)?;
+        let handler_kind = bounded_text(&row, 6, 8)
+            .ok()
+            .and_then(|kind| HookHandlerKind::from_spelling(&kind));
+        // The binding a replay re-opens must still be the one the row was
+        // written against: for the `url` kind that is the activated
+        // destination, and for a local kind it is the reviewed program the
+        // deployed package holds under the same digest.
+        let binding_activated = match handler_kind {
+            Some(HookHandlerKind::Url) => logical_destination_id
+                .as_deref()
+                .and_then(|id| self.seams.destination(id))
+                .is_some_and(|destination| {
+                    destination.binding_digest() == destination_binding_digest
+                }),
+            Some(kind @ (HookHandlerKind::Rhai | HookHandlerKind::Wasm)) => {
+                logical_destination_id.is_none()
+                    && self
+                        .seams
+                        .handler(HookHandlerBinding {
+                            kind,
+                            compiled_delivery_id,
+                            package_revision: &package_revision,
+                            handler_digest: &destination_binding_digest,
+                        })
+                        .is_some_and(|handler| {
+                            handler.handler_digest() == destination_binding_digest
+                        })
+            }
+            None => false,
+        };
         if generation != expected_generation
             || !operator_replay
             || state != "dead_lettered"
-            || self
-                .seams
-                .destination(&logical_destination_id)
-                .is_none_or(|destination| {
-                    destination.binding_digest() != destination_binding_digest
-                })
+            || !binding_activated
         {
             return Err(DeliveryError::Unavailable);
         }
@@ -331,7 +359,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
                         delivery.deployed_attempt_timeout_ms,
                         delivery.deployed_maximum_attempts,
                         delivery.retry_delays_ms,
-                        delivery.package_revision
+                        delivery.package_revision,
+                        delivery.handler_kind
                  FROM {schema}.registry_webhook_delivery_state AS state
                  JOIN {schema}.registry_webhook_deliveries AS delivery
                    ON delivery.event_id = state.event_id
@@ -367,6 +396,13 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let retry_delays_ms = row.try_get::<_, Vec<i64>>(6)?;
         let package_revision =
             bounded_text(&row, 7, 256).map_err(|_| DeliveryError::Unavailable)?;
+        let Some(handler_kind) = bounded_text(&row, 8, 8)
+            .ok()
+            .and_then(|kind| HookHandlerKind::from_spelling(&kind))
+        else {
+            self.refused(DeliveryTransitionCode::ClaimPolicyRefused);
+            return Err(DeliveryError::Unavailable);
+        };
         let attempt = prior_attempt
             .checked_add(1)
             .filter(|attempt| *attempt <= deployed_maximum_attempts)
@@ -460,6 +496,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             deployed_maximum_attempts,
             retry_delays_ms,
             package_revision,
+            handler_kind,
         }))
     }
 
@@ -679,22 +716,25 @@ impl<S: DeliverySeams> DeliveryService<S> {
         Ok(())
     }
 
-    async fn reload_and_send(
-        &self,
-        claim: &DeliveryClaim,
-    ) -> Result<DeliveryAuditOutcome, DeliveryError> {
+    async fn reload_and_send(&self, claim: &DeliveryClaim) -> Result<AttemptResult, DeliveryError> {
         let material = match self.reload_material(claim).await {
             Ok(material) => material,
             Err(MaterialLoadError::Unavailable) => return Err(DeliveryError::Unavailable),
             Err(MaterialLoadError::PayloadRefused) => {
-                return Ok(DeliveryAuditOutcome::PayloadRefused)
+                return Ok(DeliveryAuditOutcome::PayloadRefused.into())
             }
             Err(MaterialLoadError::BindingRefused) => {
-                return Ok(DeliveryAuditOutcome::DestinationBindingRefused)
+                return Ok(material_binding_refusal(claim.handler_kind).into())
             }
         };
-        let Some(destination) = self.seams.destination(&material.logical_destination_id) else {
-            return Ok(DeliveryAuditOutcome::DestinationBindingRefused);
+        if claim.handler_kind.is_local() {
+            return self.run_local_handler(claim, material).await;
+        }
+        let Some(destination_id) = material.logical_destination_id.as_deref() else {
+            return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
+        };
+        let Some(destination) = self.seams.destination(destination_id) else {
+            return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         };
         let deployed_timeout_ms = i64::try_from(destination.attempt_timeout().as_millis())
             .map_err(|_| DeliveryError::Unavailable)?;
@@ -702,7 +742,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             || deployed_timeout_ms != material.deployed_attempt_timeout_ms
             || i16::from(destination.maximum_attempts()) != material.deployed_maximum_attempts
         {
-            return Ok(DeliveryAuditOutcome::DestinationBindingRefused);
+            return Ok(DeliveryAuditOutcome::DestinationBindingRefused.into());
         }
         let delivery_time = OffsetDateTime::from(claim.attempt_started_at)
             .format(&Rfc3339)
@@ -735,7 +775,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             body: &material.body,
         });
         let Ok(signature) = signature else {
-            return Ok(DeliveryAuditOutcome::DestinationPolicyRefused);
+            return Ok(DeliveryAuditOutcome::DestinationPolicyRefused.into());
         };
         let request = match destination.render_delivery(
             EventDeliveryHeaders {
@@ -753,7 +793,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             material.body,
         ) {
             Ok(request) => request,
-            Err(_) => return Ok(DeliveryAuditOutcome::DestinationPolicyRefused),
+            Err(_) => return Ok(DeliveryAuditOutcome::DestinationPolicyRefused.into()),
         };
         let attempt_timeout = Duration::from_millis(
             u64::try_from(material.deployed_attempt_timeout_ms)
@@ -762,20 +802,77 @@ impl<S: DeliverySeams> DeliveryService<S> {
         let Some(remaining) =
             remaining_attempt_budget(attempt_timeout, claim.attempt_started_at, SystemTime::now())
         else {
-            return Ok(DeliveryAuditOutcome::DestinationTimeout);
+            return Ok(DeliveryAuditOutcome::DestinationTimeout.into());
         };
         if remaining.is_zero() {
-            return Ok(DeliveryAuditOutcome::DestinationTimeout);
+            return Ok(DeliveryAuditOutcome::DestinationTimeout.into());
         }
         let monotonic_deadline = Instant::now() + remaining;
         match destination.send_delivery(request, remaining).await {
-            Ok(DestinationAnswer::Delivered) => Ok(DeliveryAuditOutcome::Delivered),
-            Ok(DestinationAnswer::NonSuccess) => Ok(DeliveryAuditOutcome::HttpNonSuccess),
+            // The destination answered: its bounded body is the handler
+            // message, read under the same ceiling and the same canonical
+            // rule a local answer is read under.
+            Ok(DestinationAnswer::Delivered { body }) => Ok(accepted_answer_result(&body)),
+            Ok(DestinationAnswer::NonSuccess { .. }) => {
+                Ok(DeliveryAuditOutcome::HttpNonSuccess.into())
+            }
+            Ok(DestinationAnswer::AnswerRefused(failure)) => {
+                Ok(DeliveryAuditOutcome::handler_failure(failure.category).into())
+            }
             Err(error) => Ok(classify_send_error(
                 error,
                 monotonic_deadline.saturating_duration_since(Instant::now())
                     <= Duration::from_millis(1),
-            )),
+            )
+            .into()),
+        }
+    }
+
+    /// Run one local-kind attempt: resolve the product's handler for the
+    /// binding the row recorded, run it over the stored envelope bytes with
+    /// the remaining attempt budget, and read its answer.
+    ///
+    /// A local row is signed by nothing and sent nowhere: the engine holds
+    /// the reviewed program, so there is no destination to resolve, no
+    /// signature to compute, and no request to render. The binding check is
+    /// the same one the `url` path makes, against the handler the product
+    /// resolved rather than the destination it activated.
+    async fn run_local_handler(
+        &self,
+        claim: &DeliveryClaim,
+        material: DeliveryMaterial,
+    ) -> Result<AttemptResult, DeliveryError> {
+        let Some(handler) = self.seams.handler(HookHandlerBinding {
+            kind: claim.handler_kind,
+            compiled_delivery_id: &claim.compiled_delivery_id,
+            package_revision: &claim.package_revision,
+            handler_digest: &material.destination_binding_digest,
+        }) else {
+            return Ok(DeliveryAuditOutcome::HandlerBindingRefused.into());
+        };
+        let deployed_timeout_ms = i64::try_from(handler.attempt_timeout().as_millis())
+            .map_err(|_| DeliveryError::Unavailable)?;
+        if handler.handler_digest() != material.destination_binding_digest
+            || deployed_timeout_ms != material.deployed_attempt_timeout_ms
+            || i16::from(handler.maximum_attempts()) != material.deployed_maximum_attempts
+        {
+            return Ok(DeliveryAuditOutcome::HandlerBindingRefused.into());
+        }
+        let attempt_timeout = Duration::from_millis(
+            u64::try_from(material.deployed_attempt_timeout_ms)
+                .map_err(|_| DeliveryError::Unavailable)?,
+        );
+        let Some(remaining) =
+            remaining_attempt_budget(attempt_timeout, claim.attempt_started_at, SystemTime::now())
+        else {
+            return Ok(DeliveryAuditOutcome::handler_failure(ErrorCategory::Deadline).into());
+        };
+        if remaining.is_zero() {
+            return Ok(DeliveryAuditOutcome::handler_failure(ErrorCategory::Deadline).into());
+        }
+        match handler.run(&material.body, remaining).await {
+            Ok(answer) => Ok(accepted_answer_result(&answer)),
+            Err(failure) => Ok(DeliveryAuditOutcome::handler_failure(failure.category).into()),
         }
     }
 
@@ -854,8 +951,15 @@ impl<S: DeliverySeams> DeliveryService<S> {
             bounded_text(&row, 3, 256).map_err(|_| MaterialLoadError::PayloadRefused)?;
         let destination_binding_digest =
             bounded_text(&row, 4, 71).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let logical_destination_id =
-            bounded_text(&row, 5, 64).map_err(|_| MaterialLoadError::PayloadRefused)?;
+        let logical_destination_id = row
+            .try_get::<_, Option<String>>(5)
+            .map_err(|_| MaterialLoadError::PayloadRefused)?
+            .map(|id| {
+                (id.len() <= 64)
+                    .then_some(id)
+                    .ok_or(MaterialLoadError::PayloadRefused)
+            })
+            .transpose()?;
         let maximum_payload_bytes = row
             .try_get::<_, i64>(6)
             .map_err(|_| MaterialLoadError::PayloadRefused)?;
@@ -883,6 +987,12 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .commit()
             .await
             .map_err(|_| MaterialLoadError::Unavailable)?;
+        // A row carries a destination when, and only when, it binds the
+        // `url` kind: a local kind runs the engine's own reviewed program
+        // and has nowhere to send.
+        if logical_destination_id.is_some() != (claim.handler_kind == HookHandlerKind::Url) {
+            return Err(MaterialLoadError::BindingRefused);
+        }
         if outbox_package_revision != claim.package_revision
             || outbox_schema_fingerprint.is_empty()
             || authentication_profile != "hmac_sha256_v1"
@@ -921,8 +1031,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
     async fn finalize(
         &self,
         claim: &DeliveryClaim,
-        outcome: DeliveryAuditOutcome,
+        attempt: AttemptResult,
     ) -> Result<DeliveryOutcome, DeliveryError> {
+        let AttemptResult { outcome, answer } = attempt;
         let mut client = self.seams.connection().await?;
         let transaction = client.transaction().await?;
         self.seams.verify_transaction(&transaction).await?;
@@ -959,11 +1070,11 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .await?;
         let changed = match work_outcome {
             DeliveryOutcome::Delivered => {
-                self.update_terminal_state(&transaction, claim, "delivered")
+                self.update_terminal_state(&transaction, claim, "delivered", answer.as_ref())
                     .await?
             }
             DeliveryOutcome::DeadLettered => {
-                self.update_terminal_state(&transaction, claim, "dead_lettered")
+                self.update_terminal_state(&transaction, claim, "dead_lettered", None)
                     .await?
             }
             DeliveryOutcome::RetryScheduled => {
@@ -1026,12 +1137,15 @@ impl<S: DeliverySeams> DeliveryService<S> {
         transaction: &Transaction<'_>,
         claim: &DeliveryClaim,
         state: &str,
+        answer: Option<&AcceptedAnswer>,
     ) -> Result<u64, DeliveryError> {
         let timestamp_column = match state {
             "delivered" => "delivered_at",
             "dead_lettered" => "dead_lettered_at",
             _ => return Err(DeliveryError::Unavailable),
         };
+        let message = answer.map(|answer| answer.bytes.clone());
+        let message_digest = answer.map(|answer| answer.digest.to_vec());
         transaction
             .execute(
                 &format!(
@@ -1041,6 +1155,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
                          attempt_started_at = NULL,
                          lease_expires_at = NULL,
                          lease_token = NULL,
+                         handler_message = $6,
+                         handler_message_digest = $7,
                          {timestamp_column} = transaction_timestamp(),
                          updated_at = transaction_timestamp()
                      WHERE event_id = $1
@@ -1057,6 +1173,8 @@ impl<S: DeliverySeams> DeliveryService<S> {
                     &claim.generation,
                     &claim.attempt,
                     &claim.lease_token,
+                    &message,
+                    &message_digest,
                 ],
             )
             .await
@@ -1123,6 +1241,7 @@ struct DeliveryClaim {
     deployed_maximum_attempts: i16,
     retry_delays_ms: Vec<i64>,
     package_revision: String,
+    handler_kind: HookHandlerKind,
 }
 
 struct DeliveryMaterial {
@@ -1130,7 +1249,7 @@ struct DeliveryMaterial {
     body: Vec<u8>,
     payload_digest: Vec<u8>,
     destination_binding_digest: String,
-    logical_destination_id: String,
+    logical_destination_id: Option<String>,
     deployed_attempt_timeout_ms: i64,
     deployed_maximum_attempts: i16,
     data_schema: String,
@@ -1141,6 +1260,84 @@ enum MaterialLoadError {
     Unavailable,
     BindingRefused,
     PayloadRefused,
+}
+
+/// What one attempt produced: its audited outcome and, when the handler
+/// answered, the accepted message to record with it.
+struct AttemptResult {
+    outcome: DeliveryAuditOutcome,
+    answer: Option<AcceptedAnswer>,
+}
+
+impl From<DeliveryAuditOutcome> for AttemptResult {
+    fn from(outcome: DeliveryAuditOutcome) -> Self {
+        Self {
+            outcome,
+            answer: None,
+        }
+    }
+}
+
+/// One accepted handler message and the digest of exactly the bytes
+/// recorded for it.
+#[derive(Debug)]
+struct AcceptedAnswer {
+    bytes: Vec<u8>,
+    digest: [u8; 32],
+}
+
+/// The refusal recorded when the delivery row and its binding disagree,
+/// named for the kind the row binds.
+const fn material_binding_refusal(kind: HookHandlerKind) -> DeliveryAuditOutcome {
+    if kind.is_local() {
+        DeliveryAuditOutcome::HandlerBindingRefused
+    } else {
+        DeliveryAuditOutcome::DestinationBindingRefused
+    }
+}
+
+/// Read one handler answer and turn it into the attempt result it implies.
+///
+/// An accepted answer is a delivered attempt carrying the message; a refused
+/// one is the failure category the taxonomy assigns it, and nothing is
+/// recorded.
+fn accepted_answer_result(body: &[u8]) -> AttemptResult {
+    match accept_handler_answer(body) {
+        Ok(answer) => AttemptResult {
+            outcome: DeliveryAuditOutcome::Delivered,
+            answer: Some(answer),
+        },
+        Err(category) => DeliveryAuditOutcome::handler_failure(category).into(),
+    }
+}
+
+/// Accept one handler answer: bound it, read it, and digest exactly the
+/// bytes that will be recorded.
+///
+/// Both kinds answer the same way. An empty answer is the `none` answer: a
+/// handler that observes and proposes nothing need not write a body, and the
+/// record still carries the message it means. Anything else is read as the
+/// handler message under the library ceiling, so an answer over the ceiling
+/// is a resource failure and a malformed or non-canonical answer is a source
+/// failure, exactly as the taxonomy states.
+///
+/// The recorded bytes are the message's own canonical encoding rather than
+/// the bytes as they arrived, so the digest covers what the state holds and
+/// the two can never disagree. Reading requires the arriving bytes to equal
+/// their canonicalization, so for a non-empty answer the two are the same
+/// bytes.
+fn accept_handler_answer(body: &[u8]) -> Result<AcceptedAnswer, ErrorCategory> {
+    let limits = HandlerOutputLimits::default();
+    let message = if body.is_empty() {
+        HookMessage::Nothing
+    } else {
+        HookMessage::from_canonical_json(body, &limits).map_err(|error| error.category())?
+    };
+    let bytes = message
+        .to_canonical_json(&limits)
+        .map_err(|error| error.category())?;
+    let digest = Sha256::digest(&bytes).into();
+    Ok(AcceptedAnswer { bytes, digest })
 }
 
 /// What the delivery row and the worker's own configuration say the stored
@@ -1415,6 +1612,33 @@ mod tests {
         }
     }
 
+    /// A handler no test below resolves: the seams under test refuse every
+    /// binding, so nothing ever runs.
+    struct UnusedHandler;
+
+    #[async_trait::async_trait]
+    impl HookHandler for UnusedHandler {
+        fn handler_digest(&self) -> &str {
+            ""
+        }
+
+        fn attempt_timeout(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn maximum_attempts(&self) -> u8 {
+            1
+        }
+
+        async fn run(
+            &self,
+            _envelope: &[u8],
+            _remaining: Duration,
+        ) -> Result<Vec<u8>, crate::delivery::HandlerRunFailure> {
+            unreachable!("no test below reaches a handler")
+        }
+    }
+
     /// A seam set that refuses every connection and records every
     /// operational event it is given.
     struct RefusingSeams {
@@ -1424,6 +1648,7 @@ mod tests {
     #[async_trait::async_trait]
     impl DeliverySeams for RefusingSeams {
         type Destination = UnusedDestination;
+        type Handler = UnusedHandler;
 
         async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
             Err(DeliveryError::Unavailable)
@@ -1437,6 +1662,10 @@ mod tests {
         }
 
         fn destination(&self, _logical_destination_id: &str) -> Option<Self::Destination> {
+            None
+        }
+
+        fn handler(&self, _binding: HookHandlerBinding<'_>) -> Option<Self::Handler> {
             None
         }
 
@@ -1784,6 +2013,69 @@ mod tests {
                     DeliveryTransitionCode::ClaimIdentityRefused
                 )),
             "a failure before the claim transaction emits no transition code"
+        );
+    }
+    #[test]
+    fn an_empty_answer_body_reads_as_the_none_answer() {
+        let accepted = accept_handler_answer(b"").expect("an empty body is the none answer");
+        assert_eq!(
+            accepted.bytes,
+            br#"{"answer":"none"}"#.to_vec(),
+            "an empty body is recorded as the canonical none answer"
+        );
+    }
+
+    #[test]
+    fn an_answer_over_the_output_ceiling_is_a_resource_failure() {
+        let mut body = br#"{"answer":"proposal","document":{"padding":""#.to_vec();
+        body.resize(body.len() + crate::MAX_OUTPUT_BYTES, b'x');
+        body.extend_from_slice(br#""}}"#);
+        assert_eq!(
+            accept_handler_answer(&body).expect_err("an oversize answer is refused"),
+            ErrorCategory::Resource,
+            "a body over the ceiling is a resource failure"
+        );
+    }
+
+    #[test]
+    fn a_malformed_answer_is_a_source_failure() {
+        assert_eq!(
+            accept_handler_answer(b"not json").expect_err("a malformed answer is refused"),
+            ErrorCategory::Source,
+            "a body that is not the handler message is a source failure"
+        );
+        assert_eq!(
+            accept_handler_answer(br#"{"answer":"maybe"}"#)
+                .expect_err("an unknown answer is refused"),
+            ErrorCategory::Source,
+            "a body outside the closed answer vocabulary is a source failure"
+        );
+    }
+
+    #[test]
+    fn a_non_canonical_answer_is_a_source_failure() {
+        assert_eq!(
+            accept_handler_answer(br#"{"answer": "none"}"#)
+                .expect_err("a non-canonical answer is refused"),
+            ErrorCategory::Source,
+            "a body that is not its own canonicalization is a source failure"
+        );
+    }
+
+    #[test]
+    fn the_recorded_answer_digest_covers_the_canonical_message_bytes() {
+        let body =
+            br#"{"answer":"refusal","code":"permit.expired","summary":"The permit lapsed."}"#;
+        let accepted = accept_handler_answer(body).expect("a refusal answer is accepted");
+        assert_eq!(
+            accepted.bytes,
+            body.to_vec(),
+            "the recorded message is the canonical answer the handler produced"
+        );
+        assert_eq!(
+            accepted.digest.to_vec(),
+            Sha256::digest(body).to_vec(),
+            "the recorded digest covers exactly the recorded message bytes"
         );
     }
 }

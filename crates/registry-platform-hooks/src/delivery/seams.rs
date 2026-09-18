@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! The product seams the delivery worker runs through: connection, identity
-//! preflight, audit, operational events, and activated destinations.
+//! preflight, audit, operational events, activated destinations, and
+//! runnable local handlers.
 //!
 //! Everything product-owned enters here, and it enters through one trait so a
 //! product implements its side as a unit. The worker carries no product name
@@ -19,6 +20,8 @@ use registry_platform_httputil::destination::{
 };
 use tokio_postgres::Transaction;
 use uuid::Uuid;
+
+use crate::{ErrorCategory, HookHandlerKind};
 
 /// One pooled product connection framed for the worker.
 ///
@@ -44,6 +47,9 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// The product's activated destination for one compiled logical id.
     type Destination: HookDestination;
 
+    /// The product's runnable handler for one local-kind delivery row.
+    type Handler: HookHandler;
+
     /// One pooled connection for a worker transaction.
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError>;
 
@@ -55,6 +61,17 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// The activated destination for a compiled logical destination id, or
     /// `None` when that id is not activated.
     fn destination(&self, logical_destination_id: &str) -> Option<Self::Destination>;
+
+    /// The runnable handler for one local-kind delivery row, or `None` when
+    /// this deployment holds no program under that binding.
+    ///
+    /// This is the second seam, and it is the reason the library runs local
+    /// kinds without owning an executor: resolving the reviewed program from
+    /// the package the delivery row names, and running it, stay with the
+    /// product. The library supplies the binding the row recorded and reads
+    /// back bytes and a failure category, so no script engine, module
+    /// format, or executor type crosses into this crate.
+    fn handler(&self, binding: HookHandlerBinding<'_>) -> Option<Self::Handler>;
 
     /// Record one neutral delivery-audit event in the product's audit
     /// journal, inside the transaction the worker is about to commit. Every
@@ -131,13 +148,93 @@ pub struct DeliverySignatureFields<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeliverySignatureRefused;
 
-/// Whether the destination answered an attempt with a success status.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// What the destination answered one attempt with.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DestinationAnswer {
-    /// The destination answered 2xx.
-    Delivered,
+    /// The destination answered 2xx, carrying the bounded response body it
+    /// returned. The body is the handler message; an empty body is the
+    /// `none` answer.
+    Delivered {
+        /// The bounded response body, exactly as received.
+        body: Vec<u8>,
+    },
     /// The destination answered, and not with 2xx.
-    NonSuccess,
+    NonSuccess {
+        /// The status the destination answered with.
+        status: u16,
+    },
+    /// The destination answered 2xx and its body could not be taken under
+    /// the handler output contract: over the ceiling, past the deadline, or
+    /// cut off mid-read. The product classifies the reason with the same
+    /// table a local run is classified by.
+    AnswerRefused(HandlerRunFailure),
+}
+
+/// The binding a delivery row recorded for a local-kind handler.
+///
+/// Every value here comes from the row the worker claimed, so the product
+/// resolves the program the row was written against and no other: the
+/// package revision pins the deployed package, and the digest pins the exact
+/// reviewed script or module inside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HookHandlerBinding<'a> {
+    /// The local kind the row recorded. Never [`HookHandlerKind::Url`].
+    pub kind: HookHandlerKind,
+    /// The compiled delivery this row belongs to.
+    pub compiled_delivery_id: &'a str,
+    /// The package revision the row was captured under.
+    pub package_revision: &'a str,
+    /// The `sha256:<hex>` digest of the reviewed script or module.
+    pub handler_digest: &'a str,
+}
+
+/// One runnable local handler, resolved by the product for a delivery row's
+/// [`HookHandlerBinding`].
+///
+/// Execution stays with the product: the reviewed program, the engine, and
+/// every budget it runs under belong to the product, and only bounded bytes
+/// and a shared failure category come back.
+#[async_trait]
+pub trait HookHandler: Send + Sync {
+    /// Digest of the exact program this handler was resolved under.
+    fn handler_digest(&self) -> &str;
+
+    /// Deployed per-attempt timeout.
+    fn attempt_timeout(&self) -> Duration;
+
+    /// Deployed maximum attempt count.
+    fn maximum_attempts(&self) -> u8;
+
+    /// Run the program over the stored envelope bytes with the remaining
+    /// attempt budget, and answer with the handler message bytes it
+    /// produced. An empty answer is the `none` answer.
+    async fn run(&self, envelope: &[u8], remaining: Duration)
+        -> Result<Vec<u8>, HandlerRunFailure>;
+}
+
+/// A local handler run failed, in the shared five-category taxonomy.
+///
+/// The product classifies: it is the side that knows whether its engine hit
+/// a deadline, exhausted a budget, trapped, or answered outside the contract.
+/// The library records the category it is given and never reinterprets it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HandlerRunFailure {
+    /// The failure's category in the taxonomy.
+    pub category: ErrorCategory,
+}
+
+impl HandlerRunFailure {
+    /// A run failure in `category`.
+    #[must_use]
+    pub const fn new(category: ErrorCategory) -> Self {
+        Self { category }
+    }
+}
+
+impl From<ErrorCategory> for HandlerRunFailure {
+    fn from(category: ErrorCategory) -> Self {
+        Self::new(category)
+    }
 }
 
 /// The closed phase of a neutral delivery-audit event.
@@ -160,10 +257,34 @@ pub enum DeliveryAuditOutcome {
     DestinationTransportUnavailable,
     DestinationPolicyRefused,
     DestinationBindingRefused,
+    HandlerBindingRefused,
+    HandlerDeadline,
+    HandlerResource,
+    HandlerExecution,
+    HandlerSource,
+    HandlerUnavailable,
     PayloadRefused,
     PayloadExpired,
     WorkerInterrupted,
     ReplayRequested,
+}
+
+impl DeliveryAuditOutcome {
+    /// The outcome recorded for a handler failure in `category`.
+    ///
+    /// Running a local program and reading a remote answer fail the same
+    /// way, so both arrive here: the category is the taxonomy's, and the
+    /// outcome names it.
+    #[must_use]
+    pub const fn handler_failure(category: ErrorCategory) -> Self {
+        match category {
+            ErrorCategory::Deadline => Self::HandlerDeadline,
+            ErrorCategory::Resource => Self::HandlerResource,
+            ErrorCategory::Execution => Self::HandlerExecution,
+            ErrorCategory::Source => Self::HandlerSource,
+            ErrorCategory::Unavailable => Self::HandlerUnavailable,
+        }
+    }
 }
 
 /// The closed disposition of a neutral delivery-audit event.

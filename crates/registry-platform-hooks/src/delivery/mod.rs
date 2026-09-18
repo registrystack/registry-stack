@@ -15,6 +15,14 @@
 //! re-reads it before every attempt and refuses a row whose headers would
 //! disagree with the body it is about to sign.
 //!
+//! A delivery row names the kind of handler that answers it. For the `url`
+//! kind the worker signs and sends, and the bounded response body is the
+//! answer. For the local kinds the worker resolves the product's runnable
+//! handler for the row's binding and reads the answer back from it; the
+//! reviewed program, the engine, and its budgets stay with the product. The
+//! answer is the same [`crate::HookMessage`] either way: bounded, canonical,
+//! digested, and recorded in the delivery state.
+//!
 //! Everything product-owned enters through [`DeliverySeams`]: the signing
 //! scheme and its key material, the idempotency domain, the audit journal and
 //! its vocabulary, the operational-event vocabulary, the registry identity
@@ -31,7 +39,7 @@ pub use seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode, DestinationAnswer,
-    HookDestination,
+    HandlerRunFailure, HookDestination, HookHandler, HookHandlerBinding,
 };
 pub use service::{
     DeliveryConfig, DeliveryOutcome, DeliveryService, DeliveryStatus, DeliveryStatusKind,

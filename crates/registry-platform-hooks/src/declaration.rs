@@ -111,14 +111,59 @@ pub enum HookHandlerSource {
 }
 
 impl HookHandlerSource {
-    /// The handler kind's declaration spelling.
+    /// The declared handler kind.
     #[must_use]
-    pub const fn kind(&self) -> &'static str {
+    pub const fn kind(&self) -> HookHandlerKind {
         match self {
-            Self::Rhai { .. } => "rhai",
-            Self::Wasm { .. } => "wasm",
-            Self::Url { .. } => "url",
+            Self::Rhai { .. } => HookHandlerKind::Rhai,
+            Self::Wasm { .. } => HookHandlerKind::Wasm,
+            Self::Url { .. } => HookHandlerKind::Url,
         }
+    }
+}
+
+/// The closed handler-kind vocabulary, carried by a declaration and by the
+/// delivery row a declaration compiles into.
+///
+/// `rhai` and `wasm` are local kinds: the engine holds the reviewed program
+/// and runs it in process. `url` is the remote kind: the engine holds no
+/// program and the answer arrives over HTTP.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum HookHandlerKind {
+    /// A reviewed Rhai script in the project.
+    Rhai,
+    /// A reviewed WASM module in the project.
+    Wasm,
+    /// A logical destination bound to a URL and a secret at runtime.
+    Url,
+}
+
+impl HookHandlerKind {
+    /// Every kind, in declaration order.
+    pub const ALL: [Self; 3] = [Self::Rhai, Self::Wasm, Self::Url];
+
+    /// The kind's stable spelling, shared by the declaration and the
+    /// delivery row.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Rhai => "rhai",
+            Self::Wasm => "wasm",
+            Self::Url => "url",
+        }
+    }
+
+    /// The kind named by `spelling`, or `None` when the spelling is outside
+    /// the closed vocabulary.
+    #[must_use]
+    pub fn from_spelling(spelling: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.as_str() == spelling)
+    }
+
+    /// Whether the engine itself holds and runs the handler program.
+    #[must_use]
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::Rhai | Self::Wasm)
     }
 }
 
@@ -331,7 +376,7 @@ mod tests {
                 destination_id: "case-intake".to_owned(),
             }
         );
-        assert_eq!(accepted.kind(), "url");
+        assert_eq!(accepted.kind(), HookHandlerKind::Url);
 
         for extra_field in ["module", "abi"] {
             let extra: Result<HookHandlerSource, _> = serde_json::from_value(json!({
@@ -415,8 +460,8 @@ mod tests {
             "kind": "rhai", "script": "handlers/followup.rhai", "abi": HOOK_HANDLER_ABI_V1,
         }))
         .expect("parses");
-        assert_eq!(rhai.kind(), "rhai");
-        assert_eq!(wasm_handler_serialized().kind(), "wasm");
+        assert_eq!(rhai.kind(), HookHandlerKind::Rhai);
+        assert_eq!(wasm_handler_serialized().kind(), HookHandlerKind::Wasm);
     }
 
     #[test]
