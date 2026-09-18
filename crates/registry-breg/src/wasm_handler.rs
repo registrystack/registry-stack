@@ -42,7 +42,7 @@ const WASM_BINARY_MAGIC: [u8; 4] = [0x00, 0x61, 0x73, 0x6D];
 
 /// The authored-path discipline a WASM handler's module must satisfy, checked
 /// only in a build that can admit WASM handlers.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 pub(crate) fn valid_wasm_module_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= MAXIMUM_WASM_MODULE_PATH_BYTES
@@ -69,7 +69,7 @@ pub(crate) fn is_wasm_binary(bytes: &[u8]) -> bool {
 /// caller owns the diagnostic path. Runs only in a build with the WASM
 /// executor prototype feature, the only build whose compiler can validate
 /// modules; the default build refuses WASM handlers at admission instead.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 pub(crate) fn structural_violation(bytes: &[u8]) -> Option<(&'static str, String)> {
     use registry_platform_script::wasm::{Backend, Budgets, Executor, InvokeError};
 

@@ -233,7 +233,7 @@ postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-suppor
 postgres-tls-test = ["runtime"]
 schema = ["dep:schemars"]
 tooling = ["dep:tempfile", "dep:tower"]
-wasm-executor-prototype = ["registry-platform-script/wasm"]
+wasm = ["registry-platform-script/wasm"]
 
 [dependencies]
 chrono.workspace = true
@@ -299,7 +299,7 @@ wat = "1.259.0"
 [[test]]
 name = "wasm_handler_admission"
 path = "tests/wasm_handler_admission.rs"
-required-features = ["wasm-executor-prototype"]
+required-features = ["wasm"]
 
 [[test]]
 name = "postgres_immediate_action_requirements"
@@ -314,7 +314,7 @@ required-features = ["postgres-test", "tooling"]
 [[test]]
 name = "postgres_wasm_action_handlers"
 path = "tests/postgres_wasm_action_handlers.rs"
-required-features = ["postgres-test", "tooling", "wasm-executor-prototype"]
+required-features = ["postgres-test", "tooling", "wasm"]
 
 [[test]]
 name = "postgres_action_evidence"

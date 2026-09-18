@@ -1094,7 +1094,7 @@ async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
 /// compiled model deserializes the backend tag, so the wire form a
 /// feature-built package produced is the honest way one can arrive here;
 /// authoring admission in this build already refuses to compile one.
-#[cfg(not(feature = "wasm-executor-prototype"))]
+#[cfg(not(feature = "wasm"))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn wasm_handler_declaration_fails_typed_and_statelessly_without_the_executor() {
     let _test_guard = HANDLER_TEST_LOCK.lock().await;

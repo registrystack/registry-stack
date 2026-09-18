@@ -19,7 +19,7 @@ workspace = true
 [features]
 # Forwarded so a WASM-prototype build of the compiler can also run through
 # bregctl; bregctl itself adds no WASM surface of its own.
-wasm-executor-prototype = ["registry-breg/wasm-executor-prototype"]
+wasm = ["registry-breg/wasm"]
 
 [dependencies]
 anstream.workspace = true

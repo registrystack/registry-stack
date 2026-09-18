@@ -813,7 +813,7 @@ async fn finish_prepared_server(
     // The process WASM executor is installed from the operator budgets before
     // any request can evaluate a WASM handler. Builds without the prototype
     // feature refuse WASM handlers at admission; the section still parses.
-    #[cfg(feature = "wasm-executor-prototype")]
+    #[cfg(feature = "wasm")]
     crate::wasm_runtime::install(
         crate::wasm_runtime::WasmExecutionBudgets::from(*config.wasm_execution()),
         crate::wasm_runtime::MAXIMUM_RETAINED_PREPARED_MODULES,
@@ -1161,7 +1161,7 @@ pub async fn serve_until_shutdown(
     };
     // The process WASM executor stops its epoch ticker once serving and
     // background work have ended, on both the graceful and the aborted path.
-    #[cfg(feature = "wasm-executor-prototype")]
+    #[cfg(feature = "wasm")]
     crate::wasm_runtime::shutdown();
     outcome
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Footprint probe for the platform WASM executor behind the non-default
-//! `wasm-executor-prototype` feature.
+//! `wasm` feature.
 //!
 //! This module exists only to measure the binary, image, and dependency
 //! footprint of the platform executor (`registry-platform-script`'s `wasm`
