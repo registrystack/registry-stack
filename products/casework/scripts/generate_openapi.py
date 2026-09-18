@@ -1925,7 +1925,7 @@ def verify_source(repository_root: Path) -> None:
         repository_root / "crates/registry-casework-core/src/clock_runtime.rs"
     ).read_text(encoding="utf-8")
     webhook_crypto_source = (
-        repository_root / "crates/registry-platform-crypto/src/breg_webhook.rs"
+        repository_root / "crates/registry-platform-crypto/src/delivery_signature.rs"
     ).read_text(encoding="utf-8")
     router_source = http_source.split("async fn http_boundary", 1)[0]
     actual_routes = set(re.findall(r'\.route\(\s*"([^"]+)"', router_source))

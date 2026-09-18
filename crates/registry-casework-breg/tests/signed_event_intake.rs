@@ -10,7 +10,7 @@ use registry_casework_breg::{BregAdapter, BregReviewStage, BregSourceConfig};
 use registry_casework_core::{
     EventRequest, RoutingSourceMetadata, SourceAdapter, SourceAdapterError,
 };
-use registry_platform_crypto::breg_webhook::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use wiremock::{

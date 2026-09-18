@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use registry_platform_crypto::breg_webhook::{verify_v1, SignatureFields, VerificationError};
+use registry_platform_crypto::delivery_signature::{verify_v1, SignatureFields, VerificationError};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const SIGNATURE_PREFIX: &str = "v1=";

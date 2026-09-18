@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
-use registry_platform_crypto::breg_webhook::{sign_v1, SignatureFields};
+use registry_platform_crypto::delivery_signature::{sign_v1, SignatureFields};
 use registry_platform_hooks::delivery::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryConfig, DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
@@ -59,7 +59,7 @@ const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
 pub(crate) const DELIVERY_SCHEMA: &str = "registry_internal";
 const _: () = assert!(
     crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES as usize
-        == registry_platform_crypto::breg_webhook::MAX_BODY_BYTES
+        == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
