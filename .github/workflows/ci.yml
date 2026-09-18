@@ -865,6 +865,9 @@ jobs:
       - name: Base Registry Engine WASM admission, runtime, and parity suites
         run: cargo test --locked --profile ci -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
 
+      - name: Base Registry Engine tooling WASM suites
+        run: cargo test --locked --profile ci -p registry-bregctl --features wasm
+
       - name: Base Registry Engine WASM handler PostgreSQL journeys
         env:
           BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ job.services.postgres.ports['5432'] }}/breg
