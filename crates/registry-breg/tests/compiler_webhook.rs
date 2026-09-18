@@ -213,7 +213,9 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.maximum_attempts, 5);
     assert_eq!(delivery.exponential_backoff_multiplier, 2);
     assert_eq!(delivery.retry_delays_ms, [1000, 2000, 4000, 8000]);
-    assert_eq!(delivery.maximum_payload_bytes, 2288);
+    // The data object's worst case plus the envelope wrapper this project's
+    // identifiers produce: 2288 + 644.
+    assert_eq!(delivery.maximum_payload_bytes, 2932);
     assert_eq!(delivery.dead_letter, WebhookDeadLetterMode::Required);
     assert!(delivery.operator_replay);
 
@@ -734,7 +736,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_envelope_boundary["entities"][0]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
-        "maxBytes": 1_046_878,
+        "maxBytes": 1_046_234,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -756,7 +758,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
             .maximum_payload_bytes,
         1_048_576
     );
-    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_879);
+    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_235);
     assert_compile_code(
         &exact_envelope_boundary,
         "event.webhook.projection_too_large",
@@ -1066,4 +1068,105 @@ fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
     source["entities"][2]["hooks"][0]["when"] =
         json!({"kind":"request_lifecycle", "transitions":["request_revision"]});
     assert_compile_code(&source, "event.webhook.projection_too_large");
+}
+
+/// The envelope wrapper one hook of `project_value` produces.
+///
+/// 584 bytes are fixed for every hook: the canonical object punctuation of the
+/// eight envelope members, the `causation` object with a parent, a quoted
+/// UUID `id`, the fixed parts of `dataschema` and `source` with their digests
+/// and a 64 byte instance id, the `subject` object, and the quoted UTC
+/// millisecond `time`. The rest scales with the identifiers this project
+/// declares: the registry id appears in both `dataschema` and `source`, the
+/// entity id once in `dataschema`, and the hook id in both `dataschema` and
+/// `type`.
+const ENVELOPE_WRAPPER_BYTES: u32 = 584
+    + 2 * "webhook-contract".len() as u32
+    + "case".len() as u32
+    + 2 * "case-created".len() as u32;
+
+/// The data object worst case that exactly fills the transport bound, so a
+/// project sized to it proves what the payload bound is measured over.
+const DATA_OBJECT_AT_THE_TRANSPORT_BOUND: u32 = 1_046_878;
+
+fn structured_label(maximum_bytes: u32) -> Value {
+    json!({
+        "id": "label",
+        "type": "structured",
+        "maxBytes": maximum_bytes,
+        "schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": false
+        },
+        "required": true,
+        "classification": "public"
+    })
+}
+
+/// The compiled payload proof measures the canonical envelope the runtime
+/// stores and delivers, not the `data` object it carries.
+///
+/// Before the envelope commits the two measured different documents, so a
+/// project could compile and then have a capture refused inside the record
+/// transaction that produced it.
+#[test]
+fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
+    let mut data_object_at_the_bound = project_value();
+    data_object_at_the_bound["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND);
+    data_object_at_the_bound["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
+    data_object_at_the_bound["entities"][0]["hooks"][0]
+        .as_object_mut()
+        .expect("event object")
+        .remove("when");
+    assert_compile_code(
+        &data_object_at_the_bound,
+        "event.webhook.projection_too_large",
+    );
+
+    let mut envelope_at_the_bound = data_object_at_the_bound.clone();
+    envelope_at_the_bound["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES);
+    assert_eq!(
+        compile(&envelope_at_the_bound)
+            .expect("an envelope at the transport bound compiles")
+            .event_deliveries()
+            .deliveries[0]
+            .maximum_payload_bytes,
+        1_048_576
+    );
+
+    let mut envelope_one_byte_over = envelope_at_the_bound;
+    envelope_one_byte_over["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES + 1);
+    assert_compile_code(
+        &envelope_one_byte_over,
+        "event.webhook.projection_too_large",
+    );
+}
+
+/// The request lifecycle trigger carries its own larger data object and the
+/// same envelope wrapper, so its proof grows by the wrapper too.
+#[test]
+fn the_request_lifecycle_payload_proof_carries_the_same_envelope_wrapper() {
+    let source = change_request_event_project();
+    let compiled = compile(&source).expect("the lifecycle acceptance project compiles");
+    let delivery = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .find(|delivery| delivery.event_id == "request-lifecycle")
+        .expect("the lifecycle hook compiles a delivery");
+    // The lifecycle data object worst case, plus the wrapper this project's
+    // identifiers produce.
+    const LIFECYCLE_DATA_OBJECT_BYTES: u32 = 33_472;
+    const LIFECYCLE_WRAPPER_BYTES: u32 = 584
+        + 2 * "request-events".len() as u32
+        + "placement-correction-request".len() as u32
+        + 2 * "request-lifecycle".len() as u32;
+    assert_eq!(
+        delivery.maximum_payload_bytes,
+        LIFECYCLE_DATA_OBJECT_BYTES + LIFECYCLE_WRAPPER_BYTES
+    );
 }

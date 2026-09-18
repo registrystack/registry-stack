@@ -3132,7 +3132,7 @@ fn validate_build_identity(request: &PackageBuildRequest) -> Result<()> {
 
 fn valid_build_id(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 64
+        && value.len() <= crate::compiler::MAX_BUILD_ID_BYTES as usize
         && value
             .bytes()
             .next()

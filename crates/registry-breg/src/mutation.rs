@@ -645,7 +645,7 @@ fn exact_entity_event_deliveries(
             || delivery.dead_letter != crate::contract::WebhookDeadLetterMode::Required
             || !delivery.operator_replay
             || Some(delivery.maximum_payload_bytes)
-                != expected_maximum_event_payload_bytes(entity, event)
+                != expected_maximum_event_payload_bytes(registry.registry_id(), entity, event)
         {
             return Err(MutationError::InvalidRequest);
         }
@@ -676,10 +676,11 @@ fn event_condition_fields(event: &crate::contract::HookSource) -> impl Iterator<
 }
 
 fn expected_maximum_event_payload_bytes(
+    registry_id: &str,
     entity: &CompiledEntity,
     event: &crate::contract::HookSource,
 ) -> Option<u32> {
-    crate::compiler::maximum_compiled_event_payload_bytes(entity, event)
+    crate::compiler::maximum_compiled_event_payload_bytes(registry_id, entity, event)
 }
 
 fn expected_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {
