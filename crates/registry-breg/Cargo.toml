@@ -312,6 +312,11 @@ path = "tests/postgres_action_handlers.rs"
 required-features = ["postgres-test", "tooling"]
 
 [[test]]
+name = "postgres_wasm_action_handlers"
+path = "tests/postgres_wasm_action_handlers.rs"
+required-features = ["postgres-test", "tooling", "wasm-executor-prototype"]
+
+[[test]]
 name = "postgres_action_evidence"
 path = "tests/postgres_action_evidence.rs"
 required-features = ["postgres-test", "tooling"]
