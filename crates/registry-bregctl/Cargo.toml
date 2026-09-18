@@ -61,3 +61,4 @@ registry-platform-crypto.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+wat = "1.259.0"
