@@ -2,7 +2,7 @@
 //! Phase 2 exit evidence: WASM and Rhai handler outcomes pass through the
 //! same BREG decode layer and the same shared validator.
 //!
-//! Every parity case drives one outcome document through both backends:
+//! Every parity case drives one outcome document through both handler paths:
 //!
 //! - Rhai: a handler script returning the equivalent map, evaluated through
 //!   the real evaluation entry (`evaluate_action_detailed`).
@@ -10,6 +10,10 @@
 //!   same document as bytes, run through the platform WASM executor, then
 //!   decoded by `decode_wasm_outcome` and validated by the same
 //!   `validate_proposed_outcome` the Rhai path uses.
+//!
+//! The WASM half runs under both platform execution backends (Native and
+//! Pulley), so the corpus proves the byte ABI and the decode layer agree
+//! whichever backend a deployment compiles for.
 //!
 //! Parity means identical `ActionHandlerOutcome`s for accepted proposals and
 //! identical diagnostics (kind, message, slot, field) for refused ones. The
@@ -127,12 +131,23 @@ fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(60)
 }
 
-/// One shared executor for the whole module: engines are expensive and every
-/// call already gets a fresh store and instance.
-fn executor() -> &'static Executor {
-    static EXECUTOR: OnceLock<Executor> = OnceLock::new();
-    EXECUTOR.get_or_init(|| {
-        Executor::new(Backend::Native, Budgets::default()).expect("fixed engine config is valid")
+/// Both execution backends the corpus runs its WASM half under: the deployment
+/// default (Native) and the executable-memory-restricted fallback (Pulley).
+fn backends() -> [Backend; 2] {
+    [Backend::Native, Backend::Pulley]
+}
+
+/// One shared executor per backend: engines are expensive and every call
+/// already gets a fresh store and instance.
+fn executor(backend: Backend) -> &'static Executor {
+    static NATIVE: OnceLock<Executor> = OnceLock::new();
+    static PULLEY: OnceLock<Executor> = OnceLock::new();
+    let cell = match backend {
+        Backend::Native => &NATIVE,
+        Backend::Pulley => &PULLEY,
+    };
+    cell.get_or_init(|| {
+        Executor::new(backend, Budgets::default()).expect("fixed engine config is valid")
     })
 }
 
@@ -163,15 +178,17 @@ fn outcome_guest(document: &[u8]) -> String {
 fn wasm_outcome(
     action: &CompiledAction,
     document: &str,
+    backend: Backend,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let handler = action
         .handler
         .as_ref()
         .expect("fixture actions declare a handler");
-    let prepared = executor()
+    let executor = executor(backend);
+    let prepared = executor
         .prepare(outcome_guest(document.as_bytes()).as_bytes())
         .expect("outcome guest passes ABI validation");
-    let invoked = executor()
+    let invoked = executor
         .invoke(&prepared, br#"{"inputs":{}}"#)
         .expect("outcome guest call succeeds");
     decode_wasm_outcome(&invoked.output, action.maximum_snapshot_bytes)
@@ -192,10 +209,12 @@ enum Expected {
     Refused(ActionHandlerError),
 }
 
-/// Assert both backends produce the same verdict on one outcome proposal,
-/// and that the verdict is the pinned one. The pinned kinds keep the parity
-/// check from degenerating into self-comparison: both paths could only drift
-/// together by changing the shared validator itself.
+/// Assert both handler paths produce the same verdict on one outcome
+/// proposal, and that the verdict is the pinned one. The WASM half runs
+/// under both platform execution backends, so a backend-specific drift is
+/// caught as a disagreement with the Rhai path. The pinned kinds keep the
+/// parity check from degenerating into self-comparison: both paths could
+/// only drift together by changing the shared validator itself.
 fn assert_parity(
     case: &str,
     action: &CompiledAction,
@@ -204,33 +223,51 @@ fn assert_parity(
     expected: Expected,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let rhai = rhai_outcome(action, inputs);
-    let wasm = wasm_outcome(action, document);
+    for backend in backends() {
+        let wasm = wasm_outcome(action, document, backend);
+        match expected {
+            Expected::Accepted => {
+                let (Ok(rhai), Ok(wasm)) = (&rhai, &wasm) else {
+                    panic!(
+                        "{case} [{backend:?}]: expected acceptance, rhai={rhai:?} wasm={wasm:?}"
+                    );
+                };
+                assert_eq!(rhai, wasm, "{case} [{backend:?}]: accepted outcomes differ");
+            }
+            Expected::Refused(kind) => {
+                let (Err(rhai), Err(wasm)) = (&rhai, &wasm) else {
+                    panic!("{case} [{backend:?}]: expected refusal, rhai={rhai:?} wasm={wasm:?}");
+                };
+                assert_eq!(
+                    rhai.kind, wasm.kind,
+                    "{case} [{backend:?}]: refusal kinds differ"
+                );
+                assert_eq!(
+                    rhai.message, wasm.message,
+                    "{case} [{backend:?}]: refusal messages differ"
+                );
+                assert_eq!(
+                    rhai.slot, wasm.slot,
+                    "{case} [{backend:?}]: refusal slots differ"
+                );
+                assert_eq!(
+                    rhai.field, wasm.field,
+                    "{case} [{backend:?}]: refusal fields differ"
+                );
+                assert_eq!(
+                    rhai.evidence_capability, wasm.evidence_capability,
+                    "{case} [{backend:?}]: refusal evidence capabilities differ"
+                );
+                assert_eq!(
+                    rhai.kind, kind,
+                    "{case} [{backend:?}]: pinned refusal kind drifted"
+                );
+            }
+        }
+    }
     match expected {
-        Expected::Accepted => {
-            let (Ok(rhai), Ok(wasm)) = (&rhai, &wasm) else {
-                panic!("{case}: expected acceptance, rhai={rhai:?} wasm={wasm:?}");
-            };
-            assert_eq!(rhai, wasm, "{case}: accepted outcomes differ");
-            Ok(rhai.clone())
-        }
-        Expected::Refused(kind) => {
-            let (Err(rhai), Err(wasm)) = (&rhai, &wasm) else {
-                panic!("{case}: expected refusal, rhai={rhai:?} wasm={wasm:?}");
-            };
-            assert_eq!(rhai.kind, wasm.kind, "{case}: refusal kinds differ");
-            assert_eq!(
-                rhai.message, wasm.message,
-                "{case}: refusal messages differ"
-            );
-            assert_eq!(rhai.slot, wasm.slot, "{case}: refusal slots differ");
-            assert_eq!(rhai.field, wasm.field, "{case}: refusal fields differ");
-            assert_eq!(
-                rhai.evidence_capability, wasm.evidence_capability,
-                "{case}: refusal evidence capabilities differ"
-            );
-            assert_eq!(rhai.kind, kind, "{case}: pinned refusal kind drifted");
-            Err(rhai.clone())
-        }
+        Expected::Accepted => Ok(rhai.expect("acceptance was asserted per backend")),
+        Expected::Refused(_) => Err(rhai.expect_err("refusal was asserted per backend")),
     }
 }
 
@@ -604,15 +641,18 @@ fn oversized_outcome_is_rejected_before_decoding() {
   (func (export "result_ptr") (result i32) (i32.const 1024))
   (func (export "result_len") (result i32) (i32.const 999999999))
 )"#;
-    let prepared = executor()
-        .prepare(wat.as_bytes())
-        .expect("guest passes ABI validation");
-    match executor().invoke(&prepared, b"x").unwrap_err() {
-        InvokeError::OutputTooLarge { len, max } => {
-            assert_eq!(len, 999_999_999);
-            assert_eq!(max, 1024 * 1024);
+    for backend in backends() {
+        let executor = executor(backend);
+        let prepared = executor
+            .prepare(wat.as_bytes())
+            .expect("guest passes ABI validation");
+        match executor.invoke(&prepared, b"x").unwrap_err() {
+            InvokeError::OutputTooLarge { len, max } => {
+                assert_eq!(len, 999_999_999);
+                assert_eq!(max, 1024 * 1024);
+            }
+            error => panic!("{backend:?}: wrong executor error: {error}"),
         }
-        error => panic!("wrong executor error: {error}"),
     }
 }
 
