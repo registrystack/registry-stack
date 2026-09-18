@@ -21,13 +21,12 @@ use registry_platform_canonical_json::{canonicalize_json, parse_json_strict, Jcs
 
 use crate::error::{bounded_token, redacted_message, ErrorCategory};
 
-/// The library default for the handler output ceiling, in bytes.
+/// The handler output ceiling, in bytes.
 ///
 /// Mirrors `registry-platform-script`'s `Budgets::default().max_output_bytes`
-/// (1 MiB). The operator configures the real ceiling per executor run; the
-/// default is a floor for tests and a bound for callers that have no executor
-/// configuration yet.
-pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1_048_576;
+/// (1 MiB). An executor run may carry a tighter per-run ceiling; it can only
+/// tighten this, never widen it.
+pub const MAX_OUTPUT_BYTES: usize = 1_048_576;
 
 /// The refusal code ceiling, in bytes.
 pub const MAX_REFUSAL_CODE_BYTES: usize = 128;
@@ -36,16 +35,44 @@ pub const MAX_REFUSAL_CODE_BYTES: usize = 128;
 pub const MAX_REFUSAL_SUMMARY_BYTES: usize = 1_024;
 
 /// Ceilings for one handler message.
+///
+/// The default is [`MAX_OUTPUT_BYTES`]. An executor run may carry a
+/// tighter per-run ceiling; tightening is the only direction available, so the
+/// ceiling is not a public field and [`HandlerOutputLimits::tightened_to`]
+/// clamps a wider request back to [`MAX_OUTPUT_BYTES`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct HandlerOutputLimits {
-    /// The maximum handler message size in bytes.
-    pub max_output_bytes: usize,
+    max_output_bytes: usize,
+}
+
+impl HandlerOutputLimits {
+    /// Tighten the output ceiling to `bytes`.
+    ///
+    /// A request above [`MAX_OUTPUT_BYTES`] is clamped to it rather
+    /// than refused: a per-run ceiling is a tightening, and a caller that asks
+    /// for more gets the library's ceiling, never more than it.
+    #[must_use]
+    pub const fn tightened_to(bytes: usize) -> Self {
+        Self {
+            max_output_bytes: if bytes < MAX_OUTPUT_BYTES {
+                bytes
+            } else {
+                MAX_OUTPUT_BYTES
+            },
+        }
+    }
+
+    /// The effective ceiling in bytes.
+    #[must_use]
+    pub const fn max_output_bytes(&self) -> usize {
+        self.max_output_bytes
+    }
 }
 
 impl Default for HandlerOutputLimits {
     fn default() -> Self {
         Self {
-            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
+            max_output_bytes: MAX_OUTPUT_BYTES,
         }
     }
 }
@@ -373,6 +400,44 @@ mod tests {
         })
     }
 
+    /// The three byte strings below are the handler ABI: a handler writes them
+    /// and the library reads them. Changing any of them changes what an already
+    /// deployed handler must emit, so it is a new handler ABI version, never a
+    /// fix inside `registry.hook-handler/v1`.
+    #[test]
+    fn the_handler_message_wire_shape_is_pinned() {
+        let limits = HandlerOutputLimits::default();
+        for (message, pinned) in [
+            (
+                HookMessage::Proposal {
+                    document: HookProposal(json!({"kind": "action-outcome"})),
+                },
+                r#"{"answer":"proposal","document":{"kind":"action-outcome"}}"#,
+            ),
+            (HookMessage::Nothing, r#"{"answer":"none"}"#),
+            (
+                HookMessage::Refusal {
+                    code: BoundedText::try_from("eligibility.missing_evidence")
+                        .expect("within the code bound"),
+                    summary: BoundedText::try_from("no verified evidence for the requirement")
+                        .expect("within the summary bound"),
+                },
+                concat!(
+                    r#"{"answer":"refusal","code":"eligibility.missing_evidence","#,
+                    r#""summary":"no verified evidence for the requirement"}"#,
+                ),
+            ),
+        ] {
+            let bytes = message.to_canonical_json(&limits).expect("encodes");
+            assert_eq!(String::from_utf8(bytes.clone()).expect("UTF-8"), pinned);
+            assert_eq!(
+                HookMessage::from_canonical_json(&bytes, &limits).expect("decodes"),
+                message,
+                "the pinned bytes decode to the answer they were written from"
+            );
+        }
+    }
+
     #[test]
     fn decodes_and_round_trips_a_proposal() {
         let limits = HandlerOutputLimits::default();
@@ -500,9 +565,7 @@ mod tests {
     fn flips_the_output_ceiling_at_a_non_default_value() {
         let bytes = canonical_bytes(&proposal_message());
 
-        let tight = HandlerOutputLimits {
-            max_output_bytes: bytes.len() - 1,
-        };
+        let tight = HandlerOutputLimits::tightened_to(bytes.len() - 1);
         let error = HookMessage::from_canonical_json(&bytes, &tight)
             .expect_err("refused above the non-default ceiling");
         assert_eq!(error.code(), "hook.message.output_too_large");
@@ -512,9 +575,7 @@ mod tests {
             "the ceiling is named: {error}"
         );
 
-        let generous = HandlerOutputLimits {
-            max_output_bytes: bytes.len(),
-        };
+        let generous = HandlerOutputLimits::tightened_to(bytes.len());
         assert!(
             HookMessage::from_canonical_json(&bytes, &generous).is_ok(),
             "accepted below (at) the non-default ceiling"
@@ -527,18 +588,14 @@ mod tests {
         let limits = HandlerOutputLimits::default();
         let message = HookMessage::from_canonical_json(&bytes, &limits).expect("decodes");
 
-        let tight = HandlerOutputLimits {
-            max_output_bytes: bytes.len() - 1,
-        };
+        let tight = HandlerOutputLimits::tightened_to(bytes.len() - 1);
         let error = message
             .to_canonical_json(&tight)
             .expect_err("refused above the non-default ceiling");
         assert_eq!(error.code(), "hook.message.output_too_large");
         assert_eq!(error.category(), ErrorCategory::Resource);
 
-        let generous = HandlerOutputLimits {
-            max_output_bytes: bytes.len(),
-        };
+        let generous = HandlerOutputLimits::tightened_to(bytes.len());
         assert_eq!(
             message.to_canonical_json(&generous).expect("encodes"),
             bytes,
@@ -548,9 +605,7 @@ mod tests {
 
     #[test]
     fn the_size_check_runs_before_parsing() {
-        let limits = HandlerOutputLimits {
-            max_output_bytes: 8,
-        };
+        let limits = HandlerOutputLimits::tightened_to(8);
         let error = HookMessage::from_canonical_json(b"not json at all", &limits)
             .expect_err("size wins before shape");
         assert!(matches!(
@@ -616,13 +671,39 @@ mod tests {
 
     #[test]
     fn the_default_output_ceiling_mirrors_the_script_budget() {
-        assert_eq!(DEFAULT_MAX_OUTPUT_BYTES, 1_048_576);
+        assert_eq!(MAX_OUTPUT_BYTES, 1_048_576);
         assert_eq!(
-            HandlerOutputLimits::default().max_output_bytes,
-            DEFAULT_MAX_OUTPUT_BYTES
+            HandlerOutputLimits::default().max_output_bytes(),
+            MAX_OUTPUT_BYTES
         );
         assert_eq!(MAX_REFUSAL_CODE_BYTES, 128);
         assert_eq!(MAX_REFUSAL_SUMMARY_BYTES, 1_024);
+    }
+
+    #[test]
+    fn the_output_ceiling_can_only_be_tightened() {
+        assert_eq!(
+            HandlerOutputLimits::tightened_to(MAX_OUTPUT_BYTES + 1).max_output_bytes(),
+            MAX_OUTPUT_BYTES,
+            "a widened request is clamped to the library ceiling"
+        );
+        assert_eq!(
+            HandlerOutputLimits::tightened_to(usize::MAX).max_output_bytes(),
+            MAX_OUTPUT_BYTES
+        );
+        assert_eq!(
+            HandlerOutputLimits::tightened_to(4_096).max_output_bytes(),
+            4_096,
+            "a tightened request is honored"
+        );
+
+        // The clamp is enforced, not just reported: bytes over the library
+        // ceiling are still refused after asking for a wider ceiling.
+        let widened = HandlerOutputLimits::tightened_to(MAX_OUTPUT_BYTES * 2);
+        let oversized = vec![b' '; MAX_OUTPUT_BYTES + 1];
+        let error = HookMessage::from_canonical_json(&oversized, &widened)
+            .expect_err("the clamp holds on the decode path");
+        assert_eq!(error.code(), "hook.message.output_too_large");
     }
 
     #[test]

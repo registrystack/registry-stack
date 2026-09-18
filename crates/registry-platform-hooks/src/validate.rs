@@ -130,11 +130,11 @@ impl HookValidationError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::EmptyHookId { .. } => "hook.id_empty",
-            Self::DuplicateHookId { .. } => "hook.id_duplicate",
-            Self::BeforePhaseRemoteHandler { .. } => "hook.before_phase_remote_handler",
-            Self::AbiMissing { .. } => "hook.abi_missing",
-            Self::AbiUnknown { .. } => "hook.abi_unknown",
+            Self::EmptyHookId { .. } => "hook.declaration.id_empty",
+            Self::DuplicateHookId { .. } => "hook.declaration.id_duplicate",
+            Self::BeforePhaseRemoteHandler { .. } => "hook.declaration.before_phase_remote_handler",
+            Self::AbiMissing { .. } => "hook.declaration.abi_missing",
+            Self::AbiUnknown { .. } => "hook.declaration.abi_unknown",
         }
     }
 
@@ -232,7 +232,7 @@ mod tests {
                 id: "remote-guard".to_owned(),
             }
         );
-        assert_eq!(error.code(), "hook.before_phase_remote_handler");
+        assert_eq!(error.code(), "hook.declaration.before_phase_remote_handler");
         assert!(error.to_string().contains("row locks"), "{error}");
     }
 
@@ -272,7 +272,7 @@ mod tests {
                 id: "followup".to_owned(),
             }
         );
-        assert_eq!(error.code(), "hook.id_duplicate");
+        assert_eq!(error.code(), "hook.declaration.id_duplicate");
         assert_eq!(error.index(), Some(1));
     }
 
@@ -281,7 +281,7 @@ mod tests {
         let hooks = [valid_hook("")];
         let error = validate_hooks(&hooks).expect_err("empty id refused");
         assert_eq!(error, HookValidationError::EmptyHookId { index: 0 });
-        assert_eq!(error.code(), "hook.id_empty");
+        assert_eq!(error.code(), "hook.declaration.id_empty");
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
                     required_abi: HOOK_HANDLER_ABI_V1,
                 }
             );
-            assert_eq!(error.code(), "hook.abi_missing");
+            assert_eq!(error.code(), "hook.declaration.abi_missing");
         }
     }
 
@@ -339,7 +339,7 @@ mod tests {
                     required_abi: HOOK_HANDLER_ABI_V1,
                 }
             );
-            assert_eq!(error.code(), "hook.abi_unknown");
+            assert_eq!(error.code(), "hook.declaration.abi_unknown");
         }
     }
 
@@ -386,12 +386,12 @@ mod tests {
             unknown_abi.clone(),
         ])
         .expect_err("the second hook is refused");
-        assert_eq!(error.code(), "hook.before_phase_remote_handler");
+        assert_eq!(error.code(), "hook.declaration.before_phase_remote_handler");
         assert_eq!(error.index(), Some(1));
 
         let error = validate_hooks(&[valid_hook("runnable"), unknown_abi, remote_before])
             .expect_err("the second hook is refused");
-        assert_eq!(error.code(), "hook.abi_unknown");
+        assert_eq!(error.code(), "hook.declaration.abi_unknown");
         assert_eq!(error.index(), Some(1));
     }
 
@@ -438,7 +438,10 @@ mod tests {
             "codes are distinct: {codes:?}"
         );
         for code in codes {
-            assert!(code.starts_with("hook."), "{code} is outside the namespace");
+            assert!(
+                code.starts_with("hook.declaration."),
+                "{code} is outside the namespace"
+            );
         }
     }
 

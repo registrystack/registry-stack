@@ -167,7 +167,8 @@ pub struct HookEnvelope {
     /// whole milliseconds, so two equal instants written at different offsets
     /// or at finer precision produce identical canonical bytes. The in-memory
     /// value keeps whatever the product gave it; the wire form is the
-    /// normalized one.
+    /// normalized one. Decoding requires that wire form and refuses any other
+    /// spelling, so a decoded envelope re-encodes to the bytes it arrived as.
     #[serde(with = "utc_millisecond_rfc3339")]
     pub time: OffsetDateTime,
     /// The product record reference and revision.
@@ -185,6 +186,7 @@ pub struct HookEnvelope {
 /// precision, so equal instants encode to equal bytes.
 mod utc_millisecond_rfc3339 {
     use serde::{Deserializer, Serializer};
+    use time::format_description::well_known::Rfc3339;
     use time::{OffsetDateTime, UtcOffset};
 
     /// Nanoseconds in one millisecond, the wire precision.
@@ -202,6 +204,17 @@ mod utc_millisecond_rfc3339 {
         deserializer: D,
     ) -> Result<OffsetDateTime, D::Error> {
         time::serde::rfc3339::deserialize(deserializer)
+    }
+
+    /// The spelling [`serialize`] writes for `value`, so the decoder requires
+    /// what the encoder produces instead of restating its rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `time` failure when the instant cannot be normalized or
+    /// formatted.
+    pub(super) fn normalized_spelling(value: OffsetDateTime) -> Result<String, time::Error> {
+        Ok(normalize(value)?.format(&Rfc3339)?)
     }
 
     /// Convert to UTC and drop everything below the millisecond.
@@ -247,13 +260,14 @@ impl HookEnvelope {
     /// The bytes must equal their own canonicalization: canonical bytes are
     /// the producer's contract, so a decoder that accepted a second spelling
     /// of the same envelope would accept bytes whose digest no producer can
-    /// reproduce.
+    /// reproduce. For the same reason `time` must arrive in the normalized
+    /// wire form the encoder writes.
     ///
     /// # Errors
     ///
     /// Returns [`HookEnvelopeError`] when the bytes exceed the ceiling, are not
     /// strict or canonical JSON, violate the envelope shape, or carry a refused
-    /// identity, revision, or causation chain.
+    /// identity, revision, time spelling, or causation chain.
     pub fn from_canonical_bytes(
         bytes: &[u8],
         limits: &EnvelopeLimits,
@@ -269,8 +283,16 @@ impl HookEnvelope {
         if canonical.as_slice() != bytes {
             return Err(HookEnvelopeError::NotCanonical);
         }
+        // The envelope shape requires a string `time`, so a document that gets
+        // past the deserializer carried one.
+        let spelled_time = value
+            .get("time")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
         let envelope: Self = serde_json::from_value(value)
             .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
+        validate_normalized_time(&spelled_time, envelope.time)?;
         validate_envelope(&envelope)?;
         Ok(envelope)
     }
@@ -285,6 +307,24 @@ fn validate_envelope(envelope: &HookEnvelope) -> Result<(), HookEnvelopeError> {
         });
     }
     validate_causation(envelope)?;
+    Ok(())
+}
+
+/// Refuse a `time` that is not already in the encoder's normalized wire form.
+///
+/// Encoding converts to UTC and truncates to whole milliseconds, so bytes
+/// carrying any other spelling of the same instant would re-encode to bytes
+/// other than the ones they arrived as. Only the decode path applies this: the
+/// encoder is what normalizes, and an in-memory value keeps whatever the
+/// product gave it.
+fn validate_normalized_time(spelled: &str, time: OffsetDateTime) -> Result<(), HookEnvelopeError> {
+    let normalized = utc_millisecond_rfc3339::normalized_spelling(time)
+        .map_err(|error| HookEnvelopeError::Shape(redacted_message(&error.to_string())))?;
+    if spelled != normalized {
+        return Err(HookEnvelopeError::TimeNotNormalized {
+            time: spelled.to_owned(),
+        });
+    }
     Ok(())
 }
 
@@ -425,6 +465,13 @@ pub enum HookEnvelopeError {
     /// The subject revision is not a revision the delivery store could hold.
     #[error("envelope subject revision {revision} must be greater than zero")]
     InvalidRevision { revision: i64 },
+    /// The envelope `time` is a second spelling of its instant: the encoder
+    /// writes UTC at whole milliseconds and nothing else.
+    #[error(
+        "envelope time `{}` is not UTC at whole milliseconds",
+        bounded_token(.time)
+    )]
+    TimeNotNormalized { time: String },
     /// The envelope carries an unusable identity or an impossible causation.
     #[error("envelope causation is inconsistent: {0}")]
     Causation(#[from] HookCausationError),
@@ -441,6 +488,7 @@ impl HookEnvelopeError {
             Self::Shape(_) => "hook.envelope.bad_shape",
             Self::Canonical(_) => "hook.envelope.not_canonicalizable",
             Self::InvalidRevision { .. } => "hook.envelope.invalid_revision",
+            Self::TimeNotNormalized { .. } => "hook.envelope.time_not_normalized",
             Self::Causation(error) => error.code(),
         }
     }
@@ -454,7 +502,8 @@ impl HookEnvelopeError {
             | Self::NotCanonical
             | Self::Shape(_)
             | Self::Canonical(_)
-            | Self::InvalidRevision { .. } => crate::error::ErrorCategory::Source,
+            | Self::InvalidRevision { .. }
+            | Self::TimeNotNormalized { .. } => crate::error::ErrorCategory::Source,
             Self::Causation(_) => crate::error::ErrorCategory::Source,
         }
     }
@@ -476,6 +525,14 @@ mod tests {
     /// test can feed canonical bytes and still assert the refusal it is about.
     fn canonical_bytes_unchecked(envelope: &HookEnvelope) -> Vec<u8> {
         let value = serde_json::to_value(envelope).expect("serializes");
+        canonicalize_json(&value).expect("canonicalizes")
+    }
+
+    /// Canonical bytes carrying `time` exactly as spelled, so a decode test can
+    /// feed a spelling the encoder would never write.
+    fn canonical_bytes_with_time(spelling: &str) -> Vec<u8> {
+        let mut value = serde_json::to_value(envelope()).expect("serializes");
+        value["time"] = json!(spelling);
         canonicalize_json(&value).expect("canonicalizes")
     }
 
@@ -673,7 +730,7 @@ mod tests {
         };
         let bytes = canonical_bytes_unchecked(&source);
         let error = HookEnvelope::from_canonical_bytes(&bytes, &limits)
-            .expect_err("self-causation is Odoo's write-inside-write");
+            .expect_err("a write inside its own write is refused");
         assert_eq!(error.code(), "hook.causation.child_own_parent");
     }
 
@@ -1015,6 +1072,42 @@ mod tests {
     }
 
     #[test]
+    fn a_decoded_envelope_re_encodes_to_the_bytes_it_arrived_as() {
+        let limits = EnvelopeLimits::default();
+        let mut source = envelope();
+        source.time = datetime!(2026-09-18 14:00:00.123_999_999 +02:00);
+        let bytes = source.to_canonical_bytes(&limits).expect("encodes");
+        let decoded = HookEnvelope::from_canonical_bytes(&bytes, &limits).expect("decodes");
+        assert_eq!(decoded.time, datetime!(2026-09-18 12:00:00.123 UTC));
+        assert_eq!(
+            decoded.to_canonical_bytes(&limits).expect("re-encodes"),
+            bytes,
+            "a document the decoder accepts re-encodes to the bytes it arrived as"
+        );
+    }
+
+    #[test]
+    fn decode_refuses_a_time_that_is_not_utc() {
+        let limits = EnvelopeLimits::default();
+        let spelling = "2026-09-18T14:00:00+02:00";
+        let bytes = canonical_bytes_with_time(spelling);
+        let error = HookEnvelope::from_canonical_bytes(&bytes, &limits)
+            .expect_err("an offset spelling would re-encode to different bytes");
+        assert_eq!(error.code(), "hook.envelope.time_not_normalized");
+        assert_eq!(error.category(), ErrorCategory::Source);
+        assert!(error.to_string().contains(spelling), "{error}");
+    }
+
+    #[test]
+    fn decode_refuses_a_time_below_millisecond_precision() {
+        let limits = EnvelopeLimits::default();
+        let bytes = canonical_bytes_with_time("2026-09-18T12:00:00.123456Z");
+        let error = HookEnvelope::from_canonical_bytes(&bytes, &limits)
+            .expect_err("a finer precision would re-encode to different bytes");
+        assert_eq!(error.code(), "hook.envelope.time_not_normalized");
+    }
+
+    #[test]
     fn an_instant_a_millisecond_apart_still_encodes_differently() {
         let limits = EnvelopeLimits::default();
         let mut earlier = envelope();
@@ -1112,6 +1205,9 @@ mod tests {
                     .expect_err("a lossy integer is not canonicalizable"),
             ),
             HookEnvelopeError::InvalidRevision { revision: 0 },
+            HookEnvelopeError::TimeNotNormalized {
+                time: String::new(),
+            },
             HookEnvelopeError::Causation(HookCausationError::HopBeyondCeiling {
                 attempted: 9,
                 ceiling: HOP_CEILING,

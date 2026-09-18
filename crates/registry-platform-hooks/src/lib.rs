@@ -56,6 +56,6 @@ pub use envelope::{
 pub use error::ErrorCategory;
 pub use message::{
     BoundedText, BoundedTextError, HandlerOutputLimits, HookMessage, HookMessageError,
-    HookProposal, DEFAULT_MAX_OUTPUT_BYTES, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
+    HookProposal, MAX_OUTPUT_BYTES, MAX_REFUSAL_CODE_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
 };
 pub use validate::{validate_hooks, HookValidationError};
