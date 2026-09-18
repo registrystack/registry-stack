@@ -334,7 +334,9 @@ fn configured_budgets_match_the_default_module_ceiling_and_platform_defaults() {
         WasmExecutionBudgets::DEFAULT_MAX_MODULE_BYTES,
         crate::wasm_handler::DEFAULT_WASM_MODULE_BYTES
     );
-    assert!(WasmExecutionBudgets::DEFAULT_MAX_MODULE_BYTES < MAXIMUM_WASM_MODULE_BYTES);
+    const {
+        assert!(WasmExecutionBudgets::DEFAULT_MAX_MODULE_BYTES < MAXIMUM_WASM_MODULE_BYTES);
+    }
     let platform = Budgets::default();
     assert_eq!(
         WasmExecutionBudgets::DEFAULT_MAX_GUEST_MEMORY_BYTES,
