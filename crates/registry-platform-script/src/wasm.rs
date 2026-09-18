@@ -38,8 +38,15 @@ const TRAP_LIMIT: usize = 128;
 pub struct BoundedString(String);
 
 impl BoundedString {
+    /// Bound a guest-derived name at [`NAME_LIMIT`].
     pub fn new(text: &str) -> Self {
         Self(truncate(text, NAME_LIMIT))
+    }
+
+    /// Bound host-generated text at a caller-chosen limit: the summary and
+    /// trap limits, which are wider than the name limit.
+    pub fn with_limit(text: &str, limit: usize) -> Self {
+        Self(truncate(text, limit))
     }
 
     pub fn as_str(&self) -> &str {
@@ -315,11 +322,11 @@ impl Executor {
             config
                 .target("pulley64")
                 .map_err(|err| InvokeError::EngineSetup {
-                    detail: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
+                    detail: BoundedString::with_limit(&err.to_string(), SUMMARY_LIMIT),
                 })?;
         }
         let engine = Engine::new(&config).map_err(|err| InvokeError::EngineSetup {
-            detail: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
+            detail: BoundedString::with_limit(&err.to_string(), SUMMARY_LIMIT),
         })?;
         Ok(Self {
             engine,
@@ -416,7 +423,7 @@ impl Executor {
         store
             .set_fuel(self.budgets.fuel)
             .map_err(|err| InvokeError::EngineSetup {
-                detail: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
+                detail: BoundedString::with_limit(&err.to_string(), SUMMARY_LIMIT),
             })?;
         store.set_epoch_deadline(epoch_deadline_ticks);
 
@@ -517,7 +524,7 @@ impl CallInstance {
             self.memory
                 .write(&mut self.store, ptr as usize, input)
                 .map_err(|err| InvokeError::Trap {
-                    description: BoundedString::new(&truncate(&err.to_string(), TRAP_LIMIT)),
+                    description: BoundedString::with_limit(&err.to_string(), TRAP_LIMIT),
                 })?;
         }
 
@@ -581,7 +588,7 @@ impl CallInstance {
             .store
             .get_fuel()
             .map_err(|err| InvokeError::EngineSetup {
-                detail: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
+                detail: BoundedString::with_limit(&err.to_string(), SUMMARY_LIMIT),
             })?;
         let limits = &self.store.data().limits;
         let stats = CallStats {
@@ -688,18 +695,18 @@ fn map_trap(err: wasmtime::Error) -> InvokeError {
             Trap::OutOfFuel => InvokeError::FuelExhausted,
             Trap::StackOverflow => InvokeError::StackLimitExceeded,
             other => InvokeError::Trap {
-                description: BoundedString::new(&truncate(&other.to_string(), TRAP_LIMIT)),
+                description: BoundedString::with_limit(&other.to_string(), TRAP_LIMIT),
             },
         };
     }
     InvokeError::Trap {
-        description: BoundedString::new(&truncate(&err.to_string(), TRAP_LIMIT)),
+        description: BoundedString::with_limit(&err.to_string(), TRAP_LIMIT),
     }
 }
 
 fn invalid_module(err: wasmtime::Error) -> InvokeError {
     InvokeError::InvalidModule {
-        summary: BoundedString::new(&truncate(&err.to_string(), SUMMARY_LIMIT)),
+        summary: BoundedString::with_limit(&err.to_string(), SUMMARY_LIMIT),
     }
 }
 
@@ -889,7 +896,7 @@ impl Drop for EpochTicker {
 
 #[cfg(test)]
 mod tests {
-    use super::Budgets;
+    use super::{truncate, BoundedString, Budgets, NAME_LIMIT, SUMMARY_LIMIT, TRAP_LIMIT};
 
     /// Reduced budgets for tests that need a ceiling small enough to hit.
     fn reduced() -> Budgets {
@@ -900,6 +907,36 @@ mod tests {
             max_input_bytes: 8,
             max_output_bytes: 16,
             ..Budgets::default()
+        }
+    }
+
+    #[test]
+    fn bounded_strings_carry_their_own_limit() {
+        let text = "x".repeat(SUMMARY_LIMIT + 1);
+        // Names stay at the 64-byte name limit.
+        assert_eq!(BoundedString::new(&text).as_str().len(), NAME_LIMIT);
+        // Summaries and trap descriptions are bounded by their own limits,
+        // not re-truncated to the name limit.
+        assert_eq!(
+            BoundedString::with_limit(&text, SUMMARY_LIMIT)
+                .as_str()
+                .len(),
+            SUMMARY_LIMIT
+        );
+        assert_eq!(
+            BoundedString::with_limit(&text, TRAP_LIMIT).as_str().len(),
+            TRAP_LIMIT
+        );
+    }
+
+    #[test]
+    fn truncation_never_splits_a_utf8_character() {
+        // 4-byte characters: every cut lands inside one.
+        let text = "\u{1F600}".repeat(100);
+        for limit in [1, 2, 3, 127, 255] {
+            let cut = truncate(&text, limit);
+            assert!(cut.len() <= limit);
+            assert!(cut.chars().all(|c| c == '\u{1F600}'));
         }
     }
 

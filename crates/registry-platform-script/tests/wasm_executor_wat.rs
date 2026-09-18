@@ -632,6 +632,36 @@ fn negative_result_ptr_is_rejected() {
 }
 
 #[test]
+fn module_rejection_summary_keeps_the_summary_limit_not_the_name_limit() {
+    // The compile error's host-generated text (the unknown-local report with
+    // the full name) is far longer than the 64-byte name limit; summaries
+    // are bounded by their own 256-byte limit, so the text must survive
+    // past 64 bytes at the error surface.
+    let long_name = "a".repeat(180);
+    let wat = format!(
+        r#"(module
+  (memory (export "memory") 1)
+  (func (export "alloc") (param i32) (result i32) (local.get ${long_name}))
+  (func (export "handle") (param i32 i32) (result i32) (i32.const 0))
+  (func (export "result_ptr") (result i32) (i32.const 0))
+  (func (export "result_len") (result i32) (i32.const 0))
+)"#
+    );
+    let exec = executor(Backend::Native);
+    match err_of(exec.prepare(wat.as_bytes())) {
+        InvokeError::InvalidModule { summary } => {
+            assert!(
+                summary.as_str().len() > 64,
+                "summary was cut at the name limit: {:?}",
+                summary.as_str()
+            );
+            assert!(summary.as_str().len() <= 256);
+        }
+        err => panic!("wrong error: {err}"),
+    }
+}
+
+#[test]
 fn guest_trap_is_surfaced_with_bounded_description() {
     for backend in backends() {
         let exec = executor(backend);
