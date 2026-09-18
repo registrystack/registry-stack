@@ -71,7 +71,7 @@ pub use schema::install_compiled_schema;
 pub use schema::reconcile_compiled_runtime_acl_for_test;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use schema::rehearse_schema_fingerprint_with_connection;
-pub(crate) use schema::verify_postgres_15_or_newer;
+pub(crate) use schema::verify_postgres_17_or_newer;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use schema::PreparedSchemaTestCatalogVerifier;
 #[cfg(all(feature = "runtime", feature = "tooling"))]

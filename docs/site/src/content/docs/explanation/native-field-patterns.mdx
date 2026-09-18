@@ -15,7 +15,7 @@ A persisted `string` or `text` field can declare `pattern`, a regular expression
 native advanced syntax. The compiler turns it into a named database CHECK constraint, so the rule
 holds for every writer of the current row: direct CRUD, atomic batches, immediate actions, reviewed
 application, and authorized SQL. Base Registry Engine (BReg) carries no second regular-expression
-engine, and PostgreSQL 15 stays the minimum version.
+engine, and PostgreSQL 17 stays the minimum version.
 
 ```yaml
 fields:

@@ -89,7 +89,7 @@ and restores the context before returning. Its exception block rolls back the
 local context on errors. It does not grant direct membership endpoints or derived views
 access to private membership records. The existing logical source views retain
 `security_invoker` and `security_barrier` settings. No additional database role
-or RLS bypass is required. PostgreSQL 15 remains the minimum for this surface;
+or RLS bypass is required. PostgreSQL 17 remains the minimum for this surface;
 other enabled features can require a newer supported version.
 
 Membership profiles support get, list, count, lookup, snapshot, and revisions.

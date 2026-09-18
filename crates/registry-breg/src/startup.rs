@@ -1240,7 +1240,7 @@ async fn verify_opened_startup(
         .batch_execute("SET LOCAL lock_timeout = '5s'")
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
-    crate::postgres::verify_postgres_15_or_newer(&transaction)
+    crate::postgres::verify_postgres_17_or_newer(&transaction)
         .await
         .map_err(|_| StartupError::DatabaseUnready)?;
     transaction
@@ -1333,7 +1333,7 @@ impl DynamicRuntimeReadiness {
             .batch_execute("SET LOCAL lock_timeout = '5s'")
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
-        crate::postgres::verify_postgres_15_or_newer(&*transaction)
+        crate::postgres::verify_postgres_17_or_newer(&*transaction)
             .await
             .map_err(|_| StartupError::DatabaseUnready)?;
         transaction

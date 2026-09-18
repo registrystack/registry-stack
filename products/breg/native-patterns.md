@@ -1,7 +1,7 @@
 # Native persisted field patterns
 
 A persisted `string` or `text` field can declare `pattern` using PostgreSQL's
-native advanced regular-expression syntax. PostgreSQL 15 or newer remains the
+native advanced regular-expression syntax. PostgreSQL 17 or newer remains the
 minimum version. There is no second regular-expression engine in BREG.
 
 ```yaml
