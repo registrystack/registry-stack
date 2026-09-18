@@ -186,7 +186,7 @@ enum ArtifactCommand {
 #[derive(Debug)]
 struct SafeCliFailure {
     operational: bool,
-    code: &'static str,
+    code: String,
     artifact: String,
     path: String,
     message: String,
@@ -549,7 +549,7 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.to_owned(),
                 artifact: "deployment_target".to_owned(),
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.to_owned(),
@@ -564,7 +564,7 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.clone(),
                 artifact,
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
@@ -579,7 +579,7 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.to_owned(),
                 artifact: diagnostic.artifact.clone(),
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
@@ -594,7 +594,7 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: true,
-                code: "evidence.doctor.runtime-check-unavailable",
+                code: "evidence.doctor.runtime-check-unavailable".to_owned(),
                 artifact: diagnostic.artifact.clone(),
                 path: "$".to_owned(),
                 message: "The delegated Evidence runtime check did not complete within its execution bounds."
@@ -611,7 +611,7 @@ fn safe_command(
             .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
         SafeCliFailure {
             operational,
-            code,
+            code: code.to_owned(),
             artifact,
             path: "$".to_owned(),
             message: message.to_owned(),
@@ -632,7 +632,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             if let Some(refusal) = error.downcast_ref::<dev::DevRefusal>() {
                 return Err(SafeCliFailure {
                     operational: refusal.operational,
-                    code: refusal.code,
+                    code: refusal.code.to_owned(),
                     artifact: "local development project".to_owned(),
                     path: refusal.path.clone(),
                     message: refusal.message.clone(),
@@ -646,7 +646,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             if let Some(failure) = error.downcast_ref::<dev::DevStartFailure>() {
                 return Err(SafeCliFailure {
                     operational: true,
-                    code: "evidence.dev.start-failed",
+                    code: "evidence.dev.start-failed".to_owned(),
                     artifact: "local development session".to_owned(),
                     path: "logs".to_owned(),
                     message: "The local Evidence services failed before reaching readiness."
@@ -662,7 +662,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             if let Some(conflict) = error.downcast_ref::<dev::PortConflict>() {
                 return Err(SafeCliFailure {
                     operational: true,
-                    code: "evidence.dev.port-unavailable",
+                    code: "evidence.dev.port-unavailable".to_owned(),
                     artifact: format!("127.0.0.1:{}", conflict.port),
                     path: "$".to_owned(),
                     message: format!(
@@ -683,7 +683,7 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             {
                 return Err(SafeCliFailure {
                     operational: false,
-                    code: "evidence.dev.mint-retired",
+                    code: "evidence.dev.mint-retired".to_owned(),
                     artifact: "local development command".to_owned(),
                     path: "$".to_owned(),
                     message: "Registry Mint development flags were removed.".to_owned(),

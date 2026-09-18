@@ -545,7 +545,7 @@ fn target_finding(target: &Path, error: anyhow::Error) -> Value {
         .or_else(|| target_document.map(|diagnostic| diagnostic.path.clone()))
         .unwrap_or_else(|| target.to_string_lossy().into_owned());
     let code = target_document
-        .map(|diagnostic| diagnostic.code)
+        .map(|diagnostic| diagnostic.code.clone())
         .unwrap_or("evidence.target.incomplete");
     let message = runtime
         .map(|diagnostic| diagnostic.to_string())
@@ -571,14 +571,14 @@ fn compiler_refusal(error: anyhow::Error, artifact: &str) -> anyhow::Error {
         .map(|diagnostic| diagnostic.path.clone())
         .unwrap_or_else(|| ".".to_owned());
     let code = authored
-        .map(|diagnostic| diagnostic.code)
-        .unwrap_or("evidence.offline-check.refused");
+        .map(|diagnostic| diagnostic.code.clone())
+        .unwrap_or_else(|| "evidence.offline-check.refused".to_owned());
     let message = authored
         .map(|diagnostic| diagnostic.message.clone())
         .unwrap_or_else(|| "offline validation refused the authored configuration".to_owned());
     DeniedFindings(vec![diagnostic(
         "error",
-        code,
+        &code,
         artifact,
         &path,
         message,
@@ -971,7 +971,7 @@ fn project_identity_findings(project: &Path) -> Result<Vec<Value>> {
                 "error",
                 finding.code,
                 "authoring_project",
-                &format!("{PROJECT_MARKER_FILE}:{}", finding.field),
+                &format!("{PROJECT_MARKER_FILE}:/{}", finding.field.to_json_pointer()),
                 "the Evidence project marker does not match the closed Version 1 shape",
                 "Correct the Evidence Version 1 project marker.",
             )])
@@ -1069,7 +1069,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             };
             if !authoring::valid_source_artifact_reference(asset) {
                 return Err(authoring::AuthoredDiagnostic {
-                    code: "source-artifact-reference",
+                    code: "evidence.source.artifact-reference".to_owned(),
                     path: format!("{relative}:{pointer}"),
                     message:
                         "source artifact references must stay in their project artifact directory"
@@ -1080,7 +1080,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             let exists = plain_asset_exists(
                 project,
                 asset,
-                "source-artifact-custody",
+                "evidence.source.artifact-custody",
                 &format!("{relative}:{pointer}"),
             )?;
             if !exists {
@@ -1152,7 +1152,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
         if let Some(derivation) = question.get("derivation").and_then(Value::as_str) {
             if !authoring::valid_derivation_reference(derivation) {
                 return Err(authoring::AuthoredDiagnostic {
-                    code: "question-derivation-reference",
+                    code: "evidence.question.derivation-reference".to_owned(),
                     path: format!("{relative}:/derivation"),
                     message: "question derivation must stay in the project derivations directory"
                         .to_owned(),
@@ -1165,7 +1165,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             let exists = plain_asset_exists(
                 project,
                 derivation,
-                "question-derivation-custody",
+                "evidence.question.derivation-custody",
                 &format!("{relative}:/derivation"),
             )?;
             if !exists || id.is_none_or(|id| !derivation_ids.contains(id)) {
@@ -1185,7 +1185,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
         {
             if !authoring::valid_fixture_reference(fixture) {
                 return Err(authoring::AuthoredDiagnostic {
-                    code: "question-fixture-reference",
+                    code: "evidence.question.fixture-reference".to_owned(),
                     path: format!("{relative}:/governance/fixtures"),
                     message: "question fixture must stay in the project fixtures directory"
                         .to_owned(),
@@ -1195,7 +1195,7 @@ fn declared_asset_findings(project: &Path, inventory: &ProjectInventory) -> Resu
             let exists = plain_asset_exists(
                 project,
                 fixture,
-                "question-fixture-custody",
+                "evidence.question.fixture-custody",
                 &format!("{relative}:/governance/fixtures"),
             )?;
             if !exists {
@@ -1236,7 +1236,7 @@ fn plain_asset_exists(project: &Path, value: &str, code: &'static str, path: &st
         Ok(exists) => Ok(exists),
         Err(error) if is_operational(&error) => Err(error),
         Err(_) => Err(authoring::AuthoredDiagnostic {
-            code,
+            code: code.to_owned(),
             path: path.to_owned(),
             message: "declared project artifacts must use plain in-project directories and files"
                 .to_owned(),
@@ -1834,7 +1834,7 @@ factSchema: schemas/record-status-facts.schema.yaml
             let human = rendered_denial(command, temporary.path(), &denied.0);
             assert!(!json.contains(CANARY));
             assert!(!human.contains(CANARY));
-            assert_eq!(denied.0[0]["code"], "question-parse");
+            assert_eq!(denied.0[0]["code"], "evidence.question.parse");
             assert_eq!(denied.0[0]["path"], "questions/record-status.yaml:/purpose");
         }
     }
@@ -1956,7 +1956,7 @@ factSchema: schemas/record-status-facts.schema.yaml
 
             let error = check(temporary.path(), None, false, false).unwrap_err();
             let denied = error.downcast_ref::<DeniedFindings>().unwrap();
-            assert_eq!(denied.0[0]["code"], "source-artifact-reference");
+            assert_eq!(denied.0[0]["code"], "evidence.source.artifact-reference");
             assert_eq!(
                 denied.0[0]["path"],
                 "sources/record-status.yaml:/responseSchema"
@@ -1970,7 +1970,7 @@ factSchema: schemas/record-status-facts.schema.yaml
         for (relative, code, path) in [
             (
                 "schemas/record-status-response.schema.yaml",
-                "source-artifact-custody",
+                "evidence.source.artifact-custody",
                 "sources/record-status.yaml:/responseSchema",
             ),
             (
@@ -1980,7 +1980,7 @@ factSchema: schemas/record-status-facts.schema.yaml
             ),
             (
                 "fixtures/record-status.yaml",
-                "question-fixture-custody",
+                "evidence.question.fixture-custody",
                 "questions/record-status.yaml:/governance/fixtures",
             ),
         ] {

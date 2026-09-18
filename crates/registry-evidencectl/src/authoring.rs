@@ -131,7 +131,7 @@ pub(crate) struct CompiledAccessPolicy {
 /// A field-addressed refusal from a typed authored document.
 #[derive(Debug)]
 pub(crate) struct AuthoredDiagnostic {
-    pub(crate) code: &'static str,
+    pub(crate) code: String,
     pub(crate) path: String,
     pub(crate) message: String,
 }
@@ -638,7 +638,7 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
                         format!("{instance_path}/{member}")
                     };
                     return Err(AuthoredDiagnostic {
-                        code: "source-member-unknown",
+                        code: "evidence.source.member-unknown".to_owned(),
                         path: format!("sources/{source_id}.yaml:{member_path}"),
                         message: "the compiled source contains a member outside the closed Evidence source shape".to_owned(),
                     }
@@ -664,11 +664,12 @@ fn validate_compiled_bundle_shape(bundle: &Value) -> Result<()> {
             instance_path.push_str(member);
         }
         return Err(AuthoredDiagnostic {
-            code: if additional_member.is_some() && instance_path.starts_with("/sources/") {
-                "source-member-unknown"
+            code: (if additional_member.is_some() && instance_path.starts_with("/sources/") {
+                "evidence.source.member-unknown"
             } else {
-                "authoring-bundle-shape"
-            },
+                "evidence.authoring.bundle-shape"
+            })
+            .to_owned(),
             path: compiled_bundle_authoring_path(&instance_path),
             message: "the compiled authoring does not satisfy the closed Evidence bundle shape"
                 .to_owned(),
@@ -713,7 +714,7 @@ pub(crate) fn validate_offline_local_access(
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let question: Question =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "question-parse",
+                code: "evidence.question.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(&project_root, &path),
                     &error.path().to_string(),
@@ -726,7 +727,7 @@ pub(crate) fn validate_offline_local_access(
         )?;
         if path.file_stem().and_then(|value| value.to_str()) != Some(&question.id) {
             return Err(AuthoredDiagnostic {
-                code: "question-id-filename-mismatch",
+                code: "evidence.question.id-filename-mismatch".to_owned(),
                 path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
                 message: "question id must match its questions/<id>.yaml filename".to_owned(),
             }
@@ -734,7 +735,7 @@ pub(crate) fn validate_offline_local_access(
         }
         if !question_ids.insert(question.id) {
             return Err(AuthoredDiagnostic {
-                code: "question-id-duplicate",
+                code: "evidence.question.id-duplicate".to_owned(),
                 path: authored_member_path(&project_relative_path(&project_root, &path), "id"),
                 message: "question ids must be unique".to_owned(),
             }
@@ -989,7 +990,7 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         let deserializer = serde_norway::Deserializer::from_slice(&question_bytes);
         let question: Question =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "question-parse",
+                code: "evidence.question.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &question_path),
                     &error.path().to_string(),
@@ -1223,7 +1224,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             .get("transport")
             .and_then(Value::as_str)
             .ok_or_else(|| AuthoredDiagnostic {
-                code: "source-transport-missing",
+                code: "evidence.source.transport-missing".to_owned(),
                 path: format!("sources/{source_id}.yaml:/transport"),
                 message: "every production source must declare its transport".to_owned(),
             })?;
@@ -1239,7 +1240,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
                     .is_some_and(|kind| kind != "none" && kind != "review-required");
                 if !https || !authenticated {
                     return Err(AuthoredDiagnostic {
-                        code: "source-production-channel",
+                        code: "evidence.source.production-channel".to_owned(),
                         path: if !https {
                             format!("sources/{source_id}.yaml:/baseUrl")
                         } else {
@@ -1262,7 +1263,7 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
             "sqlite-extract" => {}
             _ => {
                 return Err(AuthoredDiagnostic {
-                    code: "source-production-transport",
+                    code: "evidence.source.production-transport".to_owned(),
                     path: format!("sources/{source_id}.yaml:/transport"),
                     message: "the production source transport has no stated production conditions"
                         .to_owned(),
@@ -1327,7 +1328,7 @@ fn read_access_policies(
         let deserializer = serde_norway::Deserializer::from_slice(&bytes);
         let policy: AccessPolicy =
             serde_path_to_error::deserialize(deserializer).map_err(|error| AuthoredDiagnostic {
-                code: "access-policy-parse",
+                code: "evidence.access-policy.parse".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &path),
                     &error.path().to_string(),
@@ -1351,7 +1352,7 @@ fn read_access_policies(
             .any(|question| !question_ids.contains(question))
         {
             return Err(AuthoredDiagnostic {
-                code: "access-policy-question-missing",
+                code: "evidence.access-policy.question-missing".to_owned(),
                 path: authored_member_path(
                     &project_relative_path(project_root, &path),
                     "questions",
@@ -1466,13 +1467,35 @@ fn read_named_objects(
 fn first_finding(findings: Vec<Finding>, artifact: &str) -> Result<()> {
     if let Some(finding) = findings.into_iter().next() {
         return Err(AuthoredDiagnostic {
-            code: finding.code,
-            path: format!("{artifact}:{}", finding.field),
+            code: dotted_code(finding.code),
+            path: authored_finding_path(artifact, &finding.field),
             message: finding.message,
         }
         .into());
     }
     Ok(())
+}
+
+/// One grammar for refusal codes across the CLI: dotted, namespaced names.
+/// The authoring crate's finding codes are its own closed vocabulary, so a
+/// bare code surfaces under the authoring namespace instead of bare.
+fn dotted_code(code: &str) -> String {
+    if code.contains('.') {
+        code.to_owned()
+    } else {
+        format!("evidence.authoring.{code}")
+    }
+}
+
+/// Cite an authored finding's field as the JSON-pointer path every other
+/// diagnostic grammar uses; the document itself is named by its artifact
+/// alone.
+fn authored_finding_path(artifact: &str, field: &registry_evidence_authoring::FieldPath) -> String {
+    if field.is_root() {
+        artifact.to_owned()
+    } else {
+        format!("{artifact}:{}", field.to_json_pointer())
+    }
 }
 
 fn project_relative_path(project_root: &Path, path: &Path) -> String {
@@ -2182,7 +2205,7 @@ fn compile_referenced_question(
     let source_value = sources
         .get(source_id)
         .ok_or_else(|| AuthoredDiagnostic {
-            code: "evidence.question.source-missing",
+            code: "evidence.question.source-missing".to_owned(),
             path: format!("questions/{}.yaml:/source/ref", question.id),
             message: format!("question source ref `{source_id}` has no sources/{source_id}.yaml"),
         })?
@@ -2280,7 +2303,7 @@ fn compile_referenced_subjects(
             let value = selectors
                 .get(&profile)
                 .ok_or_else(|| AuthoredDiagnostic {
-                    code: "evidence.question.selector-missing",
+                    code: "evidence.question.selector-missing".to_owned(),
                     path: format!(
                         "questions/{}.yaml:/subjectProfiles/{subject_index}",
                         question.id
@@ -4202,7 +4225,7 @@ fn governed_public_key_fault(
         return error;
     }
     AuthoredDiagnostic {
-        code: "evidence.target.signing-key-missing",
+        code: "evidence.target.signing-key-missing".to_owned(),
         path: if Some(path) == active {
             "governance.yaml:/signing/activePublicJwkFile".to_owned()
         } else {
@@ -4395,7 +4418,7 @@ fn render_discovery_description(
         format!("Evidence rejected provider publication compilation: {diagnostic}")
     };
     Err(AuthoredDiagnostic {
-        code: "evidence.target.publication-invalid",
+        code: "evidence.target.publication-invalid".to_owned(),
         path: if target_authored {
             "governance.yaml:/publication".to_owned()
         } else {
@@ -5397,6 +5420,67 @@ properties:
     }
 
     #[test]
+    fn surfaced_authoring_findings_use_one_code_and_path_grammar() {
+        use registry_evidence_authoring::{FieldPath, Finding};
+
+        let bare = first_finding(
+            vec![Finding::new(
+                FieldPath::root().key("disclosure").key("allow"),
+                "disclosure-allow",
+                "sentence",
+            )],
+            "questions/x.yaml",
+        )
+        .expect_err("first finding");
+        let diagnostic = bare
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.authoring.disclosure-allow");
+        assert_eq!(diagnostic.path, "questions/x.yaml:/disclosure/allow");
+
+        let rooted = first_finding(
+            vec![Finding::new(
+                FieldPath::root(),
+                "question-identifier",
+                "sentence",
+            )],
+            "questions/x.yaml",
+        )
+        .expect_err("root finding");
+        assert_eq!(
+            rooted
+                .downcast_ref::<AuthoredDiagnostic>()
+                .expect("authored diagnostic")
+                .path,
+            "questions/x.yaml"
+        );
+
+        let dotted = first_finding(
+            vec![Finding::new(
+                FieldPath::root().index(1),
+                "evidence.answer-schema.open-object",
+                "sentence",
+            )],
+            "schemas/x.yaml",
+        )
+        .expect_err("dotted finding");
+        let diagnostic = dotted
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("authored diagnostic");
+        assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
+        assert_eq!(diagnostic.path, "schemas/x.yaml:/1");
+
+        // Pointer tokens escape the characters RFC 6901 reserves.
+        assert_eq!(
+            FieldPath::root()
+                .map_key("a/b")
+                .key("c~d")
+                .to_json_pointer(),
+            "/a~1b/c~0d"
+        );
+    }
+
+    #[test]
     fn refuses_an_open_object_answer_schema_naming_the_schema_file() {
         let fixture = Fixture::new(
             OPENAPI,
@@ -5420,7 +5504,7 @@ properties:
             .expect("the refusal is an authored diagnostic");
         assert_eq!(diagnostic.code, "evidence.answer-schema.open-object");
         assert_eq!(
-            diagnostic.path, "schemas/birth-certificate.yaml:.additionalProperties",
+            diagnostic.path, "schemas/birth-certificate.yaml:/additionalProperties",
             "the refusal must name the schema document and its field"
         );
         assert_eq!(
@@ -5459,7 +5543,7 @@ properties:
             "evidence.answer-schema.declared-properties"
         );
         assert_eq!(
-            diagnostic.path, "schemas/birth-certificate.yaml:.properties",
+            diagnostic.path, "schemas/birth-certificate.yaml:/properties",
             "the refusal must name the schema document and its field"
         );
     }

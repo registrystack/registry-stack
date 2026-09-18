@@ -289,7 +289,7 @@ pub(crate) fn generate_signing_keypair(out_dir: &Path) -> Result<()> {
         None,
         SIGNING_PRIVATE_FILENAME,
         SIGNING_PUBLIC_FILENAME,
-        false,
+        GenerationReport::Silent,
         PUBLIC_FILE_MODE,
     )?;
     Ok(())
