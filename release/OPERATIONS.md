@@ -24,6 +24,9 @@ Start release preparation when:
   workflow write access.
 - The `npm`, `pypi`, and `pypi-evidence` GitHub environments exist with the
   intended release approvers.
+- Every dependency pinned to a long-term-support line has been checked for
+  remaining upstream support: more than six months must remain, or the
+  next-LTS migration is already promoted to a release blocker for this cut.
 
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
