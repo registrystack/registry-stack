@@ -175,9 +175,8 @@ authentication availability. The mirror is digest-preserving: the mirrored tag
 must resolve to exactly the upstream digest, and the builder recipes verify
 that property themselves.
 
-When a pin bump changes the BuildKit version or digest in
-`.github/workflows/ci.yml`, the release workflows, and
-`release/scripts/build-release-image.sh`, mirror the new digest before landing
+When a pin bump changes the BuildKit version or digest in the workflows or
+the release scripts, mirror the new digest before landing
 the bump, then confirm the package stays public:
 
 ```sh
@@ -192,6 +191,12 @@ requested digest, and fails when the mirrored digest differs or the package
 visibility is not public. Provision the `buildkit` package identity once with
 the classic-PAT bootstrap above, then change it to public in the organization
 package settings and grant `registrystack/registry-stack` Actions access.
+
+The rehearsal canonical job permits exactly one GHCR reference: the
+digest-pinned `ghcr.io/registrystack/buildkit` mirror. It preserves the
+upstream manifest digest byte for byte, so it adds no org-controlled build
+input; every other GHCR reference stays banned so the rehearsal cannot read
+published release artifacts.
 
 ### Provision client registries
 
