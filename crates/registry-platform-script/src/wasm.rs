@@ -840,31 +840,54 @@ pub struct EpochTicker {
 /// The default tick interval: 1 ms.
 pub const DEFAULT_INTERVAL: Duration = Duration::from_millis(1);
 
+/// The ticker thread could not be spawned. Without the thread, epoch
+/// deadlines never fire and calls stay bounded by fuel alone, so the caller
+/// is told and decides; the ticker does not run degraded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TickerSpawnError;
+
+impl fmt::Display for TickerSpawnError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the epoch-ticker thread could not be spawned")
+    }
+}
+
+impl std::error::Error for TickerSpawnError {}
+
+/// The ticker thread body handed to the spawner.
+type TickerBody = Box<dyn FnOnce() + Send>;
+
 impl EpochTicker {
     /// Start ticking every `interval` (1 ms by default; see
-    /// [`DEFAULT_INTERVAL`]).
-    ///
-    /// If the thread cannot be spawned (host resource exhaustion), the
-    /// ticker is inert: no increments happen, so deadlines never fire and
-    /// calls stay bounded by fuel alone. `stop` remains a no-op.
-    pub fn spawn(engine: Engine, interval: Duration) -> EpochTicker {
+    /// [`DEFAULT_INTERVAL`]). A ticker whose thread could not be spawned is
+    /// returned as an error, never as an inert ticker with permanently dead
+    /// deadlines.
+    pub fn spawn(engine: Engine, interval: Duration) -> Result<Self, TickerSpawnError> {
+        Self::spawn_with(engine, interval, spawn_ticker_thread)
+    }
+
+    /// Spawn through `spawner`. The seam exists so a spawn failure is
+    /// testable without exhausting host threads; production code always
+    /// reaches the ticker through [`EpochTicker::spawn`].
+    fn spawn_with(
+        engine: Engine,
+        interval: Duration,
+        spawner: impl FnOnce(TickerBody) -> Result<JoinHandle<()>, TickerSpawnError>,
+    ) -> Result<Self, TickerSpawnError> {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let thread_flag = Arc::clone(&stop_flag);
         let tick_engine = engine.clone();
-        let handle = thread::Builder::new()
-            .name("epoch-ticker".to_owned())
-            .spawn(move || {
-                while !thread_flag.load(Ordering::Relaxed) {
-                    thread::sleep(interval);
-                    tick_engine.increment_epoch();
-                }
-            })
-            .ok();
-        EpochTicker {
+        let handle = spawner(Box::new(move || {
+            while !thread_flag.load(Ordering::Relaxed) {
+                thread::sleep(interval);
+                tick_engine.increment_epoch();
+            }
+        }))?;
+        Ok(EpochTicker {
             engine,
             stop_flag,
-            handle: Mutex::new(handle),
-        }
+            handle: Mutex::new(Some(handle)),
+        })
     }
 
     /// Signal the ticker to stop and join its thread. Returning proves the
@@ -886,6 +909,14 @@ impl EpochTicker {
     pub fn engine(&self) -> &Engine {
         &self.engine
     }
+}
+
+/// The production spawner: a named host thread.
+fn spawn_ticker_thread(body: TickerBody) -> Result<JoinHandle<()>, TickerSpawnError> {
+    thread::Builder::new()
+        .name("epoch-ticker".to_owned())
+        .spawn(body)
+        .map_err(|_| TickerSpawnError)
 }
 
 impl Drop for EpochTicker {
@@ -962,5 +993,19 @@ mod tests {
         assert!(budgets.max_module_bytes < defaults.max_module_bytes);
         assert!(budgets.max_input_bytes < defaults.max_input_bytes);
         assert!(budgets.max_output_bytes < defaults.max_output_bytes);
+    }
+
+    #[test]
+    fn a_ticker_spawn_failure_is_surfaced_not_swallowed() {
+        // The spawner is injectable so the failure path is testable without
+        // exhausting host threads; `spawn` delegates to the real spawner and
+        // maps its failure the same way.
+        let exec = super::Executor::new(super::Backend::Native, Budgets::default())
+            .expect("fixed engine config is valid");
+        let failure =
+            super::EpochTicker::spawn_with(exec.engine().clone(), super::DEFAULT_INTERVAL, |_| {
+                Err(super::TickerSpawnError)
+            });
+        assert!(matches!(failure, Err(super::TickerSpawnError)));
     }
 }

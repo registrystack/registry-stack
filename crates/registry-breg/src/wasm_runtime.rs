@@ -7,9 +7,10 @@
 //! first use of a module identity pays compilation and later uses do not.
 //! The evaluation entry points are free functions over owned compiled
 //! declarations (see `mutation::action`), so the runtime is installed once at
-//! server startup from the operator configuration and otherwise
-//! default-initialized on first use; replacing or clearing it stops the old
-//! ticker when the last evaluation holding it finishes.
+//! server startup from the operator configuration; evaluation before that
+//! install is refused rather than silently served on default budgets, and
+//! replacing or clearing the runtime stops the old ticker when the last
+//! evaluation holding it finishes.
 //!
 //! Semantics shared with the Rhai path are not re-decided here: the request
 //! envelope is the same inputs document the Rhai context receives, and the
@@ -21,16 +22,17 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
 
 use registry_platform_script::wasm::{
-    Backend, Budgets, EpochTicker, Executor, InvokeError, PreparedModule, DEFAULT_INTERVAL,
+    Backend, Budgets, EpochTicker, Executor, InvokeError, PreparedModule, TickerSpawnError,
+    DEFAULT_INTERVAL,
 };
 use serde_json::{Map as JsonMap, Value};
 
 use crate::action_handler::{ActionHandlerDiagnostic, ActionHandlerError, ActionHandlerOutcome};
 use crate::model::{CompiledAction, CompiledActionHandler};
 
-/// The compilation backend for handler execution. Native is the default
-/// deployment; Pulley is the fallback for executable-memory-restricted
-/// environments and becomes configuration when that deployment lands.
+/// The compilation backend for handler execution. Native is the current
+/// deployment default; making the backend operator configuration is a
+/// decided follow-up.
 const WASM_EXECUTION_BACKEND: Backend = Backend::Native;
 
 /// Named bound on prepared modules retained by one process. A package
@@ -100,6 +102,16 @@ impl From<crate::runtime_config::WasmExecutionConfig> for WasmExecutionBudgets {
     }
 }
 
+/// Why the process runtime could not start: the engine rejected its
+/// configuration, or the epoch ticker's thread could not be spawned. Either
+/// way the caller refuses to install a running runtime: a runtime without
+/// its ticker would leave every action deadline permanently inert.
+#[derive(Debug)]
+pub enum WasmRuntimeStartError {
+    EngineSetup(InvokeError),
+    Ticker(TickerSpawnError),
+}
+
 /// One engine, one ticker, and the bounded prepared-module cache.
 pub(crate) struct WasmHandlerRuntime {
     executor: Executor,
@@ -126,11 +138,13 @@ struct ModuleCache {
 
 impl WasmHandlerRuntime {
     /// Build the executor, start its epoch ticker, and start with an empty
-    /// cache retaining at most `retained_modules` prepared modules.
+    /// cache retaining at most `retained_modules` prepared modules. A ticker
+    /// that cannot start is a start failure: the runtime is not built with
+    /// permanently inert deadlines.
     pub(crate) fn new(
         budgets: WasmExecutionBudgets,
         retained_modules: usize,
-    ) -> Result<Self, InvokeError> {
+    ) -> Result<Self, WasmRuntimeStartError> {
         let budgets = Budgets {
             max_module_bytes: budgets.max_module_bytes,
             max_guest_memory_bytes: budgets.max_guest_memory_bytes,
@@ -139,8 +153,10 @@ impl WasmHandlerRuntime {
             max_output_bytes: WASM_MAXIMUM_OUTCOME_BYTES,
             ..Budgets::default()
         };
-        let executor = Executor::new(WASM_EXECUTION_BACKEND, budgets)?;
-        let ticker = EpochTicker::spawn(executor.engine().clone(), DEFAULT_INTERVAL);
+        let executor = Executor::new(WASM_EXECUTION_BACKEND, budgets)
+            .map_err(WasmRuntimeStartError::EngineSetup)?;
+        let ticker = EpochTicker::spawn(executor.engine().clone(), DEFAULT_INTERVAL)
+            .map_err(WasmRuntimeStartError::Ticker)?;
         Ok(Self {
             executor,
             ticker,
@@ -200,33 +216,39 @@ impl WasmHandlerRuntime {
     }
 }
 
-/// The process runtime. Lazily default-initialized so every evaluation entry
-/// works in any process (tests, tooling); server startup installs the
-/// configured runtime before serving.
+/// The process runtime. Server startup installs the configured runtime
+/// before serving; an evaluation that arrives before any install is refused
+/// rather than silently served on default budgets.
 static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
 
 fn runtime() -> Result<Arc<WasmHandlerRuntime>, ActionHandlerDiagnostic> {
-    if let Some(runtime) = RUNTIME.read().expect("wasm runtime lock").clone() {
-        return Ok(runtime);
-    }
-    let mut guard = RUNTIME.write().expect("wasm runtime lock");
-    if guard.is_none() {
-        let runtime = WasmHandlerRuntime::new(WasmExecutionBudgets::default(), usize::MAX)
-            .map_err(|_| engine_setup_refused())?;
-        *guard = Some(Arc::new(runtime));
-    }
-    Ok(guard.as_ref().expect("just installed").clone())
+    RUNTIME
+        .read()
+        .expect("wasm runtime lock")
+        .clone()
+        .ok_or_else(runtime_not_installed)
+}
+
+/// Evaluation before any install is a wiring fault, typed with the closed
+/// execution vocabulary. A lazily defaulted runtime would silently discard
+/// the operator budgets and backend the startup path owns.
+fn runtime_not_installed() -> ActionHandlerDiagnostic {
+    ActionHandlerDiagnostic::new(
+        ActionHandlerError::Execution,
+        "The WASM execution runtime is not installed; the server startup path installs it.",
+    )
 }
 
 /// Install the configured runtime. Called once at server startup, before
-/// requests: replacing a runtime stops the previous ticker once the last
+/// requests, and by any embedder that evaluates handlers outside the server
+/// startup path: replacing a runtime stops the previous ticker once the last
 /// evaluation holding it finishes, so no evaluation loses its backstop
-/// mid-call.
-#[cfg(any(test, feature = "runtime"))]
+/// mid-call. A start failure (engine configuration rejected, ticker thread
+/// not spawned) is returned, never swallowed into a degraded runtime.
 pub(crate) fn install(
     budgets: WasmExecutionBudgets,
     retained_modules: usize,
-) -> Result<(), InvokeError> {
+) -> Result<(), WasmRuntimeStartError> {
     let runtime = WasmHandlerRuntime::new(budgets, retained_modules)?;
     *RUNTIME.write().expect("wasm runtime lock") = Some(Arc::new(runtime));
     Ok(())
@@ -234,10 +256,21 @@ pub(crate) fn install(
 
 /// Clear the process runtime. The server shutdown path calls this; the
 /// runtime's Drop stops its ticker at the last reference, and a later
-/// evaluation lazily builds a fresh default runtime.
+/// evaluation refuses until a new install.
 #[cfg(any(test, feature = "runtime"))]
 pub(crate) fn shutdown() {
     drop(RUNTIME.write().expect("wasm runtime lock").take());
+}
+
+/// Install the process runtime with the default execution budgets and cache
+/// bound. The server startup path installs the configured runtime itself; an
+/// embedder assembling the HTTP app without that path calls this before
+/// serving, and every evaluation before any install is refused.
+pub fn install_default() -> Result<(), WasmRuntimeStartError> {
+    install(
+        WasmExecutionBudgets::default(),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )
 }
 
 /// Whether a runtime is installed; observability for the startup/shutdown
@@ -255,13 +288,15 @@ fn engine_setup_refused() -> ActionHandlerDiagnostic {
 }
 
 /// Compile failures are typed the way authoring admission types them: a
-/// module over the configured ceiling is a resource refusal, anything else
-/// is a module-source refusal. A compiled package was structurally
-/// validated at authoring time, so the non-size branches are
+/// module over the configured ceiling is a resource refusal, anything caused
+/// by the module bytes is a module-source refusal, and an engine-setup
+/// failure is the build fault the invoke path uses. A compiled package was
+/// structurally validated at authoring time, so the non-size branches are
 /// defense-in-depth for hand-built handler declarations.
 fn classify_prepare_error(error: InvokeError) -> ActionHandlerDiagnostic {
     match error {
         InvokeError::ModuleTooLarge { .. } => ActionHandlerError::Resource.into(),
+        InvokeError::EngineSetup { .. } => engine_setup_refused(),
         _ => ActionHandlerError::Source.into(),
     }
 }

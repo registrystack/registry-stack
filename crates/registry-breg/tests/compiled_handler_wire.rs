@@ -104,6 +104,12 @@ fn only_the_handler_kind_expresses_the_wasm_backend() {
 
 #[test]
 fn runtime_refuses_to_execute_non_rhai_handler_kinds() {
+    // In a build with the executor feature, evaluation of a wasm-tagged
+    // handler reaches the process runtime, so install it and pin the deeper
+    // refusal (the frozen Rhai handler carries no module content hash). In a
+    // build without the feature, admission refuses the backend itself.
+    #[cfg(feature = "wasm-executor-prototype")]
+    registry_breg::wasm_runtime::install_default().expect("the wasm runtime installs");
     let mut action = register_person(&frozen_actions_inventory());
     let handler = action
         .handler

@@ -130,7 +130,7 @@ pub mod tooling;
 pub(crate) mod wasm_executor_probe;
 pub mod wasm_handler;
 #[cfg(feature = "wasm")]
-pub(crate) mod wasm_runtime;
+pub mod wasm_runtime;
 #[cfg(feature = "runtime")]
 pub mod webhook;
 

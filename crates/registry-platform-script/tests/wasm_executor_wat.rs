@@ -172,7 +172,8 @@ fn epoch_deadline_with_ticker() {
         let prepared = exec
             .prepare(guest_wat(SPIN_HANDLE, "(i32.const 0)").as_bytes())
             .expect("wat guest passes validation");
-        let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+        let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
+            .expect("the epoch ticker starts");
         let err = err_of(exec.invoke(&prepared, b"x"));
         ticker.stop();
         assert!(matches!(err, InvokeError::DeadlineExceeded), "{err}");
@@ -190,7 +191,8 @@ fn per_call_epoch_deadline_replaces_a_larger_budget_default() {
     let prepared = exec
         .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
         .expect("wat guest passes validation");
-    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
+        .expect("the epoch ticker starts");
     let ok = exec
         .invoke(&prepared, b"x")
         .expect("bounded spin finishes inside the budget default");
@@ -211,7 +213,8 @@ fn per_call_epoch_deadline_replaces_a_smaller_budget_default() {
         let prepared = exec
             .prepare(guest_wat(BOUNDED_SPIN_HANDLE, "(i32.const 0)").as_bytes())
             .expect("wat guest passes validation");
-        let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+        let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
+            .expect("the epoch ticker starts");
         let err = err_of(exec.invoke(&prepared, b"x"));
         let ok = exec
             .invoke_with_epoch_deadline(&prepared, b"x", 60_000)
@@ -225,7 +228,8 @@ fn per_call_epoch_deadline_replaces_a_smaller_budget_default() {
 #[test]
 fn ticker_stop_joins_and_double_stop_is_harmless() {
     let exec = executor(Backend::Native);
-    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1));
+    let ticker = EpochTicker::spawn(exec.engine().clone(), Duration::from_millis(1))
+        .expect("the epoch ticker starts");
     thread::sleep(Duration::from_millis(5));
     // stop() joins the ticker thread, so returning proves the thread ended.
     ticker.stop();
