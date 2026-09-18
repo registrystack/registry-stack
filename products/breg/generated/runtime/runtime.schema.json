@@ -1315,7 +1315,7 @@
         "maxGuestMemoryBytes": 33554432,
         "maxModuleBytes": 2097152
       },
-      "description": "Optional WASM handler execution budgets. Parsed in every build;\nexecuted only in builds with the WASM executor prototype feature."
+      "description": "Optional WASM handler execution budgets. Parsed in every build;\nexecuted only in builds with the non-default `wasm` feature."
     }
   },
   "required": [
