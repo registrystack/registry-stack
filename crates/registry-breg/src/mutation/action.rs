@@ -416,13 +416,18 @@ impl MutationCoordinator {
                 .get(&effect.target.entity_id)
                 .ok_or(MutationError::InvalidRequest)?;
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+            let deliveries = exact_entity_event_deliveries(registry, entity)?;
+            let trigger = mutation_trigger(effect.operation);
+            let data_schemas =
+                event_data_schemas(registry.registry_id(), entity, trigger, &deliveries)?;
+            let event_source = self.event_source();
             insert_configured_events(
                 transaction.transaction(),
                 &entity.hooks,
-                &exact_entity_event_deliveries(registry, entity)?,
+                &deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {
-                    trigger: mutation_trigger(effect.operation),
+                    trigger,
                     application_reference: Some(&application_reference),
                     entity_id: &entity.id,
                     record_id: &current.record_id,
@@ -438,6 +443,11 @@ impl MutationCoordinator {
                         .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                             destinations.payload_retention()
                         }),
+                    envelope: EnvelopeBinding {
+                        source: &event_source,
+                        data_schemas: &data_schemas,
+                        causation: None,
+                    },
                 },
             )
             .await?;

@@ -13,7 +13,8 @@ use axum::{
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, KeyInit, Mac};
 use registry_breg::model::{CompiledEventDelivery, CompiledRegistry};
-use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
+use registry_platform_canonical_json::parse_json_strict;
+use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
 use serde_json::{json, Value};
 use sha2::Sha256;
 use std::{
@@ -290,7 +291,8 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     if event_id.to_string() != signed[1] {
         bail!("webhook event identity must be canonical");
     }
-    OffsetDateTime::parse(signed[4], &Rfc3339).context("webhook event time is invalid")?;
+    let event_time =
+        OffsetDateTime::parse(signed[4], &Rfc3339).context("webhook event time is invalid")?;
     let delivery_time =
         OffsetDateTime::parse(signed[8], &Rfc3339).context("webhook delivery time is invalid")?;
     if (OffsetDateTime::now_utc() - delivery_time).abs() > time::Duration::seconds(30) {
@@ -322,14 +324,21 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
     }
     mac.verify_slice(&signature)
         .map_err(|_| anyhow::anyhow!("webhook signature is invalid"))?;
-    let document = parse_json_strict(body).context("webhook body is invalid")?;
-    if canonicalize_json(&document)? != body {
-        bail!("webhook body is not canonical");
+    let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::default())
+        .map_err(|_| anyhow::anyhow!("webhook envelope is invalid"))?;
+    if envelope.id != signed[1]
+        || envelope.event_type != signed[3]
+        || envelope.source != signed[2]
+        || envelope.dataschema != signed[5]
+        || envelope.time != event_time
+    {
+        bail!("webhook envelope does not match its signed delivery attributes");
     }
-    let object = document
+    let data = envelope.data;
+    let object = data
         .as_object()
-        .context("webhook body must be an object")?;
-    let lifecycle = document["trigger"] == "request_lifecycle";
+        .context("webhook envelope data must be an object")?;
+    let lifecycle = data["trigger"] == "request_lifecycle";
     if object.len() != if lifecycle { 7 } else { 6 }
         || ![
             "entity",
@@ -341,22 +350,22 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         ]
         .iter()
         .all(|field| object.contains_key(*field))
-        || (lifecycle && !document["request"].is_object())
-        || !document["values"].is_object()
-        || document["revision"].as_u64().is_none_or(|n| n == 0)
-        || !document["packageRevision"].as_str().is_some_and(digest)
-        || !document["entity"]
+        || (lifecycle && !data["request"].is_object())
+        || !data["values"].is_object()
+        || data["revision"].as_u64().is_none_or(|n| n == 0)
+        || !data["packageRevision"].as_str().is_some_and(digest)
+        || !data["entity"]
             .as_str()
             .is_some_and(|entity| !entity.is_empty() && entity.len() <= 64)
         || !matches!(
-            document["trigger"].as_str(),
+            data["trigger"].as_str(),
             Some("created" | "patched" | "tombstoned" | "request_lifecycle")
         )
-        || !document["recordId"].as_str().is_some_and(|id| {
+        || !data["recordId"].as_str().is_some_and(|id| {
             uuid::Uuid::parse_str(id).is_ok_and(|parsed| parsed.to_string() == id)
         })
     {
-        bail!("webhook body shape is invalid");
+        bail!("webhook envelope data shape is invalid");
     }
     let registry = signed[2]
         .strip_prefix("urn:registrystack:registry:")
@@ -366,7 +375,7 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         .0;
     let prefix = format!(
         "urn:breg:event-schema:{registry}:{}:{}:",
-        document["entity"]
+        data["entity"]
             .as_str()
             .context("webhook entity is invalid")?,
         signed[3]
@@ -375,12 +384,12 @@ fn verify(key: &[u8], headers: &HeaderMap, body: &[u8]) -> Result<(Value, Value)
         bail!("webhook schema does not match event metadata");
     }
     let record = json!({
-        "eventId":signed[1],"eventType":signed[3],"entity":document["entity"],
-        "trigger":document["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
+        "eventId":signed[1],"eventType":signed[3],"entity":data["entity"],
+        "trigger":data["trigger"],"deliveryId":null,"idempotencyKey":idempotency_key,
         "generation":generation,"attempt":attempt,"status":"received",
-        "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":document["values"]
+        "receivedAt":OffsetDateTime::now_utc().format(&Rfc3339)?,"payload":data["values"]
     });
-    Ok((record, document))
+    Ok((record, data))
 }
 
 fn storage_lock(root: &Path) -> Result<File> {
@@ -508,6 +517,7 @@ mod tests {
         compiler::{compile_project, CompileProfile},
         contract::{parse_project_json, EventTrigger},
     };
+    use registry_platform_canonical_json::canonicalize_json;
     use std::{io::Write, net::TcpStream, os::unix::fs::PermissionsExt, time::Instant};
 
     fn fixture() -> (tempfile::TempDir, u16, Receiver) {
@@ -592,7 +602,11 @@ mod tests {
         (root, port, receiver)
     }
 
-    fn signed(attempt: u64, generation: u64) -> (HeaderMap, Vec<u8>) {
+    /// The capture instant the delivery headers and the envelope share. Whole
+    /// milliseconds, the precision the envelope's wire form spells.
+    const EVENT_TIME: &str = "2026-01-01T00:00:00.123Z";
+
+    fn event_headers(attempt: u64, generation: u64) -> HeaderMap {
         let now = OffsetDateTime::now_utc().format(&Rfc3339).unwrap();
         let mut headers = HeaderMap::new();
         for (name, value) in [
@@ -605,7 +619,7 @@ mod tests {
                 "urn:registrystack:registry:example:instance:local".into(),
             ),
             ("ce-type", "record-created-v1".into()),
-            ("ce-time", now.clone()),
+            ("ce-time", EVENT_TIME.to_owned()),
             (
                 "ce-dataschema",
                 format!(
@@ -620,12 +634,44 @@ mod tests {
         ] {
             headers.insert(name, HeaderValue::from_str(&value).unwrap());
         }
-        let body = canonicalize_json(&json!({
+        headers
+    }
+
+    /// The product projection a delivered envelope carries as `data`.
+    fn event_data() -> Value {
+        json!({
             "entity":"record", "recordId":"00000000-0000-4000-8000-000000000002",
             "revision":1,"trigger":"created","packageRevision":format!("sha256:{}", "0".repeat(64)),
             "values":{"label":"projected-value-canary"}
-        }))
-        .unwrap();
+        })
+    }
+
+    /// The canonical envelope bytes a delivery with `headers` would carry.
+    fn envelope_bytes(headers: &HeaderMap, data: Value) -> Vec<u8> {
+        HookEnvelope {
+            id: headers["ce-id"].to_str().unwrap().to_owned(),
+            event_type: headers["ce-type"].to_str().unwrap().to_owned(),
+            source: headers["ce-source"].to_str().unwrap().to_owned(),
+            time: OffsetDateTime::parse(headers["ce-time"].to_str().unwrap(), &Rfc3339).unwrap(),
+            subject: registry_platform_hooks::EventSubject {
+                record_reference: "0".repeat(63) + "2",
+                record_revision: 1,
+            },
+            dataschema: headers["ce-dataschema"].to_str().unwrap().to_owned(),
+            data,
+            causation: registry_platform_hooks::Causation::root(headers["ce-id"].to_str().unwrap()),
+        }
+        .to_canonical_bytes(&EnvelopeLimits::default())
+        .unwrap()
+    }
+
+    fn signed(attempt: u64, generation: u64) -> (HeaderMap, Vec<u8>) {
+        signed_data(attempt, generation, event_data())
+    }
+
+    fn signed_data(attempt: u64, generation: u64, data: Value) -> (HeaderMap, Vec<u8>) {
+        let mut headers = event_headers(attempt, generation);
+        let body = envelope_bytes(&headers, data);
         sign(&mut headers, &body);
         (headers, body)
     }
@@ -790,10 +836,10 @@ mod tests {
             "extra projection",
             "missing projection",
         ] {
-            let (mut headers, body) = signed(1, 1);
-            let mut document = parse_json_strict(&body).unwrap();
+            let mut headers = event_headers(1, 1);
+            let mut data = event_data();
             match change {
-                "trigger" => document["trigger"] = json!("patched"),
+                "trigger" => data["trigger"] = json!("patched"),
                 "schema" => {
                     headers.insert(
                         "ce-dataschema",
@@ -804,15 +850,13 @@ mod tests {
                         .unwrap(),
                     );
                 }
-                "extra projection" => {
-                    document["values"]["undeclared"] = json!("extra-value-canary")
-                }
+                "extra projection" => data["values"]["undeclared"] = json!("extra-value-canary"),
                 "missing projection" => {
-                    document["values"].as_object_mut().unwrap().remove("label");
+                    data["values"].as_object_mut().unwrap().remove("label");
                 }
                 _ => unreachable!(),
             }
-            let body = canonicalize_json(&document).unwrap();
+            let body = envelope_bytes(&headers, data);
             sign(&mut headers, &body);
             assert_eq!(request(port, headers, body), 401, "{change}");
             assert_eq!(
@@ -830,6 +874,39 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[test]
+    fn a_pre_envelope_body_is_refused_and_never_recorded() {
+        let (root, port, _receiver) = fixture();
+        let mut headers = event_headers(1, 1);
+        let body = canonicalize_json(&event_data()).unwrap();
+        sign(&mut headers, &body);
+        assert_eq!(
+            request(port, headers, body),
+            401,
+            "the projection alone is no longer a delivery body"
+        );
+        assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
+    }
+
+    #[test]
+    fn an_envelope_that_disagrees_with_its_signed_attributes_is_refused() {
+        let (root, port, _receiver) = fixture();
+        let mut headers = event_headers(1, 1);
+        let mut other = event_headers(1, 1);
+        other.insert(
+            "ce-source",
+            HeaderValue::from_static("urn:registrystack:registry:example:instance:other"),
+        );
+        let body = envelope_bytes(&other, event_data());
+        sign(&mut headers, &body);
+        assert_eq!(
+            request(port, headers, body),
+            401,
+            "an envelope source that differs from the signed header is refused"
+        );
+        assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
     }
 
     #[test]
@@ -857,11 +934,9 @@ mod tests {
     #[test]
     fn projected_null_values_remain_present_in_the_exact_key_set() {
         let (root, port, _receiver) = fixture();
-        let (mut headers, body) = signed(1, 1);
-        let mut document = parse_json_strict(&body).unwrap();
-        document["values"]["label"] = Value::Null;
-        let body = canonicalize_json(&document).unwrap();
-        sign(&mut headers, &body);
+        let mut data = event_data();
+        data["values"]["label"] = Value::Null;
+        let (headers, body) = signed_data(1, 1, data);
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
             report(root.path(), true).unwrap()["deliveries"][0]["payload"],
@@ -878,11 +953,9 @@ mod tests {
                 invalid.push(json!("undeclared-code"));
             }
             for value in invalid {
-                let (mut headers, body) = signed(1, 1);
-                let mut document = parse_json_strict(&body).unwrap();
-                document["values"]["label"] = value;
-                let body = canonicalize_json(&document).unwrap();
-                sign(&mut headers, &body);
+                let mut data = event_data();
+                data["values"]["label"] = value;
+                let (headers, body) = signed_data(1, 1, data);
                 assert_eq!(request(port, headers, body), 401);
                 assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
             }
@@ -926,22 +999,18 @@ mod tests {
             invalid.push(request);
         }
         for request_body in invalid {
-            let (mut headers, body) = signed(1, 1);
-            let mut document = parse_json_strict(&body).unwrap();
-            document["trigger"] = json!("request_lifecycle");
-            document["request"] = request_body;
-            let body = canonicalize_json(&document).unwrap();
-            sign(&mut headers, &body);
+            let mut data = event_data();
+            data["trigger"] = json!("request_lifecycle");
+            data["request"] = request_body;
+            let (headers, body) = signed_data(1, 1, data);
             assert_eq!(request(port, headers, body), 401);
             assert_eq!(report(root.path(), true).unwrap()["deliveries"], json!([]));
         }
-        let (mut headers, body) = signed(1, 1);
-        let mut document = parse_json_strict(&body).unwrap();
-        document["trigger"] = json!("request_lifecycle");
-        document["request"] = valid;
-        document["values"]["label"] = Value::Null;
-        let body = canonicalize_json(&document).unwrap();
-        sign(&mut headers, &body);
+        let mut data = event_data();
+        data["trigger"] = json!("request_lifecycle");
+        data["request"] = valid;
+        data["values"]["label"] = Value::Null;
+        let (headers, body) = signed_data(1, 1, data);
         assert_eq!(request(port, headers, body), 204);
         assert_eq!(
             report(root.path(), true).unwrap()["deliveries"]

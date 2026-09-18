@@ -57,6 +57,12 @@ const IDEMPOTENCY_DOMAIN: &[u8] = b"breg-webhook-idempotency-v1";
 /// The schema Base Registry Engine installs the platform delivery tables
 /// into, and the one the worker and the capture INSERT read and write.
 pub(crate) const DELIVERY_SCHEMA: &str = "registry_internal";
+
+/// The event source one registry deployment stamps on every captured envelope
+/// and every delivery header.
+pub(crate) fn delivery_source(package_id: &str, instance_id: &str) -> String {
+    format!("urn:registrystack:registry:{package_id}:instance:{instance_id}")
+}
 const _: () = assert!(
     crate::compiler::MAX_WEBHOOK_PAYLOAD_BYTES as usize
         == registry_platform_crypto::delivery_signature::MAX_BODY_BYTES
@@ -452,10 +458,7 @@ impl WebhookDeliveryService {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
-            delivery_source: format!(
-                "urn:registrystack:registry:{}:instance:{}",
-                expected.package_id, expected.instance_id
-            ),
+            delivery_source: delivery_source(&expected.package_id, &expected.instance_id),
         };
         let seams = BregDeliverySeams {
             pool,

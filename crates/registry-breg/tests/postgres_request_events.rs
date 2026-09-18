@@ -29,6 +29,7 @@ use registry_breg::contract::{EventConditionSource, EventTrigger, HookPhase, Hoo
 use registry_breg::cursor::CursorCodec;
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
 use registry_breg::mutation::install_mutation_schema;
+use registry_breg::outbox::EnvelopeBinding;
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ExpectedRegistryIdentity,
     PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
@@ -77,6 +78,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
 
     let request_id = Uuid::new_v4();
     let events = configured_events();
+    let schemas = configured_data_schemas();
     let mut values = Map::new();
     values.insert("reason".to_owned(), json!("correct the recorded site"));
 
@@ -96,6 +98,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             "submit",
             None,
             &values,
+            &schemas,
         ),
     )
     .await
@@ -126,6 +129,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             "submit",
             None,
             &values,
+            &schemas,
         ),
     )
     .await
@@ -159,6 +163,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
             transition,
             Some("review"),
             &values,
+            &schemas,
         );
         event.reason = Some(reason);
         assert!(matches!(
@@ -189,6 +194,7 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
                 "approve",
                 Some("review"),
                 &values,
+                &schemas,
             ),
         )
         .await
@@ -213,7 +219,16 @@ async fn real_postgres_request_lifecycle_events_are_transactional_and_stably_ded
     assert_eq!(rows[0].get::<_, i64>(4), 3);
 
     let payload_text = rows[0].get::<_, String>(5);
-    let payload = parse_json_strict(payload_text.as_bytes()).expect("payload is strict JSON");
+    let envelope = parse_json_strict(payload_text.as_bytes()).expect("payload is strict JSON");
+    assert_eq!(envelope["id"], rows[0].get::<_, Uuid>(0).to_string());
+    assert_eq!(envelope["type"], "approval-ready");
+    assert_eq!(envelope["source"], EVENT_SOURCE);
+    assert_eq!(envelope["subject"]["recordReference"], "request-reference");
+    assert_eq!(envelope["subject"]["recordRevision"], 3);
+    assert_eq!(envelope["causation"]["root"], envelope["id"]);
+    assert_eq!(envelope["causation"]["hop"], 0);
+    assert_eq!(envelope["dataschema"], schemas["approval-ready"].as_str());
+    let payload = &envelope["data"];
     assert_eq!(payload["trigger"], "request_lifecycle");
     assert_eq!(payload["recordId"], request_id.to_string());
     assert_eq!(payload["revision"], 3);
@@ -287,6 +302,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         .find(|delivery| delivery.event_id == "request-rejected")
         .expect("compiled lifecycle delivery exists")
         .clone();
+    let schemas = compiled_data_schemas(&compiled);
     let mut values = Map::new();
     values.insert("reason".to_owned(), json!("external review completed"));
     let request_id = Uuid::new_v4();
@@ -303,6 +319,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         "reject",
         Some("review"),
         &values,
+        &schemas,
     );
     event.reason = Some(&reason);
     let transaction = migration.transaction().await.expect("transaction starts");
@@ -320,7 +337,9 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
 
     let captured = capture_event(&database).await;
     assert_eq!(captured.compiled_delivery_id, delivery.id);
-    let payload = parse_json_strict(&captured.payload).expect("payload is strict JSON");
+    let envelope = parse_json_strict(&captured.payload).expect("payload is strict JSON");
+    assert_eq!(envelope["dataschema"], delivery.data_schema.as_str());
+    let payload = &envelope["data"];
     let dedup_key = payload["request"]["deduplicationKey"]
         .as_str()
         .expect("payload carries consumer deduplication key")
@@ -374,7 +393,8 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         "delivery retry for the same generation keeps the delivery key"
     );
     assert_eq!(
-        parse_json_strict(&first.body).expect("first body parses")["request"]["deduplicationKey"],
+        parse_json_strict(&first.body).expect("first body parses")["data"]["request"]
+            ["deduplicationKey"],
         dedup_key
     );
 
@@ -401,7 +421,8 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
         "operator replay uses a new delivery key even though the consumer dedup key is stable"
     );
     assert_eq!(
-        parse_json_strict(&replay.body).expect("replay body parses")["request"]["deduplicationKey"],
+        parse_json_strict(&replay.body).expect("replay body parses")["data"]["request"]
+            ["deduplicationKey"],
         dedup_key
     );
 
@@ -761,10 +782,7 @@ fn assert_lifecycle_delivery_request(
     assert_eq!(request.body, event.payload);
     assert_eq!(header(request, "ce-id"), event.event_id.to_string());
     assert_eq!(header(request, "ce-specversion"), "1.0");
-    assert_eq!(
-        header(request, "ce-source"),
-        "urn:registrystack:registry:request-event-registry:instance:request-event-instance"
-    );
+    assert_eq!(header(request, "ce-source"), EVENT_SOURCE);
     assert_eq!(header(request, "ce-type"), "request-rejected");
     assert_eq!(header(request, "ce-dataschema"), event.data_schema);
     assert_eq!(
@@ -795,6 +813,7 @@ fn lifecycle_event<'a>(
     transition: &'a str,
     stage_id: Option<&'a str>,
     request_values: &'a Map<String, Value>,
+    data_schemas: &'a BTreeMap<String, String>,
 ) -> RequestLifecycleEvent<'a> {
     RequestLifecycleEvent {
         request_entity_id: REQUEST_ENTITY,
@@ -813,7 +832,37 @@ fn lifecycle_event<'a>(
         schema_fingerprint: SCHEMA_FINGERPRINT,
         request_values,
         payload_retention: Duration::from_secs(7 * 24 * 60 * 60),
+        envelope: EnvelopeBinding {
+            source: EVENT_SOURCE,
+            data_schemas,
+            causation: None,
+        },
     }
+}
+
+/// The event source this fixture deployment stamps on every envelope.
+/// The source the deployment identity above spells, the one the delivery
+/// worker holds every stored envelope against.
+const EVENT_SOURCE: &str =
+    "urn:registrystack:registry:request-event-registry:instance:request-event-instance";
+
+/// The data contract id the capture path stamps on an envelope whose hook has
+/// no compiled delivery.
+fn configured_data_schemas() -> BTreeMap<String, String> {
+    BTreeMap::from([(
+        "approval-ready".to_owned(),
+        format!("urn:breg:event-schema:request-event-registry:{REQUEST_ENTITY}:approval-ready:sha256:{}", "a".repeat(64)),
+    )])
+}
+
+/// The data contract ids a compiled registry already proved, by hook id.
+fn compiled_data_schemas(compiled: &registry_breg::CompiledRegistry) -> BTreeMap<String, String> {
+    compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .map(|delivery| (delivery.event_id.clone(), delivery.data_schema.clone()))
+        .collect()
 }
 
 fn event_authority_router(

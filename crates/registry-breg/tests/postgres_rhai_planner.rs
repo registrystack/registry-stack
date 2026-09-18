@@ -598,7 +598,8 @@ async fn automatic_submission_and_approval_emit_the_committed_transition_with_it
             "exact replay emits no second {transition} event"
         );
         let record_reference: String = events[0].get(0);
-        let event: Value = serde_json::from_slice(&events[0].get::<_, Vec<u8>>(1)).unwrap();
+        let envelope: Value = serde_json::from_slice(&events[0].get::<_, Vec<u8>>(1)).unwrap();
+        let event = &envelope["data"];
         assert_eq!(event["recordId"], request.id);
         assert_eq!(event["revision"], applied.body["revision"]);
         assert_eq!(event["values"], json!({"handling":"routine"}));

@@ -183,8 +183,36 @@ fn sample_is_an_exact_deterministic_cloudevents_request_without_deployment_autho
         .as_str()
         .expect("data schema is text")
         .starts_with("urn:breg:event-schema:webhook-sample:record:record-created-v1:sha256:"));
+    let body = &report["request"]["body"];
     assert_eq!(
-        report["request"]["body"]["values"],
+        body.as_object()
+            .expect("the sample body is one envelope")
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>(),
+        BTreeSet::from([
+            "causation",
+            "data",
+            "dataschema",
+            "id",
+            "source",
+            "subject",
+            "time",
+            "type",
+        ])
+    );
+    assert_eq!(body["id"], headers["ce-id"]);
+    assert_eq!(body["type"], headers["ce-type"]);
+    assert_eq!(body["source"], headers["ce-source"]);
+    assert_eq!(body["time"], headers["ce-time"]);
+    assert_eq!(body["dataschema"], headers["ce-dataschema"]);
+    assert_eq!(body["subject"]["recordRevision"], 1);
+    assert_eq!(
+        body["causation"],
+        serde_json::json!({"root": body["id"], "hop": 0})
+    );
+    assert_eq!(
+        body["data"]["values"],
         serde_json::json!({
             "active": true,
             "count": 1,

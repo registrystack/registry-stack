@@ -4927,6 +4927,7 @@ dependencies = [
  "registry-platform-buildinfo",
  "registry-platform-canonical-json",
  "registry-platform-crypto",
+ "registry-platform-hooks",
  "registry-platform-httputil",
  "registry-thunderid-tooling",
  "reqwest",

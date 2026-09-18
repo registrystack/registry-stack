@@ -31,7 +31,6 @@ use registry_breg::postgres::{
     RegistryStateTestIdentity, RowBoundaryContext,
 };
 use registry_platform_audit::{verify_jsonl_lines_with_hasher, AuditEnvelope, AuditProfile};
-use registry_platform_canonical_json::canonicalize_json;
 use serde_json::{json, Map, Value};
 use tower::Service as _;
 use uuid::Uuid;
@@ -2750,7 +2749,7 @@ async fn assert_patch_preserved_omitted_field(
         )
         .await
         .expect("administrator can inspect configured post-write event");
-    let expected_event = canonicalize_json(&json!({
+    let expected_data = json!({
         "entity": "widget",
         "recordId": record_id,
         "revision": 2,
@@ -2760,11 +2759,12 @@ async fn assert_patch_preserved_omitted_field(
             "label": "after-patch",
             "quantity": 41,
         },
-    }))
-    .expect("expected configured event canonicalizes");
-    assert!(events
-        .iter()
-        .any(|row| row.get::<_, Vec<u8>>(0) == expected_event.as_slice()));
+    });
+    assert!(events.iter().any(|row| {
+        let envelope: Value = serde_json::from_slice(&row.get::<_, Vec<u8>>(0))
+            .expect("captured event body is strict JSON");
+        envelope.get("data") == Some(&expected_data)
+    }));
     let quantity_physical = compiled_registry().entities()["widget"].fields["quantity"]
         .physical_name
         .clone();

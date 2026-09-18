@@ -113,6 +113,15 @@ destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
+The stored outbox payload is that envelope, byte for byte, and the delivery
+worker sends it unchanged. A row captured under the earlier bare-data body is
+not an envelope; the worker refuses it rather than reshaping it. That refusal
+is a failed attempt, not a terminal one, so the row retries on the captured
+schedule and dead-letters only once its attempt budget is exhausted. A
+deployment upgrading across this change should drain the outbox, or let it
+settle, before the upgrade: every delivery captured under the earlier body
+spends its whole retry budget on attempts that cannot succeed.
+
 This contract does not reinterpret delivery history created by the earlier
 experimental webhook shape. An empty pre-Version 1 internal schema upgrades
 automatically. A database containing pre-Version 1 webhook history requires an
@@ -132,12 +141,22 @@ Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
 - `ce-dataschema`: a URN containing the Registry id, event id, and generated
   event-schema fingerprint
 
-The body contains `entity`, `recordId`, `revision`, `trigger`,
+The body is one shared hook envelope, the envelope every Registry Stack product
+delivers: `id`, `type`, `source`, `time`, `subject`, `dataschema`, `data`, and
+`causation`, and nothing else. `id`, `type`, `source`, `time`, and `dataschema`
+repeat the CloudEvents attributes above, so a receiver reading only the body
+still knows which event it holds. `subject` carries the hashed record reference
+and the revision the change produced, never the raw record id. `causation`
+carries `root` and `hop`, plus `parent` once an event is caused by another; a
+captured registry mutation is a root event, so `root` equals `id` and `hop` is
+0. Delivery attributes stay on the transport and never enter the envelope.
+
+`data` contains `entity`, `recordId`, `revision`, `trigger`,
 `packageRevision`, and `values`. `values` contains exactly the declared
 projection. Record identifiers are deliberately kept out of CloudEvents
 headers because infrastructure commonly logs headers.
 
-Lifecycle bodies also require a `request` object containing `proposalVersion`,
+Lifecycle event data also requires a `request` object containing `proposalVersion`,
 `workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
 `deduplicationKey`, and `reasonPresent`. `stage` and `effectDigest` may be null.
 For approve, reject, request-revision, and apply transitions, an explanation

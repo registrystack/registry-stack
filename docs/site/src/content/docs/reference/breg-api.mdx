@@ -655,8 +655,17 @@ The package carries each event schema at
 `generated/event-schemas/<entity-id>.<event-id>.schema.json`. Record identifiers appear in the
 body, never in CloudEvents headers.
 
-The six common payload members are required, and a lifecycle event also requires `request`.
-Other top-level members and unprojected values are absent.
+The body is one shared hook envelope, the same envelope every Registry Stack product delivers.
+Its eight members are required and nothing else appears beside them. The envelope restates the
+event identity the CloudEvents headers carry, so a receiver that reads only the body still knows
+which event it holds; a body and its headers can never describe two different events. Delivery
+attributes stay on the transport: attempt, generation, delivery time, idempotency key, and
+signature are headers, never envelope members.
+
+<EventReferenceTable id="envelope" />
+
+`data` carries the captured event data. The six common members are required, and a lifecycle
+event also requires `request`. Other members and unprojected values are absent.
 
 <EventReferenceTable id="payload" />
 
@@ -667,19 +676,31 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 
 ```json
 {
-  "entity": "record",
-  "recordId": "<record-uuid>",
-  "revision": 2,
-  "trigger": "patched",
-  "packageRevision": "sha256:<package-digest>",
-  "values": {"code": "EX-003", "label": "Updated label"}
+  "causation": {"hop": 0, "root": "<event-uuid>"},
+  "data": {
+    "entity": "record",
+    "packageRevision": "sha256:<package-digest>",
+    "recordId": "<record-uuid>",
+    "revision": 2,
+    "trigger": "patched",
+    "values": {"code": "EX-003", "label": "Updated label"}
+  },
+  "dataschema": "urn:breg:event-schema:<registry-id>:record:record-patched-v1:sha256:<digest>",
+  "id": "<event-uuid>",
+  "source": "urn:registrystack:registry:<registry-id>:instance:<instance-id>",
+  "subject": {"recordReference": "hmac-sha256:<64-hex>", "recordRevision": 2},
+  "time": "2026-01-01T00:00:00.123Z",
+  "type": "record-patched-v1"
 }
 ```
 
-{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, reload_and_send();
+Members appear in canonical JSON order, the order the bytes on the wire use.
+
+{/* Evidence: crates/registry-platform-hooks/src/envelope.rs, HookEnvelope, EventSubject, and Causation;
+    crates/registry-platform-hooks/src/delivery/service.rs, reload_and_send() and accept_stored_envelope();
     crates/registry-breg/src/artifacts.rs, event_data_schema_binding();
     crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
-    crates/registry-breg/src/outbox.rs, insert_configured_events();
+    crates/registry-breg/src/outbox.rs, insert_configured_events() and capture_envelope();
     crates/registry-breg/src/request_events.rs, insert_request_lifecycle_events();
     crates/registry-breg/tests/postgres_webhook_delivery.rs, assert_exact_request(). */}
 
