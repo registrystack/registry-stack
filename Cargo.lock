@@ -4940,6 +4940,7 @@ dependencies = [
  "tokio",
  "url",
  "uuid",
+ "wat",
  "zeroize",
 ]
 

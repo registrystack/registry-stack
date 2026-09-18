@@ -7468,6 +7468,17 @@ fn explain_actions(compiled: &CompiledRegistry) -> serde_json::Result<Value> {
                         json!("wasm"),
                         json!({
                             "moduleSha256": handler.module_sha256,
+                            // The preflight compatibility contract for a WASM
+                            // handler: which servers run it, and the two typed
+                            // refusal shapes everything else produces.
+                            "compatibility": {
+                                "minimumServer": "registry-breg built with the wasm feature",
+                                "serversBeforeWasmSupport":
+                                    "refuse the package at load with a typed handler error and no state change",
+                                "serversBuiltWithoutTheFeature":
+                                    "load the package and fail each invocation with a typed handler failure",
+                                "moduleSha256": handler.module_sha256,
+                            },
                         }),
                     ),
                 };
