@@ -27,6 +27,7 @@ SHARDS = {
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
+        "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
