@@ -207,10 +207,12 @@ fn project() -> CaseworkProject {
                 "required":["summary"],
                 "properties":{"summary":{"type":"string","maxLength":80}}
             }),
+            result_schema: None,
             outcomes: vec![HostedOutcomePolicy {
                 id: "done".to_owned(),
                 label: "Done".to_owned(),
                 reason_required: false,
+                result_required: false,
             }],
         }],
         calendars: Vec::new(),
@@ -663,6 +665,7 @@ async fn add_hosted_item(
                 kind: "task".to_owned(),
                 requester_reference: reference.to_owned(),
                 display: json!({"summary":reference}),
+                result_constraints: None,
             },
             &format!("create-{reference}"),
         )

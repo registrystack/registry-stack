@@ -1285,6 +1285,11 @@ fn hosted_validation_reason(value: &str) -> Option<HostedValidationReason> {
         "outcome_not_declared" => HostedValidationReason::OutcomeNotDeclared,
         "reason_required" => HostedValidationReason::ReasonRequired,
         "text_invalid" => HostedValidationReason::TextInvalid,
+        "result_not_declared" => HostedValidationReason::ResultNotDeclared,
+        "result_required" => HostedValidationReason::ResultRequired,
+        "field_not_declared" => HostedValidationReason::FieldNotDeclared,
+        "constraint_invalid" => HostedValidationReason::ConstraintInvalid,
+        "constraint_violated" => HostedValidationReason::ConstraintViolated,
         _ => return None,
     })
 }

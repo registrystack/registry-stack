@@ -41,6 +41,7 @@ struct StoredHostedItem {
     requester_profile_id: Option<String>,
     requester_reference: Option<String>,
     display: Option<Value>,
+    result_constraints: Option<Value>,
     kind_id: String,
     kind_version: String,
     kind_policy_digest: String,
@@ -111,6 +112,7 @@ fn stored_hosted_item(row: &Row) -> Result<StoredHostedItem, StoreError> {
         requester_profile_id: row.get("requester_profile_id"),
         requester_reference: row.get("requester_reference"),
         display: row.get("display"),
+        result_constraints: row.get("result_constraints"),
         kind_id: row.get("kind_id"),
         kind_version: row.get("kind_version"),
         kind_policy_digest: row.get("kind_policy_digest"),
@@ -159,6 +161,22 @@ fn validate_text(value: &str, maximum: usize, allow_empty: bool) -> Result<(), S
 fn hosted_request_hash<T: serde::Serialize>(value: &T) -> Result<String, StoreError> {
     let bytes = serde_json::to_vec(value)?;
     let digest = Sha256::digest(bytes);
+    Ok(format!(
+        "sha256:{}",
+        digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
+
+/// The accountability digest of a decision result: sha256 over the canonical
+/// JSON of the result. It proves which result was decided without retaining
+/// the content beyond the terminal clock.
+fn hosted_result_digest(result: &Value) -> Result<String, StoreError> {
+    let canonical = registry_platform_canonical_json::canonicalize_json(result)
+        .map_err(|_| StoreError::Invalid)?;
+    let digest = Sha256::digest(canonical);
     Ok(format!(
         "sha256:{}",
         digest
@@ -340,6 +358,7 @@ impl StoredHostedItem {
             kind: self.kind_id.clone(),
             version: self.kind_version.clone(),
             display: self.display.clone().ok_or(StoreError::NotFound)?,
+            result_constraints: self.result_constraints.clone(),
             state: occurrence_state(self.state),
             revision: self.revision,
             kind_policy_digest: HostedPolicyDigest::parse(&self.kind_policy_digest)
@@ -394,6 +413,8 @@ impl StoredHostedItem {
                 display,
                 kind_policy_digest: snapshot.identity.digest,
                 outcomes: snapshot.outcomes,
+                result_schema: snapshot.result_schema,
+                result_constraints: self.result_constraints.clone(),
             }),
             routing: None,
             clock_occurrences: Vec::new(),
@@ -557,6 +578,11 @@ impl PostgresStore {
         snapshot
             .validate_display(&request.display)
             .map_err(|_| StoreError::Invalid)?;
+        if let Some(constraints) = &request.result_constraints {
+            snapshot
+                .validate_result_constraints(constraints)
+                .map_err(|_| StoreError::Invalid)?;
+        }
         validate_text(
             &request.requester_reference,
             registry_casework_core::MAXIMUM_HOSTED_REFERENCE_BYTES,
@@ -569,8 +595,8 @@ impl PostgresStore {
         let now = Utc::now();
         let policy = serde_json::to_value(snapshot)?;
         transaction.execute(
-            "INSERT INTO casework_hosted_items(item_id,requester_issuer,requester_subject,requester_profile_id,requester_reference,display,kind_id,kind_version,kind_policy_digest,kind_policy,queue_id,state,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',1,$12,$12)",
-            &[&item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&request.requester_reference,&request.display,&snapshot.identity.kind_id,&snapshot.identity.version,&snapshot.identity.digest.as_str(),&policy,&snapshot.queue,&now],
+            "INSERT INTO casework_hosted_items(item_id,requester_issuer,requester_subject,requester_profile_id,requester_reference,display,result_constraints,kind_id,kind_version,kind_policy_digest,kind_policy,queue_id,state,revision,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',1,$13,$13)",
+            &[&item_id,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&request.requester_reference,&request.display,&request.result_constraints,&snapshot.identity.kind_id,&snapshot.identity.version,&snapshot.identity.digest.as_str(),&policy,&snapshot.queue,&now],
         ).await?;
         append_hosted_history(
             &transaction,
@@ -587,6 +613,7 @@ impl PostgresStore {
             kind: snapshot.identity.kind_id.clone(),
             version: snapshot.identity.version.clone(),
             display: request.display.clone(),
+            result_constraints: request.result_constraints.clone(),
             state: OccurrenceState::Open,
             revision: 1,
             kind_policy_digest: snapshot.identity.digest.clone(),
@@ -737,7 +764,7 @@ impl PostgresStore {
         let (after_at, after_id) = after.unwrap_or((Utc::now(), Uuid::nil()));
         let query_limit = i64::try_from(limit + 1).map_err(|_| StoreError::Invalid)?;
         let rows = transaction.query(
-            "SELECT e.event_id,e.item_id,e.requester_reference,e.state,e.outcome,e.cancellation_reason,e.actor_ref,e.kind_policy_digest,e.terminal_at FROM casework_hosted_terminal_events e JOIN casework_hosted_items i ON i.item_id=e.item_id WHERE e.requester_issuer=$1 AND e.requester_subject=$2 AND e.requester_profile_id=$3 AND i.kind_id=ANY($4) AND e.retained_until>now() AND (NOT $5 OR (e.terminal_at,e.event_id)>($6,$7)) ORDER BY e.terminal_at,e.event_id LIMIT $8",
+            "SELECT e.event_id,e.item_id,e.requester_reference,e.state,e.outcome,e.cancellation_reason,e.actor_ref,e.kind_policy_digest,e.terminal_at,e.result FROM casework_hosted_terminal_events e JOIN casework_hosted_items i ON i.item_id=e.item_id WHERE e.requester_issuer=$1 AND e.requester_subject=$2 AND e.requester_profile_id=$3 AND i.kind_id=ANY($4) AND e.retained_until>now() AND (NOT $5 OR (e.terminal_at,e.event_id)>($6,$7)) ORDER BY e.terminal_at,e.event_id LIMIT $8",
             &[&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&allowed_kinds,&has_after,&after_at,&after_id,&query_limit],
         ).await?;
         let more = rows.len() > limit;
@@ -746,19 +773,26 @@ impl PostgresStore {
         for row in rows.into_iter().take(limit) {
             let event_id: Uuid = row.get(0);
             let terminal_at: DateTime<Utc> = row.get(8);
-            let terminal = match row.get::<_, String>(3).as_str() {
-                "completed" => HostedTerminalState::Completed {
-                    outcome: row.get::<_, Option<String>>(4).ok_or(StoreError::Corrupt)?,
-                    actor_ref: OpaqueActorRef::parse(
-                        &row.get::<_, Option<String>>(6).ok_or(StoreError::Corrupt)?,
-                    )
-                    .map_err(|_| StoreError::Corrupt)?,
-                },
-                "cancelled" => HostedTerminalState::Cancelled {
-                    cancellation_reason: row
-                        .get::<_, Option<String>>(5)
-                        .ok_or(StoreError::Corrupt)?,
-                },
+            // The payload erasure check pins result to completed events only.
+            let (terminal, result) = match row.get::<_, String>(3).as_str() {
+                "completed" => (
+                    HostedTerminalState::Completed {
+                        outcome: row.get::<_, Option<String>>(4).ok_or(StoreError::Corrupt)?,
+                        actor_ref: OpaqueActorRef::parse(
+                            &row.get::<_, Option<String>>(6).ok_or(StoreError::Corrupt)?,
+                        )
+                        .map_err(|_| StoreError::Corrupt)?,
+                    },
+                    row.get::<_, Option<Value>>(9),
+                ),
+                "cancelled" => (
+                    HostedTerminalState::Cancelled {
+                        cancellation_reason: row
+                            .get::<_, Option<String>>(5)
+                            .ok_or(StoreError::Corrupt)?,
+                    },
+                    None,
+                ),
                 _ => return Err(StoreError::Corrupt),
             };
             last = Some((terminal_at, event_id));
@@ -769,6 +803,7 @@ impl PostgresStore {
                 terminal,
                 kind_policy_digest: HostedPolicyDigest::parse(&row.get::<_, String>(7))
                     .map_err(|_| StoreError::Corrupt)?,
+                result,
                 terminal_at,
             });
         }
@@ -804,7 +839,7 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction.query_opt(
-            "SELECT a.item_id,a.event_id,a.actor_ref,a.actor_issuer,a.actor_subject,a.profile_id,a.outcome,a.reason,a.occurred_at,a.retained_until,a.queue_id FROM casework_hosted_accountability a WHERE a.event_id=$1 AND a.retained_until>now()",
+            "SELECT a.item_id,a.event_id,a.actor_ref,a.actor_issuer,a.actor_subject,a.profile_id,a.outcome,a.reason,a.occurred_at,a.retained_until,a.queue_id,a.result_digest FROM casework_hosted_accountability a WHERE a.event_id=$1 AND a.retained_until>now()",
             &[&event_id],
         ).await?.ok_or(StoreError::NotFound)?;
         if !has_queue_authority(&transaction, actor, &row.get::<_, String>(10)).await? {
@@ -824,6 +859,7 @@ impl PostgresStore {
             reason: row.get(7),
             recorded_at: row.get(8),
             retained_until: row.get(9),
+            result_digest: row.get(11),
         };
         let read_event_id = Uuid::new_v4();
         transaction.execute(
@@ -1050,7 +1086,7 @@ impl PostgresStore {
                 transaction.execute("DELETE FROM casework_hosted_idempotency WHERE issuer=$1 AND subject=$2 AND profile_id=$3 AND operation=$4 AND resource=$5 AND idempotency_key=$6", &[&issuer,&subject,&profile_id,&operation,&resource,&key]).await?;
             }
             item_payloads = transaction.execute(
-                "UPDATE casework_hosted_items i SET requester_issuer=NULL,requester_subject=NULL,requester_profile_id=NULL,requester_reference=NULL,display=NULL WHERE i.item_id=ANY($1) AND NOT EXISTS(SELECT 1 FROM casework_hosted_notes n WHERE n.item_id=i.item_id) AND NOT EXISTS(SELECT 1 FROM casework_hosted_history h WHERE h.item_id=i.item_id) AND NOT EXISTS(SELECT 1 FROM casework_hosted_idempotency d WHERE d.item_id=i.item_id)",
+                "UPDATE casework_hosted_items i SET requester_issuer=NULL,requester_subject=NULL,requester_profile_id=NULL,requester_reference=NULL,display=NULL,result_constraints=NULL WHERE i.item_id=ANY($1) AND NOT EXISTS(SELECT 1 FROM casework_hosted_notes n WHERE n.item_id=i.item_id) AND NOT EXISTS(SELECT 1 FROM casework_hosted_history h WHERE h.item_id=i.item_id) AND NOT EXISTS(SELECT 1 FROM casework_hosted_idempotency d WHERE d.item_id=i.item_id)",
                 &[&item_ids],
             ).await?;
         }
@@ -1417,8 +1453,9 @@ impl CaseworkService {
         request: &HostedDecisionRequest,
         idempotency_key: &str,
     ) -> Result<HostedTerminalResult, ServiceError> {
-        let snapshot = self.store.hosted_policy_for_actor(actor, item_id).await?;
-        request.check(&snapshot)?;
+        let (snapshot, result_constraints) =
+            self.store.hosted_policy_for_actor(actor, item_id).await?;
+        request.check(&snapshot, result_constraints.as_ref())?;
         self.store
             .decide_hosted_item(actor, item_id, expected_revision, request, idempotency_key)
             .await
@@ -1717,6 +1754,7 @@ impl PostgresStore {
             },
             kind_policy_digest: HostedPolicyDigest::parse(&item.kind_policy_digest)
                 .map_err(|_| StoreError::Corrupt)?,
+            result: None,
             terminal_at: now,
         };
         let response = serde_json::to_value(&result)?;
@@ -1876,11 +1914,13 @@ impl PostgresStore {
         Ok(result)
     }
 
+    /// The pinned kind snapshot for a decision, with the item's accepted
+    /// result constraints so the service can apply the narrowing check.
     pub async fn hosted_policy_for_actor(
         &self,
         actor: &ActorContext,
         item_id: Uuid,
-    ) -> Result<HostedKindPolicySnapshot, StoreError> {
+    ) -> Result<(HostedKindPolicySnapshot, Option<Value>), StoreError> {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         let row = transaction
@@ -1897,7 +1937,7 @@ impl PostgresStore {
         {
             return Err(StoreError::NotFound);
         }
-        Ok(snapshot)
+        Ok((snapshot, item.result_constraints))
     }
 
     pub async fn decide_hosted_item(
@@ -1921,7 +1961,10 @@ impl PostgresStore {
             .ok_or(StoreError::NotFound)?;
         let item = stored_hosted_item(&row)?;
         let snapshot = item.snapshot()?;
-        if request.check(&snapshot).is_err() {
+        if request
+            .check(&snapshot, item.result_constraints.as_ref())
+            .is_err()
+        {
             return Err(StoreError::Invalid);
         }
         if !snapshot.deciding_profiles.contains(&actor.profile_id)
@@ -1961,15 +2004,23 @@ impl PostgresStore {
         let requester = item.requester.ok_or(StoreError::Corrupt)?;
         let requester_profile_id = item.requester_profile_id.ok_or(StoreError::Corrupt)?;
         let requester_reference = item.requester_reference.ok_or(StoreError::Corrupt)?;
+        let result_digest = match &request.result {
+            Some(result) => Some(hosted_result_digest(result)?),
+            None => None,
+        };
         transaction.execute(
-            "INSERT INTO casework_hosted_terminal_events(event_id,item_id,requester_issuer,requester_subject,requester_profile_id,requester_reference,state,outcome,cancellation_reason,actor_ref,kind_policy_digest,terminal_at,retained_until) VALUES($1,$2,$3,$4,$5,$6,'completed',$7,NULL,$8,$9,$10,$11)",
-            &[&event_id,&item_id,&requester.issuer,&requester.subject,&requester_profile_id,&requester_reference,&request.outcome,&actor_ref,&item.kind_policy_digest,&now,&terminal_retained_until],
+            "INSERT INTO casework_hosted_terminal_events(event_id,item_id,requester_issuer,requester_subject,requester_profile_id,requester_reference,state,outcome,cancellation_reason,actor_ref,kind_policy_digest,terminal_at,retained_until,result) VALUES($1,$2,$3,$4,$5,$6,'completed',$7,NULL,$8,$9,$10,$11,$12)",
+            &[&event_id,&item_id,&requester.issuer,&requester.subject,&requester_profile_id,&requester_reference,&request.outcome,&actor_ref,&item.kind_policy_digest,&now,&terminal_retained_until,&request.result],
         ).await?;
         transaction.execute(
-            "INSERT INTO casework_hosted_accountability(event_id,item_id,actor_ref,actor_issuer,actor_subject,profile_id,queue_id,outcome,reason,occurred_at,retained_until) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-            &[&event_id,&item_id,&actor_ref,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&item.queue_id,&request.outcome,&request.reason,&now,&accountability_retained_until],
+            "INSERT INTO casework_hosted_accountability(event_id,item_id,actor_ref,actor_issuer,actor_subject,profile_id,queue_id,outcome,reason,occurred_at,retained_until,result_digest) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+            &[&event_id,&item_id,&actor_ref,&actor.principal.issuer,&actor.principal.subject,&actor.profile_id,&item.queue_id,&request.outcome,&request.reason,&now,&accountability_retained_until,&result_digest],
         ).await?;
-        append_hosted_history(&transaction,item_id,next,"completed",actor,json!({"eventId":event_id,"outcome":request.outcome,"reason":request.reason,"actorRef":actor_ref})).await?;
+        let mut detail = json!({"eventId":event_id,"outcome":request.outcome,"reason":request.reason,"actorRef":actor_ref});
+        if let Some(result) = &request.result {
+            detail["result"] = result.clone();
+        }
+        append_hosted_history(&transaction, item_id, next, "completed", actor, detail).await?;
         let result = HostedTerminalResult {
             item_id,
             event_id,
@@ -1980,6 +2031,7 @@ impl PostgresStore {
             },
             kind_policy_digest: HostedPolicyDigest::parse(&item.kind_policy_digest)
                 .map_err(|_| StoreError::Corrupt)?,
+            result: request.result.clone(),
             terminal_at: now,
         };
         let response = serde_json::to_value(&result)?;

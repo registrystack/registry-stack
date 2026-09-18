@@ -86,6 +86,18 @@ fn project(version: &str, outcomes: Vec<HostedOutcomePolicy>) -> CaseworkProject
                     "batchReference":{"type":"string","maxLength":120}
                 }
             }),
+            result_schema: Some(json!({
+                "type":"object",
+                "additionalProperties":false,
+                "required":["batchStatus"],
+                "properties":{
+                    "batchStatus":{"type":"string","enum":["valid","partial","invalid"]},
+                    "acceptedCount":{"type":"integer","minimum":0,"maximum":100000},
+                    "correctedReference":{"type":"string","maxLength":120},
+                    "mode":{"$ref":"#/$defs/mode"}
+                },
+                "$defs":{"mode":{"type":"string","enum":["fast","slow"]}}
+            })),
             outcomes,
         }],
         calendars: Vec::new(),
@@ -100,11 +112,13 @@ fn default_outcomes() -> Vec<HostedOutcomePolicy> {
             id: "confirmed".to_owned(),
             label: "Confirm".to_owned(),
             reason_required: false,
+            result_required: false,
         },
         HostedOutcomePolicy {
             id: "rejected".to_owned(),
             label: "Reject".to_owned(),
             reason_required: true,
+            result_required: false,
         },
     ]
 }
@@ -117,6 +131,7 @@ fn create_request(reference: &str) -> HostedCreateRequest {
             "summary": format!("Review {reference}"),
             "batchReference": reference
         }),
+        result_constraints: None,
     }
 }
 
@@ -417,6 +432,7 @@ async fn hosted_inbox_applies_view_queue_cursor_and_current_authority() {
             &HostedDecisionRequest {
                 outcome: "confirmed".to_owned(),
                 reason: None,
+                result: None,
             },
             "complete-view-item",
         )
@@ -689,6 +705,7 @@ async fn pinned_policy_and_commit_time_membership_control_decision() {
             id: "deferred".to_owned(),
             label: "Defer".to_owned(),
             reason_required: false,
+            result_required: false,
         }],
     );
     revised.hosted_kinds[0].display_schema = json!({
@@ -751,6 +768,7 @@ async fn pinned_policy_and_commit_time_membership_control_decision() {
                 &HostedDecisionRequest {
                     outcome: "confirmed".to_owned(),
                     reason: Some("checked".to_owned()),
+                    result: None,
                 },
                 "decision-after-revoke",
             )
@@ -825,6 +843,7 @@ async fn cancel_and_decision_race_produces_one_stable_terminal_event() {
                     &HostedDecisionRequest {
                         outcome: "confirmed".to_owned(),
                         reason: Some("checked".to_owned()),
+                        result: None,
                     },
                     "decide-race",
                 )
@@ -1110,6 +1129,7 @@ async fn terminal_cursors_and_independent_retention_are_enforced_and_erased() {
             &HostedDecisionRequest {
                 outcome: "confirmed".to_owned(),
                 reason: Some("internal reason".to_owned()),
+                result: None,
             },
             "decide-retention",
         )
@@ -1244,7 +1264,8 @@ async fn terminal_cursors_and_independent_retention_are_enforced_and_erased() {
                 claimed.revision,
                 &HostedDecisionRequest {
                     outcome: "confirmed".to_owned(),
-                    reason: Some("internal reason".to_owned())
+                    reason: Some("internal reason".to_owned()),
+                    result: None
                 },
                 "decide-retention"
             )

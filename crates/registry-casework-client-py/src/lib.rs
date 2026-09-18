@@ -256,7 +256,7 @@ fn auth<'a>(
 /// Every validation reason the binding can answer, in the order the mapping
 /// below names them. A reason the client adds stops that mapping compiling, so
 /// a new reason is named here before it can reach a caller.
-const VALIDATION_REASONS: [casework_client_sdk::HostedValidationReason; 9] = {
+const VALIDATION_REASONS: [casework_client_sdk::HostedValidationReason; 14] = {
     use casework_client_sdk::HostedValidationReason;
     [
         HostedValidationReason::KindNotAllowed,
@@ -268,6 +268,11 @@ const VALIDATION_REASONS: [casework_client_sdk::HostedValidationReason; 9] = {
         HostedValidationReason::OutcomeNotDeclared,
         HostedValidationReason::ReasonRequired,
         HostedValidationReason::TextInvalid,
+        HostedValidationReason::ResultNotDeclared,
+        HostedValidationReason::ResultRequired,
+        HostedValidationReason::FieldNotDeclared,
+        HostedValidationReason::ConstraintInvalid,
+        HostedValidationReason::ConstraintViolated,
     ]
 };
 
@@ -283,6 +288,11 @@ fn validation_reason(value: casework_client_sdk::HostedValidationReason) -> &'st
         HostedValidationReason::OutcomeNotDeclared => "outcome_not_declared",
         HostedValidationReason::ReasonRequired => "reason_required",
         HostedValidationReason::TextInvalid => "text_invalid",
+        HostedValidationReason::ResultNotDeclared => "result_not_declared",
+        HostedValidationReason::ResultRequired => "result_required",
+        HostedValidationReason::FieldNotDeclared => "field_not_declared",
+        HostedValidationReason::ConstraintInvalid => "constraint_invalid",
+        HostedValidationReason::ConstraintViolated => "constraint_violated",
     }
 }
 
