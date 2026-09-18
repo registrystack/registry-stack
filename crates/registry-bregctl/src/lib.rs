@@ -6015,6 +6015,9 @@ const INIT_DEV_CLIENTS: &[u8] =
 # short-lived tokens carrying these claims. One client binds each access profile
 # that `tests/journeys.yaml` uses, with the claims those journeys expect, so a
 # first start runs the journeys and serves the package without another file.
+# A maintained refusal step can name the exact client for its profile with
+# `testBindings`; the 'Explicit teaching clients' section of
+# products/breg/DEV.md documents the closed binding format.
 # `dev` generates a fresh private key per client under `.breg/dev/credentials/`;
 # nothing here is a credential, and none of it belongs in a deployment.
 version: 1

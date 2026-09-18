@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Installed-binary proof. Opt in after building breg and bregctl; Docker
 //! must be available. This creates and removes only its own synthetic database.
+//! The refusal and help tests at the end need only the built bregctl: they
+//! stop before any prerequisite is resolved or any service is started.
 
 use base64::Engine as _;
 use serde_json::{json, Value};
@@ -1251,4 +1253,126 @@ seed:
     session.stop();
     std::mem::forget(session);
     fs::remove_dir_all(parent).unwrap();
+}
+
+/// One `bregctl` invocation against a freshly initialized project. The port
+/// refusals this exercises happen before Docker or `breg` is resolved and
+/// before any service starts, so the built bregctl is the only prerequisite.
+fn plain_bregctl(binary: &Path, json: bool, args: &[&str]) -> std::process::Output {
+    let mut invocation = Command::new(binary);
+    if json {
+        invocation.arg("--format").arg("json");
+    }
+    invocation.args(args);
+    invocation.output().expect("bregctl starts")
+}
+
+#[test]
+fn dev_start_port_refusals_name_the_port_flag_and_role_in_both_formats() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let temporary = tempfile::tempdir().expect("a temporary directory");
+    // `init` refuses a destination behind a symbolic link, and a platform's
+    // temporary root often is one.
+    let parent = fs::canonicalize(temporary.path()).expect("a canonical directory");
+    let project = parent.join("registry");
+    let initialized = plain_bregctl(binary, false, &["init", project.to_str().unwrap()]);
+    assert!(
+        initialized.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&initialized.stdout),
+        String::from_utf8_lossy(&initialized.stderr)
+    );
+    // The start probes BReg, then the database, then the owned issuer, so
+    // each case names the port it occupies and leaves the earlier ports free.
+    let [breg, database, _] = free_ports();
+    let occupant = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("an occupiable port");
+    let occupied = occupant.local_addr().expect("the occupied port").port();
+    for (case, occupied_flag, role) in [
+        (vec![], "--breg-port", "BReg registry"),
+        (
+            vec![("--breg-port", breg)],
+            "--database-port",
+            "PostgreSQL database",
+        ),
+        (
+            vec![("--breg-port", breg), ("--database-port", database)],
+            "--issuer-port",
+            "issuer",
+        ),
+    ] {
+        let mut arguments: Vec<String> = vec![
+            "dev".into(),
+            "start".into(),
+            occupied_flag.into(),
+            occupied.to_string(),
+        ];
+        for (flag, port) in &case {
+            arguments.push((*flag).to_owned());
+            arguments.push(port.to_string());
+        }
+        arguments.push(project.to_str().unwrap().to_owned());
+        let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+        // The machine-readable refusal carries the same named facts as the
+        // human one, because both render the refusal's own message.
+        let json = plain_bregctl(binary, true, &borrowed);
+        assert!(!json.status.success(), "{case:?} refused nothing");
+        let report: Value = serde_json::from_slice(&json.stdout).expect("a JSON refusal");
+        assert_eq!(report["ok"], false, "{report}");
+        assert_eq!(report["command"], "dev", "{report}");
+        let message = report["diagnostics"][0]["message"]
+            .as_str()
+            .expect("message");
+        for fact in [
+            occupied.to_string(),
+            occupied_flag.to_owned(),
+            role.to_owned(),
+            "127.0.0.1".to_owned(),
+        ] {
+            assert!(message.contains(&fact), "{message} lacks {fact}");
+        }
+        assert!(!message.contains(".breg"), "{message}");
+        let human = plain_bregctl(binary, false, &borrowed);
+        assert!(!human.status.success(), "{case:?} refused nothing");
+        let rendered = String::from_utf8_lossy(&human.stderr);
+        for fact in [
+            occupied.to_string(),
+            occupied_flag.to_owned(),
+            role.to_owned(),
+        ] {
+            assert!(rendered.contains(&fact), "{rendered} lacks {fact}");
+        }
+        assert!(
+            String::from_utf8_lossy(&human.stdout).trim().is_empty(),
+            "a human refusal stays off stdout"
+        );
+    }
+}
+
+#[test]
+fn dev_help_names_the_owning_document_and_both_record_options() {
+    let binary = Path::new(env!("CARGO_BIN_EXE_bregctl"));
+    let start = plain_bregctl(binary, false, &["dev", "start", "--help"]);
+    assert!(start.status.success(), "{start:?}");
+    let start = String::from_utf8(start.stdout).expect("help is UTF-8");
+    for fact in [
+        "products/breg/DEV.md",
+        "'Native local BReg lifecycle'",
+        "'Retained state and recovery'",
+        "uncatchable outside kill",
+        ".breg/dev/logs",
+    ] {
+        assert!(start.contains(fact), "dev start --help omits {fact}");
+    }
+    let stop = plain_bregctl(binary, false, &["dev", "stop", "--help"]);
+    assert!(stop.status.success(), "{stop:?}");
+    let stop = String::from_utf8(stop.stdout).expect("help is UTF-8");
+    for fact in [
+        "--remove",
+        "discarding records",
+        "copy the authored files to a new project directory",
+        "products/breg/DEV.md",
+        "'Retained state and recovery'",
+    ] {
+        assert!(stop.contains(fact), "dev stop --help omits {fact}");
+    }
 }
