@@ -9916,7 +9916,12 @@
                     "schema_mismatch",
                     "outcome_not_declared",
                     "reason_required",
-                    "text_invalid"
+                    "text_invalid",
+                    "result_not_declared",
+                    "result_required",
+                    "field_not_declared",
+                    "constraint_invalid",
+                    "constraint_violated"
                   ],
                   "type": "string"
                 },
@@ -10667,7 +10672,12 @@
                     "schema_mismatch",
                     "outcome_not_declared",
                     "reason_required",
-                    "text_invalid"
+                    "text_invalid",
+                    "result_not_declared",
+                    "result_required",
+                    "field_not_declared",
+                    "constraint_invalid",
+                    "constraint_violated"
                   ],
                   "type": "string"
                 },
@@ -11288,7 +11298,12 @@
                     "schema_mismatch",
                     "outcome_not_declared",
                     "reason_required",
-                    "text_invalid"
+                    "text_invalid",
+                    "result_not_declared",
+                    "result_required",
+                    "field_not_declared",
+                    "constraint_invalid",
+                    "constraint_violated"
                   ],
                   "type": "string"
                 },
@@ -16587,7 +16602,12 @@
                     "schema_mismatch",
                     "outcome_not_declared",
                     "reason_required",
-                    "text_invalid"
+                    "text_invalid",
+                    "result_not_declared",
+                    "result_required",
+                    "field_not_declared",
+                    "constraint_invalid",
+                    "constraint_violated"
                   ],
                   "type": "string"
                 },

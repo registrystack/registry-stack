@@ -1424,6 +1424,11 @@ HOSTED_VALIDATION_REASONS = [
     "outcome_not_declared",
     "reason_required",
     "text_invalid",
+    "result_not_declared",
+    "result_required",
+    "field_not_declared",
+    "constraint_invalid",
+    "constraint_violated",
 ]
 SOURCE_ATTEMPT_REFERENCE_OPERATIONS = {
     ("POST", "/v1/work-items/{item_id}/decisions"),
