@@ -382,7 +382,7 @@ export class CaseworkClientError extends Error {
   readonly originalAttemptId?: string
   readonly validation?: {
     readonly path: string
-    readonly reason: 'kind_not_allowed' | 'reference_invalid' | 'object_required' | 'maximum_bytes_exceeded' | 'maximum_depth_exceeded' | 'schema_mismatch' | 'outcome_not_declared' | 'reason_required' | 'text_invalid'
+    readonly reason: 'kind_not_allowed' | 'reference_invalid' | 'object_required' | 'maximum_bytes_exceeded' | 'maximum_depth_exceeded' | 'schema_mismatch' | 'outcome_not_declared' | 'reason_required' | 'text_invalid' | 'result_not_declared' | 'result_required' | 'field_not_declared' | 'constraint_invalid' | 'constraint_violated'
   }
   readonly transportKind?: string
   readonly protocolFailure?: string

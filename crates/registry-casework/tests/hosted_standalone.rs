@@ -486,6 +486,7 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
             kind: kind.clone(),
             requester_reference: format!("reference-{number}"),
             display: json!({"summary": format!("Synthetic item {number}"), "reference": format!("REF-{number}")}),
+            result_constraints: None,
         };
         let key = format!("create-{number}");
         let item = client
@@ -718,11 +719,13 @@ async fn ten_items_two_create_retries_and_one_terminal_result_without_breg() {
         let decision = HostedDecisionRequest {
             outcome: outcome.into(),
             reason: Some("Staff-only decision rationale".into()),
+            result: None,
         };
         if number == 0 {
             let missing_reason = HostedDecisionRequest {
                 outcome: outcome.into(),
                 reason: None,
+                result: None,
             };
             let refused = client
                 .decide_hosted_work_item(

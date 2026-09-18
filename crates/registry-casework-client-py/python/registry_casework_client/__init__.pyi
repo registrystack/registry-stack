@@ -195,12 +195,19 @@ class CorrectionRoutingCopy(_CorrectionRoutingCopyOptional):
     sourceBinding: SourceBinding
     flaggedFields: list[str]
 
-class HostedOutcomePolicy(TypedDict):
+class _HostedOutcomePolicyOptional(TypedDict, total=False):
+    resultRequired: bool
+
+class HostedOutcomePolicy(_HostedOutcomePolicyOptional):
     id: str
     label: str
     reasonRequired: bool
 
-class HostedWorkItemContext(TypedDict):
+class _HostedWorkItemContextOptional(TypedDict, total=False):
+    resultSchema: JsonValue
+    resultConstraints: JsonValue
+
+class HostedWorkItemContext(_HostedWorkItemContextOptional):
     requesterReference: str
     kind: str
     version: str
@@ -258,7 +265,10 @@ class WorkItemPage(_WorkItemPageOptional):
     servedQueues: list[str]
     status: PageStatus
 
-class HostedCreateRequest(TypedDict):
+class _HostedCreateRequestOptional(TypedDict, total=False):
+    resultConstraints: JsonValue
+
+class HostedCreateRequest(_HostedCreateRequestOptional):
     kind: str
     requesterReference: str
     display: JsonValue
@@ -271,6 +281,7 @@ class HostedCancelRequest(TypedDict):
 
 class _HostedDecisionRequestOptional(TypedDict, total=False):
     reason: str
+    result: JsonValue
 
 class HostedDecisionRequest(_HostedDecisionRequestOptional):
     outcome: str
@@ -430,7 +441,10 @@ class CaseloadItemResult(_CaseloadItemResultOptional):
     itemId: str
     result: Literal["moved", "not_visible", "not_eligible", "attempt_in_progress", "conflict"]
 
-class RequesterHostedItem(TypedDict):
+class _RequesterHostedItemOptional(TypedDict, total=False):
+    resultConstraints: JsonValue
+
+class RequesterHostedItem(_RequesterHostedItemOptional):
     itemId: str
     requesterReference: str
     kind: str
@@ -449,7 +463,10 @@ class HostedNote(TypedDict):
     itemRevision: int
     recordedAt: str
 
-class HostedCompletedTerminalResult(TypedDict):
+class _HostedCompletedTerminalResultOptional(TypedDict, total=False):
+    result: JsonValue
+
+class HostedCompletedTerminalResult(_HostedCompletedTerminalResultOptional):
     itemId: str
     eventId: str
     requesterReference: str
@@ -492,6 +509,7 @@ class HostedHistoryEntry(_HostedHistoryEntryOptional):
 
 class _HostedAccountabilityRecordOptional(TypedDict, total=False):
     reason: str
+    resultDigest: str
 
 class HostedAccountabilityRecord(_HostedAccountabilityRecordOptional):
     itemId: str
@@ -614,7 +632,10 @@ class HostedRetentionPolicy(TypedDict):
     terminalDays: int
     accountabilityDays: int
 
-class HostedKindPolicy(TypedDict):
+class _HostedKindPolicyOptional(TypedDict, total=False):
+    resultSchema: JsonValue
+
+class HostedKindPolicy(_HostedKindPolicyOptional):
     id: str
     version: str
     queue: str
@@ -773,6 +794,11 @@ HostedValidationReason: TypeAlias = Literal[
     "outcome_not_declared",
     "reason_required",
     "text_invalid",
+    "result_not_declared",
+    "result_required",
+    "field_not_declared",
+    "constraint_invalid",
+    "constraint_violated",
 ]
 
 class ValidationDetail(TypedDict):

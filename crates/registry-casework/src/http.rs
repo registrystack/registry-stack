@@ -1634,6 +1634,11 @@ fn hosted_validation_reason(reason: HostedValidationReason) -> &'static str {
         HostedValidationReason::OutcomeNotDeclared => "outcome_not_declared",
         HostedValidationReason::ReasonRequired => "reason_required",
         HostedValidationReason::TextInvalid => "text_invalid",
+        HostedValidationReason::ResultNotDeclared => "result_not_declared",
+        HostedValidationReason::ResultRequired => "result_required",
+        HostedValidationReason::FieldNotDeclared => "field_not_declared",
+        HostedValidationReason::ConstraintInvalid => "constraint_invalid",
+        HostedValidationReason::ConstraintViolated => "constraint_violated",
     }
 }
 

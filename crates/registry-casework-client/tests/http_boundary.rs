@@ -215,6 +215,7 @@ async fn hosted_decision_uses_the_offered_outcome_without_a_source_profile() {
             &HostedDecisionRequest {
                 outcome: "confirmed".into(),
                 reason: None,
+                result: None,
             },
         )
         .await;
