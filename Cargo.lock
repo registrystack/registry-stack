@@ -5670,6 +5670,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "registry-platform-hooks"
+version = "0.32.0"
+dependencies = [
+ "registry-platform-canonical-json",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "time",
+]
+
+[[package]]
 name = "registry-platform-httpsec"
 version = "0.32.0"
 dependencies = [

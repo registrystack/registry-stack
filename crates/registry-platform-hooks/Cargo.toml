@@ -1,0 +1,20 @@
+[package]
+name = "registry-platform-hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Shared hook contract for Registry Stack: declarations, envelope, handler messages, and compile-time rules."
+repository.workspace = true
+readme = "README.md"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+registry-platform-canonical-json.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time = { workspace = true, features = ["serde-well-known"] }
