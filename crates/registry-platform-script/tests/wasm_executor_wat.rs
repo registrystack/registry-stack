@@ -603,6 +603,35 @@ fn out_of_bounds_result_pointer_is_rejected() {
 }
 
 #[test]
+fn negative_result_len_is_rejected() {
+    let exec = executor(Backend::Native);
+    let prepared = exec
+        .prepare(guest_wat("(i32.const 0)", "(i32.const -1)").as_bytes())
+        .expect("wat guest passes validation");
+    match err_of(exec.invoke(&prepared, b"x")) {
+        InvokeError::OutputLengthNegative(len) => assert_eq!(len, -1),
+        err => panic!("wrong error: {err}"),
+    }
+}
+
+#[test]
+fn negative_result_ptr_is_rejected() {
+    let wat = guest_wat("(i32.const 0)", "(i32.const 8)").replacen(
+        "(i32.const 1024))",
+        "(i32.const -16))",
+        1,
+    );
+    let exec = executor(Backend::Native);
+    let prepared = exec
+        .prepare(wat.as_bytes())
+        .expect("wat guest passes validation");
+    match err_of(exec.invoke(&prepared, b"x")) {
+        InvokeError::OutputPointerNegative(ptr) => assert_eq!(ptr, -16),
+        err => panic!("wrong error: {err}"),
+    }
+}
+
+#[test]
 fn guest_trap_is_surfaced_with_bounded_description() {
     for backend in backends() {
         let exec = executor(backend);
