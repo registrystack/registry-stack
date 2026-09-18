@@ -8,6 +8,7 @@ import {
   type HostedCreateRequest,
   type HostedDecisionRequest,
   type HistoryEntry,
+  type JsonValue,
   type WorkItem,
 } from '../client'
 
@@ -74,14 +75,35 @@ const hostedCreate: HostedCreateRequest = {
   requesterReference: 'batch-42',
   display: { summary: 'Review the prepared batch' },
 }
+const hostedCreateWithConstraints: HostedCreateRequest = {
+  kind: 'batch-validation',
+  requesterReference: 'batch-43',
+  display: { summary: 'Review the prepared batch' },
+  resultConstraints: { acceptedCount: { minimum: 0, maximum: 412 } },
+}
 const hostedDecision: HostedDecisionRequest = { outcome: 'confirmed' }
+const hostedDecisionWithResult: HostedDecisionRequest = {
+  outcome: 'confirmed',
+  result: { batchStatus: 'valid', acceptedCount: 412 },
+}
 void client.createHostedItem(token, 'requester', 'create-42', hostedCreate)
+void client.createHostedItem(token, 'requester', 'create-43', hostedCreateWithConstraints)
 void client.requesterHostedNotes(token, 'requester', item.itemId, { limit: 25 })
-void client.hostedTerminalItems(token, 'requester', { limit: 25 })
+void client.hostedTerminalItems(token, 'requester', { limit: 25 }).then((page) => {
+  const [terminal] = page.value.items
+  const terminalResult: JsonValue | undefined =
+    terminal?.state === 'completed' ? terminal.result : undefined
+  void terminalResult
+})
 void client.listHostedWorkItems(token, profile, { view: 'my_teams', limit: 25 })
 void client.hostedWorkItemHistory(token, profile, item.itemId, { limit: 25 })
 void client.hostedAccountabilityRecord(token, 'supervisor', '00000000-0000-0000-0000-000000000000')
+  .then((record) => {
+    const resultDigest: string | undefined = record.value.resultDigest
+    void resultDigest
+  })
 void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-42', hostedDecision)
+void client.decideHostedWorkItem(token, profile, item.actions[0], 'decide-43', hostedDecisionWithResult)
 
 const officer = { issuer: 'https://idp.example', subject: 'officer' }
 const cover = { issuer: 'https://idp.example', subject: 'cover' }
