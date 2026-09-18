@@ -76,14 +76,16 @@ const DEFAULT_SHUTDOWN_GRACE_MILLISECONDS: u64 = 30_000;
 const DEFAULT_RECORD_LOCK_MILLISECONDS: u64 = 5_000;
 const DEFAULT_MIGRATION_LOCK_MILLISECONDS: u64 = 30_000;
 const DEFAULT_MIGRATION_STATEMENT_MILLISECONDS: u64 = 60_000;
-/// Default and floor for the execution-time module ceiling: the compile-time
-/// admission ceiling an authored module already satisfied.
+/// Floor for the execution-time module ceiling.
 const MINIMUM_WASM_EXECUTION_MODULE_BYTES: u64 = 1_024;
+/// Default execution-time module ceiling: the authored admission default an
+/// ordinary module already satisfies.
 const DEFAULT_WASM_EXECUTION_MODULE_BYTES: u64 =
+    crate::wasm_handler::DEFAULT_WASM_MODULE_BYTES as u64;
+/// Cap on the execution-time module ceiling, equal to the structural
+/// authoring ceiling: configuration admits nothing authoring refused.
+const MAXIMUM_WASM_EXECUTION_MODULE_BYTES: u64 =
     crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64;
-/// Ceiling for deployments that carry larger pre-initialized modules; the
-/// authoring admission ceiling stays at its own compile-time constant.
-const MAXIMUM_WASM_EXECUTION_MODULE_BYTES: u64 = 5 * 1_048_576;
 const MINIMUM_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 = 1_048_576;
 const DEFAULT_WASM_EXECUTION_GUEST_MEMORY_BYTES: u64 =
     crate::wasm_handler::DEFAULT_WASM_GUEST_MEMORY_BYTES as u64;
@@ -2258,7 +2260,8 @@ impl Default for RawOperationalTimeouts {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct RawWasmExecutionConfig {
-    /// Defaults to the compile-time module admission ceiling (2 MiB).
+    /// Defaults to the default execution-time module ceiling (2 MiB); the
+    /// structural admission ceiling (5 MiB) is operator-reachable here.
     #[serde(default = "default_wasm_execution_max_module_bytes")]
     max_module_bytes: u64,
     /// Defaults to the platform guest-memory ceiling (32 MiB).

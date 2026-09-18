@@ -35,6 +35,46 @@ fn binary(wat_text: &str) -> Vec<u8> {
     wat::parse_str(wat_text).expect("the wat fixture assembles")
 }
 
+/// Unsigned LEB128 encoding, for hand-built section headers.
+fn leb128(mut value: usize) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value == 0 {
+            encoded.push(byte);
+            return encoded;
+        }
+        encoded.push(byte | 0x80);
+    }
+}
+
+/// A structurally valid module padded to exactly `target_len` bytes: the
+/// minimal ABI module plus one trailing custom section, which every
+/// conforming consumer ignores. This is the shape of an oversized
+/// pre-initialized module: real ABI, real payload, bytes past the default.
+fn module_padded_to(target_len: usize) -> Vec<u8> {
+    let mut bytes = binary(MINIMAL_ABI_WAT);
+    assert!(
+        target_len > bytes.len() + 4,
+        "the target leaves room for the custom section"
+    );
+    // Section id 0x00, a one-byte name, then zero padding. The header length
+    // depends on the payload length and vice versa, so resolve them together.
+    for header_len in 1..=5 {
+        let payload_len = target_len - bytes.len() - 1 - header_len;
+        if leb128(payload_len).len() == header_len {
+            bytes.push(0x00);
+            bytes.extend(leb128(payload_len));
+            bytes.extend(leb128(1));
+            bytes.push(b'p');
+            bytes.resize(target_len, 0);
+            return bytes;
+        }
+    }
+    panic!("no LEB128 header length fits {target_len}");
+}
+
 fn sha256(bytes: &[u8]) -> String {
     let value = Sha256::digest(bytes);
     let mut rendered = String::from("sha256:");
@@ -190,13 +230,16 @@ fn a_missing_module_asset_reports_the_authored_path() {
 }
 
 #[test]
-fn an_over_budget_module_is_refused_before_validation() {
+fn a_module_over_the_structural_ceiling_is_refused_before_validation() {
     let over_budget = vec![0u8; MAXIMUM_WASM_MODULE_BYTES + 1];
     let failure = compile_with_module(wasm_project(), "wasm/handler.wasm", over_budget)
         .map(|_| ())
-        .expect_err("a module beyond the ceiling is refused");
+        .expect_err("a module beyond the structural ceiling is refused");
     let diagnostic = first_code(&failure, "action.handler.module_bound");
     assert_eq!(diagnostic.path, "actions[register-person].handler.module");
+    // The refusal names the structural ceiling: the ceiling every build and
+    // package enforces, not an operator's execution-time configuration.
+    assert_eq!(MAXIMUM_WASM_MODULE_BYTES, 5 * 1024 * 1024);
     assert!(
         diagnostic
             .message
@@ -204,6 +247,18 @@ fn an_over_budget_module_is_refused_before_validation() {
         "the diagnostic names the ceiling: {}",
         diagnostic.message
     );
+}
+
+#[test]
+fn a_module_between_the_default_and_structural_ceilings_is_admitted() {
+    // Structurally valid, past the 2 MiB execution default, under the 5 MiB
+    // structural ceiling: authoring admission is structural, so such a module
+    // compiles, and an operator whose deployment raises the configured
+    // ceiling can execute it.
+    let bytes = module_padded_to(2 * 1024 * 1024 + 64 * 1024);
+    assert_eq!(MAXIMUM_WASM_MODULE_BYTES, 5 * 1024 * 1024);
+    compile_with_module(wasm_project(), "wasm/handler.wasm", bytes)
+        .expect("a module under the structural ceiling is admitted");
 }
 
 #[test]
@@ -395,15 +450,17 @@ fn the_per_package_wasm_module_count_is_bounded() {
 #[cfg(feature = "runtime")]
 mod package_closure {
     use super::*;
+    use registry_breg::package::{
+        inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
+        PackageError, PackageMigrationPlanInput, PackageSourceFile, PreparedPackage,
+        SignaturePolicy,
+    };
 
-    #[test]
-    fn a_wasm_handler_module_travels_through_the_package_closure() {
-        use registry_breg::package::{
-            inspect_package_integrity, prepare_package_with_project_assets, PackageBuildRequest,
-            PackageMigrationPlanInput, PackageSourceFile, SignaturePolicy,
-        };
-
-        let bytes = binary(MINIMAL_ABI_WAT);
+    /// Build and prepare the wasm admission project as a package carrying
+    /// `bytes` as its single handler module. The compiler admission inside
+    /// `prepare_package_with_project_assets` refuses over-ceiling modules, so
+    /// an oversized build fails here exactly as a real package build would.
+    fn build_wasm_package(bytes: Vec<u8>) -> Result<PreparedPackage, PackageError> {
         let mut project = wasm_project();
         project["package"] = json!({
             "environment": "local",
@@ -412,22 +469,6 @@ mod package_closure {
             "sourceRevision": "wasm-admission-1"
         });
         let project_bytes = serde_json::to_vec(&project).unwrap();
-        let parsed = parse_project_json(&project_bytes).unwrap();
-        let module_asset = PackageSourceFile {
-            path: "wasm/handler.wasm".to_owned(),
-            bytes: bytes.clone(),
-        };
-        let compiled = compile_project_with_assets(
-            &parsed,
-            &[],
-            &[ModuleAssetSource {
-                module: None,
-                path: "wasm/handler.wasm".to_owned(),
-                bytes: bytes.clone(),
-            }],
-            CompileProfile::Production,
-        )
-        .expect("the wasm admission project compiles for packaging");
         let request = PackageBuildRequest {
             environment: "local".to_owned(),
             instance_id: "wasm-admission".to_owned(),
@@ -435,7 +476,7 @@ mod package_closure {
             sequence: 1,
             prior_revision: None,
             compiler_source_revision: "wasm-admission-1".to_owned(),
-            schema_fingerprint: sha256(compiled.ddl().script().as_bytes()),
+            schema_fingerprint: sha256(&project_bytes),
             signature_policy: SignaturePolicy {
                 threshold: 0,
                 key_ids: vec![],
@@ -451,8 +492,19 @@ mod package_closure {
             },
             migration_plan: PackageMigrationPlanInput::InitialCompiledDdl,
         };
-        let package = prepare_package_with_project_assets(request, vec![module_asset])
-            .expect("the wasm handler package builds");
+        prepare_package_with_project_assets(
+            request,
+            vec![PackageSourceFile {
+                path: "wasm/handler.wasm".to_owned(),
+                bytes,
+            }],
+        )
+    }
+
+    #[test]
+    fn a_wasm_handler_module_travels_through_the_package_closure() {
+        let bytes = binary(MINIMAL_ABI_WAT);
+        let package = build_wasm_package(bytes.clone()).expect("the wasm handler package builds");
         let files = package.file_bytes();
         let module_file = files
             .get("source/project/wasm/handler.wasm")
@@ -493,5 +545,26 @@ mod package_closure {
             handler.module_sha256.as_deref(),
             Some(sha256(&bytes).as_str())
         );
+    }
+
+    #[test]
+    fn a_module_between_the_default_and_structural_ceilings_packages() {
+        // The package closure enforces the same structural ceiling the
+        // compiler does: a module past the 2 MiB execution default but under
+        // the structural ceiling packages byte-for-byte.
+        let bytes = module_padded_to(2 * 1024 * 1024 + 64 * 1024);
+        let package =
+            build_wasm_package(bytes.clone()).expect("the oversized module package builds");
+        assert_eq!(
+            package.file_bytes().get("source/project/wasm/handler.wasm"),
+            Some(&bytes)
+        );
+    }
+
+    #[test]
+    fn a_module_over_the_structural_ceiling_is_refused_at_package_validation() {
+        let error = build_wasm_package(vec![0u8; MAXIMUM_WASM_MODULE_BYTES + 1])
+            .expect_err("a module beyond the structural ceiling never packages");
+        assert_eq!(error, PackageError::Derivation);
     }
 }

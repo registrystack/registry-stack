@@ -1146,7 +1146,7 @@
         },
         "maxModuleBytes": {
           "default": 2097152,
-          "description": "Defaults to the compile-time module admission ceiling (2 MiB).",
+          "description": "Defaults to the default execution-time module ceiling (2 MiB); the\nstructural admission ceiling (5 MiB) is operator-reachable here.",
           "format": "uint64",
           "maximum": 5242880,
           "minimum": 1024,
