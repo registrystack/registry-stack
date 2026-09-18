@@ -2138,6 +2138,7 @@ async fn insert_action_evidence(
 /// This covers both immediate-action and reviewed-request application uses.
 /// Runtime roles have INSERT only; history erasure has a separate scope.
 /// A future cutoff cannot erase material whose retention has not expired.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) async fn erase_expired_action_evidence(
     client: &tokio_postgres::Transaction<'_>,
     before: chrono::DateTime<chrono::Utc>,
