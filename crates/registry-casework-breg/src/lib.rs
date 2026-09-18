@@ -20,6 +20,7 @@ use std::{
     sync::{Mutex, PoisonError},
     time::{Duration, SystemTime},
 };
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
 /// One stage imported from the source's governed request description. It is
@@ -762,10 +763,16 @@ impl SourceAdapter for BregAdapter {
         let envelope =
             HookEnvelope::from_canonical_bytes(&request.body, &EnvelopeLimits::default())
                 .map_err(|_| SourceAdapterError::Invalid)?;
+        // The signed header spells the event time as RFC 3339 while the
+        // envelope member is the normalized UTC form, so the two are held
+        // against each other as instants rather than as strings.
+        let signed_time = OffsetDateTime::parse(h("ce-time")?, &Rfc3339)
+            .map_err(|_| SourceAdapterError::Invalid)?;
         if envelope.id != h("ce-id")?
             || envelope.event_type != h("ce-type")?
             || envelope.source != h("ce-source")?
             || envelope.dataschema != h("ce-dataschema")?
+            || envelope.time.unix_timestamp_nanos() != signed_time.unix_timestamp_nanos()
         {
             return Err(SourceAdapterError::Invalid);
         }
