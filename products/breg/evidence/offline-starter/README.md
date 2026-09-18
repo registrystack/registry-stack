@@ -12,6 +12,12 @@ evidencectl check <dir>
 evidencectl test <dir>
 ```
 
+This starter is proven offline with `evidencectl check` and `evidencectl
+test` only. Its source binds a synthetic SQLite extract, and local serving
+binds only HTTP transports, so `evidencectl dev start` refuses it, with code
+`evidence.dev.local-transport-refused`. A starter built over an HTTP source,
+such as the neighboring `starter/`, is the one to use for local serving.
+
 `record-active` asks whether a registered record is active. The caller sends
 one code and nothing else. The source runs one fixed statement over a
 synthetic SQLite extract built from the fixture text, extraction hands the
