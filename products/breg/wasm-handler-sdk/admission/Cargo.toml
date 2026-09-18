@@ -1,0 +1,13 @@
+[package]
+name = "breg-wasm-admission-proof"
+description = "Admission proof: the built template module passes BREG authoring admission and produces the fixture outcomes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+registry-breg = { path = "../../../../crates/registry-breg", features = ["wasm"] }
+registry-platform-script = { path = "../../../../crates/registry-platform-script", features = ["wasm"] }
+serde_json = "1"
+sha2 = "0.11"

@@ -6,7 +6,7 @@
 # registry workspace forbids.
 [workspace]
 resolver = "2"
-members = ["sdk", "template", "preinit"]
+members = ["sdk", "template", "preinit", "admission"]
 
 [workspace.package]
 version = "0.1.0"
@@ -24,3 +24,10 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# The admission-proof tests compile multi-MiB modules through wasmtime; with
+# an unoptimized wasmtime those compiles dominate the run. Optimize
+# dependencies (wasmtime included) in dev/test builds; workspace crates stay
+# unoptimized for fast iteration.
+[profile.dev.package."*"]
+opt-level = 2
