@@ -545,8 +545,8 @@ fn target_finding(target: &Path, error: anyhow::Error) -> Value {
         .or_else(|| target_document.map(|diagnostic| diagnostic.path.clone()))
         .unwrap_or_else(|| target.to_string_lossy().into_owned());
     let code = target_document
-        .map(|diagnostic| diagnostic.code.clone())
-        .unwrap_or("evidence.target.incomplete");
+        .map(|diagnostic| diagnostic.code.to_owned())
+        .unwrap_or_else(|| "evidence.target.incomplete".to_owned());
     let message = runtime
         .map(|diagnostic| diagnostic.to_string())
         .or_else(|| target_document.map(|diagnostic| diagnostic.message.to_owned()))
@@ -555,7 +555,7 @@ fn target_finding(target: &Path, error: anyhow::Error) -> Value {
         });
     diagnostic(
         "error",
-        code,
+        &code,
         "deployment_target",
         &path,
         message,
@@ -571,7 +571,7 @@ fn compiler_refusal(error: anyhow::Error, artifact: &str) -> anyhow::Error {
         .map(|diagnostic| diagnostic.path.clone())
         .unwrap_or_else(|| ".".to_owned());
     let code = authored
-        .map(|diagnostic| diagnostic.code.clone())
+        .map(|diagnostic| diagnostic.code.to_owned())
         .unwrap_or_else(|| "evidence.offline-check.refused".to_owned());
     let message = authored
         .map(|diagnostic| diagnostic.message.clone())

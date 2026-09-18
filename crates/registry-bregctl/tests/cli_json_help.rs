@@ -15,7 +15,10 @@ fn help_honours_the_global_json_format_with_the_catalog_schema() {
         let mut stderr = Vec::new();
         let status = registry_bregctl::run_from(arguments.clone(), &mut stdout, &mut stderr);
         assert_eq!(status, ExitCode::SUCCESS, "arguments: {arguments:?}");
-        assert!(stderr.is_empty(), "JSON help wrote stderr for {arguments:?}");
+        assert!(
+            stderr.is_empty(),
+            "JSON help wrote stderr for {arguments:?}"
+        );
         let rendered = String::from_utf8(stdout).expect("catalog is UTF-8");
         let catalog: serde_json::Value = serde_json::from_str(rendered.trim())
             .unwrap_or_else(|error| panic!("invalid catalog for {arguments:?}: {error}"));
