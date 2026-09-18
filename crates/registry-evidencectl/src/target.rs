@@ -37,7 +37,7 @@ pub(crate) enum TargetCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct NewArgs {
-    /// New target directory to create.
+    /// New target directory to create; missing parent directories are created.
     pub directory: PathBuf,
 
     /// Closed settings document with native governance, runtime, and public keys.
@@ -144,7 +144,7 @@ pub(crate) fn run(command: TargetCommand) -> Result<ExitCode> {
 
 fn new(args: NewArgs) -> Result<ExitCode> {
     reject_existing(&args.directory)?;
-    let parent = plain_parent(&args.directory, "target parent")?;
+    let parent = created_plain_parent(&args.directory, "target parent")?;
     let project = args.project.as_deref().unwrap_or_else(|| Path::new("."));
     if args.settings.is_none() {
         if !args.local {
@@ -319,7 +319,12 @@ pub(crate) fn create_local_target(
     if !source_connections.is_object() {
         bail!("local sourceConnections must be a mapping");
     }
-    let mut governance = crate::authoring::local_target_governance(project)?;
+    // Read the project signing key once (creating it when the project has
+    // none) so the kid governance names and the key file written beside it
+    // come from the same material. Reading it twice would let a key replaced
+    // between the reads publish governance and a key file that disagree.
+    let (relative, key_bytes) = crate::authoring::ensure_local_signing_public_jwk(project)?;
+    let mut governance = crate::authoring::local_target_governance(&relative)?;
     governance["sourceConnections"] = source_connections;
     let mut runtime = serde_json::json!({
         "version": 1,
@@ -335,12 +340,18 @@ pub(crate) fn create_local_target(
     });
     fill_local_paths(project, &governance, &mut runtime)?;
     validate_settings_documents(&governance, &runtime)?;
-    let (relative, key) = signing_public_key_reference(
-        &project
-            .join(crate::authoring::SECRETS_DIRECTORY)
-            .join("signing-p256-public.jwk.json"),
-        "local signing public key",
-    )?;
+    // The kid in governance and the staged key file must agree before
+    // anything is published; the render and the bytes above share one read,
+    // so a disagreement here means the render itself is broken.
+    let governed_key = governance
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("local target governance lost its active public key reference"))?;
+    if governed_key != relative {
+        bail!(
+            "local target governance names public key {governed_key} while the project signing key names {relative}"
+        );
+    }
     let files = [
         (
             "governance.yaml".to_owned(),
@@ -350,7 +361,7 @@ pub(crate) fn create_local_target(
             "runtime.yaml".to_owned(),
             serde_norway::to_string(&runtime)?.into_bytes(),
         ),
-        (relative, key.bytes),
+        (relative, key_bytes),
     ];
     if directory.exists() {
         let metadata = fs::symlink_metadata(directory)?;
@@ -370,7 +381,7 @@ pub(crate) fn create_local_target(
         return Ok(());
     }
     reject_existing(directory)?;
-    let parent = plain_parent(directory, "target parent")?;
+    let parent = created_plain_parent(directory, "target parent")?;
     let staging = tempfile::Builder::new()
         .prefix(".evidencectl-target-")
         .tempdir_in(parent)?;
@@ -758,6 +769,33 @@ fn plain_parent(path: &Path, description: &str) -> Result<PathBuf> {
     fs::canonicalize(parent).with_context(|| format!("resolving {description}"))
 }
 
+/// Resolve the parent for a newly authored output, creating it when missing.
+///
+/// `target new` demands no pre-created `targets/` directory, exactly as `init`
+/// and `source add` create the parents they write under. A parent that already
+/// exists as a symlink stays refused: the published target must live in a
+/// plain directory the operator can review.
+fn created_plain_parent(path: &Path, description: &str) -> Result<PathBuf> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    match fs::symlink_metadata(parent) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o755)
+                .create(parent)
+                .with_context(|| format!("creating {description} {}", parent.display()))?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspecting {description}"));
+        }
+    }
+    plain_parent(path, description)
+}
+
 fn read_plain_file(path: &Path, maximum: u64, description: &str) -> Result<Vec<u8>> {
     let descriptor = rustix::fs::open(
         path,
@@ -835,6 +873,7 @@ fn rename_noreplace(_source: &Path, _destination: &Path) -> std::io::Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::symlink;
 
     const ES256_PUBLIC_JWK: &str = r#"{"kty":"EC","crv":"P-256","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
     const ES256_PRIVATE_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
@@ -953,6 +992,82 @@ runtime:
             fs::read_to_string(target.join("runtime.yaml")).unwrap(),
             "operator authored settings"
         );
+    }
+
+    #[test]
+    fn local_target_creation_creates_missing_parents_and_refuses_a_symlinked_parent() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.as_path();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        fs::create_dir(project.join("secrets")).unwrap();
+        fs::write(
+            project.join("secrets/signing-p256-public.jwk.json"),
+            ES256_PUBLIC_JWK,
+        )
+        .unwrap();
+        let target = project.join("targets/nested/local");
+        assert!(!target.parent().unwrap().exists());
+        create_local_target(project, &target, serde_json::json!({}))
+            .expect("missing target parents are created");
+        assert!(target.join("governance.yaml").is_file());
+
+        let real = project.join("real-parent");
+        fs::create_dir(&real).unwrap();
+        symlink(&real, project.join("link-parent")).expect("symlink");
+        let error = create_local_target(
+            project,
+            &project.join("link-parent/local"),
+            serde_json::json!({}),
+        )
+        .expect_err("a symlinked target parent is refused");
+        assert!(
+            format!("{error:#}").contains("must be an existing plain directory"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn local_target_creation_generates_a_missing_project_signing_key_once() {
+        let temporary = tempfile::tempdir().unwrap();
+        let canonical = fs::canonicalize(temporary.path()).unwrap();
+        let project = canonical.as_path();
+        fs::write(project.join("evidence-project.yaml"), "version: 1").unwrap();
+        let mut secrets = fs::DirBuilder::new();
+        secrets.mode(0o700);
+        secrets.create(project.join("secrets")).unwrap();
+        let target = project.join("target");
+        create_local_target(project, &target, serde_json::json!({}))
+            .expect("a project without a signing key gets one");
+        let governance: Value =
+            serde_norway::from_slice(&fs::read(target.join("governance.yaml")).unwrap()).unwrap();
+        let active = governance
+            .pointer("/signing/activePublicJwkFile")
+            .and_then(Value::as_str)
+            .expect("governance names its active key")
+            .to_owned();
+        let written: Value = serde_norway::from_slice(
+            &fs::read(target.join(&active)).expect("the named key file is written"),
+        )
+        .unwrap();
+        let generated: Value = serde_norway::from_slice(
+            &fs::read(project.join("secrets/signing-p256-public.jwk.json"))
+                .expect("the project key was generated"),
+        )
+        .unwrap();
+        assert_eq!(
+            active,
+            format!("public-keys/{}.jwk.json", written["kid"].as_str().unwrap())
+        );
+        assert_eq!(written, generated, "governance and disk name one key");
+        assert!(project.join("secrets/signing-p256-private-jwk").is_file());
+        // The generation is create-only: an identical retry reuses the key and
+        // the authored target unchanged.
+        create_local_target(project, &target, serde_json::json!({}))
+            .expect("an identical retry is harmless");
+        let retried: Value =
+            serde_norway::from_slice(&fs::read(target.join(&active)).unwrap()).unwrap();
+        assert_eq!(retried, generated);
     }
 
     #[test]

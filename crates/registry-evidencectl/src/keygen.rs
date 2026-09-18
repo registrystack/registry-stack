@@ -275,6 +275,26 @@ pub(crate) fn generate_scaffold_key_material(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Generate only the project signing keypair, under the same names and modes
+/// `init` scaffolds it with.
+///
+/// Local target creation needs the project's signing public JWK to name the
+/// governed key in governance; a project that has none gets one here rather
+/// than a refusal, and an existing key is never regenerated.
+pub(crate) fn generate_signing_keypair(out_dir: &Path) -> Result<()> {
+    ensure_private_dir(out_dir)?;
+    run_keypair_impl(
+        generate_p256_keypair()?,
+        out_dir,
+        None,
+        SIGNING_PRIVATE_FILENAME,
+        SIGNING_PUBLIC_FILENAME,
+        false,
+        PUBLIC_FILE_MODE,
+    )?;
+    Ok(())
+}
+
 /// Generate one private development keypair without reporting key material or
 /// paths. Both halves remain owner-only because the pair lives in ephemeral
 /// private supervisor state rather than in a public JWKS artifact.

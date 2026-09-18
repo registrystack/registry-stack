@@ -1103,6 +1103,33 @@ fn local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
     Ok((format!("public-keys/{kid}.jwk.json"), bytes))
 }
 
+/// Read the project's local signing public JWK, creating the keypair once
+/// when the project has none.
+///
+/// `init` scaffolds this key for every new project. A project that lost it,
+/// or was authored without it, gets the same create-only generation here —
+/// under the same names and modes `init` uses — so the governed key reference
+/// this compiler renders and the key material on disk always agree. An
+/// existing key is never regenerated.
+pub(crate) fn ensure_local_signing_public_jwk(project_root: &Path) -> Result<(String, Vec<u8>)> {
+    let public = project_root
+        .join(SECRETS_DIRECTORY)
+        .join(LOCAL_SIGNING_PUBLIC_FILENAME);
+    match fs::symlink_metadata(&public) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            crate::keygen::generate_signing_keypair(&project_root.join(SECRETS_DIRECTORY))
+                .context("generating the local project signing key")?;
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("inspecting local signing public JWK {}", public.display())
+            });
+        }
+    }
+    local_signing_public_jwk(project_root)
+}
+
 fn validate_production_inputs(project_root: &Path, inputs: &Inputs) -> Result<()> {
     validate_deployment_inputs(project_root, inputs, true)
 }
@@ -2154,8 +2181,10 @@ fn compile_referenced_question(
         .expect("referenced source was validated");
     let source_value = sources
         .get(source_id)
-        .ok_or_else(|| {
-            anyhow!("question source ref `{source_id}` has no sources/{source_id}.yaml")
+        .ok_or_else(|| AuthoredDiagnostic {
+            code: "evidence.question.source-missing",
+            path: format!("questions/{}.yaml:/source/ref", question.id),
+            message: format!("question source ref `{source_id}` has no sources/{source_id}.yaml"),
         })?
         .clone();
     validate_referenced_source_authentication(&question.id, source_id, &source_value)?;
@@ -2230,7 +2259,7 @@ fn compile_referenced_subjects(
     let authored = question_subjects(question).map_err(|finding| anyhow!("{}", finding.message))?;
     let mut compiled = Vec::with_capacity(authored.len());
     let mut combinations = 1_usize;
-    for subject in authored {
+    for (subject_index, subject) in authored.into_iter().enumerate() {
         let profiles = if subject.profiles.is_empty() {
             vec![match &subject.profile {
                 Some(profile) => profile.clone(),
@@ -2250,8 +2279,15 @@ fn compile_referenced_subjects(
         for profile in profiles {
             let value = selectors
                 .get(&profile)
-                .ok_or_else(|| {
-                    anyhow!("referenced source question uses missing selectors/{profile}.yaml")
+                .ok_or_else(|| AuthoredDiagnostic {
+                    code: "evidence.question.selector-missing",
+                    path: format!(
+                        "questions/{}.yaml:/subjectProfiles/{subject_index}",
+                        question.id
+                    ),
+                    message: format!(
+                        "referenced source question uses missing selectors/{profile}.yaml"
+                    ),
                 })?
                 .clone();
             let declared_fields = value
@@ -3516,15 +3552,19 @@ fn render_governance_parts(
 }
 
 /// Local target baseline for source-first authoring. Actual local grants are
-/// compiled from authored questions and access policies by `dev`.
-pub(crate) fn local_target_governance(project: &Path) -> Result<Value> {
-    let (key, _) = local_signing_public_jwk(project)?;
+/// compiled from authored questions and access policies by `dev`, and from
+/// the authored questions again wherever the baseline is compiled into a
+/// bundle (`check`, `explain`, `fixtures run`, `build` with `--target`).
+///
+/// The signing key reference is supplied by the caller so the governance
+/// content and the key file written beside it come from one read of one key.
+pub(crate) fn local_target_governance(active_public_jwk_file: &str) -> Result<Value> {
     let mut governance = render_local_bundle(
         &[],
         &[],
         &BTreeMap::new(),
         LocalServicePorts::new(8080, 8081)?,
-        &key,
+        active_public_jwk_file,
         LOCAL_AUDIENCE,
         &LocalAdmission::default(),
     )?;
@@ -3829,6 +3869,44 @@ fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -
                 .collect(),
         ),
     );
+    // A local baseline target carries no authored grants or response formats:
+    // `dev` compiles the actual local ones from the authored questions, so the
+    // baseline this compile renders must do the same or the bundle it produces
+    // carries an authority profile with no grants and a bundle with no enabled
+    // format, both of which the Evidence contract refuses. Only the generated
+    // empty baseline is filled; an authored local governance that declares real
+    // grants or formats is kept exactly as reviewed.
+    if object.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
+        if object
+            .get("responseFormats")
+            .and_then(Value::as_array)
+            .is_some_and(|formats| formats.is_empty())
+        {
+            let compiled = questions
+                .iter()
+                .flat_map(|question| question.response_formats.iter().copied())
+                .map(QuestionResponseFormat::as_str)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            object.insert("responseFormats".to_owned(), json!(compiled));
+        }
+        if let Some(profiles) = object
+            .get_mut("authorityProfiles")
+            .and_then(Value::as_object_mut)
+        {
+            for (name, profile) in profiles.iter_mut() {
+                let empty = profile
+                    .get("grants")
+                    .and_then(Value::as_array)
+                    .is_some_and(|grants| grants.is_empty());
+                if empty {
+                    let compiled = render_authority_profile(name, questions.iter())?;
+                    profile["grants"] = compiled["grants"].clone();
+                }
+            }
+        }
+    }
     Ok(governance)
 }
 
@@ -3956,7 +4034,8 @@ fn write_bundle(
     }
     let config_path = bundle.join("evidence.yaml");
     write_private_file(&config_path, &yaml_bytes(&plan.bundle)?)?;
-    let description = render_discovery_description(evidence_bin, &config_path)?;
+    let description =
+        render_discovery_description(evidence_bin, &config_path, deployment_target_root.is_some())?;
     // Evidence prints a description only for a bundle that declares a
     // publication, and prints nothing for one that does not. Which of the two
     // this is was decided by the bundle written just above, so nothing back
@@ -4068,9 +4147,15 @@ fn write_bundle(
             }
         }
     }
+    let active_public_jwk_file = plan
+        .bundle
+        .pointer("/signing/activePublicJwkFile")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     for path in auxiliary_artifacts(&plan.bundle)? {
         if written_paths.insert(path.clone()) {
-            let artifact_root = if path.starts_with("public-keys/") {
+            let governed_public_key = path.starts_with("public-keys/");
+            let artifact_root = if governed_public_key {
                 deployment_target_root.unwrap_or(project_root)
             } else {
                 project_root
@@ -4079,18 +4164,55 @@ fn write_bundle(
                 artifact_root,
                 &path,
                 MAX_SOURCE_ARTIFACT_BYTES,
-                if path.starts_with("public-keys/") {
+                if governed_public_key {
                     "governed deployment public key"
                 } else {
                     "referenced bundle artifact"
                 },
-            )?;
+            )
+            .map_err(|error| {
+                governed_public_key_fault(&path, active_public_jwk_file.as_deref(), error)
+            })?;
             ensure_generated_parent(&bundle, &path)?;
             write_private_file(&bundle.join(path), &bytes)?;
         }
     }
     set_bundle_modes(&bundle, 0o500, 0o400)?;
     Ok(bundle)
+}
+
+/// Refuse a missing governed public key as a field-addressed diagnostic.
+///
+/// The compile copies the public key files governance names out of the
+/// deployment target, so an absent key means the target is incomplete, not
+/// that the project is unreadable. Naming the governance field that selected
+/// the missing file lets `check` and `explain` refuse with the same shape they
+/// use for every other authored defect; other read failures pass through.
+fn governed_public_key_fault(
+    path: &str,
+    active: Option<&str>,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    let missing = error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
+    });
+    if !missing {
+        return error;
+    }
+    AuthoredDiagnostic {
+        code: "evidence.target.signing-key-missing",
+        path: if Some(path) == active {
+            "governance.yaml:/signing/activePublicJwkFile".to_owned()
+        } else {
+            "governance.yaml:/signing/publishedPublicJwkFiles".to_owned()
+        },
+        message: format!(
+            "the deployment target does not provide the governed public key file {path}"
+        ),
+    }
+    .into()
 }
 
 fn read_project_artifact(
@@ -4238,7 +4360,11 @@ fn check_with_evidence(evidence_bin: &Path, runtime_path: &Path) -> Result<()> {
     bail!("Evidence rejected the compiled local generation: {diagnostic}")
 }
 
-fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Result<Vec<u8>> {
+fn render_discovery_description(
+    evidence_bin: &Path,
+    config_path: &Path,
+    target_authored: bool,
+) -> Result<Vec<u8>> {
     let mut command = Command::new(evidence_bin);
     command
         .arg("render-discovery-description")
@@ -4258,11 +4384,26 @@ fn render_discovery_description(evidence_bin: &Path, config_path: &Path) -> Resu
         }
         return Ok(run.stdout);
     }
+    // Relay the Evidence binary's own message — its validation is closed and
+    // value-free, and it names the publication field that refused — but carry
+    // it as a field-addressed refusal so `check` and `explain` report the
+    // governed document and field instead of a generic offline-check refusal.
     let diagnostic = child_diagnostic(&run.stderr);
-    if diagnostic.is_empty() {
-        bail!("Evidence rejected provider publication compilation");
+    let message = if diagnostic.is_empty() {
+        "Evidence rejected provider publication compilation".to_owned()
+    } else {
+        format!("Evidence rejected provider publication compilation: {diagnostic}")
+    };
+    Err(AuthoredDiagnostic {
+        code: "evidence.target.publication-invalid",
+        path: if target_authored {
+            "governance.yaml:/publication".to_owned()
+        } else {
+            "evidence.yaml:/publication".to_owned()
+        },
+        message,
     }
-    bail!("Evidence rejected provider publication compilation: {diagnostic}")
+    .into())
 }
 
 /// The longest provider publication description evidencectl accepts from the
@@ -6108,6 +6249,246 @@ factSchema: schemas/source-facts.schema.yaml
         assert_eq!(compiled.fixture_paths, ["fixtures/adult-status.yaml"]);
     }
 
+    /// The generated local baseline is compiled, not authored: its empty
+    /// grants and empty response formats are filled from the project's
+    /// questions exactly as a `dev` compile would, or every check, explain,
+    /// and fixtures run against the target would be refused by the Evidence
+    /// contract for an empty collection.
+    #[test]
+    fn a_local_baseline_target_compiles_its_grants_and_formats_from_the_questions() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        assert!(
+            governed["authorityProfiles"]["local-caller"]["grants"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            "the generated baseline carries no grants"
+        );
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("the baseline compiles against its own project");
+        let grants = compiled.bundle["authorityProfiles"]["local-caller"]["grants"]
+            .as_array()
+            .unwrap();
+        assert!(!grants.is_empty(), "grants are compiled from the questions");
+        assert_eq!(
+            grants[0]["requirement"],
+            "urn:authority:requirement:adult-status:v1"
+        );
+        assert_eq!(
+            compiled.bundle["responseFormats"],
+            json!(["signed-jws"]),
+            "formats are compiled from the questions"
+        );
+    }
+
+    /// An authored local governance keeps the grants and formats it declares:
+    /// only the generated empty baseline is filled, so an operator's reviewed
+    /// authority is never silently widened or replaced.
+    #[test]
+    fn an_authored_local_governance_keeps_its_own_grants_and_formats() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let authored_grants = json!([{
+            "requirement": "urn:authority:requirement:adult-status:v1",
+            "purpose": "age-check",
+            "audienceFrom": "authenticated-requester",
+            "subjects": [{"role": "person", "selectorProfile": "person-reference-v1", "valueOrigin": "authenticated-token"}],
+        }]);
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        let mut governed = governed;
+        governed["authorityProfiles"]["local-caller"]["grants"] = authored_grants.clone();
+        governed["responseFormats"] = json!(["signed-jws", "unsigned-json"]);
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("authored local governance compiles unchanged");
+        assert_eq!(
+            compiled.bundle["authorityProfiles"]["local-caller"]["grants"], authored_grants,
+            "authored grants are preserved exactly"
+        );
+        assert_eq!(
+            compiled.bundle["responseFormats"],
+            json!(["signed-jws", "unsigned-json"]),
+            "authored formats are preserved exactly"
+        );
+    }
+
+    /// Author the referenced-people project shape the two baseline tests use:
+    /// one governed question with stable deployment governance and a fixture.
+    fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
+        let question = write_referenced_people_project(fixture, authentication);
+        let mut question: Value = serde_norway::from_str(&question).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:is-adult:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:adult-status:v1", "kind":"criterion",
+            "referenceFrameworks":["urn:authority:framework:adult-status:v1"],
+            "evidenceType":"urn:authority:evidence-type:adult-status:v1", "validitySeconds":900,
+            "observationTimezone":"Asia/Bangkok", "fixtures":"fixtures/adult-status.yaml",
+            "disclosureFamilies":["urn:authority:disclosure-family:adult-status:v1"]
+        });
+        fs::write(
+            fixture.project.join("questions/adult-status.yaml"),
+            serde_norway::to_string(&question).unwrap(),
+        )
+        .unwrap();
+        fs::create_dir(fixture.project.join("fixtures")).unwrap();
+        fs::write(
+            fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_missing_referenced_source_is_refused_as_a_field_addressed_diagnostic() {
+        let inline = r#"source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+"#;
+        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
+        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let authored = AuthoredQuestion {
+            question,
+            derivation: ANSWER.to_owned(),
+        };
+        let error = match compile_referenced_question(
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            authored,
+        ) {
+            Ok(_) => panic!("the referenced source is absent"),
+            Err(error) => error,
+        };
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is field-addressed");
+        assert_eq!(diagnostic.code, "evidence.question.source-missing");
+        assert_eq!(diagnostic.path, "questions/adult-status.yaml:/source/ref");
+        assert!(
+            diagnostic
+                .message
+                .contains("question source ref `people` has no sources/people.yaml"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_missing_selector_profile_is_refused_as_a_field_addressed_diagnostic() {
+        let inline = r#"source:
+  operation: getPerson
+  facts:
+    - name: date_of_birth
+      path: /date_of_birth
+      combine: exactly-one
+  collectionBounds: {}
+"#;
+        let referenced = QUESTION.replace(inline, "source:\n  ref: people\n");
+        let question: Question = serde_norway::from_str(&referenced).unwrap();
+        let source: Value = serde_norway::from_str(&format!(
+            "transport: http-json\nbaseUrl: https://records.example.test\nposture: field-projected\nauthentication: {{kind: none}}\n{REFERENCED_SOURCE_TAIL}"
+        ))
+        .unwrap();
+        let sources = BTreeMap::from([("people".to_owned(), source)]);
+        let authored = AuthoredQuestion {
+            question,
+            derivation: ANSWER.to_owned(),
+        };
+        let error = match compile_referenced_question(
+            &BTreeMap::new(),
+            &sources,
+            &BTreeMap::new(),
+            authored,
+        ) {
+            Ok(_) => panic!("the referenced selector profile is absent"),
+            Err(error) => error,
+        };
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("the refusal is field-addressed");
+        assert_eq!(diagnostic.code, "evidence.question.selector-missing");
+        assert_eq!(
+            diagnostic.path, "questions/adult-status.yaml:/subjectProfiles/0",
+            "the path names the subject alternative index"
+        );
+        assert!(
+            diagnostic
+                .message
+                .contains("missing selectors/person-reference-v1.yaml"),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    #[test]
+    fn a_missing_governed_public_key_is_refused_as_a_field_addressed_diagnostic() {
+        let not_found: anyhow::Error = std::io::Error::from(std::io::ErrorKind::NotFound).into();
+        let wrapped = not_found.context("opening governed deployment public key");
+        let active = "public-keys/_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo.jwk.json";
+        let error = governed_public_key_fault(active, Some(active), wrapped);
+        let diagnostic = error
+            .downcast_ref::<AuthoredDiagnostic>()
+            .expect("a missing key names its governance field");
+        assert_eq!(diagnostic.code, "evidence.target.signing-key-missing");
+        assert_eq!(
+            diagnostic.path,
+            "governance.yaml:/signing/activePublicJwkFile"
+        );
+        assert!(
+            diagnostic.message.contains(active),
+            "{}",
+            diagnostic.message
+        );
+
+        let published = "public-keys/retired.jwk.json";
+        let error = governed_public_key_fault(
+            published,
+            Some(active),
+            std::io::Error::from(std::io::ErrorKind::NotFound).into(),
+        );
+        assert_eq!(
+            error.downcast_ref::<AuthoredDiagnostic>().unwrap().path,
+            "governance.yaml:/signing/publishedPublicJwkFiles"
+        );
+
+        // A read failure that is not an absent file stays operational.
+        let denied: anyhow::Error =
+            std::io::Error::from(std::io::ErrorKind::PermissionDenied).into();
+        let error = governed_public_key_fault(active, Some(active), denied);
+        assert!(error.downcast_ref::<AuthoredDiagnostic>().is_none());
+    }
+
     /// Build the same referenced-people target project as
     /// `local_target_compilation_keeps_target_governance_without_local_secrets`,
     /// but under the given assurance profile and source authentication, and
@@ -7913,7 +8294,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
         let diagnostic = format!("{error:#}");
         assert!(
@@ -7930,7 +8311,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
         assert_eq!(
             format!("{error:#}"),
@@ -7969,7 +8350,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -8018,7 +8399,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -8047,7 +8428,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("an oversized description must be refused");
 
         assert!(format!("{error:#}").contains("longer than"), "{error:#}");
@@ -8064,7 +8445,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");
@@ -8089,7 +8470,7 @@ factSchema: schemas/family-facts.schema.yaml
         let config_path = root.path().join("evidence.yaml");
         fs::write(&config_path, "questions: []\n").expect("config");
 
-        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path))
+        let error = retry_busy_stub(|| render_discovery_description(&evidence, &config_path, true))
             .expect_err("a rejected compilation must fail");
 
         let diagnostic = format!("{error:#}");

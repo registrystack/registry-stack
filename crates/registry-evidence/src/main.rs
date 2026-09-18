@@ -364,8 +364,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::RenderDiscoveryDescription { config } => {
             let bytes = fs::read(config).map_err(|_| DISCOVERY_CONFIG_UNREADABLE)?;
-            let config =
-                EvidenceConfig::parse_yaml(&bytes).map_err(|_| DISCOVERY_CONFIG_INVALID)?;
+            let config = EvidenceConfig::parse_yaml(&bytes).map_err(discovery_config_invalid)?;
             // Configuration validation projects the publication before it
             // accepts the document, so every projection refusal is already
             // reported as an invalid configuration and this call cannot fail
@@ -440,9 +439,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
 ///
 /// Each stage of the compilation reports its own class, so an adopter learns
 /// whether the configuration was unreadable, refused as Evidence
-/// configuration, or never reached standard output. Every class is fixed text:
-/// the configured path and the document's own keys and scalars stay out of it,
-/// exactly as they stay out of `check`.
+/// configuration, or never reached standard output. Every class is fixed
+/// text: the configured path and the document's own keys and scalars stay out
+/// of it, exactly as they stay out of `check`.
+///
+/// A parse refusal appends the parser's closed, value-free cause — the
+/// contract clause or bound that refused, plus the schema path and text
+/// location when the decoder knew them — so an operator learns which field
+/// failed without any configured value reaching the message.
 ///
 /// The projection has no class of its own because it has no refusal of its
 /// own. `EvidenceConfig::validate` renders the publication before it accepts
@@ -455,6 +459,19 @@ const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
+
+/// Report a refused discovery configuration with the cause the parser carried.
+///
+/// The class is the same fixed text as every other invalid configuration; the
+/// appended cause is the parser's own value-free diagnostic, which names the
+/// contract clause and, for a bound violation, the closed field label it
+/// applies to.
+fn discovery_config_invalid(error: ConfigError) -> CommandError {
+    CommandError::Deployment(
+        "discovery description configuration is not valid Evidence configuration",
+        ArtifactFault::new("evidence.yaml", error.fault()),
+    )
+}
 
 /// Report a startup failure with the artifact diagnostic it carries.
 ///
@@ -5228,12 +5245,33 @@ mod tests {
                 .await
                 .expect_err("a document that is not Evidence configuration is refused");
 
-            assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
+            let CommandError::Deployment(message, artifact) = &error else {
+                panic!("an invalid configuration reports its class: {error}");
+            };
+            assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
+            assert_eq!(artifact.artifact(), "evidence.yaml");
             let rendered = error.to_string();
             for content in [name, "unknownSetting", "parcel-owner-lookup"] {
                 assert!(!rendered.contains(content), "{rendered}");
             }
         }
+    }
+
+    /// A refused configuration carries the parser's closed, value-free cause,
+    /// so the operator learns which bound or field refused the document
+    /// without any configured value reaching the message.
+    #[test]
+    fn a_refused_discovery_configuration_carries_the_field_named_cause() {
+        let error = discovery_config_invalid(ConfigError::InvalidField(
+            "collection cardinality is outside Version 1 bounds",
+            "publication jurisdictions",
+        ));
+        assert_eq!(
+            error.to_string(),
+            "discovery description configuration is not valid Evidence configuration: \
+             artifact evidence.yaml: collection cardinality is outside Version 1 bounds \
+             (publication jurisdictions)"
+        );
     }
 
     /// Configuration validation refuses every scalar the shared public profile
@@ -5267,7 +5305,12 @@ mod tests {
             .await
             .expect_err("a publication the shared profile refuses is not compiled");
 
-        assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
+        let CommandError::Deployment(message, artifact) = &error else {
+            panic!("an unprojectable publication reports its class: {error}");
+        };
+        assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
+        assert_eq!(artifact.artifact(), "evidence.yaml");
+        assert_eq!(artifact.fault().cause(), "URI is invalid");
     }
 
     #[test]

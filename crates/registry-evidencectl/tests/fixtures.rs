@@ -1163,6 +1163,109 @@ fn evidence_bin_env_var_is_used_when_the_flag_is_omitted() {
     assert_eq!(invocations.len(), 2, "check plus one fixture");
 }
 
+/// The documented local authoring journey, end to end: scaffold a project,
+/// create its first local target without pre-creating `targets/`, then check
+/// and explain the project against that target.
+///
+/// `target new --local` names the governed signing key in governance and
+/// writes the same key beside it from one read, so the target it publishes is
+/// the one the offline check accepts: `check --target` and `explain --target`
+/// must both complete rather than refuse, which is what a fresh adopter sees
+/// before any hand-authored governance exists.
+#[test]
+fn a_fresh_local_target_journey_checks_and_explains_without_a_pretargets_directory() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let project = root.join("project");
+    let created = evidencectl()
+        .args(["new"])
+        .arg(&project)
+        .args(["--transport", "sqlite-extract", "--profile", "local"])
+        .output()
+        .expect("create SQLite starter");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+    assert!(
+        !project.join("targets").exists(),
+        "init scaffolds no targets/ directory; target new must create it"
+    );
+
+    let target = project.join("targets/local");
+    let created = evidencectl()
+        .args(["target", "new"])
+        .arg(&target)
+        .arg("--project")
+        .arg(&project)
+        .arg("--local")
+        .output()
+        .expect("create the first local target");
+    assert!(created.status.success(), "{}", stderr_of(&created));
+
+    // The governed key reference and the written key file must name the same
+    // material, drawn from the project's own signing key.
+    let governance: serde_json::Value = serde_norway::from_slice(
+        &fs::read(target.join("governance.yaml")).expect("governance is written"),
+    )
+    .expect("governance parses");
+    let active = governance["signing"]["activePublicJwkFile"]
+        .as_str()
+        .expect("governance names its active key");
+    assert_eq!(
+        fs::read(target.join(active)).expect("the named key is written"),
+        fs::read(project.join("secrets/signing-p256-public.jwk.json"))
+            .expect("the project signing key"),
+        "governance and the written key file come from one read"
+    );
+
+    // The stub answers the version handshake, the provider-publication
+    // compiler, and the bundle-only check seam with the report shape
+    // `evidencectl check --target` parses.
+    let stub = root.join("evidence");
+    let stub_script = format!(
+        concat!(
+            "#!/bin/sh\n",
+            "if [ \"${{1:-}}\" = \"--version\" ]; then\n",
+            "  printf 'evidence %s\\n' \"{version}\"\n",
+            "  exit 0\n",
+            "fi\n",
+            "case \"$1\" in\n",
+            "  render-discovery-description) printf 'stub catalog\\n'; exit 0 ;;\n",
+            "  bundle-check) printf '%s\\n' '{report}'; exit 0 ;;\n",
+            "esac\n",
+            "exit 0\n",
+        ),
+        version = registry_platform_buildinfo::DISPLAY_VERSION,
+        report = r#"{"bundleRevision":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","requirements":[{"id":"urn:example:requirement:record-status:v1","configurationRevision":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}]}"#,
+    );
+    fs::write(&stub, stub_script).expect("write check stub");
+    let mut permissions = fs::metadata(&stub).expect("stat stub").permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&stub, permissions).expect("chmod stub");
+    let checked = evidencectl()
+        .args(["check"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("check against the fresh target");
+    assert!(checked.status.success(), "{}", stderr_of(&checked));
+    let stdout = stdout_of(&checked);
+    assert!(stdout.contains("deployment-closure"), "{stdout}");
+
+    let explained = evidencectl()
+        .args(["explain"])
+        .arg(&project)
+        .arg("--target")
+        .arg(&target)
+        .env("EVIDENCE_BIN", &stub)
+        .output()
+        .expect("explain against the fresh target");
+    assert!(explained.status.success(), "{}", stderr_of(&explained));
+    let stdout = stdout_of(&explained);
+    assert!(stdout.contains("Status: complete"), "{stdout}");
+    assert!(stdout.contains("record-status"), "{stdout}");
+}
+
 #[test]
 fn local_target_created_before_questions_uses_current_local_caller_governance() {
     let dir = tempfile::tempdir().expect("tempdir");
