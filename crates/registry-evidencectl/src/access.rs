@@ -510,12 +510,12 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
     if document.status == ClientStatus::Revoked {
         bail!("client {} is already revoked", args.client);
     }
-    document.status = ClientStatus::Revoked;
-    replace_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
     // Nothing consumes a revoked client's private state, and re-adding the
     // same id is refused while its directory exists, so revocation removes
     // the directory rather than retaining key material no client can use.
-    // A client admitted without a local key has no directory to remove.
+    // A client admitted without a local key has no directory to remove. The
+    // directory is removed before the record is marked revoked: if removal
+    // fails, the record is left untouched and a rerun retries the removal.
     let private_directory = project
         .join(PRIVATE_STATE_DIRECTORY)
         .join(CLIENTS_DIRECTORY)
@@ -540,6 +540,8 @@ fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCo
             })
         }
     };
+    document.status = ClientStatus::Revoked;
+    replace_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
     match format {
         OutputFormat::Human => match &removed {
             Some(removed) => println!(

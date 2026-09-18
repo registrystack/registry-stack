@@ -211,6 +211,44 @@ fn revoke_updates_public_status_and_removes_the_local_private_key() {
 }
 
 #[test]
+fn revoke_leaves_the_record_untouched_when_the_private_directory_cannot_be_removed() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+    success(&add_policy(project, "age-checks", &["adult-status"]));
+    success(&add_client(project, "age-checker", &["age-checks"]));
+    let private_directory = project.join(".evidence/clients/age-checker");
+    let private_directory_mode = mode(&private_directory);
+
+    // Read-only on the client directory itself (the parent of private.jwk)
+    // blocks unlinking the key file, not just removing the now-empty
+    // directory, so the removal fails before any private state is lost.
+    fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o500))
+        .expect("read-only client directory");
+    let blocked = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
+    fs::set_permissions(
+        &private_directory,
+        fs::Permissions::from_mode(private_directory_mode),
+    )
+    .expect("restore client directory mode");
+
+    assert!(!blocked.status.success());
+    assert!(private_directory.join("private.jwk").is_file());
+    let document: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/age-checker.yaml")).expect("client document"),
+    )
+    .expect("yaml");
+    assert_eq!(document["status"], "active");
+
+    let retried = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
+    assert_eq!(
+        success(&retried),
+        "Revoked client age-checker (removed local private key .evidence/clients/age-checker).\n"
+    );
+    assert!(!private_directory.exists());
+}
+
+#[test]
 fn unsafe_or_symlinked_access_directory_publishes_no_access_artifact() {
     let fixture = tempfile::tempdir().expect("tempdir");
     let project = fixture.path();
