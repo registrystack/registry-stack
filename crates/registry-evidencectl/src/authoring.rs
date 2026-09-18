@@ -443,7 +443,7 @@ pub(crate) fn compile_target_project(
     let deployment_target_root = fs::canonicalize(deployment_target_root)
         .context("resolving deployment target directory")?;
     validate_private_empty_staging(staging_root)?;
-    let inputs = read_inputs(&project_root, false)?;
+    let mut inputs = read_inputs(&project_root, false)?;
     let production = match governed_bundle
         .get("assuranceProfile")
         .and_then(Value::as_str)
@@ -454,6 +454,20 @@ pub(crate) fn compile_target_project(
             "deployment governance assuranceProfile must be local, production, or evidence-grade"
         ),
     };
+    if !production {
+        // A local target is a local bundle, so it takes its authority from the
+        // authored access policies `dev` compiles rather than from every
+        // question. A production or evidence-grade target is governed by its
+        // reviewed deployment governance and reads no local access at all.
+        let question_ids = inputs
+            .questions
+            .iter()
+            .map(|authored| authored.question.id.clone())
+            .collect::<BTreeSet<_>>();
+        let local_access = read_local_access(&project_root, &question_ids)?;
+        inputs.access_policies = local_access.access_policies;
+        inputs.active_client_policies = local_access.active_client_policies;
+    }
     validate_deployment_inputs(&project_root, &inputs, production)?;
     let plan = compile_plan(inputs, CompileProfile::Production(governed_bundle))?;
     if production {
@@ -763,6 +777,13 @@ struct Inputs {
     active_client_policies: BTreeMap<String, Vec<String>>,
 }
 
+/// The authored access a local bundle takes its authority profiles from.
+#[derive(Default)]
+struct LocalAccess {
+    access_policies: Vec<AuthoredAccessPolicy>,
+    active_client_policies: BTreeMap<String, Vec<String>>,
+}
+
 #[derive(Clone)]
 struct AuthoredAccessPolicy {
     id: String,
@@ -1046,18 +1067,10 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
             derivation,
         });
     }
-    let access_policies = if require_local_secrets {
-        read_access_policies(project_root, &question_ids)?
+    let local_access = if require_local_secrets {
+        read_local_access(project_root, &question_ids)?
     } else {
-        Vec::new()
-    };
-    let active_client_policies = if access_policies
-        .iter()
-        .any(|policy| policy.task_grant.is_some())
-    {
-        crate::access::active_client_policies(project_root)?
-    } else {
-        BTreeMap::new()
+        LocalAccess::default()
     };
 
     if require_local_secrets {
@@ -1079,8 +1092,8 @@ fn read_inputs(project_root: &Path, require_local_secrets: bool) -> Result<Input
         sources,
         schemas,
         questions,
-        access_policies,
-        active_client_policies,
+        access_policies: local_access.access_policies,
+        active_client_policies: local_access.active_client_policies,
     })
 }
 
@@ -1273,6 +1286,27 @@ fn validate_production_sources(bundle: &Value) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The authored access policies a local bundle takes its authority from, with
+/// the client assignments a task grant among them is checked against.
+///
+/// A project that authored no policy has neither, and the compile falls back
+/// to the implicit caller profile over every question.
+fn read_local_access(project_root: &Path, question_ids: &BTreeSet<String>) -> Result<LocalAccess> {
+    let access_policies = read_access_policies(project_root, question_ids)?;
+    let active_client_policies = if access_policies
+        .iter()
+        .any(|policy| policy.task_grant.is_some())
+    {
+        crate::access::active_client_policies(project_root)?
+    } else {
+        BTreeMap::new()
+    };
+    Ok(LocalAccess {
+        access_policies,
+        active_client_policies,
+    })
 }
 
 fn read_access_policies(
@@ -1696,7 +1730,12 @@ fn compile_plan_with_connections(
             })
         }
         CompileProfile::Production(governance) => {
-            let bundle = render_production_bundle(&questions, governance)?;
+            let bundle = render_production_bundle(
+                &questions,
+                &access_policies,
+                &active_client_policies,
+                governance,
+            )?;
             Ok(CompilePlan {
                 questions,
                 access_policies,
@@ -3623,28 +3662,8 @@ fn render_local_bundle(
         .iter()
         .map(|question| (question.source_id.clone(), question.source_value.clone()))
         .collect::<Map<_, _>>();
-    let authority_profiles = if access_policies.is_empty() {
-        Map::from_iter([(
-            AUTHORITY_PROFILE_ID.to_owned(),
-            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
-        )])
-    } else {
-        access_policies
-            .iter()
-            .map(|policy| {
-                let covered = policy.questions.iter().map(|question_id| {
-                    questions
-                        .iter()
-                        .find(|question| question.question_id == *question_id)
-                        .expect("access policy questions were validated")
-                });
-                Ok((
-                    policy.requester_tag.clone(),
-                    render_policy_authority_profile(policy, covered, active_client_policies)?,
-                ))
-            })
-            .collect::<Result<Map<_, _>>>()?
-    };
+    let authority_profiles =
+        render_local_authority_profiles(questions, access_policies, active_client_policies)?;
     let requirements = questions
         .iter()
         .map(|question| question.requirement.clone())
@@ -3743,6 +3762,42 @@ fn local_resource_identity(audience: &str, role: &str) -> String {
     } else {
         format!("{audience}#{role}")
     }
+}
+
+/// The authority profiles a local bundle carries: one per authored access
+/// policy, holding only the grants of the questions that policy names, or a
+/// single implicit caller profile over every question when the project
+/// authored no policy at all.
+///
+/// Every local bundle this compiler renders, for `dev` and for a generated
+/// `target` baseline alike, takes its profiles from here, so no compiled
+/// target carries authority wider than the policies the author wrote.
+fn render_local_authority_profiles(
+    questions: &[QuestionPlan],
+    access_policies: &[AuthoredAccessPolicy],
+    active_client_policies: &BTreeMap<String, Vec<String>>,
+) -> Result<Map<String, Value>> {
+    if access_policies.is_empty() {
+        return Ok(Map::from_iter([(
+            AUTHORITY_PROFILE_ID.to_owned(),
+            render_authority_profile(AUTHORITY_PROFILE_ID, questions.iter())?,
+        )]));
+    }
+    access_policies
+        .iter()
+        .map(|policy| {
+            let covered = policy.questions.iter().map(|question_id| {
+                questions
+                    .iter()
+                    .find(|question| question.question_id == *question_id)
+                    .expect("access policy questions were validated")
+            });
+            Ok((
+                policy.requester_tag.clone(),
+                render_policy_authority_profile(policy, covered, active_client_policies)?,
+            ))
+        })
+        .collect::<Result<Map<_, _>>>()
 }
 
 fn render_policy_authority_profile<'a>(
@@ -3863,7 +3918,12 @@ fn render_authority_profile<'a>(
     }))
 }
 
-fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -> Result<Value> {
+fn render_production_bundle(
+    questions: &[QuestionPlan],
+    access_policies: &[AuthoredAccessPolicy],
+    active_client_policies: &BTreeMap<String, Vec<String>>,
+    mut governance: Value,
+) -> Result<Value> {
     let object = governance
         .as_object_mut()
         .ok_or_else(|| anyhow!("deployment governance must be an object"))?;
@@ -3899,6 +3959,11 @@ fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -
     // format, both of which the Evidence contract refuses. Only the generated
     // empty baseline is filled; an authored local governance that declares real
     // grants or formats is kept exactly as reviewed.
+    //
+    // A project that authored access policies has the empty baseline profiles
+    // replaced by the profiles those policies grant, exactly as `dev` renders
+    // them, so the target never holds an implicit caller profile over every
+    // question the author never granted together.
     if object.get("assuranceProfile").and_then(Value::as_str) == Some("local") {
         if object
             .get("responseFormats")
@@ -3918,15 +3983,27 @@ fn render_production_bundle(questions: &[QuestionPlan], mut governance: Value) -
             .get_mut("authorityProfiles")
             .and_then(Value::as_object_mut)
         {
-            for (name, profile) in profiles.iter_mut() {
-                let empty = profile
+            let generated = |profile: &Value| {
+                profile
                     .get("grants")
                     .and_then(Value::as_array)
-                    .is_some_and(|grants| grants.is_empty());
-                if empty {
-                    let compiled = render_authority_profile(name, questions.iter())?;
-                    profile["grants"] = compiled["grants"].clone();
+                    .is_some_and(|grants| grants.is_empty())
+            };
+            if access_policies.is_empty() {
+                for (name, profile) in profiles.iter_mut() {
+                    if generated(profile) {
+                        let compiled = render_authority_profile(name, questions.iter())?;
+                        profile["grants"] = compiled["grants"].clone();
+                    }
                 }
+            } else if profiles.values().any(generated) {
+                let mut granted = render_local_authority_profiles(
+                    questions,
+                    access_policies,
+                    active_client_policies,
+                )?;
+                profiles.retain(|_, profile| !generated(profile));
+                profiles.append(&mut granted);
             }
         }
     }
@@ -6423,6 +6500,54 @@ factSchema: schemas/source-facts.schema.yaml
         );
     }
 
+    /// A generated local baseline carries the authority the project's access
+    /// policies grant. A policy naming one of two questions compiles into a
+    /// profile that answers that question alone, so no target holds authority
+    /// wider than a policy the author wrote.
+    #[test]
+    fn a_local_baseline_target_compiles_only_the_grants_its_access_policies_name() {
+        let fixture = Fixture::new(OPENAPI, QUESTION, ANSWER, true);
+        write_governed_referenced_people_project(&fixture, "authentication: {kind: none}\n");
+        add_governed_age_bracket_question(&fixture);
+        fixture.add_access_policy("age-checks", &["adult-status"]);
+        fs::create_dir(fixture.project.join("public-keys")).unwrap();
+        fs::write(
+            fixture.project.join(OFFLINE_CHECK_PUBLIC_JWK_FILE),
+            OFFLINE_CHECK_PUBLIC_JWK,
+        )
+        .unwrap();
+        let governed = local_target_governance(OFFLINE_CHECK_PUBLIC_JWK_FILE).unwrap();
+        let project = fs::canonicalize(&fixture.project).unwrap();
+        let compiled = compile_target_project(
+            &project,
+            &project,
+            &fixture.staging,
+            governed,
+            &fixture.evidence,
+        )
+        .expect("the baseline compiles against its own project");
+        let profiles = compiled.bundle["authorityProfiles"]
+            .as_object()
+            .expect("authority profiles");
+        let tag = access_policy_requester_tag("age-checks", &["adult-status".to_owned()]).unwrap();
+        assert_eq!(
+            profiles.keys().collect::<Vec<_>>(),
+            [&tag],
+            "the policy replaces the generated baseline profile"
+        );
+        let requirements = profiles[&tag]["grants"]
+            .as_array()
+            .expect("compiled grants")
+            .iter()
+            .map(|grant| grant["requirement"].as_str().expect("grant requirement"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            requirements,
+            ["urn:authority:requirement:adult-status:v1"],
+            "the question the policy does not name is never granted"
+        );
+    }
+
     /// Author the referenced-people project shape the two baseline tests use:
     /// one governed question with stable deployment governance and a fixture.
     fn write_governed_referenced_people_project(fixture: &Fixture, authentication: &str) {
@@ -6444,6 +6569,31 @@ factSchema: schemas/source-facts.schema.yaml
         fs::create_dir(fixture.project.join("fixtures")).unwrap();
         fs::write(
             fixture.project.join("fixtures/adult-status.yaml"),
+            "version: 1\ncases: []\n",
+        )
+        .unwrap();
+    }
+
+    /// Author a second governed question beside the baseline project's first,
+    /// so a target compile holds two question grants an access policy may
+    /// name one of.
+    fn add_governed_age_bracket_question(fixture: &Fixture) {
+        let mut question: Value = serde_norway::from_str(AGE_BRACKET_QUESTION).unwrap();
+        question["answers"][0]["id"] = json!("urn:authority:concept:age-bracket:v1");
+        question["governance"] = json!({
+            "requirement": "urn:authority:requirement:age-bracket:v1",
+            "kind": "information-requirement",
+            "referenceFrameworks": ["urn:authority:framework:age-bracket:v1"],
+            "evidenceType": "urn:authority:evidence-type:age-bracket:v1", "validitySeconds": 900,
+            "observationTimezone": "Asia/Bangkok", "fixtures": "fixtures/age-bracket.yaml",
+            "disclosureFamilies": ["urn:authority:disclosure-family:age-bracket:v1"]
+        });
+        fixture.add_question(
+            &serde_norway::to_string(&question).unwrap(),
+            AGE_BRACKET_ANSWER,
+        );
+        fs::write(
+            fixture.project.join("fixtures/age-bracket.yaml"),
             "version: 1\ncases: []\n",
         )
         .unwrap();
