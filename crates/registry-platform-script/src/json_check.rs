@@ -88,6 +88,7 @@ pub fn check_no_duplicate_members(bytes: &[u8]) -> Result<Value, DuplicateMember
         error: Rc::clone(&error),
     };
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
+    // The visitor walk's recursion depth is bounded by serde_json's default 128-level nesting cap; enabling `unbounded_depth` on this deserializer would silently remove that bound.
     let result = serde::Deserializer::deserialize_any(&mut deserializer, visitor);
     match result {
         Ok(value) => deserializer
@@ -297,6 +298,24 @@ mod tests {
         );
         assert_eq!(check_no_duplicate_members(b"null").unwrap(), json!(null));
         assert_eq!(check_no_duplicate_members(b"true").unwrap(), json!(true));
+    }
+
+    #[test]
+    fn malformed_utf8_is_reported_as_malformed_never_a_panic() {
+        // Guest-returned outcome bytes are not trusted to be UTF-8: invalid
+        // sequences surface as a bounded decode error.
+        for bytes in [
+            b"{\"a\": \"\xff\xfe\"}".as_slice(),
+            b"{\"a\": \"\xc3\x28\"}".as_slice(),
+            b"\xff".as_slice(),
+        ] {
+            let err = check_no_duplicate_members(bytes).unwrap_err();
+            assert_eq!(err.duplicate_path(), None, "{bytes:?}");
+            assert!(
+                err.to_string().starts_with("not valid JSON"),
+                "{bytes:?}: {err}"
+            );
+        }
     }
 
     #[test]
