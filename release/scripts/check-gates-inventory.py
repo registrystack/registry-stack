@@ -445,6 +445,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
 
 RELEASE_SECURITY_POLICY_PATHS = (
     ".github/workflows/codeql.yml",
+    ".github/workflows/mirror-buildkit.yml",
     ".github/workflows/docs-pages.yml",
     ".github/workflows/evidence-dev.yml",
     ".github/workflows/nightly-rust-coverage.yml",
@@ -465,6 +466,7 @@ RELEASE_SECURITY_POLICY_PATHS = (
 
 REQUIRED_SECURITY_WORKFLOW_SELECTIONS: dict[str, frozenset[str]] = {
     ".github/workflows/codeql.yml": frozenset({"release_tool"}),
+    ".github/workflows/mirror-buildkit.yml": frozenset({"release_tool"}),
     ".github/workflows/docs-pages.yml": frozenset(
         {"docs", "release_source_proof", "release_tool"}
     ),

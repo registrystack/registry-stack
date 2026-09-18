@@ -1,0 +1,124 @@
+name: Mirror BuildKit image
+
+# CI and release tooling pin ghcr.io/registrystack/buildkit, a
+# digest-preserving mirror of the public moby/buildkit image, so builders do
+# not depend on Docker Hub authentication availability. This package-write
+# workflow stays on repository_dispatch so an operator cannot select
+# branch-controlled workflow code. Mirror run:
+# gh api --method POST repos/registrystack/registry-stack/dispatches \
+#   -f event_type=mirror-buildkit \
+#   -F 'client_payload[tag]=v0.31.2' \
+#   -F 'client_payload[digest]=sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec'
+on:
+  repository_dispatch:
+    types: [mirror-buildkit]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-buildkit
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: registrystack
+  SOURCE_IMAGE: docker.io/moby/buildkit
+  MIRROR_PACKAGE: buildkit
+  CRANE_VERSION: v0.21.2
+  CRANE_LINUX_AMD64_SHA256: 897e7c342db072ba76531246fc18fbf3e8e298688b6ecf98916770984b263866
+
+jobs:
+  mirror:
+    name: Copy the pinned BuildKit image to the registry mirror
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      REQUESTED_TAG: ${{ github.event.client_payload.tag }}
+      REQUESTED_DIGEST: ${{ github.event.client_payload.digest }}
+    steps:
+      - name: Checkout protected mirror tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          submodules: false
+
+      - name: Validate mirror request
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REPOSITORY}" != "registrystack/registry-stack" ]]; then
+            echo "BuildKit mirroring can only run in registrystack/registry-stack" >&2
+            exit 1
+          fi
+          if [[ "${REQUESTED_TAG}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "tag: ${REQUESTED_TAG}"
+          else
+            echo "client_payload.tag must be a canonical vMAJOR.MINOR.PATCH value" >&2
+            exit 1
+          fi
+          if [[ "${REQUESTED_DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "digest: ${REQUESTED_DIGEST}"
+          else
+            echo "client_payload.digest must be a lowercase sha256:<64 hex> value" >&2
+            exit 1
+          fi
+
+      - name: Install pinned crane
+        env:
+          STEP_CRANE_SHA256: ${{ env.CRANE_LINUX_AMD64_SHA256 }}
+          STEP_CRANE_VERSION: ${{ env.CRANE_VERSION }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${HOME}/.local/bin" "${RUNNER_TEMP}/tools"
+          curl -sSfL \
+            "https://github.com/google/go-containerregistry/releases/download/${STEP_CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz" \
+            -o "${RUNNER_TEMP}/tools/crane.tar.gz"
+          echo "${STEP_CRANE_SHA256}  ${RUNNER_TEMP}/tools/crane.tar.gz" \
+            | sha256sum --check --strict
+          tar -xzf "${RUNNER_TEMP}/tools/crane.tar.gz" \
+            -C "${HOME}/.local/bin" crane
+          echo "${HOME}/.local/bin" >> "${GITHUB_PATH}"
+
+      - name: Mirror the pinned image digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mirror_tag="${REGISTRY}/${IMAGE_NAMESPACE}/${MIRROR_PACKAGE}:${REQUESTED_TAG}"
+          if [[ "$(crane digest "${SOURCE_IMAGE}:${REQUESTED_TAG}")" != "${REQUESTED_DIGEST}" ]]; then
+            echo "upstream ${SOURCE_IMAGE}:${REQUESTED_TAG} no longer resolves to ${REQUESTED_DIGEST}" >&2
+            echo "re-pin the new digest in the workflows before mirroring" >&2
+            exit 1
+          fi
+          printf '%s' "${GH_TOKEN}" \
+            | crane auth login "${REGISTRY}" \
+                --username "${GITHUB_ACTOR}" --password-stdin
+          crane copy "${SOURCE_IMAGE}@${REQUESTED_DIGEST}" "${mirror_tag}"
+          if [[ "$(crane digest "${mirror_tag}")" != "${REQUESTED_DIGEST}" ]]; then
+            echo "mirror ${mirror_tag} must preserve ${REQUESTED_DIGEST} byte for byte" >&2
+            exit 1
+          fi
+
+      - name: Require the mirror package to stay public
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          package_metadata="${RUNNER_TEMP}/${MIRROR_PACKAGE}-package.json"
+          if ! gh api "/orgs/${IMAGE_NAMESPACE}/packages/container/${MIRROR_PACKAGE}" \
+              > "${package_metadata}"; then
+            echo "GHCR package ${MIRROR_PACKAGE} must be provisioned before mirroring" >&2
+            exit 1
+          fi
+          python3 release/scripts/release_workflow_guard.py \
+            require-package-visibility \
+            --metadata "${package_metadata}" \
+            --package "${MIRROR_PACKAGE}" \
+            --visibility public
