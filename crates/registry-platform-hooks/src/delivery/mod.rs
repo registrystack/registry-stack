@@ -10,8 +10,10 @@
 //! core, not a new design: claim, lease/CAS, reaping, retry scheduling,
 //! dead-lettering, expiry, replay, attempt-budget accounting, idempotency-key
 //! construction, and transport-vs-deadline classification keep their
-//! behavior, and the worker sends the product's captured payload bytes with
-//! the product's headers.
+//! behavior, and the worker sends the captured envelope bytes unchanged. The
+//! stored payload is one [`crate::HookEnvelope`] in canonical form; the worker
+//! re-reads it before every attempt and refuses a row whose headers would
+//! disagree with the body it is about to sign.
 //!
 //! Everything product-owned enters through [`DeliverySeams`]: the signing
 //! scheme and its key material, the idempotency domain, the audit journal and

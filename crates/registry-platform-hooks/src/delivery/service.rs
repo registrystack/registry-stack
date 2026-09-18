@@ -8,12 +8,11 @@
 //! idempotency-key construction, and transport-vs-deadline classification
 //! keep the behavior they had while the worker lived in the owning product's
 //! runtime; every product-owned input arrives through the seams, and the
-//! worker sends the product's captured payload bytes with the product's
-//! headers.
+//! worker sends the captured envelope bytes unchanged, with the delivery
+//! attributes the transport carries beside them.
 
 use std::time::{Duration, SystemTime};
 
-use registry_platform_canonical_json::{canonicalize_json, parse_json_strict};
 use registry_platform_httputil::destination::{DestinationSendError, EventDeliveryHeaders};
 use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
@@ -29,6 +28,7 @@ use super::seams::{
     DeliveryTransitionCode, DestinationAnswer, HookDestination,
 };
 use crate::delivery_schema;
+use crate::envelope::{EnvelopeLimits, HookEnvelope};
 
 impl From<tokio_postgres::Error> for DeliveryError {
     fn from(_error: tokio_postgres::Error) -> Self {
@@ -883,10 +883,6 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .commit()
             .await
             .map_err(|_| MaterialLoadError::Unavailable)?;
-        let digest = Sha256::digest(&body);
-        let parsed = parse_json_strict(&body).map_err(|_| MaterialLoadError::PayloadRefused)?;
-        let canonical =
-            canonicalize_json(&parsed).map_err(|_| MaterialLoadError::PayloadRefused)?;
         if outbox_package_revision != claim.package_revision
             || outbox_schema_fingerprint.is_empty()
             || authentication_profile != "hmac_sha256_v1"
@@ -897,15 +893,18 @@ impl<S: DeliverySeams> DeliveryService<S> {
         {
             return Err(MaterialLoadError::BindingRefused);
         }
-        if body.is_empty()
-            || i64::try_from(body.len()).ok() > Some(maximum_payload_bytes)
-            || payload_digest.len() != 32
-            || payload_digest.as_slice() != digest.as_slice()
-            || canonical != body
-            || !parsed.is_object()
-        {
-            return Err(MaterialLoadError::PayloadRefused);
-        }
+        accept_stored_envelope(
+            &body,
+            &StoredEnvelope {
+                event_id: claim.event_id,
+                event_type: &event_type,
+                source: &self.delivery_source,
+                data_schema: &data_schema,
+                event_time,
+                maximum_payload_bytes,
+                payload_digest: &payload_digest,
+            },
+        )?;
         Ok(DeliveryMaterial {
             event_type,
             body,
@@ -1142,6 +1141,48 @@ enum MaterialLoadError {
     Unavailable,
     BindingRefused,
     PayloadRefused,
+}
+
+/// What the delivery row and the worker's own configuration say the stored
+/// envelope must be.
+struct StoredEnvelope<'a> {
+    event_id: Uuid,
+    event_type: &'a str,
+    source: &'a str,
+    data_schema: &'a str,
+    event_time: SystemTime,
+    maximum_payload_bytes: i64,
+    payload_digest: &'a [u8],
+}
+
+/// Accept the stored envelope bytes the worker is about to deliver unchanged.
+///
+/// The stored bytes are the delivery body, so the worker re-reads them as an
+/// envelope and refuses a row whose headers could disagree with the body it is
+/// about to sign. The per-delivery bound measures those same bytes, so an
+/// envelope over the bound is refused here rather than sent.
+fn accept_stored_envelope(
+    body: &[u8],
+    expected: &StoredEnvelope<'_>,
+) -> Result<(), MaterialLoadError> {
+    let maximum = usize::try_from(expected.maximum_payload_bytes)
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    let envelope = HookEnvelope::from_canonical_bytes(body, &EnvelopeLimits::tightened_to(maximum))
+        .map_err(|_| MaterialLoadError::PayloadRefused)?;
+    if expected.payload_digest.len() != 32
+        || expected.payload_digest != Sha256::digest(body).as_slice()
+    {
+        return Err(MaterialLoadError::PayloadRefused);
+    }
+    if envelope.id != expected.event_id.to_string()
+        || envelope.event_type != expected.event_type
+        || envelope.source != expected.source
+        || envelope.dataschema != expected.data_schema
+        || envelope.time != OffsetDateTime::from(expected.event_time)
+    {
+        return Err(MaterialLoadError::PayloadRefused);
+    }
+    Ok(())
 }
 
 /// The work result of one delivery iteration.
@@ -1410,6 +1451,115 @@ mod tests {
         fn operational_event(&self, event: DeliveryOperationalEvent) {
             self.events.lock().expect("events lock").push(event);
         }
+    }
+
+    const STORED_EVENT_ID: &str = "4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51";
+    const STORED_SOURCE: &str = "urn:registrystack:test:instance:hooks-delivery";
+    const STORED_DATA_SCHEMA: &str = "urn:test:event-schema:permit.granted";
+
+    fn stored_envelope() -> HookEnvelope {
+        HookEnvelope {
+            id: STORED_EVENT_ID.to_owned(),
+            event_type: "permit.granted".to_owned(),
+            source: STORED_SOURCE.to_owned(),
+            time: OffsetDateTime::from_unix_timestamp_nanos(1_767_225_600_123_000_000)
+                .expect("capture instant"),
+            subject: crate::EventSubject {
+                record_reference:
+                    "8f14e45fceea467a9cc18b2a4b9e2a1103b41d5ad4c88c8f2a0a9ac4f4c0d2b7".to_owned(),
+                record_revision: 3,
+            },
+            dataschema: STORED_DATA_SCHEMA.to_owned(),
+            data: serde_json::json!({ "values": { "status": "granted" } }),
+            causation: crate::Causation::root(STORED_EVENT_ID),
+        }
+    }
+
+    fn stored_binding<'a>(body: &'a [u8], digest: &'a [u8]) -> StoredEnvelope<'a> {
+        StoredEnvelope {
+            event_id: Uuid::parse_str(STORED_EVENT_ID).expect("event id"),
+            event_type: "permit.granted",
+            source: STORED_SOURCE,
+            data_schema: STORED_DATA_SCHEMA,
+            event_time: SystemTime::UNIX_EPOCH + Duration::from_millis(1_767_225_600_123),
+            maximum_payload_bytes: i64::try_from(body.len()).expect("bound"),
+            payload_digest: digest,
+        }
+    }
+
+    #[test]
+    fn the_worker_accepts_the_stored_envelope_it_will_deliver_unchanged() {
+        let body = stored_envelope()
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes");
+        let digest = Sha256::digest(&body).to_vec();
+        assert!(
+            accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_ok(),
+            "the stored envelope matches the delivery row that governs it"
+        );
+    }
+
+    #[test]
+    fn the_worker_refuses_a_body_that_is_not_an_envelope() {
+        let body = br#"{"entity":"permit","recordId":"8f14e45f","revision":3}"#.to_vec();
+        let digest = Sha256::digest(&body).to_vec();
+        assert!(
+            accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_err(),
+            "a stored body in the pre-envelope shape is refused, never delivered"
+        );
+    }
+
+    #[test]
+    fn the_worker_refuses_an_envelope_that_disagrees_with_its_delivery_row() {
+        let mut envelope = stored_envelope();
+        envelope.source = "urn:registrystack:test:instance:other".to_owned();
+        let body = envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes");
+        let digest = Sha256::digest(&body).to_vec();
+        assert!(
+            accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_err(),
+            "an envelope whose source differs from the header the worker would sign is refused"
+        );
+
+        let mut envelope = stored_envelope();
+        envelope.time += Duration::from_millis(1);
+        let body = envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes");
+        let digest = Sha256::digest(&body).to_vec();
+        assert!(
+            accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_err(),
+            "an envelope whose time differs from the stored capture instant is refused"
+        );
+    }
+
+    #[test]
+    fn the_per_delivery_bound_measures_the_whole_stored_envelope() {
+        let body = stored_envelope()
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes");
+        let digest = Sha256::digest(&body).to_vec();
+        let data_bytes = serde_json::to_vec(&stored_envelope().data).expect("data bytes");
+        assert!(data_bytes.len() < body.len());
+        let mut binding = stored_binding(&body, &digest);
+        binding.maximum_payload_bytes = i64::try_from(body.len() - 1).expect("bound");
+        assert!(
+            accept_stored_envelope(&body, &binding).is_err(),
+            "the bound refuses envelope bytes, not the product projection alone"
+        );
+    }
+
+    #[test]
+    fn the_worker_refuses_an_envelope_whose_captured_digest_does_not_match() {
+        let body = stored_envelope()
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("envelope bytes");
+        let digest = Sha256::digest(b"other bytes").to_vec();
+        assert!(
+            accept_stored_envelope(&body, &stored_binding(&body, &digest)).is_err(),
+            "the captured payload digest still pins the bytes the idempotency key is built from"
+        );
     }
 
     #[test]
