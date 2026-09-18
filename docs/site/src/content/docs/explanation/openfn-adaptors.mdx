@@ -221,8 +221,8 @@ API key. The destination deduplicates on source, event ID, and effect, refuses a
 under the same key, and only advances a record to a higher revision, so at-least-once delivery never
 regresses state.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs defines SIGNATURE_DOMAIN as
-breg-webhook-signature-v1 and crates/registry-breg/tests/postgres_webhook_delivery.rs exercises the
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs defines
+SIGNATURE_DOMAIN as breg-webhook-signature-v1 and crates/registry-breg/tests/postgres_webhook_delivery.rs exercises the
 outbox delivery the pilot's event bridge verifies. products/breg/starters/agricultural-holdings/core/registry.yaml
 is the starter the pilot adapts. */}
 
