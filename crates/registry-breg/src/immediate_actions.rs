@@ -236,7 +236,7 @@ fn compile_handler(
         ));
         return None;
     }
-    #[cfg(not(feature = "wasm-executor-prototype"))]
+    #[cfg(not(feature = "wasm"))]
     if is_wasm {
         // Refuse the declared backend explicitly, before any Rhai-shaped
         // validation could misreport the module: this build carries no WASM
@@ -250,11 +250,11 @@ fn compile_handler(
     }
     // The authored source reference follows the declared backend exactly.
     let source_path: &str = if is_wasm {
-        #[cfg(feature = "wasm-executor-prototype")]
+        #[cfg(feature = "wasm")]
         {
             wasm_handler_module_path(source, &path, errors)?
         }
-        #[cfg(not(feature = "wasm-executor-prototype"))]
+        #[cfg(not(feature = "wasm"))]
         {
             return None;
         }
@@ -576,7 +576,7 @@ fn compile_handler(
             ));
             return None;
         }
-        #[cfg(feature = "wasm-executor-prototype")]
+        #[cfg(feature = "wasm")]
         if let Some((code, message)) = crate::wasm_handler::structural_violation(&asset.bytes) {
             errors.push(Diagnostic::error(code, format!("{path}.module"), &message));
             return None;
@@ -745,7 +745,7 @@ fn rhai_handler_script_path<'a>(
 
 /// The authored source reference a WASM handler must declare: its module path
 /// and nothing else.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 fn wasm_handler_module_path<'a>(
     source: &'a crate::contract::ActionHandlerSource,
     path: &str,

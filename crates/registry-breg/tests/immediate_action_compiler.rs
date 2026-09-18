@@ -172,7 +172,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
     // backend (the admission suite covers that lane); this script-shaped
     // handler is still refused there, by backend field discipline.
     let v1 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V1);
-    #[cfg(not(feature = "wasm-executor-prototype"))]
+    #[cfg(not(feature = "wasm"))]
     {
         let not_admitted = v1
             .expect_err("a WASM v1 handler is refused without WASM support in the build")
@@ -186,7 +186,7 @@ fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
             "actions[register-household-contact].handler.kind"
         );
     }
-    #[cfg(feature = "wasm-executor-prototype")]
+    #[cfg(feature = "wasm")]
     {
         let forbidden = v1
             .expect_err("a WASM handler declaring a Rhai script is refused")

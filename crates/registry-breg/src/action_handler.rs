@@ -340,7 +340,7 @@ pub(crate) fn evaluate_with_engine(
     // A WASM handler never reaches the Rhai compile path; its module runs
     // through the platform executor in builds that carry the prototype
     // feature (and every build refuses the backend at admission above).
-    #[cfg(feature = "wasm-executor-prototype")]
+    #[cfg(feature = "wasm")]
     if handler.kind == crate::model::CompiledActionHandlerKind::Wasm {
         return crate::wasm_runtime::evaluate_wasm_handler(action, handler, inputs, deadline);
     }
@@ -394,7 +394,7 @@ fn admit_handler<'a>(
         // v1 ABI for WASM handlers. The Evidence-enabled v2 ABI stays
         // Rhai-only in this release, and a resolver never reaches a WASM
         // handler.
-        #[cfg(feature = "wasm-executor-prototype")]
+        #[cfg(feature = "wasm")]
         crate::model::CompiledActionHandlerKind::Wasm
             if handler.abi == ACTION_HANDLER_ABI_V1 && resolver.is_none() => {}
         _ => {

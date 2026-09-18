@@ -2,7 +2,7 @@
 
 //! WASM action-handler admission through the compiler and the package.
 //!
-//! These tests run only under the `wasm-executor-prototype` feature, the only
+//! These tests run only under the `wasm` feature, the only
 //! build whose compiler can structurally validate guest modules: a WASM
 //! handler module is admitted (read once, size-checked, hashed, structurally
 //! validated against the platform ABI, captured into the compiled handler and

@@ -14,7 +14,7 @@
 //! always took, with the same diagnostics in the same order.
 //!
 //! The WASM outcome-byte decoder is compiled behind the non-default
-//! `wasm-executor-prototype` feature and serves the WASM execution path in
+//! `wasm` feature and serves the WASM execution path in
 //! those builds (and the parity tests beside it).
 
 use std::collections::BTreeSet;
@@ -119,7 +119,7 @@ pub(crate) fn rhai_document(value: Dynamic) -> ProposedValue {
 /// Decode parsed outcome JSON into the neutral outcome document. Total for
 /// the same reason as [`rhai_document`]: JSON numbers outside i64 decode to
 /// `Inexpressible` rather than failing the parse.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 fn json_document(value: Value) -> ProposedValue {
     match value {
         Value::Null => ProposedValue::Absent,
@@ -145,7 +145,7 @@ fn json_document(value: Value) -> ProposedValue {
 /// JSON members while parsing, then run the same shared output bound and
 /// document decode the Rhai path runs. Compiled under the prototype feature
 /// and used by the WASM execution path in those builds.
-#[cfg(feature = "wasm-executor-prototype")]
+#[cfg(feature = "wasm")]
 pub(crate) fn decode_wasm_outcome(
     bytes: &[u8],
     maximum_snapshot_bytes: u32,
@@ -831,6 +831,6 @@ fn member_string(value: &ProposedValue) -> Result<String, ChangeRequestPlannerEr
     }
 }
 
-#[cfg(all(test, feature = "wasm-executor-prototype"))]
+#[cfg(all(test, feature = "wasm"))]
 #[path = "tests/action_outcome_wasm_parity_tests.rs"]
 mod action_outcome_wasm_parity_tests;

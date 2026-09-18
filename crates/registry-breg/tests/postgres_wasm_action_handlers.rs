@@ -7,11 +7,7 @@
 //! and audit content ride the same mutation machinery the Rhai journeys use,
 //! so these journeys prove the execution wiring, not a parallel product.
 
-#![cfg(all(
-    feature = "postgres-test",
-    feature = "tooling",
-    feature = "wasm-executor-prototype"
-))]
+#![cfg(all(feature = "postgres-test", feature = "tooling", feature = "wasm"))]
 
 #[path = "support/postgres_harness.rs"]
 #[allow(dead_code)]
