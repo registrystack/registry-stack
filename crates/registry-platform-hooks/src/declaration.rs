@@ -21,6 +21,7 @@ use crate::error::{bounded_token, redacted_message};
 pub const HOOK_HANDLER_ABI_V1: &str = "registry.hook-handler/v1";
 
 /// When the hook runs relative to the triggering transaction.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookPhase {
@@ -44,6 +45,7 @@ impl HookPhase {
 }
 
 /// One declared hook: a product trigger bound to one handler.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HookDeclaration {
@@ -74,6 +76,7 @@ pub struct HookDeclaration {
 /// kind requires exactly its own fields and nothing else. `abi` is required on
 /// `rhai` and `wasm` and forbidden on `url`; its value is closed and checked at
 /// compile time in [`crate::validate_hooks`].
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(
     deny_unknown_fields,
@@ -119,6 +122,7 @@ impl HookHandlerSource {
 }
 
 /// The project's declared hooks, in declaration order.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct HooksDocument {

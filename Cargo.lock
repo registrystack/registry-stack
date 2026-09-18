@@ -5679,6 +5679,7 @@ dependencies = [
  "hex",
  "registry-platform-canonical-json",
  "registry-platform-httputil",
+ "schemars",
  "serde",
  "serde_json",
  "serde_path_to_error",

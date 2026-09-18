@@ -14,6 +14,7 @@ workspace = true
 
 [features]
 default = []
+schema = ["dep:schemars"]
 postgres = [
     "dep:async-trait",
     "dep:hex",
@@ -28,6 +29,7 @@ async-trait = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
 registry-platform-canonical-json.workspace = true
 registry-platform-httputil = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error.workspace = true
