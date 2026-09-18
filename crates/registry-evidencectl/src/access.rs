@@ -2,7 +2,8 @@
 //!
 //! Governed, reviewable policy and public client membership live under
 //! `access/`. The only private client artifact is the locally generated key
-//! under `.evidence/clients/<id>/private.jwk`.
+//! under `.evidence/clients/<id>/private.jwk`; revoking a client removes that
+//! directory so no private state outlives the client it authenticated.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -19,7 +20,7 @@ use registry_platform_crypto::{PrivateJwk, PublicJwk};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::{authoring, dev, keygen};
+use crate::{authoring, dev, keygen, OutputFormat};
 
 const ACCESS_DIRECTORY: &str = "access";
 const POLICIES_DIRECTORY: &str = "policies";
@@ -220,17 +221,22 @@ pub(crate) struct ActiveClientRegistration {
     pub(crate) exchange: Option<ActiveClientExchange>,
 }
 
-pub fn run(command: AccessCommand) -> Result<ExitCode> {
+pub fn run(command: AccessCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        AccessCommand::Policy(PolicyCommand::Add(args)) => add_policy(&args),
-        AccessCommand::Policy(PolicyCommand::List(args)) => list_policies(&args.project),
-        AccessCommand::Client(ClientCommand::Add(args)) => add_client(&args),
-        AccessCommand::Client(ClientCommand::List(args)) => list_clients(&args.project),
-        AccessCommand::Client(ClientCommand::Revoke(args)) => revoke_client(&args),
+        AccessCommand::Policy(PolicyCommand::Add(args)) => add_policy(&args, format),
+        AccessCommand::Policy(PolicyCommand::List(args)) => list_policies(&args.project, format),
+        AccessCommand::Client(ClientCommand::Add(args)) => add_client(&args, format),
+        AccessCommand::Client(ClientCommand::List(args)) => list_clients(&args.project, format),
+        AccessCommand::Client(ClientCommand::Revoke(args)) => revoke_client(&args, format),
     }
 }
 
-fn add_policy(args: &PolicyAddArgs) -> Result<ExitCode> {
+/// The project-relative spelling of one client's private state directory.
+fn private_client_directory(client_id: &str) -> String {
+    format!("{PRIVATE_STATE_DIRECTORY}/{CLIENTS_DIRECTORY}/{client_id}")
+}
+
+fn add_policy(args: &PolicyAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(&args.project)?;
     validate_identifier(&args.policy, "policy")?;
     let questions = sorted_unique(&args.question, "questions", MAX_QUESTIONS)?;
@@ -259,29 +265,66 @@ fn add_policy(args: &PolicyAddArgs) -> Result<ExitCode> {
         task_grant: None,
     };
     write_new_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
+    match format {
+        OutputFormat::Human => println!(
+            "Added access policy {} for {}.",
+            document.id,
+            document.questions.join(", ")
+        ),
+        OutputFormat::Json => println!(
+            "{}",
+            crate::command_report(
+                "access policy add",
+                json!({
+                    "policy": document.id,
+                    "questions": document.questions,
+                    "files": [path.display().to_string()],
+                })
+            )
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn list_policies(project: &Path, format: OutputFormat) -> Result<ExitCode> {
+    let project = canonical_project(project)?;
+    let policies = load_policy_documents_if_present(&project)?;
+    if policies.is_empty() {
+        match format {
+            OutputFormat::Human => println!("No access policies configured."),
+            OutputFormat::Json => println!(
+                "{}",
+                crate::command_report("access policy list", json!({"entries": []}))
+            ),
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    if format == OutputFormat::Human {
+        println!("POLICY\tQUESTIONS");
+        for policy in policies.values() {
+            println!("{}\t{}", policy.id, policy.questions.join(", "));
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
     println!(
-        "Added access policy {} for {}.",
-        document.id,
-        document.questions.join(", ")
+        "{}",
+        crate::command_report(
+            "access policy list",
+            json!({
+                "entries": policies
+                    .values()
+                    .map(|policy| json!({
+                        "id": policy.id,
+                        "questions": policy.questions,
+                    }))
+                    .collect::<Vec<_>>(),
+            })
+        )
     );
     Ok(ExitCode::SUCCESS)
 }
 
-fn list_policies(project: &Path) -> Result<ExitCode> {
-    let project = canonical_project(project)?;
-    let policies = load_policy_documents_if_present(&project)?;
-    if policies.is_empty() {
-        println!("No access policies configured.");
-        return Ok(ExitCode::SUCCESS);
-    }
-    println!("POLICY\tQUESTIONS");
-    for policy in policies.values() {
-        println!("{}\t{}", policy.id, policy.questions.join(", "));
-    }
-    Ok(ExitCode::SUCCESS)
-}
-
-fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
+fn add_client(args: &ClientAddArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(&args.project)?;
     validate_identifier(&args.client, "client")?;
     if !args.generate_local_key {
@@ -373,40 +416,89 @@ fn add_client(args: &ClientAddArgs) -> Result<ExitCode> {
         return Err(error);
     }
 
-    println!(
-        "Added client {} with {}.",
-        document.client_id,
-        joined_policies(&document.policies)
-    );
+    match format {
+        OutputFormat::Human => println!(
+            "Added client {} with {}.",
+            document.client_id,
+            joined_policies(&document.policies)
+        ),
+        OutputFormat::Json => {
+            let kid = document.keys[0]
+                .get("kid")
+                .and_then(Value::as_str)
+                .context("generated client public key carries no kid")?;
+            println!(
+                "{}",
+                crate::command_report(
+                    "access client add",
+                    json!({
+                        "client": document.client_id,
+                        "policies": document.policies,
+                        "kid": kid,
+                        "files": [
+                            private_client_path.join(PRIVATE_KEY_FILENAME).display().to_string(),
+                            public_path.display().to_string(),
+                        ],
+                    })
+                )
+            );
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 
-fn list_clients(project: &Path) -> Result<ExitCode> {
+fn list_clients(project: &Path, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(project)?;
     let policies = load_policy_documents_if_present(&project)?;
     let clients = load_client_documents_if_present(&project)?;
     if clients.is_empty() {
-        println!("No clients configured.");
+        match format {
+            OutputFormat::Human => println!("No clients configured."),
+            OutputFormat::Json => println!(
+                "{}",
+                crate::command_report("access client list", json!({"entries": []}))
+            ),
+        }
         return Ok(ExitCode::SUCCESS);
     }
-    println!("CLIENT\tSTATUS\tPOLICIES");
+    if format == OutputFormat::Human {
+        println!("CLIENT\tSTATUS\tPOLICIES");
+        for client in clients.values() {
+            validate_client_policies(&client.policies, &policies)?;
+            let status = match client.status {
+                ClientStatus::Active => "active",
+                ClientStatus::Revoked => "revoked",
+            };
+            println!(
+                "{}\t{}\t{}",
+                client.client_id,
+                status,
+                client.policies.join(", ")
+            );
+        }
+        return Ok(ExitCode::SUCCESS);
+    }
+    let mut entries = Vec::with_capacity(clients.len());
     for client in clients.values() {
         validate_client_policies(&client.policies, &policies)?;
         let status = match client.status {
             ClientStatus::Active => "active",
             ClientStatus::Revoked => "revoked",
         };
-        println!(
-            "{}\t{}\t{}",
-            client.client_id,
-            status,
-            client.policies.join(", ")
-        );
+        entries.push(json!({
+            "id": client.client_id,
+            "status": status,
+            "policies": client.policies,
+        }));
     }
+    println!(
+        "{}",
+        crate::command_report("access client list", json!({"entries": entries}))
+    );
     Ok(ExitCode::SUCCESS)
 }
 
-fn revoke_client(args: &ClientRevokeArgs) -> Result<ExitCode> {
+fn revoke_client(args: &ClientRevokeArgs, format: OutputFormat) -> Result<ExitCode> {
     let project = canonical_project(&args.project)?;
     validate_identifier(&args.client, "client")?;
     let _lifecycle = dev::lock_project_lifecycle(&project)?;
@@ -420,7 +512,53 @@ fn revoke_client(args: &ClientRevokeArgs) -> Result<ExitCode> {
     }
     document.status = ClientStatus::Revoked;
     replace_yaml_atomic(&path, &document, PUBLIC_FILE_MODE)?;
-    println!("Revoked client {}.", document.client_id);
+    // Nothing consumes a revoked client's private state, and re-adding the
+    // same id is refused while its directory exists, so revocation removes
+    // the directory rather than retaining key material no client can use.
+    // A client admitted without a local key has no directory to remove.
+    let private_directory = project
+        .join(PRIVATE_STATE_DIRECTORY)
+        .join(CLIENTS_DIRECTORY)
+        .join(&args.client);
+    let removed = match fs::symlink_metadata(&private_directory) {
+        Ok(_) => {
+            fs::remove_dir_all(&private_directory).with_context(|| {
+                format!(
+                    "removing revoked client state {}",
+                    private_directory.display()
+                )
+            })?;
+            Some(private_client_directory(&args.client))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "inspecting revoked client state {}",
+                    private_directory.display()
+                )
+            })
+        }
+    };
+    match format {
+        OutputFormat::Human => match &removed {
+            Some(removed) => println!(
+                "Revoked client {} (removed local private key {removed}).",
+                document.client_id
+            ),
+            None => println!("Revoked client {}.", document.client_id),
+        },
+        OutputFormat::Json => println!(
+            "{}",
+            crate::command_report(
+                "access client revoke",
+                json!({
+                    "client": document.client_id,
+                    "removed": removed,
+                })
+            )
+        ),
+    }
     Ok(ExitCode::SUCCESS)
 }
 

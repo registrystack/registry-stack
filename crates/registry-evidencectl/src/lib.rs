@@ -317,9 +317,9 @@ pub fn main_entry() -> ExitCode {
             )
         }
         Command::Client(command) => client::run(command),
-        Command::Access(command) => access::run(command),
-        Command::Keygen(command) => keygen::run(command),
-        Command::Jwks(args) => jwks::run(args),
+        Command::Access(command) => access::run(command, format),
+        Command::Keygen(command) => keygen::run(command, format),
+        Command::Jwks(args) => jwks::run(args, format),
         Command::New(args) => scaffold::run_with_format(args, format),
         Command::Build(args) => build::run_with_format(args, format),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
@@ -346,8 +346,8 @@ pub fn main_entry() -> ExitCode {
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
-        Command::Audit(command) => audit_view::run(command),
-        Command::Tooling(command) => tooling::run(command),
+        Command::Audit(command) => audit_view::run(command, format),
+        Command::Tooling(command) => tooling::run(command, format),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {
@@ -356,6 +356,10 @@ pub fn main_entry() -> ExitCode {
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
                 write_safe_failure(failure, format);
                 return ExitCode::from(if failure.operational { 3 } else { 1 });
+            }
+            if let Some(unknown) = error.downcast_ref::<suggest::UnknownSelectionPointer>() {
+                write_unknown_selection_failure(unknown, format);
+                return ExitCode::from(1);
             }
             let operational = error
                 .chain()
@@ -439,30 +443,30 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
 fn unsupported_json_command(command: &Command) -> Option<&'static str> {
     match command {
         Command::Client(_) => Some("client"),
-        Command::Access(_) => Some("access"),
-        Command::Keygen(_) => Some("keygen"),
-        Command::Jwks(_) => Some("jwks"),
         Command::Source(
-            source_cli::SourceCommand::Suggest(_)
-            | source_cli::SourceCommand::Mock(_)
-            | source_cli::SourceCommand::Detach(_),
+            source_cli::SourceCommand::Mock(_) | source_cli::SourceCommand::Detach(_),
         ) => Some("source"),
         Command::Target(target::TargetCommand::New(_)) => Some("target new"),
         Command::Request(_) => Some("request"),
         Command::Verify(_) => Some("verify"),
-        Command::Audit(_) => Some("audit"),
-        Command::Tooling(_) => Some("tooling"),
+        Command::Tooling(tooling::ToolingCommand::LanguageServer) => {
+            Some("tooling language-server")
+        }
         Command::DevSupervisor(_) => Some("__dev-supervisor"),
         Command::Init(_)
         | Command::Check(_)
         | Command::Explain(_)
         | Command::Test(_)
         | Command::Package(_)
+        | Command::Access(_)
+        | Command::Keygen(_)
+        | Command::Jwks(_)
         | Command::New(_)
         | Command::Build(_)
         | Command::Fixtures(_)
         | Command::Source(
             source_cli::SourceCommand::Add(_)
+            | source_cli::SourceCommand::Suggest(_)
             | source_cli::SourceCommand::Diff(_)
             | source_cli::SourceCommand::Import(_)
             | source_cli::SourceCommand::Update(_),
@@ -470,7 +474,9 @@ fn unsupported_json_command(command: &Command) -> Option<&'static str> {
         | Command::Target(target::TargetCommand::Explain(_))
         | Command::Doctor(_)
         | Command::Artifact(_)
-        | Command::Dev(_) => None,
+        | Command::Dev(_)
+        | Command::Audit(_)
+        | Command::Tooling(tooling::ToolingCommand::Editor(_)) => None,
     }
 }
 
@@ -703,6 +709,49 @@ fn write_safe_failure(failure: &SafeCliFailure, format: OutputFormat) {
         OutputFormat::Human => eprint!("{}", safe_failure_human(failure)),
         OutputFormat::Json => println!("{}", safe_failure_json(failure)),
     }
+}
+
+/// Render one refusal for an unknown `source suggest --select` pointer. The
+/// human listing stays the plain refusal it has always been; the JSON
+/// diagnostic carries the valid pointers as a machine-readable sibling.
+fn write_unknown_selection_failure(
+    unknown: &suggest::UnknownSelectionPointer,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprintln!("evidencectl: {unknown}"),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "status": "domain-refusal",
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "evidencectl.source.select-unknown",
+                    "artifact": "source suggest",
+                    "path": "$.select",
+                    "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
+                    "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
+                    "availablePointers": unknown.available_pointers(),
+                }]
+            })
+        ),
+    }
+}
+
+/// The envelope every successful `--format json` command report shares, with
+/// the command's own members merged in.
+pub(crate) fn command_report(command: &str, members: serde_json::Value) -> serde_json::Value {
+    let mut report = serde_json::json!({
+        "command": command,
+        "ok": true,
+        "status": "complete",
+    });
+    if let (Some(envelope), Some(extra)) = (report.as_object_mut(), members.as_object()) {
+        for (key, value) in extra {
+            envelope.insert(key.clone(), value.clone());
+        }
+    }
+    report
 }
 
 fn safe_failure_human(failure: &SafeCliFailure) -> String {

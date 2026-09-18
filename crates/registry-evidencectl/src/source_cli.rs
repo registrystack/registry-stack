@@ -75,7 +75,7 @@ pub(crate) struct SourceDetachArgs {
 pub(crate) fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
         SourceCommand::Add(args) => source_add::run(args, format),
-        SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args)),
+        SourceCommand::Suggest(args) => suggest::run(suggest::SourceCommand::Suggest(args), format),
         SourceCommand::Mock(command) => source_mock::run(command),
         SourceCommand::Diff(args) => diff(args, format),
         SourceCommand::Import(args) | SourceCommand::Update(args) => apply(args, format),

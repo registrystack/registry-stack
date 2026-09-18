@@ -23,12 +23,14 @@ use std::{collections::BTreeMap, path::Path, process::ExitCode};
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::{ArgGroup, Args, Subcommand};
+use serde_json::json;
 
+use crate::OutputFormat;
 use emit::EmitInputs;
 use openapi::Spec;
 use types::{
     BoundKind, BoundNeed, BoundValues, CandidateLeaf, Decisions, DraftArtifacts, Observations,
-    OperationKey, OperationSummary, Provenance, SuggestedBound,
+    OperationKey, OperationSummary, Provenance, ResolvedSchema, SuggestedBound,
 };
 
 #[derive(Debug, Subcommand)]
@@ -70,6 +72,11 @@ pub struct SuggestArgs {
     #[arg(long = "select")]
     pub selection: Vec<String>,
 
+    /// Print the candidate pointers the selected operation and response offer
+    /// for --select, then stop without drafting.
+    #[arg(long, requires = "operation")]
+    pub list_pointers: bool,
+
     /// Sample response JSON file used to suggest bounds. Read only; nothing
     /// from it is copied into any artifact except derived bounds.
     #[arg(long)]
@@ -91,9 +98,9 @@ pub struct SuggestArgs {
     pub project: Option<std::path::PathBuf>,
 }
 
-pub fn run(command: SourceCommand) -> Result<ExitCode> {
+pub fn run(command: SourceCommand, format: OutputFormat) -> Result<ExitCode> {
     match command {
-        SourceCommand::Suggest(args) => suggest(args),
+        SourceCommand::Suggest(args) => suggest(args, format),
         SourceCommand::Mock(command) => crate::source_mock::run(command),
     }
 }
@@ -122,10 +129,21 @@ pub(crate) struct PreparedSuggestion {
     flag_driven: bool,
 }
 
-/// Run the shared OpenAPI interpretation pipeline without writing output.
-/// `source suggest` and `new --openapi` differ only in how they deliver this
-/// prepared draft.
-pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
+/// The pipeline state both pointer listing and drafting start from: the
+/// loaded document, the chosen operation, its resolved response schema, and
+/// the flattened candidate leaves a `--select` pointer may name.
+struct ResponseLeaves {
+    source: types::SpecSource,
+    spec: Spec,
+    operation: OperationKey,
+    schema: ResolvedSchema,
+    leaves: Vec<CandidateLeaf>,
+}
+
+/// Load the document, pick the operation, resolve its response schema, and
+/// flatten it into candidate leaves. Both a drafting run and a
+/// `--list-pointers` run start here; only the drafting run continues.
+fn resolve_response_leaves(args: &SuggestArgs) -> Result<ResponseLeaves> {
     let source = suggestion_openapi(args)?;
     let spec = load::open(&source)?;
     let operations = spec.operations();
@@ -136,7 +154,6 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
         );
     }
 
-    let flag_driven = args.operation.is_some() && !args.selection.is_empty();
     // A run with no terminal to prompt on still gets told what it could have
     // asked for, and each answer is only knowable once the one before it is
     // settled: the operations come from the document, the leaves from the
@@ -192,6 +209,28 @@ pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
             operation.path
         );
     }
+
+    Ok(ResponseLeaves {
+        source,
+        spec,
+        operation,
+        schema,
+        leaves,
+    })
+}
+
+/// Run the shared OpenAPI interpretation pipeline without writing output.
+/// `source suggest` and `new --openapi` differ only in how they deliver this
+/// prepared draft.
+pub(crate) fn prepare(args: &SuggestArgs) -> Result<PreparedSuggestion> {
+    let flag_driven = args.operation.is_some() && !args.selection.is_empty();
+    let ResponseLeaves {
+        source,
+        spec,
+        operation,
+        schema,
+        leaves,
+    } = resolve_response_leaves(args)?;
 
     let selection = if args.selection.is_empty() {
         if !interactive::is_interactive() {
@@ -356,34 +395,75 @@ fn suggestion_openapi(args: &SuggestArgs) -> Result<types::SpecSource> {
     }
 }
 
-fn suggest(args: SuggestArgs) -> Result<ExitCode> {
+fn suggest(args: SuggestArgs, format: OutputFormat) -> Result<ExitCode> {
+    if args.list_pointers {
+        return list_pointers(&args, format);
+    }
     let prepared = prepare(&args)?;
     let artifacts = prepared.artifacts;
 
-    let code = match &args.project {
-        Some(project) => deliver_into_project(project, &artifacts, prepared.flag_driven)?,
+    let written = match &args.project {
+        Some(project) => deliver_into_project(project, &artifacts, prepared.flag_driven, format)?,
         None => {
-            print_draft(&artifacts);
-            ExitCode::SUCCESS
+            if format == OutputFormat::Human {
+                print_draft(&artifacts);
+            }
+            Vec::new()
         }
     };
 
-    println!("{}", artifacts.report);
-    println!("Reproduce this run with:");
-    println!("  {}", artifacts.equivalent_command);
-    Ok(code)
+    match format {
+        OutputFormat::Human => {
+            println!("{}", artifacts.report);
+            println!("Reproduce this run with:");
+            println!("  {}", artifacts.equivalent_command);
+        }
+        OutputFormat::Json => println!(
+            "{}",
+            crate::command_report(
+                "source suggest",
+                json!({
+                    "sourceId": artifacts.source_id,
+                    "files": written,
+                    "report": artifacts.report,
+                    "equivalentCommand": artifacts.equivalent_command,
+                })
+            )
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print the candidate pointers of the selected operation and response, the
+/// same set `--select` accepts, and stop without drafting anything.
+fn list_pointers(args: &SuggestArgs, format: OutputFormat) -> Result<ExitCode> {
+    let leaves = resolve_response_leaves(args)?.leaves;
+    match format {
+        OutputFormat::Human => println!("{}", list_leaves(&leaves)),
+        OutputFormat::Json => println!(
+            "{}",
+            json!({
+                "command": "source suggest",
+                "ok": true,
+                "pointers": leaves.iter().map(|leaf| leaf.pointer.clone()).collect::<Vec<_>>(),
+            })
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Write the draft into an OpenAPI authoring project, then report what happened.
 ///
 /// The write refuses to replace anything that already exists, so a repeated
 /// run never silently discards an edited draft. Verification runs only when
-/// the operator supplied a runtime binary to run it with.
+/// the operator supplied a runtime binary to run it with. Returns the paths
+/// that were written, for the report of the run.
 fn deliver_into_project(
     project: &Path,
     artifacts: &DraftArtifacts,
     flag_driven: bool,
-) -> Result<ExitCode> {
+    format: OutputFormat,
+) -> Result<Vec<std::path::PathBuf>> {
     if !project.is_dir() {
         bail!(
             "authoring project directory {} not found; create one with `evidencectl init` first",
@@ -394,27 +474,31 @@ fn deliver_into_project(
         && !interactive::confirm_write(&project.display().to_string(), &artifacts.files)?
     {
         eprintln!("evidencectl: nothing was written; the draft is printed below instead.");
-        print_draft(artifacts);
-        return Ok(ExitCode::SUCCESS);
+        if format == OutputFormat::Human {
+            print_draft(artifacts);
+        }
+        return Ok(Vec::new());
     }
 
     let written = emit::write_into_authoring_project(project, artifacts)?;
-    for path in &written {
-        println!("wrote {}", path.display());
-    }
-    println!(
-        "source draft: {}",
-        project
-            .join("sources")
-            .join(format!("{}.yaml", artifacts.source_id))
-            .display()
-    );
+    if format == OutputFormat::Human {
+        for path in &written {
+            println!("wrote {}", path.display());
+        }
+        println!(
+            "source draft: {}",
+            project
+                .join("sources")
+                .join(format!("{}.yaml", artifacts.source_id))
+                .display()
+        );
 
-    println!(
-        "not verified: complete a question and run `evidencectl dev`; the local compiler \
-         delegates validation to Evidence."
-    );
-    Ok(ExitCode::SUCCESS)
+        println!(
+            "not verified: complete a question and run `evidencectl dev`; the local compiler \
+             delegates validation to Evidence."
+        );
+    }
+    Ok(written)
 }
 
 /// Print every drafted file, and the pasteable source block, to stdout.
@@ -624,16 +708,53 @@ fn check_selection(selection: &[String], leaves: &[CandidateLeaf]) -> Result<()>
             .iter()
             .any(|leaf| leaf.pointer == *pointer || leaf.pointer.starts_with(&prefix));
         if !known {
-            let available = leaves
-                .iter()
-                .map(|leaf| format!("  {}", leaf.pointer))
-                .collect::<Vec<_>>()
-                .join("\n");
-            bail!("`--select {pointer}` names nothing in this response schema; it offers:\n{available}");
+            return Err(UnknownSelectionPointer {
+                pointer: pointer.clone(),
+                available: leaves.iter().map(|leaf| leaf.pointer.clone()).collect(),
+            }
+            .into());
         }
     }
     Ok(())
 }
+
+/// A `--select` pointer that names nothing in the selected response schema,
+/// carrying the pointers that were available so each output format can list
+/// them: the human refusal as it has always read, and a machine-readable
+/// `availablePointers` member in the JSON diagnostic.
+#[derive(Debug)]
+pub(crate) struct UnknownSelectionPointer {
+    pointer: String,
+    available: Vec<String>,
+}
+
+impl UnknownSelectionPointer {
+    pub(crate) fn pointer(&self) -> &str {
+        &self.pointer
+    }
+
+    pub(crate) fn available_pointers(&self) -> &[String] {
+        &self.available
+    }
+}
+
+impl std::fmt::Display for UnknownSelectionPointer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let available = self
+            .available
+            .iter()
+            .map(|pointer| format!("  {pointer}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        write!(
+            formatter,
+            "`--select {}` names nothing in this response schema; it offers:\n{available}",
+            self.pointer
+        )
+    }
+}
+
+impl std::error::Error for UnknownSelectionPointer {}
 
 /// Accepts an identifier that is safe as a file name, a YAML key, and a
 /// bundle-relative path segment.
@@ -689,7 +810,9 @@ fn missing_flags_message(args: &SuggestArgs) -> String {
     if args.operation.is_none() {
         missing.push("--operation");
     }
-    if args.selection.is_empty() {
+    // A pointer listing asks nothing else, so `--select` is missing only for
+    // a run that means to draft.
+    if args.selection.is_empty() && !args.list_pointers {
         missing.push("--select");
     }
     format!(

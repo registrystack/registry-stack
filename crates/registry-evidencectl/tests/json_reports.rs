@@ -112,3 +112,62 @@ fn a_refused_check_report_keeps_the_passing_report_top_level_keys() {
     assert_eq!(report["status"], "refused");
     assert!(report["findings"].as_array().is_some_and(|f| !f.is_empty()));
 }
+
+/// `tooling editor` reuses its versioned setup report inside the shared JSON
+/// envelope, so a tool reading the terminal and a tool reading stdout see the
+/// same managed set.
+#[test]
+fn tooling_editor_publishes_its_setup_report_in_json() {
+    let workspace = tempfile::tempdir().expect("temporary workspace");
+    let project = workspace.path().join("project");
+    fs::create_dir(&project).expect("project directory");
+    fs::write(
+        project.join("evidence-project.yaml"),
+        registry_evidence_authoring::default_project_marker_document(),
+    )
+    .expect("project marker");
+
+    let output = evidencectl()
+        .args(["--format", "json", "tooling", "editor", "--project"])
+        .arg(&project)
+        .output()
+        .expect("run tooling editor");
+    assert_eq!(output.status.code(), Some(0));
+    assert!(
+        output.stderr.is_empty(),
+        "JSON mode wrote human diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report = json_of(&output);
+    assert_eq!(report["command"], "tooling editor");
+    assert_eq!(report["ok"], Value::Bool(true));
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["schemaVersion"], "evidencectl.editor.v1");
+    assert_eq!(report["editorStatus"], "configured");
+    assert_eq!(
+        report["projectDirectory"],
+        Value::String(
+            project
+                .canonicalize()
+                .expect("canonical")
+                .display()
+                .to_string()
+        )
+    );
+    let mut files = report["files"].as_array().expect("files").clone();
+    files.sort_by_key(|file| file.as_str().expect("path").to_owned());
+    assert_eq!(
+        files
+            .iter()
+            .map(|file| file.as_str().expect("path"))
+            .collect::<Vec<_>>(),
+        [
+            ".evidence-editor/manifest.json",
+            ".evidence-editor/schemas/project-marker.schema.json",
+            ".evidence-editor/schemas/question.schema.json",
+            ".vscode/extensions.json",
+            ".vscode/settings.json",
+            ".zed/settings.json",
+        ]
+    );
+}

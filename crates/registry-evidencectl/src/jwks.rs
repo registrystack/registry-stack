@@ -13,6 +13,9 @@ use std::{
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use registry_platform_crypto::{canonicalize_json, PublicJwk};
+use serde_json::json;
+
+use crate::OutputFormat;
 
 const OUTPUT_FILE_MODE: u32 = 0o644;
 
@@ -31,7 +34,7 @@ pub struct JwksArgs {
     pub public_jwk_files: Vec<PathBuf>,
 }
 
-pub fn run(args: JwksArgs) -> Result<ExitCode> {
+pub fn run(args: JwksArgs, format: OutputFormat) -> Result<ExitCode> {
     if args.output.exists() && !args.force {
         bail!(
             "refusing to overwrite existing output without --force: {}",
@@ -80,7 +83,16 @@ pub fn run(args: JwksArgs) -> Result<ExitCode> {
 
     write_owner_file(&args.output, document.as_bytes(), args.force)?;
 
-    println!("wrote {}", args.output.display());
+    match format {
+        OutputFormat::Human => println!("wrote {}", args.output.display()),
+        OutputFormat::Json => println!(
+            "{}",
+            crate::command_report(
+                "jwks",
+                json!({"files": [args.output.display().to_string()]})
+            )
+        ),
+    }
 
     Ok(ExitCode::SUCCESS)
 }
