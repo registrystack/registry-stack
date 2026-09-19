@@ -1962,7 +1962,7 @@ struct RawRuntimeConfig {
     #[serde(default)]
     operational_timeouts: RawOperationalTimeouts,
     /// Optional WASM handler execution budgets. Parsed in every build;
-    /// executed only in builds with the non-default `wasm` feature.
+    /// executed only in builds with the `wasm` cargo feature, on by default.
     #[serde(default)]
     wasm_execution: RawWasmExecutionConfig,
     /// Optional operator-private metrics listener. Absent by default, which

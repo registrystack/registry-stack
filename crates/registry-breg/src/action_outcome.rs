@@ -13,8 +13,8 @@
 //! backend. The Rhai evaluation path routes through the same two steps it
 //! always took, with the same diagnostics in the same order.
 //!
-//! The WASM outcome-byte decoder is compiled behind the non-default
-//! `wasm` feature and serves the WASM execution path in
+//! The WASM outcome-byte decoder is compiled behind the `wasm` cargo
+//! feature, on by default, and serves the WASM execution path in
 //! those builds (and the parity tests beside it).
 
 use std::collections::BTreeSet;
