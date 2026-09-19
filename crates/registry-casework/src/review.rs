@@ -1492,6 +1492,14 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         transaction
+            .query(
+                "SELECT request_id FROM casework_review_requests
+                 WHERE result_available_until<=$1 OR accountability_retained_until<=$1
+                 ORDER BY request_id FOR UPDATE",
+                &[&now],
+            )
+            .await?;
+        transaction
             .execute(
                 "DELETE FROM casework_review_accountability WHERE retained_until<=$1",
                 &[&now],
@@ -1517,9 +1525,34 @@ impl PostgresStore {
             .await?;
         transaction
             .execute(
+                "UPDATE casework_review_decisions d SET result=NULL
+                  FROM casework_review_requests r
+                 WHERE d.request_id=r.request_id AND r.result_available_until<=$1
+                   AND d.result IS NOT NULL",
+                &[&now],
+            )
+            .await?;
+        transaction
+            .execute(
+                "UPDATE casework_idempotency i SET response=NULL
+                  FROM casework_review_requests r
+                 WHERE r.result_available_until<=$1 AND i.response IS NOT NULL
+                   AND (i.resource='review-request:'||r.request_id::text
+                        OR (i.operation='review.create'
+                            AND i.response->>'requestId'=r.request_id::text)
+                        OR EXISTS (
+                            SELECT 1 FROM casework_review_tasks t
+                             WHERE t.request_id=r.request_id
+                               AND i.resource='review-task:'||t.task_id::text))",
+                &[&now],
+            )
+            .await?;
+        transaction
+            .execute(
                 "UPDATE casework_review_requests
                  SET context='{}'::jsonb,result_constraints=NULL
-                 WHERE result_available_until<=$1 AND context<>'{}'::jsonb",
+                 WHERE result_available_until<=$1
+                   AND (context<>'{}'::jsonb OR result_constraints IS NOT NULL)",
                 &[&now],
             )
             .await?;
@@ -1630,7 +1663,7 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(None);
         };
-        let record = load_request(&transaction, producer_id, request_id, false).await?;
+        let record = load_request(&transaction, producer_id, request_id, true).await?;
         let accepted = accepted(&record);
         insert_review_idempotency(
             &transaction,
@@ -1751,7 +1784,7 @@ impl PostgresStore {
             return Err(ReviewRuntimeError::ResultExpired);
         }
         if let Some(request_id) = reservation.get::<_, Option<Uuid>>(1) {
-            let record = load_request(&transaction, &producer.id, request_id, false).await?;
+            let record = load_request(&transaction, &producer.id, request_id, true).await?;
             let accepted = accepted(&record);
             insert_review_idempotency(
                 &transaction,

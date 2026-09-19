@@ -828,6 +828,36 @@ pub(crate) async fn load_accepted_binding(
     Ok((row.get(0), accepted))
 }
 
+pub(crate) async fn load_reconciled_approved_evidence(
+    client: &impl GenericClient,
+    authority: &str,
+    accepted: &ReviewRequestAccepted,
+) -> Result<Option<crate::review_integration::AcceptedReviewEvidence>, MutationError> {
+    let row = client
+        .query_opt(
+            "SELECT r.result
+               FROM registry_internal.registry_request_review_results r
+               JOIN registry_internal.registry_request_review_submissions s
+                 USING (request_entity_id,request_id,proposal_version)
+              WHERE s.authority=$1 AND r.authority=s.authority AND s.accepted_binding=$2",
+            &[
+                &authority,
+                &serde_json::to_value(accepted).map_err(|_| MutationError::Unavailable)?,
+            ],
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    row.map(|row| {
+        let result: ReviewResult =
+            serde_json::from_value(row.get(0)).map_err(|_| MutationError::Unavailable)?;
+        crate::review_integration::AcceptedReviewEvidence::from_protocol(
+            authority, accepted, &result,
+        )
+        .map_err(|_| MutationError::PreconditionFailed)
+    })
+    .transpose()
+}
+
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
     (
         "registry_request_review_submissions",
@@ -956,9 +986,7 @@ pub(crate) async fn install(
                  proposal_version bigint NOT NULL CHECK (proposal_version BETWEEN 1 AND 4294967295),
                  authority text NOT NULL CHECK (authority <> '' AND octet_length(authority) <= 128),
                  result_id uuid NOT NULL,
-                 result jsonb NOT NULL CHECK (
-                     jsonb_typeof(result) = 'object' AND octet_length(result::text) <= 16384
-                 ),
+                 result jsonb NOT NULL,
                  status text NOT NULL CHECK (status IN
                      ('approved','rejected','changes_requested','answered','cancelled','superseded')),
                  completed_at timestamptz NOT NULL,
@@ -970,6 +998,21 @@ pub(crate) async fn install(
                      REFERENCES registry_internal.registry_request_review_submissions,
                  CHECK (available_until > completed_at)
              );
+             ALTER TABLE registry_internal.registry_request_review_results
+                 DROP CONSTRAINT IF EXISTS registry_request_review_results_result_check;
+             DO $$ BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_constraint
+                      WHERE conname='registry_request_review_results_result_size'
+                        AND conrelid='registry_internal.registry_request_review_results'::regclass
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_request_review_results
+                         ADD CONSTRAINT registry_request_review_results_result_size CHECK (
+                             jsonb_typeof(result)='object'
+                             AND octet_length(result::text)<=32768
+                         );
+                 END IF;
+             END $$;
              CREATE TABLE IF NOT EXISTS registry_internal.registry_request_review_feed_checkpoints (
                  authority text PRIMARY KEY CHECK (authority <> '' AND octet_length(authority) <= 128),
                  cursor text CHECK (cursor IS NULL OR (cursor <> '' AND octet_length(cursor) <= 1024)),
@@ -1235,7 +1278,7 @@ pub async fn claim_submission(
                   FOR UPDATE SKIP LOCKED LIMIT 1
              )
              UPDATE registry_internal.registry_request_review_submissions s
-                SET state='submitting', attempt_count=attempt_count+1,
+                SET state='submitting', attempt_count=LEAST(attempt_count+1,1000),
                     lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
                     updated_at=transaction_timestamp()
                FROM candidate c
@@ -1339,7 +1382,7 @@ pub async fn run_one_cancellation(
         .query_opt(
             "UPDATE registry_internal.registry_request_review_submissions
                 SET lease_until=transaction_timestamp()+($1::bigint * interval '1 second'),
-                    attempt_count=attempt_count+1,updated_at=transaction_timestamp()
+                    attempt_count=LEAST(attempt_count+1,1000),updated_at=transaction_timestamp()
               WHERE (request_entity_id,request_id,proposal_version)=(
                     SELECT request_entity_id,request_id,proposal_version
                       FROM registry_internal.registry_request_review_submissions
@@ -1508,7 +1551,7 @@ pub async fn reconcile_result(
     }
     let status = result_status(result.status);
     let value = serde_json::to_value(result).map_err(|_| MutationError::Unavailable)?;
-    transaction
+    let persisted = transaction
         .execute(
             "INSERT INTO registry_internal.registry_request_review_results
              (request_entity_id,request_id,proposal_version,authority,result_id,result,
@@ -1532,6 +1575,9 @@ pub async fn reconcile_result(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    if persisted != 1 {
+        return Err(MutationError::PreconditionFailed);
+    }
     transaction
         .execute(
             "UPDATE registry_internal.registry_request_review_completions
