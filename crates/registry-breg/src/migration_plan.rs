@@ -535,6 +535,7 @@ pub(crate) fn validate_reviewed_migration_plan(
                 }
             }
         }
+        validate_field_encryption_drop_order(&descriptor, &steps)?;
         let descriptor_covers = descriptor.covers.iter().cloned().collect::<BTreeSet<_>>();
         if descriptor.steps.is_empty() && covers_are_metadata_only(&descriptor.covers) {
             object_covers = descriptor_covers.clone();
@@ -609,6 +610,78 @@ pub(crate) fn validate_reviewed_migration_plan(
         return Err(ReviewedMigrationError::Coverage);
     }
     Ok(ValidatedReviewedMigrationPlan { migrations })
+}
+
+/// A plaintext column covered by a field-encryption flip must remain available
+/// until the engine-executed backfill has sealed it. The reviewed descriptor
+/// already binds both the logical member and each physical SQL object, so this
+/// ordering check needs no inferred catalog state.
+#[cfg(feature = "tooling")]
+fn validate_field_encryption_drop_order(
+    descriptor: &ReviewedMigrationDescriptor,
+    steps: &[ValidatedReviewedMigrationStep],
+) -> Result<(), ReviewedMigrationError> {
+    let flipped_fields = descriptor
+        .covers
+        .iter()
+        .filter(|cover| cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        .filter_map(|cover| {
+            Some((
+                cover.target.entity_id.as_ref()?.clone(),
+                cover.target.member_id.as_ref()?.clone(),
+            ))
+        })
+        .collect::<BTreeSet<_>>();
+    if flipped_fields.is_empty() {
+        return Ok(());
+    }
+
+    let mut sealed_fields = BTreeSet::new();
+    for step in steps {
+        match &step.descriptor {
+            ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => {
+                sealed_fields.extend(objects.iter().filter_map(|object| {
+                    let member_id = object.member_id.as_deref()?;
+                    if member_id.ends_with("#lookup") {
+                        return None;
+                    }
+                    let field = (object.entity_id.clone(), member_id.to_owned());
+                    flipped_fields.contains(&field).then_some(field)
+                }));
+            }
+            ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. } => {
+                let parsed = parse_one(&step.sql)?;
+                let PgNode::AlterTableStmt(alter) = root_node(&parsed)? else {
+                    continue;
+                };
+                for command in &alter.cmds {
+                    let Some(PgNode::AlterTableCmd(command)) = command.node.as_ref() else {
+                        return Err(ReviewedMigrationError::Sql);
+                    };
+                    if AlterTableType::try_from(command.subtype).ok()
+                        != Some(AlterTableType::AtDropColumn)
+                    {
+                        continue;
+                    }
+                    let Some(object) = objects.iter().find(|object| {
+                        object.kind == ReviewedMigrationObjectKind::Field
+                            && object.physical_name == command.name
+                    }) else {
+                        return Err(ReviewedMigrationError::Sql);
+                    };
+                    let Some(member_id) = object.member_id.as_ref() else {
+                        return Err(ReviewedMigrationError::Descriptor);
+                    };
+                    let field = (object.entity_id.clone(), member_id.clone());
+                    if flipped_fields.contains(&field) && !sealed_fields.contains(&field) {
+                        return Err(ReviewedMigrationError::Descriptor);
+                    }
+                }
+            }
+            ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 /// Classify a permitted package-relative reviewed artifact path before reading it.

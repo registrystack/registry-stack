@@ -2549,8 +2549,9 @@ async fn verify_field_encryption_content(
         u64::try_from(accepted_plaintext_journal.get::<_, i64>(0))
             .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
-    // Change-request copies are format-agnostic here: they are counted by key
-    // presence and tagged-member presence, never parsed and rewritten.
+    // Target copies are counted by key and tagged-member presence. Proposal
+    // copies use their frozen nested effects and field changes; neither path
+    // parses and rewrites workflow payloads during apply verification.
     let request_targets = transaction
         .query_one(
             "SELECT count(*) FILTER (WHERE base_snapshot ? $2 OR after_snapshot ? $2)::bigint,
@@ -2579,14 +2580,16 @@ async fn verify_field_encryption_content(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_request_proposals AS proposal
               WHERE snapshot IS NOT NULL
-                AND snapshot ? $2
                 AND EXISTS (
                     SELECT 1
-                      FROM registry_internal.registry_request_targets AS target
-                     WHERE target.request_entity_id = proposal.request_entity_id
-                       AND target.request_id = proposal.request_id
-                       AND target.proposal_version = proposal.proposal_version
-                       AND target.target_entity_id = $1
+                      FROM jsonb_array_elements(
+                               COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                           ) AS effect
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                      ) AS field_change
+                     WHERE effect -> 'target' ->> 'entityId' = $1
+                       AND field_change ->> 'field' = $2
                 )",
             &[&entity_id, &field_id],
         )

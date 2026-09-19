@@ -2687,10 +2687,9 @@ struct EncryptedColumnValues {
 }
 
 /// Seal one encrypted field's submitted value into the bytes its physical
-/// columns bind. The plaintext is validated, canonicalized, checked against the
-/// declared pattern, and checked against the encryption size limit in Rust:
-/// no plaintext of an encrypted field ever reaches SQL, and the compiled schema
-/// carries a CHECK constraint for plaintext columns only.
+/// columns bind. The plaintext is validated, canonicalized, and checked against
+/// the encryption size limit in Rust. No plaintext of an encrypted field ever
+/// reaches SQL.
 fn encrypted_column_values(
     entity: &CompiledEntity,
     field: &CompiledField,
@@ -2707,7 +2706,6 @@ fn encrypted_column_values(
         });
     }
     let plaintext = sql_value(value, &field.field_type)?.ok_or(MutationError::InvalidRequest)?;
-    enforce_field_pattern(entity, field, &plaintext)?;
     if plaintext.len() > MAX_FIELD_PLAINTEXT_BYTES {
         return Err(MutationError::InvalidRequest);
     }
@@ -2727,29 +2725,6 @@ fn encrypted_column_values(
         envelope: Some(envelope),
         blind_index,
     })
-}
-
-/// Enforce the declared pattern on one canonical encrypted plaintext before it
-/// is sealed. Plaintext columns keep their SQL CHECK constraint; the encrypted
-/// column cannot carry one, so this is the pattern's only enforcement. A
-/// pattern the Rust regex engine cannot compile fails closed rather than
-/// admitting an unchecked value.
-fn enforce_field_pattern(
-    entity: &CompiledEntity,
-    field: &CompiledField,
-    plaintext: &str,
-) -> Result<(), MutationError> {
-    let Some(pattern) = &field.pattern else {
-        return Ok(());
-    };
-    let regex = regex::Regex::new(pattern).map_err(|_| MutationError::Unavailable)?;
-    if !regex.is_match(plaintext) {
-        return Err(MutationError::FieldPatternViolation {
-            entity_id: entity.id.clone(),
-            field_id: field.id.clone(),
-        });
-    }
-    Ok(())
 }
 
 async fn apply_tombstone_row(

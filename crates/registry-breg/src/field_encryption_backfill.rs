@@ -26,6 +26,7 @@ use serde::Serialize;
 use serde_json::json;
 use tokio_postgres::Client;
 
+use crate::history_commit::lock_history_head;
 use crate::history_erasure::{
     erase_record_history, HistoryErasureError, HistoryErasureRequest, RecordHistoryErasureTarget,
 };
@@ -198,18 +199,19 @@ pub async fn preflight_field_encryption_backfill(
 
     let mut steps = Vec::new();
     for migration in request.plan.migrations() {
-        // The plan validation already refused a missing or unmatched history
-        // choice, so the apply arm's expectation and this echo agree.
-        let history_choice = migration
-            .descriptor
-            .history
-            .ok_or(FieldEncryptionBackfillPreflightError::InvalidInput)?;
         for step in &migration.steps {
             let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { entity_id, .. } =
                 &step.descriptor
             else {
                 continue;
             };
+            // The plan validation already refused a missing or unmatched
+            // history choice for this backfill. Unrelated descriptors in the
+            // same reviewed plan do not need a field-encryption choice.
+            let history_choice = migration
+                .descriptor
+                .history
+                .ok_or(FieldEncryptionBackfillPreflightError::InvalidInput)?;
             let covered = covered_field_encryption_fields(
                 request.registry,
                 request.predecessor_baseline,
@@ -329,14 +331,16 @@ async fn field_preflight(
             "SELECT count(*)::bigint
                FROM registry_internal.registry_request_proposals AS proposal
               WHERE snapshot IS NOT NULL
-                AND snapshot ? $2
                 AND EXISTS (
                     SELECT 1
-                      FROM registry_internal.registry_request_targets AS target
-                     WHERE target.request_entity_id = proposal.request_entity_id
-                       AND target.request_id = proposal.request_id
-                       AND target.proposal_version = proposal.proposal_version
-                       AND target.target_entity_id = $1
+                      FROM jsonb_array_elements(
+                               COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                           ) AS effect
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                      ) AS field_change
+                     WHERE effect -> 'target' ->> 'entityId' = $1
+                       AND field_change ->> 'field' = $2
                 )",
             &[&entity_id, &field_id],
         )
@@ -530,8 +534,14 @@ pub async fn erase_field_encryption_history(
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
 
+    // Change-request snapshots are not generic record history. Scrub only the
+    // copies that still carry plaintext for a recorded erase-and-rebaseline
+    // flip. The transaction also marks coverage incomplete, which is the
+    // existing durable retry signal if this lifecycle stops before rebaseline.
+    let (mut scrubbed_request_target_count, mut scrubbed_request_proposal_count, needs_rebaseline) =
+        scrub_plaintext_request_snapshots(client, &request).await?;
     let targets = pending_erase_targets(client, &request).await?;
-    if targets.is_empty() {
+    if targets.is_empty() && !needs_rebaseline {
         return Err(FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory);
     }
 
@@ -541,8 +551,6 @@ pub async fn erase_field_encryption_history(
     let mut scrubbed_change_context_count = 0_u64;
     let mut scrubbed_outbox_payload_count = 0_u64;
     let mut scrubbed_cached_response_count = 0_u64;
-    let mut scrubbed_request_target_count = 0_u64;
-    let mut scrubbed_request_proposal_count = 0_u64;
     let mut removed_descriptor_count = 0_u64;
     for target in &targets {
         // The erasure path enforces the per-record revision cap and appends
@@ -636,6 +644,173 @@ pub async fn erase_field_encryption_history(
     };
     append_erase_history_audit(client, &request, &outcome).await?;
     Ok(outcome)
+}
+
+/// Clear whole request snapshots only when their nested value for a recorded
+/// erase-and-rebaseline field is still plaintext. This deliberately does not
+/// depend on a retained record revision: canceled and rejected create requests
+/// can have proposal and target snapshots without ever creating a record.
+async fn scrub_plaintext_request_snapshots(
+    client: &mut Client,
+    request: &FieldEncryptionHistoryErasureRequest<'_>,
+) -> Result<(u64, u64, bool), FieldEncryptionHistoryErasureError> {
+    let transaction = client
+        .transaction()
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    set_local_timeouts(&transaction, request.timeouts).await?;
+    transaction
+        .execute(
+            "SELECT pg_catalog.pg_advisory_xact_lock($1)",
+            &[&request.lock_key.get()],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    verify_ready_identity(&transaction, request.expected).await?;
+    let head = lock_history_head(&transaction)
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    let has_erase_choice_flip: bool = transaction
+        .query_one(
+            "SELECT EXISTS (
+                 SELECT 1
+                   FROM registry_internal.registry_field_encryption_flips
+                  WHERE history_choice = 'erase-and-rebaseline'
+             )",
+            &[],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?
+        .get(0);
+    if !has_erase_choice_flip {
+        transaction
+            .commit()
+            .await
+            .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+        return Ok((0, 0, false));
+    }
+    let envelope_tag = registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG;
+
+    let scrubbed_request_proposal_count = transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_proposals AS proposal
+                SET snapshot = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE proposal.snapshot IS NOT NULL
+                AND proposal.erased_at IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_field_encryption_flips AS flip
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                          COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                      ) AS effect
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                      ) AS field_change
+                     WHERE flip.history_choice = 'erase-and-rebaseline'
+                       AND effect -> 'target' ->> 'entityId' = flip.entity_id
+                       AND field_change ->> 'field' = flip.field_id
+                       AND (
+                           (field_change -> 'before' ->> 'kind' = 'Present'
+                            AND NOT CASE
+                                WHEN jsonb_typeof(field_change -> 'before' -> 'value') = 'object'
+                                THEN field_change -> 'before' -> 'value'
+                                         = jsonb_build_object(
+                                             $1::text,
+                                             field_change -> 'before' -> 'value' -> $1::text)
+                                     AND jsonb_typeof(
+                                         field_change -> 'before' -> 'value' -> $1::text) = 'string'
+                                ELSE false
+                            END)
+                           OR
+                           (field_change -> 'after' ->> 'kind' = 'Present'
+                            AND NOT CASE
+                                WHEN jsonb_typeof(field_change -> 'after' -> 'value') = 'object'
+                                THEN field_change -> 'after' -> 'value'
+                                         = jsonb_build_object(
+                                             $1::text,
+                                             field_change -> 'after' -> 'value' -> $1::text)
+                                     AND jsonb_typeof(
+                                         field_change -> 'after' -> 'value' -> $1::text) = 'string'
+                                ELSE false
+                            END)
+                       )
+                )",
+            &[&envelope_tag],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+
+    let scrubbed_request_target_count = transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_targets AS target
+                SET base_snapshot = NULL,
+                    after_snapshot = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE target.erased_at IS NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_field_encryption_flips AS flip
+                     WHERE flip.history_choice = 'erase-and-rebaseline'
+                       AND target.target_entity_id = flip.entity_id
+                       AND (
+                           (target.base_snapshot ? flip.field_id
+                            AND NOT CASE
+                                WHEN jsonb_typeof(target.base_snapshot -> flip.field_id) = 'object'
+                                THEN target.base_snapshot -> flip.field_id
+                                         = jsonb_build_object(
+                                             $1::text,
+                                             target.base_snapshot -> flip.field_id -> $1::text)
+                                     AND jsonb_typeof(
+                                         target.base_snapshot -> flip.field_id -> $1::text) = 'string'
+                                ELSE false
+                            END)
+                           OR
+                           (target.after_snapshot ? flip.field_id
+                            AND NOT CASE
+                                WHEN jsonb_typeof(target.after_snapshot -> flip.field_id) = 'object'
+                                THEN target.after_snapshot -> flip.field_id
+                                         = jsonb_build_object(
+                                             $1::text,
+                                             target.after_snapshot -> flip.field_id -> $1::text)
+                                     AND jsonb_typeof(
+                                         target.after_snapshot -> flip.field_id -> $1::text) = 'string'
+                                ELSE false
+                            END)
+                       )
+                )",
+            &[&envelope_tag],
+        )
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+
+    let scrubbed_any = scrubbed_request_target_count != 0 || scrubbed_request_proposal_count != 0;
+    if scrubbed_any {
+        let changed = transaction
+            .execute(
+                "UPDATE registry_internal.registry_commit_head
+                    SET coverage_ready = false,
+                        updated_at = transaction_timestamp()
+                  WHERE singleton",
+                &[],
+            )
+            .await
+            .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+        if changed != 1 {
+            return Err(FieldEncryptionHistoryErasureError::Unavailable);
+        }
+    }
+    let needs_rebaseline =
+        scrubbed_any || !head.coverage_ready || head.unavailable_after_position.is_some();
+    transaction
+        .commit()
+        .await
+        .map_err(|_| FieldEncryptionHistoryErasureError::Unavailable)?;
+    Ok((
+        scrubbed_request_target_count,
+        scrubbed_request_proposal_count,
+        needs_rebaseline,
+    ))
 }
 
 /// Enumerate the records whose retained history still carries a plaintext

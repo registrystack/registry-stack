@@ -3966,6 +3966,20 @@ fn apply_lifecycle_failure(error: ApplyLifecycleError) -> FailureReport {
             DiagnosticArtifact::RuntimeConfiguration,
             SuggestedAction::CorrectRuntimeConfiguration,
         ),
+        ApplyLifecycleError::FieldEncryptionConfiguration => (
+            "apply.field_encryption.configuration_refused",
+            "fieldEncryption.provider",
+            "the field-encryption key provider is required and must resolve for this package",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
+        ApplyLifecycleError::FieldEncryptionCustody => (
+            "apply.field_encryption.custody_refused",
+            "fieldEncryption.provider",
+            "a local-file field-encryption key is allowed only for local database initialization",
+            DiagnosticArtifact::RuntimeConfiguration,
+            SuggestedAction::CorrectRuntimeConfiguration,
+        ),
         ApplyLifecycleError::DatabaseConfiguration | ApplyLifecycleError::TimeoutConfiguration => (
             "apply.database_configuration.refused",
             "database",
@@ -13058,6 +13072,37 @@ fn native_pattern_activation_diagnostics_preserve_field_and_pinned_target_recove
         assert!(diagnostic.message.contains("pinned in maintenance"));
         assert!(diagnostic.message.contains(repair));
         assert!(!diagnostic.message.contains("registry_data"));
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn apply_reports_actionable_field_encryption_provider_failures() {
+    for (error, code, message_fragment) in [
+        (
+            ApplyLifecycleError::FieldEncryptionConfiguration,
+            "apply.field_encryption.configuration_refused",
+            "provider is required",
+        ),
+        (
+            ApplyLifecycleError::FieldEncryptionCustody,
+            "apply.field_encryption.custody_refused",
+            "only for local database initialization",
+        ),
+    ] {
+        let report = apply_lifecycle_failure(error);
+        let diagnostic = &report.diagnostics[0];
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.path, "fieldEncryption.provider");
+        assert_eq!(
+            diagnostic.artifact,
+            DiagnosticArtifact::RuntimeConfiguration
+        );
+        assert_eq!(
+            diagnostic.suggested_action,
+            SuggestedAction::CorrectRuntimeConfiguration
+        );
+        assert!(diagnostic.message.contains(message_fragment));
     }
 }
 

@@ -46,15 +46,16 @@ still open. Envelopes live in dedicated `bytea` columns beside the rest of the r
 decrypt them at their response edges: a record read, a history read, and a revision read each
 decrypt on the way out, so no caller-facing surface ever returns envelope bytes.
 
-The `pattern` member stays allowed on an encrypted field and keeps its meaning. The rule is enforced
-in Rust against the plaintext before the value is sealed, so a value that the pattern refuses never
-reaches the database.
+Phase 1 refuses `pattern` on an encrypted field with `field.encrypted.pattern_refused`. Native
+patterns are PostgreSQL checks, while encrypted plaintext must not reach PostgreSQL. Remove
+`pattern`, or keep the field in plaintext storage when the native pattern is required.
 
 {/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
     open_field(), FieldAad, derive_field_aead_key(), and MAX_FIELD_PLAINTEXT_BYTES;
     crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::seal() and
-    FieldEncryptionService::open(); crates/registry-breg/src/mutation.rs,
-    encrypted_column_values() and enforce_field_pattern();
+    FieldEncryptionService::open(); crates/registry-breg/src/compiler.rs,
+    field.encrypted.pattern_refused; crates/registry-breg/src/mutation.rs,
+    encrypted_column_values();
     crates/registry-breg/src/postgres/{read,history_read,revision_read}.rs,
     with_field_encryption(); crates/registry-breg/src/api/mod.rs, opened_held_body(). */}
 
@@ -116,19 +117,29 @@ rather than at the first reviewed change.
     crates/registry-breg/src/request_prepare.rs, refuse_encrypted_participation();
     crates/registry-breg/src/outbox.rs, projected_event_values(). */}
 
-## Key loss fails closed
+## Startup and stored-envelope failures fail closed
 
-When the registry cannot reach Transit, or cannot unwrap the DEK, the failure is per entity: reads
-and writes on an entity with encrypted fields answer with an HTTP `503` problem
-`runtime.field_encryption.unavailable`, and entities without encrypted fields keep serving. The
-registry does not fall back to plaintext, does not cache an unsealed copy, and does not fail the
-whole deployment for one entity's missing key.
+Startup resolves the field-encryption provider and unwraps or creates the active DEK before the
+deployment can serve. If an active package declares encrypted fields and Transit is missing or
+unreachable, or the DEK cannot be unwrapped, startup fails the deployment. BReg does not start in a
+degraded mode and does not fall back to plaintext.
 
-{/* Evidence: crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
+After startup, a bad stored envelope fails closed at the response edge. Reads that would open the
+bad envelope answer with the HTTP `503` problem `runtime.field_encryption.unavailable`, while
+entities whose rows do not contain that bad envelope keep serving. BReg does not cache an unsealed
+copy.
+
+{/* Evidence: crates/registry-breg/src/startup.rs, prepare() and
+    FieldEncryptionService::initialize(); crates/registry-breg/src/problem.rs,
+    RuntimeFieldEncryptionUnavailable;
     crates/registry-breg/src/api/mod.rs, field_encryption_refusal(),
     field_encryption_unavailable(), and opened_held_body();
     crates/registry-breg/src/postgres/read.rs, open_row_members();
-    crates/registry-breg/src/mutation.rs, response_data(). */}
+    crates/registry-breg/src/mutation.rs, response_data();
+    crates/registry-breg/tests/postgres_field_encryption.rs,
+    missing_field_encryption_provider_refuses_startup(),
+    transit_provider_activates_the_first_key_row_and_restart_unwraps_it(), and
+    tampered_envelope_fails_closed_and_sibling_entity_serves(). */}
 
 ## Turning encryption on over existing plaintext
 
@@ -203,6 +214,8 @@ Three boundaries are worth planning around now, and
 
 - Change-request flows cannot target encrypted fields, so a restricted field that must go through
   review cannot be encrypted yet.
+- Native `pattern` checks cannot apply to encrypted fields, so Phase 1 refuses the combination at
+  authoring time.
 - One key version is active at a time, and envelope key rotation is Phase 2. Plan escrow with that
   in mind: the key you enable with is the key the data stays on.
 - The flip-on migration carries the history and backup consequences described on this page, and the
