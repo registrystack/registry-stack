@@ -42,7 +42,8 @@ use registry_platform_config::SecretResolver;
 use registry_scheduling_core::{
     evaluate_exact_time_admission, evaluate_hold_state, evaluate_window_admission,
     AdmissionRefusal, ExactTimeContext, LedgerClaim, LedgerKind, LedgerSnapshot, PoolMember,
-    SchedulingFacts,
+    SchedulingFacts, APPOINTMENT_CANCELLED_TRIGGER, APPOINTMENT_CONFIRMED_TRIGGER,
+    APPOINTMENT_RESCHEDULED_TRIGGER,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -51,13 +52,16 @@ use tokio_postgres::{Config as PgConfig, Row};
 use uuid::Uuid;
 
 use crate::config::{describe_secret_failure, DatabaseConfig};
+use crate::hooks::{ActivatedHooks, HookCaptureError};
 
 const SCHEDULING_MIGRATION: &str = include_str!("../migrations/0001_scheduling.sql");
 const FACTS_REVISION_MIGRATION: &str =
     include_str!("../migrations/0002_facts_revision_and_suppressed.sql");
+const HOOK_DELIVERY_MIGRATION_VERSION: i64 = 3;
 
 /// Every schema version in ledger order.
 const MIGRATIONS: [(i64, &str); 2] = [(1, SCHEDULING_MIGRATION), (2, FACTS_REVISION_MIGRATION)];
+const SCHEMA_VERSIONS: [i64; 3] = [1, 2, HOOK_DELIVERY_MIGRATION_VERSION];
 
 /// Serializes operator-run migrations on one session lock. A second migrator
 /// waits here instead of racing the ledger primary key. The key spells the
@@ -254,6 +258,7 @@ pub struct Commitment<'c> {
     /// transaction as the state change.
     pub audit_event: Uuid,
     pub audit_record: Value,
+    pub hooks: Option<&'c ActivatedHooks>,
 }
 
 /// The policy-resolved supply an admission runs against.
@@ -304,6 +309,8 @@ pub enum CommitError {
     /// A statement inside the capacity transaction itself failed.
     #[error("the Scheduling query failed")]
     Query(#[from] tokio_postgres::Error),
+    #[error("the Scheduling hook event could not be captured")]
+    Hooks(#[from] HookCaptureError),
     #[error("the admission was refused")]
     Refused(#[from] AdmissionRefusal),
     #[error("the idempotency key was reused with a different request")]
@@ -432,6 +439,34 @@ impl PostgresStore {
         self.pool.get().await.map_err(StoreError::Pool)
     }
 
+    pub(crate) async fn hook_delivery_client(
+        &self,
+    ) -> Result<deadpool_postgres::Client, StoreError> {
+        self.client().await
+    }
+
+    pub(crate) async fn schema_name(&self) -> Result<String, StoreError> {
+        let client = self.client().await?;
+        let schema: String = client
+            .query_one("SELECT current_schema()", &[])
+            .await?
+            .get(0);
+        let valid = !schema.is_empty()
+            && schema.len() <= 63
+            && schema
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte == b'_' || byte.is_ascii_lowercase())
+            && schema
+                .bytes()
+                .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit());
+        if valid {
+            Ok(schema)
+        } else {
+            Err(StoreError::Corrupt)
+        }
+    }
+
     pub async fn migrate(&self) -> Result<(), StoreError> {
         let mut client = self.client().await?;
         client
@@ -480,6 +515,40 @@ impl PostgresStore {
             }
             transaction.commit().await?;
         }
+        let transaction = client.transaction().await?;
+        let applied: bool = transaction
+            .query_one(
+                "SELECT EXISTS(SELECT 1 FROM scheduling_schema_migrations WHERE version=$1)",
+                &[&HOOK_DELIVERY_MIGRATION_VERSION],
+            )
+            .await?
+            .get(0);
+        if !applied {
+            let schema: String = transaction
+                .query_one("SELECT current_schema()", &[])
+                .await?
+                .get(0);
+            let valid = !schema.is_empty()
+                && schema.len() <= 63
+                && schema
+                    .bytes()
+                    .next()
+                    .is_some_and(|byte| byte == b'_' || byte.is_ascii_lowercase())
+                && schema
+                    .bytes()
+                    .all(|byte| byte == b'_' || byte.is_ascii_lowercase() || byte.is_ascii_digit());
+            if !valid {
+                return Err(StoreError::Corrupt);
+            }
+            registry_platform_hooks::delivery_schema::install(&*transaction, &schema).await?;
+            transaction
+                .execute(
+                    "INSERT INTO scheduling_schema_migrations(version,applied_at) VALUES($1,now()) ON CONFLICT(version) DO NOTHING",
+                    &[&HOOK_DELIVERY_MIGRATION_VERSION],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -491,11 +560,11 @@ impl PostgresStore {
                 &[],
             )
             .await?;
-        let schema_is_current = applied.len() == MIGRATIONS.len()
+        let schema_is_current = applied.len() == SCHEMA_VERSIONS.len()
             && applied
                 .iter()
-                .zip(MIGRATIONS.iter())
-                .all(|(row, (expected, _))| {
+                .zip(SCHEMA_VERSIONS.iter())
+                .all(|(row, expected)| {
                     row.try_get::<_, i64>(0)
                         .is_ok_and(|version| version == *expected)
                 });
@@ -1057,6 +1126,11 @@ impl PostgresStore {
             )
             .await?;
         mint_reminders(&transaction, &claim, offering, commitment.now).await?;
+        if let Some(hooks) = commitment.hooks {
+            hooks
+                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
+                .await?;
+        }
         transaction
             .insert_audit(commitment.audit_event, &commitment.audit_record)
             .await?;
@@ -1192,6 +1266,11 @@ impl PostgresStore {
             )
             .await?;
         mint_reminders(&transaction, &claim, offering, commitment.now).await?;
+        if let Some(hooks) = commitment.hooks {
+            hooks
+                .capture(&transaction, APPOINTMENT_CONFIRMED_TRIGGER, &claim)
+                .await?;
+        }
         transaction
             .insert_audit(commitment.audit_event, &commitment.audit_record)
             .await?;
@@ -1400,6 +1479,11 @@ impl PostgresStore {
                 confirmation_payload(&moved, commitment.policy_revision),
             )
             .await?;
+        if let Some(hooks) = commitment.hooks {
+            hooks
+                .capture(&transaction, APPOINTMENT_RESCHEDULED_TRIGGER, &moved)
+                .await?;
+        }
         transaction
             .insert_audit(commitment.audit_event, &commitment.audit_record)
             .await?;
@@ -1528,6 +1612,11 @@ impl PostgresStore {
             closed_at: Some(commitment.now),
             ..appointment
         };
+        if let Some(hooks) = commitment.hooks {
+            hooks
+                .capture(&transaction, APPOINTMENT_CANCELLED_TRIGGER, &cancelled)
+                .await?;
+        }
         transaction
             .insert_audit(commitment.audit_event, &commitment.audit_record)
             .await?;

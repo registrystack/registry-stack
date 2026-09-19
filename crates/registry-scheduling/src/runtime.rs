@@ -2,12 +2,18 @@
 
 //! Service assembly and the supervised background loops: `scheduling serve`
 //! builds the store connection, the authenticator, the audit chain, and the
-//! scheduling service, then runs the HTTP listener beside four workers: hold
-//! expiry, reminder-intent dispatch, retention sweeps, and audit publication.
+//! scheduling service, then runs the HTTP listener beside five workers: hold
+//! expiry, reminder-intent dispatch, hook delivery, retention sweeps, and
+//! audit publication.
 //! A worker that dies stops the process rather than letting the runtime keep
 //! selling capacity its clocks no longer guard.
 //!
-//! Reminder dispatch is the one place the runtime speaks to another system:
+//! Reminder dispatch and declared appointment observers are the places the
+//! runtime speaks to another system. Reminder dispatch renders due intents;
+//! observer delivery sends canonical envelopes captured with the appointment
+//! transaction and can never mutate Scheduling from a receiver's response.
+//!
+//! For reminders,
 //! each due outbox intent is rendered as one CloudEvents 1.0 JSON event and
 //! POSTed to the operator-configured destination, exactly once per claim, with
 //! the transport and the notification bus wholly external (INT-02). When no
@@ -39,6 +45,7 @@ use uuid::Uuid;
 
 use crate::auth::SchedulingAuthenticator;
 use crate::config::{ReminderDestinationConfig, RuntimeConfig, RuntimeConfigError};
+use crate::hooks::{ActivatedHooks, HookActivationError, HookRuntimeIdentity};
 use crate::http::{router, HttpState};
 use crate::service::SchedulingService;
 use crate::store::{OutboxRow, PostgresStore, StoreError, REMINDER_SEND_TIMEOUT};
@@ -151,7 +158,7 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     // The deployment identity is read before anything is written: the store
     // refuses to apply a policy under a scheduling id the deployment does not
     // carry, and an empty one is a deployment that has not been adopted yet.
-    let (stored_id, _, _) = store
+    let (stored_id, stored_revision, stored_digest) = store
         .scheduling_meta()
         .await
         .map_err(database_step("deployment identity read"))?;
@@ -160,6 +167,60 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
     }
     if stored_id != scheduling_id {
         return Err(RuntimeError::DeploymentIdentity);
+    }
+    let database_schema = store
+        .schema_name()
+        .await
+        .map_err(database_step("hook schema discovery"))?;
+    let hook_payload_retention =
+        Duration::from_secs(u64::from(config.retention.hook_payload_days) * 24 * 60 * 60);
+    let expected_policy_revision = if stored_digest == policy_digest {
+        stored_revision
+    } else {
+        stored_revision
+            .checked_add(1)
+            .ok_or(RuntimeError::HookActivation(
+                HookActivationError::InvalidIdentity,
+            ))?
+    };
+
+    // Resolve and validate every destination, including its signing material,
+    // before policy publication. A first start with a bad secret must not
+    // advance the durable policy revision and then fail to serve it.
+    let hooks = ActivatedHooks::activate(
+        &policy.hooks,
+        &config.destinations.hooks,
+        &secrets,
+        HookRuntimeIdentity {
+            scheduling_id: scheduling_id.clone(),
+            policy_revision: expected_policy_revision,
+            policy_digest: policy_digest.clone(),
+        },
+        database_schema.clone(),
+        hook_payload_retention,
+    )?;
+
+    // Before publishing a changed policy, prove that every retained event can
+    // still use the exact destination binding captured for it. A deployment
+    // may retain extra explicit bindings while old deliveries drain.
+    if stored_revision > 0 && !stored_digest.is_empty() {
+        let retained_hooks = ActivatedHooks::activate(
+            &policy.hooks,
+            &config.destinations.hooks,
+            &secrets,
+            HookRuntimeIdentity {
+                scheduling_id: stored_id.clone(),
+                policy_revision: stored_revision,
+                policy_digest: stored_digest.clone(),
+            },
+            database_schema.clone(),
+            hook_payload_retention,
+        )?;
+        retained_hooks
+            .delivery_service(store.clone())
+            .verify_retained_bindings()
+            .await
+            .map_err(|_| RuntimeError::HookDelivery)?;
     }
 
     let (verifier, keys) = config.oidc_verifier(&secrets).await?;
@@ -216,15 +277,29 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
         .await
         .map_err(database_step("policy publication"))?;
 
-    let service = Arc::new(SchedulingService::new(
-        store.clone(),
-        policy,
-        scheduling_id.clone(),
-        policy_revision,
-        policy_digest,
-        audit_profile.key_hasher(),
-        config.retention.attempt_receipt_days,
-    ));
+    if policy_revision != expected_policy_revision {
+        return Err(RuntimeError::HookActivation(
+            HookActivationError::InvalidIdentity,
+        ));
+    }
+    let hook_delivery = hooks.delivery_service(store.clone());
+    hook_delivery
+        .verify_retained_bindings()
+        .await
+        .map_err(|_| RuntimeError::HookDelivery)?;
+
+    let service = Arc::new(
+        SchedulingService::new(
+            store.clone(),
+            policy,
+            scheduling_id.clone(),
+            policy_revision,
+            policy_digest,
+            audit_profile.key_hasher(),
+            config.retention.attempt_receipt_days,
+        )
+        .with_hooks(hooks),
+    );
 
     let (worker_stopped, worker_stops) = mpsc::channel(WORKER_STOP_CAPACITY);
     let mut workers = Vec::new();
@@ -275,6 +350,18 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
                     );
                 }
             }
+        },
+    ));
+
+    let (hook_shutdown, hook_shutdown_rx) = tokio::sync::watch::channel(false);
+    workers.push(supervise(
+        "hook delivery",
+        worker_stopped.clone(),
+        async move {
+            // Keep the sender for the lifetime of the supervised worker. Runtime
+            // shutdown aborts this future and releases the shared delivery loop.
+            let _keepalive = hook_shutdown;
+            hook_delivery.worker().run(hook_shutdown_rx).await;
         },
     ));
 
@@ -368,6 +455,10 @@ pub enum RuntimeError {
     Listen(#[from] std::io::Error),
     #[error("the Scheduling reminder destination is invalid: {0}")]
     Destination(String),
+    #[error(transparent)]
+    HookActivation(#[from] HookActivationError),
+    #[error("the Scheduling retained hook delivery bindings are unavailable")]
+    HookDelivery,
     #[error("a Scheduling background worker stopped")]
     WorkerStopped,
     #[error(

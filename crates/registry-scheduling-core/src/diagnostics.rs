@@ -58,10 +58,18 @@ pub enum PolicyCheckReason {
     UnsupportedHookAbi,
     /// A hook phase and handler kind cannot run together.
     UnsupportedHookPhase,
+    /// A hook trigger is outside Scheduling's closed lifecycle vocabulary.
+    UnsupportedHookTrigger,
+    /// Scheduling's observer slice does not evaluate hook conditions.
+    UnsupportedHookCondition,
+    /// Scheduling observer hooks cannot carry proposal authority.
+    UnsupportedHookPrincipal,
+    /// A projected field is unavailable for the selected Scheduling trigger.
+    UnsupportedHookProjection,
+    /// A URL hook names no valid deployment-owned logical destination.
+    InvalidHookDestination,
     /// A shared hook declaration violates a rule unknown to this product.
     InvalidHookDeclaration,
-    /// This version has no hook engine, so a declared hook can never run.
-    HooksUnsupported,
     /// This version reads no leftover policy, so a declared one never
     /// applies.
     LeftoverUnsupported,
@@ -92,8 +100,12 @@ impl PolicyCheckReason {
             Self::SharedSupplyUnpartitioned => "shared-supply-unpartitioned",
             Self::UnsupportedHookAbi => "unsupported-hook-abi",
             Self::UnsupportedHookPhase => "unsupported-hook-phase",
+            Self::UnsupportedHookTrigger => "unsupported-hook-trigger",
+            Self::UnsupportedHookCondition => "unsupported-hook-condition",
+            Self::UnsupportedHookPrincipal => "unsupported-hook-principal",
+            Self::UnsupportedHookProjection => "unsupported-hook-projection",
+            Self::InvalidHookDestination => "invalid-hook-destination",
             Self::InvalidHookDeclaration => "invalid-hook-declaration",
-            Self::HooksUnsupported => "hooks-unsupported",
             Self::LeftoverUnsupported => "leftover-unsupported",
         }
     }

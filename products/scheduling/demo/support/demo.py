@@ -423,6 +423,7 @@ audit:
 retention: {{}}
 destinations:
   reminders: null
+  hooks: {{}}
 """
 
 

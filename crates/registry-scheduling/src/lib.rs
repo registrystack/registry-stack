@@ -19,6 +19,7 @@
 pub mod auth;
 pub mod config;
 pub mod cursors;
+pub mod hooks;
 pub mod http;
 pub mod runtime;
 #[cfg(feature = "schema")]

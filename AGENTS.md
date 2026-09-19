@@ -150,13 +150,13 @@ identifier, a hold or appointment is a claim against that supply inside one
 capacity transaction, and every mutation carries a task grant matched against
 the offering's service, location, and action before that transaction opens,
 with the grant's expiry re-checked inside it immediately before the claim
-commits. Reminder delivery and retention are outbox work, never inline side
-effects. Scheduling accepts the shared `registry-platform-hooks` declaration
-shape and `registry.hook-handler/v1` ABI for validation, but every non-empty
-hook list remains an explicit authoring refusal until the product has its own
-trigger, projection, disclosure, and execution contracts. The source-neutral
-core and the client must not depend on the runtime or another product's
-protocol types.
+commits. Reminder delivery, observer-hook delivery, and retention are outbox
+work, never inline side effects. Scheduling accepts only `after` URL observers
+for `appointment.confirmed`, `appointment.rescheduled`, and
+`appointment.cancelled`, with the product-owned closed projections documented
+under `products/scheduling`. It refuses conditions, principals, local handlers,
+and every proposal returned by an observer. The source-neutral core and the
+client must not depend on the runtime or another product's protocol types.
 
 For the MVP, no scheduling crate may reach a BReg, Casework, or Evidence crate
 in either direction, and the dependency-direction gate enforces that on the

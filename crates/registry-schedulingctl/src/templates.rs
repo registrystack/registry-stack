@@ -588,13 +588,20 @@ destinations: {}
   # reminders:
   #   url: https://bus.example.test/scheduling-reminders
   #   bearerTokenRef: secret:file/reminder-bearer-token
+  # URL observers declared under scheduling.yaml hooks bind here. The policy
+  # carries no endpoint or secret, and retained work keeps this exact binding.
+  # hooks:
+  #   appointment-events:
+  #     url: https://integration.example.test/scheduling-events
+  #     hmacSha256KeyRef: secret:file/appointment-events-hmac
+  #     attemptTimeoutMilliseconds: 5000
+  #     maximumAttempts: 8
 retention:
-  # The one retention period the sweep enforces today, and it covers
-  # idempotency attempt receipts and listing cursors and nothing else:
-  # appointment, history, outbox, and audit retention are deferred. Seven days
-  # is the default floor, not a recommendation; a jurisdiction's retention
-  # schedule approves the deployed value, and the audit journal records it.
+  # Attempt receipts/listing cursors and hook delivery payloads have separate
+  # bounded lifetimes. Appointment, reminder, history, and audit retention are
+  # deferred. Seven days is a default, not a jurisdictional recommendation.
   attemptReceiptDays: 7
+  hookPayloadDays: 7
 "#;
 
 /// The files one template writes, relative to the project directory, in

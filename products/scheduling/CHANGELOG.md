@@ -24,6 +24,6 @@
   write a complete `runtime.example.yaml` beside every initialized project.
 - Carry the product's own contract checks, security-invariant matrix, and
   offline authoring journey under this folder.
-- Validate authored hooks with the shared Registry Stack declaration shape and
-  handler ABI while continuing to refuse every non-empty hook list until
-  Scheduling defines product-owned trigger, projection, and execution contracts.
+- Deliver declared `after` URL observers for confirmed, rescheduled, and
+  cancelled appointments from a transactionally captured, bounded projection;
+  refuse conditions, principals, local handlers, and observer proposals.

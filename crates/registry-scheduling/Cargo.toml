@@ -45,6 +45,7 @@ registry-platform-config.workspace = true
 registry-platform-crypto.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"] }
 registry-platform-httputil.workspace = true
+registry-platform-hooks = { workspace = true, features = ["postgres"] }
 registry-platform-oidc.workspace = true
 rustls.workspace = true
 serde.workspace = true

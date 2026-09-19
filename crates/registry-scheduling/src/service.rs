@@ -37,6 +37,7 @@ use crate::cursors::{
     bind_stored, cursor_expiry, decode_cursor, encode_cursor, CursorError, ListingPosition,
     StoredCursor,
 };
+use crate::hooks::ActivatedHooks;
 use crate::store::{
     ClaimRow, CommitError, CommitOutcome, Commitment, PostgresStore, StoreError, SupplyContext,
 };
@@ -154,6 +155,7 @@ pub struct SchedulingService {
     policy_digest: String,
     hasher: AuditKeyHasher,
     attempt_receipt_days: i64,
+    hooks: Option<ActivatedHooks>,
 }
 
 impl SchedulingService {
@@ -175,7 +177,14 @@ impl SchedulingService {
             policy_digest,
             hasher,
             attempt_receipt_days: i64::from(attempt_receipt_days),
+            hooks: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_hooks(mut self, hooks: ActivatedHooks) -> Self {
+        self.hooks = Some(hooks);
+        self
     }
 
     fn revision(&self) -> u64 {
@@ -1166,7 +1175,7 @@ impl SchedulingService {
 
     #[allow(clippy::too_many_arguments)]
     fn commitment<'a>(
-        &self,
+        &'a self,
         caller: &'a Caller,
         actor: &'a str,
         grant: &GrantClaims,
@@ -1203,6 +1212,7 @@ impl SchedulingService {
             grant_exp_unix: Some(grant.exp()),
             audit_event: Uuid::new_v4(),
             audit_record,
+            hooks: self.hooks.as_ref(),
         })
     }
 
@@ -1237,7 +1247,10 @@ impl SchedulingService {
             }),
             Ok(minted) => Ok(CommitmentAnswer::Minted(T::from_minted(minted))),
             Err(error) => {
-                if matches!(error, CommitError::Store(_) | CommitError::Query(_)) {
+                if matches!(
+                    error,
+                    CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_)
+                ) {
                     // Nothing was decided: no receipt, no audit row, and the
                     // caller sees no detail.
                     tracing::error!(%error, "the Scheduling store failed mid-commitment");
@@ -1791,7 +1804,9 @@ impl ClaimRow {
 
 fn problem_of(error: &CommitError) -> ProblemCode {
     match error {
-        CommitError::Store(_) | CommitError::Query(_) => ProblemCode::ServiceUnavailable,
+        CommitError::Store(_) | CommitError::Query(_) | CommitError::Hooks(_) => {
+            ProblemCode::ServiceUnavailable
+        }
         CommitError::Refused(refusal) => refusal.public_code(),
         CommitError::KeyReused => ProblemCode::IdempotencyKeyReused,
         CommitError::KeyExpired => ProblemCode::IdempotencyExpired,

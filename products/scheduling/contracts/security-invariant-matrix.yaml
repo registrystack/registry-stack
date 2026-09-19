@@ -381,6 +381,25 @@ invariants:
     negativeTest:
       path: crates/registry-scheduling/src/auth.rs
       name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it
+  - id: SCHEDULING-SEC-24
+    state: enforced
+    threat: >-
+      An appointment observer gains mutation authority, receives caller or
+      capacity secrets, or observes an event not durably bound to the state
+      change it describes.
+    enforcementPoint: >-
+      A closed policy compiler admitting only after-phase URL handlers for
+      three appointment lifecycle triggers; product-owned projections that
+      cannot name actor, credential, capacity, duplicate-key, or cancellation
+      reason fields; outbox capture in the appointment transaction; and a
+      delivery seam that refuses every proposal.
+    refusal: >-
+      Refuse unsupported declarations before startup, fail the appointment
+      transaction if its matching event cannot be captured, and record a
+      value-free proposal refusal without applying receiver output.
+    negativeTest:
+      path: crates/registry-scheduling/src/hooks.rs
+      name: projections_disclose_only_the_requested_closed_fields
 deferred:
   - id: SCHEDULING-DEF-01
     subject: Full task-grant bounds re-checked inside the capacity transaction
