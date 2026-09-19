@@ -581,6 +581,21 @@ impl<S: DeliverySeams> DeliveryService<S> {
             &retry_delays_ms,
         )?;
         let dead_lettered = attempt >= deployed_maximum_attempts;
+        // The final worker may have committed a proposal before dying or
+        // losing its lease. Recover under the same delivery-scoped boundary
+        // before the reaper makes that row terminal; otherwise this direct
+        // dead-letter path would hide the committed application behind an
+        // all-null proposal disposition.
+        let proposal = if dead_lettered {
+            self.seams
+                .recover_proposal_receipt(ProposalReceiptRecovery {
+                    event_id,
+                    compiled_delivery_id: &compiled_delivery_id,
+                })
+                .await?
+        } else {
+            None
+        };
         self.seams
             .record_audit(
                 transaction,
@@ -601,6 +616,7 @@ impl<S: DeliverySeams> DeliveryService<S> {
             )
             .await?;
         let changed = if dead_lettered {
+            let columns = proposal_columns("dead_lettered", proposal.as_ref())?;
             transaction
                 .execute(
                     &self.sql(
@@ -610,6 +626,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
                          attempt_started_at = NULL,
                          lease_expires_at = NULL,
                          lease_token = NULL,
+                         proposal_disposition = $6,
+                         proposal_resulting_revision = $7,
+                         proposal_code = $8,
+                         proposal_summary = $9,
                          dead_lettered_at = transaction_timestamp(),
                          updated_at = transaction_timestamp()
                      WHERE event_id = $1
@@ -626,6 +646,10 @@ impl<S: DeliverySeams> DeliveryService<S> {
                         &generation,
                         &attempt,
                         &lease_token,
+                        &columns.disposition,
+                        &columns.resulting_revision,
+                        &columns.code,
+                        &columns.summary,
                     ],
                 )
                 .await

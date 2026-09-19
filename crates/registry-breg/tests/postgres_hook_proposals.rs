@@ -1432,6 +1432,75 @@ async fn real_postgres_exhausted_failed_retry_recovers_a_committed_proposal() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_final_expired_lease_recovers_a_committed_proposal() {
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "final-lease-recovery").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    let payload = outbox_payload(&setup, &event).await;
+    drop(mutation_client);
+
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
+    let changed = setup
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+             SET attempt = 2
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&event.event_id, &delivery_id],
+        )
+        .await
+        .expect("administrator models a crash on the final allowed attempt");
+    assert_eq!(changed, 1);
+
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the reaper terminalizes the expired final lease before claiming new work"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.attempt, 2);
+    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        1,
+        "the final worker's committed proposal stands"
+    );
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_a_hidden_effect_proposal_finalizes_as_applied() {
     let receiver = HttpsReceiver::start().await;
     let setup = setup(hidden_result_registry(), &receiver, false).await;
