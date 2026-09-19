@@ -4427,6 +4427,25 @@ impl registry_breg::field_encryption::FieldKeyStore for EmptyFieldKeyStore {
         Box::pin(std::future::ready(Ok(None)))
     }
 
+    fn field_key_row_count<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        u32,
+                        registry_breg::field_encryption::FieldEncryptionError,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+    {
+        Box::pin(std::future::ready(Ok(0)))
+    }
+
     fn insert_first_field_key<'life0, 'life1, 'async_trait>(
         &'life0 self,
         _key: &'life1 registry_breg::field_encryption::NewFieldKey,
