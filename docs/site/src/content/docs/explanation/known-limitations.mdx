@@ -138,6 +138,31 @@ the product does not do.
   no Helm chart, Compose file, operator, or hosted offering, and the quickstart's use of Docker is
   a loopback development path rather than a deployment pattern.
 
+Encrypted restricted fields carry their own limits, described with the model in
+[Field encryption for restricted fields](../breg-field-encryption/):
+
+- Change-request flows cannot target an encrypted field: the compiler refuses it, so a restricted
+  field that must flow through review cannot be encrypted yet.
+- One key version is active at a time: envelope key rotation is Phase 2, and a registry stays on
+  the key version it enabled with.
+- The flip-on migration requires an authored history choice, written exactly as
+  `history: erase-and-rebaseline` or `history: retain-plaintext-history`. There is no implicit
+  default, and tooling may only recommend. `retain-plaintext-history` is an explicit risk
+  acceptance that does not satisfy the database-read guarantee, because pre-flip revision snapshots
+  keep plaintext. `erase-and-rebaseline` can destroy record history beyond the encrypted field, and
+  the preflight report states the affected record and revision counts before confirmation.
+- Retained plaintext backups are the operator's precondition: backups taken before the flip stay
+  plaintext, and Phase 1 ships no tooling to retire or encrypt them.
+- Blind indexes leak equality, presence, and cardinality to a database reader, by design; the
+  indexed value itself stays sealed.
+
+{/* TODO[evidence]: the field-encryption limits above are Phase 1 behavior of registry-stack
+    issue #1108, whose implementation is not yet in this tree, so no anchor resolves today.
+    When the milestone lands, anchor the change-request refusal against the compiler, the two
+    history values and the preflight report against the migration module, and the blind-index
+    leakage against the blind-index module, and fold those anchors into the Evidence block
+    above. */}
+
 {/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgis;
     crates/registry-breg/src/postgres/catalog.rs, verify_btree_gist;
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
