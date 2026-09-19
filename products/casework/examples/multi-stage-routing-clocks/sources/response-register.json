@@ -8,17 +8,13 @@
   "request": {
     "requestEntity": "response-correction",
     "requestRoute": "response-corrections",
-    "reviewMode": "staged",
-    "stages": [
-      {
-        "id": "review",
-        "approvals": 1,
-        "excludeSubmitter": true,
-        "excludePreviousReviewers": false
-      }
-    ],
+    "review": {
+      "authority": "casework-main",
+      "policyId": "regional-review"
+    },
     "fields": [],
     "contractFingerprint": "sha256:response-correction-contract",
-    "application": {"mode": "manual"}
+    "onApproved": {"mode": "manual"},
+    "application": {}
   }
 }

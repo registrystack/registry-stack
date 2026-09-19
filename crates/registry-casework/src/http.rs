@@ -507,14 +507,16 @@ async fn assign_review_task(
     Path(task_id): Path<Uuid>,
     Json(request): Json<AssignmentRequest>,
 ) -> Result<Json<ReviewerTask>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
             .assign_review_task(
                 &actor,
                 task_id,
+                source_profile_id,
+                token,
                 if_match(&headers)?,
                 request,
                 idempotency_key(&headers)?,
@@ -529,14 +531,16 @@ async fn delegate_review_task(
     Path(task_id): Path<Uuid>,
     Json(request): Json<DelegateRequest>,
 ) -> Result<Json<ReviewerTask>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
             .delegate_review_task(
                 &actor,
                 task_id,
+                source_profile_id,
+                token,
                 if_match(&headers)?,
                 request,
                 idempotency_key(&headers)?,
@@ -550,9 +554,13 @@ async fn get_review_task_draft(
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<Response, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
-    match state.service.review_task_draft(&actor, task_id).await? {
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
+    match state
+        .service
+        .review_task_draft(&actor, task_id, source_profile_id, token)
+        .await?
+    {
         Some(draft) => Ok(Json(draft).into_response()),
         None => Ok(StatusCode::NOT_FOUND.into_response()),
     }
@@ -564,14 +572,16 @@ async fn save_review_task_draft(
     Path(task_id): Path<Uuid>,
     Json(input): Json<ReviewTaskDraftInput>,
 ) -> Result<Json<ReviewTaskDraft>, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     Ok(Json(
         state
             .service
             .save_review_task_draft(
                 &actor,
                 task_id,
+                source_profile_id,
+                token,
                 if_match(&headers)?,
                 input,
                 idempotency_key(&headers)?,
@@ -585,13 +595,15 @@ async fn delete_review_task_draft(
     headers: HeaderMap,
     Path(task_id): Path<Uuid>,
 ) -> Result<StatusCode, HttpError> {
-    reject_source_profile(&headers)?;
-    let (actor, _) = authenticate(&state, &headers).await?;
+    let source_profile_id = source_profile_optional(&headers)?;
+    let (actor, token) = authenticate(&state, &headers).await?;
     state
         .service
         .delete_review_task_draft(
             &actor,
             task_id,
+            source_profile_id,
+            token,
             if_match(&headers)?,
             idempotency_key(&headers)?,
         )

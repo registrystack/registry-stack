@@ -13670,6 +13670,18 @@
             }
           },
           {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Quoted positive signed 64-bit Casework item revision.",
             "in": "header",
             "name": "If-Match",
@@ -14474,6 +14486,18 @@
             }
           },
           {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Quoted positive signed 64-bit Casework item revision.",
             "in": "header",
             "name": "If-Match",
@@ -14772,6 +14796,18 @@
             }
           },
           {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Quoted positive signed 64-bit Casework item revision.",
             "in": "header",
             "name": "If-Match",
@@ -15046,6 +15082,18 @@
             }
           },
           {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Quoted positive signed 64-bit Casework item revision.",
             "in": "header",
             "name": "If-Match",
@@ -15301,6 +15349,18 @@
             }
           },
           {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
             "description": "Unified review task UUID.",
             "in": "path",
             "name": "task_id",
@@ -15540,6 +15600,18 @@
             "in": "header",
             "name": "Registry-Casework-Profile",
             "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9_.:-]+$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Explicit source profile used for the caller-scoped BReg read or action.",
+            "in": "header",
+            "name": "Registry-Source-Profile",
+            "required": false,
             "schema": {
               "maxLength": 128,
               "minLength": 1,

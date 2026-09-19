@@ -21,8 +21,8 @@ $$;
 CREATE TABLE casework_review_requests (
     request_id uuid PRIMARY KEY,
     producer_id text NOT NULL CHECK (octet_length(producer_id) BETWEEN 1 AND 128),
-    producer_issuer text NOT NULL CHECK (octet_length(producer_issuer) BETWEEN 1 AND 256),
-    producer_subject text NOT NULL CHECK (octet_length(producer_subject) BETWEEN 1 AND 256),
+    producer_issuer text NOT NULL CHECK (octet_length(producer_issuer) BETWEEN 1 AND 2048),
+    producer_subject text NOT NULL CHECK (octet_length(producer_subject) BETWEEN 1 AND 2048),
     source_namespace text NOT NULL CHECK (octet_length(source_namespace) BETWEEN 1 AND 128),
     subject_source text NOT NULL CHECK (octet_length(subject_source) BETWEEN 1 AND 128),
     subject_type text NOT NULL CHECK (octet_length(subject_type) BETWEEN 1 AND 128),
@@ -30,8 +30,8 @@ CREATE TABLE casework_review_requests (
     subject_version text NOT NULL CHECK (octet_length(subject_version) BETWEEN 1 AND 128),
     subject_digest text NOT NULL CHECK (subject_digest ~ '^sha256:[0-9a-f]{64}$'),
     requester_reference text NOT NULL CHECK (octet_length(requester_reference) BETWEEN 1 AND 256),
-    initiator_issuer text CHECK (initiator_issuer IS NULL OR octet_length(initiator_issuer) BETWEEN 1 AND 256),
-    initiator_subject text CHECK (initiator_subject IS NULL OR octet_length(initiator_subject) BETWEEN 1 AND 256),
+    initiator_issuer text CHECK (initiator_issuer IS NULL OR octet_length(initiator_issuer) BETWEEN 1 AND 2048),
+    initiator_subject text CHECK (initiator_subject IS NULL OR octet_length(initiator_subject) BETWEEN 1 AND 2048),
     context_strategy text NOT NULL CHECK (context_strategy IN ('submitted','source')),
     context jsonb NOT NULL CHECK (octet_length(context::text) <= 65536),
     result_constraints jsonb CHECK (result_constraints IS NULL OR octet_length(result_constraints::text) <= 16384),
@@ -148,13 +148,13 @@ CREATE TABLE casework_review_tasks (
     slot integer NOT NULL CHECK (slot >= 0),
     queue_id text NOT NULL CHECK (octet_length(queue_id) BETWEEN 1 AND 128),
     state text NOT NULL CHECK (state IN ('open','claimed','decided','closed')),
-    holder_issuer text CHECK (holder_issuer IS NULL OR octet_length(holder_issuer) BETWEEN 1 AND 256),
-    holder_subject text CHECK (holder_subject IS NULL OR octet_length(holder_subject) BETWEEN 1 AND 256),
+    holder_issuer text CHECK (holder_issuer IS NULL OR octet_length(holder_issuer) BETWEEN 1 AND 2048),
+    holder_subject text CHECK (holder_subject IS NULL OR octet_length(holder_subject) BETWEEN 1 AND 2048),
     assignment_kind text CHECK (assignment_kind IS NULL OR assignment_kind IN ('claim','nomination','delegation','absence_cover')),
-    assignment_owner_issuer text CHECK (assignment_owner_issuer IS NULL OR octet_length(assignment_owner_issuer) BETWEEN 1 AND 256),
-    assignment_owner_subject text CHECK (assignment_owner_subject IS NULL OR octet_length(assignment_owner_subject) BETWEEN 1 AND 256),
-    assigned_by_issuer text CHECK (assigned_by_issuer IS NULL OR octet_length(assigned_by_issuer) BETWEEN 1 AND 256),
-    assigned_by_subject text CHECK (assigned_by_subject IS NULL OR octet_length(assigned_by_subject) BETWEEN 1 AND 256),
+    assignment_owner_issuer text CHECK (assignment_owner_issuer IS NULL OR octet_length(assignment_owner_issuer) BETWEEN 1 AND 2048),
+    assignment_owner_subject text CHECK (assignment_owner_subject IS NULL OR octet_length(assignment_owner_subject) BETWEEN 1 AND 2048),
+    assigned_by_issuer text CHECK (assigned_by_issuer IS NULL OR octet_length(assigned_by_issuer) BETWEEN 1 AND 2048),
+    assigned_by_subject text CHECK (assigned_by_subject IS NULL OR octet_length(assigned_by_subject) BETWEEN 1 AND 2048),
     assignment_absence_ids uuid[] NOT NULL DEFAULT '{}',
     staffing_diagnostic text CHECK (staffing_diagnostic IS NULL OR staffing_diagnostic = 'no_cover_available'),
     deadline_at timestamptz,
@@ -185,8 +185,8 @@ CREATE UNIQUE INDEX casework_review_task_holder_stage_idx
 
 CREATE TABLE casework_review_task_drafts (
     task_id uuid PRIMARY KEY REFERENCES casework_review_tasks(task_id) ON DELETE CASCADE,
-    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 256),
-    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 256),
+    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
+    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
     body jsonb NOT NULL CHECK (octet_length(body::text) <= 16384),
     revision bigint NOT NULL CHECK (revision > 0),
     updated_at timestamptz NOT NULL
@@ -197,8 +197,8 @@ CREATE TABLE casework_review_decisions (
     request_id uuid NOT NULL REFERENCES casework_review_requests(request_id) ON DELETE CASCADE,
     task_id uuid NOT NULL UNIQUE,
     stage_index integer NOT NULL CHECK (stage_index >= 0),
-    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 256),
-    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 256),
+    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
+    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
     profile_id text NOT NULL CHECK (octet_length(profile_id) BETWEEN 1 AND 128),
     decision text NOT NULL CHECK (decision IN ('approve','reject','changes_requested','answer')),
     outcome text CHECK (outcome IS NULL OR octet_length(outcome) BETWEEN 1 AND 128),
@@ -230,6 +230,7 @@ CREATE TABLE casework_review_results (
 
 CREATE TABLE casework_review_terminal_events (
     event_id uuid PRIMARY KEY,
+    feed_position bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
     request_id uuid NOT NULL UNIQUE,
     result_id uuid NOT NULL UNIQUE,
     producer_id text NOT NULL,
@@ -243,7 +244,7 @@ CREATE TABLE casework_review_terminal_events (
         REFERENCES casework_review_requests(request_id, producer_id) ON DELETE CASCADE
 );
 CREATE INDEX casework_review_terminal_feed_idx
-    ON casework_review_terminal_events(producer_id, completed_at, event_id);
+    ON casework_review_terminal_events(producer_id, feed_position);
 
 CREATE TABLE casework_review_completion_outbox (
     event_id uuid PRIMARY KEY,
@@ -290,8 +291,8 @@ CREATE TABLE casework_review_accountability (
     request_id uuid NOT NULL,
     task_id uuid,
     actor_ref text NOT NULL CHECK (octet_length(actor_ref) BETWEEN 1 AND 256),
-    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 256),
-    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 256),
+    actor_issuer text NOT NULL CHECK (octet_length(actor_issuer) BETWEEN 1 AND 2048),
+    actor_subject text NOT NULL CHECK (octet_length(actor_subject) BETWEEN 1 AND 2048),
     profile_id text NOT NULL CHECK (octet_length(profile_id) BETWEEN 1 AND 128),
     decision text NOT NULL CHECK (octet_length(decision) BETWEEN 1 AND 128),
     private_reason text CHECK (private_reason IS NULL OR octet_length(private_reason) <= 2000),
@@ -313,8 +314,8 @@ CREATE TABLE casework_review_task_grants (
     task_id uuid NOT NULL,
     request_id uuid NOT NULL,
     task_revision bigint NOT NULL CHECK (task_revision > 0),
-    holder_issuer text NOT NULL CHECK (octet_length(holder_issuer) BETWEEN 1 AND 256),
-    holder_subject text NOT NULL CHECK (octet_length(holder_subject) BETWEEN 1 AND 256),
+    holder_issuer text NOT NULL CHECK (octet_length(holder_issuer) BETWEEN 1 AND 2048),
+    holder_subject text NOT NULL CHECK (octet_length(holder_subject) BETWEEN 1 AND 2048),
     approver_profile text NOT NULL CHECK (octet_length(approver_profile) BETWEEN 1 AND 128),
     approver_role text NOT NULL CHECK (approver_role IN ('staff','supervisor')),
     idempotency_key text NOT NULL CHECK (octet_length(idempotency_key) BETWEEN 1 AND 256),

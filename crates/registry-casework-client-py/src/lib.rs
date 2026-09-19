@@ -662,6 +662,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
     fn assign_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -671,6 +672,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -679,7 +681,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.assign_review_task(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -690,6 +692,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, request, source_profile=None))]
     fn delegate_review_task<'py>(
         &self,
         py: Python<'py>,
@@ -699,6 +702,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         request: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -707,7 +711,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.delegate_review_task(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -717,12 +721,14 @@ impl CaseworkClient {
         )
     }
 
+    #[pyo3(signature = (token, profile, task_id, source_profile=None))]
     fn review_task_draft<'py>(
         &self,
         py: Python<'py>,
         token: &str,
         profile: &str,
         task_id: &str,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -731,13 +737,14 @@ impl CaseworkClient {
             py.detach(|| {
                 self.runtime.block_on(
                     self.inner
-                        .review_task_draft(auth(&token, profile, None), task_id),
+                        .review_task_draft(auth(&token, profile, source_profile), task_id),
                 )
             }),
         )
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, draft, source_profile=None))]
     fn save_review_task_draft<'py>(
         &self,
         py: Python<'py>,
@@ -747,6 +754,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
         draft: &Bound<'_, PyAny>,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -755,7 +763,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.save_review_task_draft(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     task_id,
                     expected_revision,
                     idempotency_key,
@@ -766,6 +774,7 @@ impl CaseworkClient {
     }
 
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (token, profile, task_id, expected_revision, idempotency_key, source_profile=None))]
     fn delete_review_task_draft<'py>(
         &self,
         py: Python<'py>,
@@ -774,6 +783,7 @@ impl CaseworkClient {
         task_id: &str,
         expected_revision: i64,
         idempotency_key: &str,
+        source_profile: Option<&str>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let token = bearer(py, token)?;
         let task_id = uuid(py, task_id)?;
@@ -781,7 +791,7 @@ impl CaseworkClient {
             py,
             py.detach(|| {
                 self.runtime.block_on(self.inner.delete_review_task_draft(
-                    auth(&token, profile, None),
+                    auth(&token, profile, source_profile),
                     task_id,
                     expected_revision,
                     idempotency_key,

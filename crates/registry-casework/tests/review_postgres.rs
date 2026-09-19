@@ -1633,6 +1633,8 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
         .assign_review_task(
             &fixture.supervisor,
             task,
+            None,
+            "",
             1,
             AssignmentRequest {
                 assignee: fixture.reviewer_a.principal.clone(),
@@ -1647,6 +1649,8 @@ async fn claim_and_decide_require_current_exact_queue_membership() {
         .delegate_review_task(
             &fixture.reviewer_a,
             task,
+            None,
+            "",
             assigned.revision,
             DelegateRequest {
                 delegate: fixture.reviewer_b.principal.clone(),
@@ -2038,6 +2042,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
             .assign_review_task(
                 &fixture.supervisor,
                 task,
+                None,
+                "",
                 1,
                 AssignmentRequest {
                     assignee: initiator,
@@ -2053,6 +2059,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .assign_review_task(
             &fixture.supervisor,
             task,
+            None,
+            "",
             1,
             AssignmentRequest {
                 assignee: fixture.reviewer_a.principal.clone(),
@@ -2072,6 +2080,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
             .delegate_review_task(
                 &fixture.reviewer_a,
                 task,
+                None,
+                "",
                 assigned.revision,
                 DelegateRequest {
                     delegate: IssuerPrincipal {
@@ -2090,6 +2100,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .delegate_review_task(
             &fixture.reviewer_a,
             task,
+            None,
+            "",
             assigned.revision,
             DelegateRequest {
                 delegate: fixture.reviewer_b.principal.clone(),
@@ -2109,6 +2121,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .save_review_task_draft(
             &fixture.reviewer_b,
             task,
+            None,
+            "",
             delegated.revision,
             ReviewTaskDraftInput {
                 body: json!({"private": "working notes"}),
@@ -2121,7 +2135,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
     assert_eq!(
         fixture
             .service_v1
-            .review_task_draft(&fixture.reviewer_b, task)
+            .review_task_draft(&fixture.reviewer_b, task, None, "")
             .await
             .expect("read private draft")
             .expect("draft exists"),
@@ -2129,7 +2143,7 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
     );
     assert!(fixture
         .service_v1
-        .review_task_draft(&fixture.reviewer_a, task)
+        .review_task_draft(&fixture.reviewer_a, task, None, "")
         .await
         .expect("other reviewer draft lookup")
         .is_none());
@@ -2206,6 +2220,8 @@ async fn review_task_coordination_preserves_exclusions_drafts_history_and_absenc
         .assign_review_task(
             &fixture.supervisor,
             covered_task,
+            None,
+            "",
             1,
             AssignmentRequest {
                 assignee: fixture.reviewer_b.principal.clone(),

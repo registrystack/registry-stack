@@ -1,4 +1,5 @@
 use std::{
+    cmp::Ordering,
     collections::{BTreeMap, BTreeSet},
     fmt,
 };
@@ -1291,23 +1292,23 @@ fn check_constraint_bounds(
         if !declares_type(&["number", "integer"]) || !plain_inline_bounds(subschema) {
             return Err(constraint_invalid(field_path));
         }
-        let minimum = minimum
-            .filter(|value| value.is_number())
-            .and_then(Value::as_f64);
-        let maximum = maximum
-            .filter(|value| value.is_number())
-            .and_then(Value::as_f64);
+        let minimum = minimum.filter(|value| value.is_number());
+        let maximum = maximum.filter(|value| value.is_number());
         if constraint.contains_key("minimum") && minimum.is_none()
             || constraint.contains_key("maximum") && maximum.is_none()
+            || minimum.zip(maximum).is_some_and(|(minimum, maximum)| {
+                compare_json_numbers(minimum, maximum) == Some(Ordering::Greater)
+            })
             || minimum
-                .zip(maximum)
-                .is_some_and(|(minimum, maximum)| minimum > maximum)
-            || minimum
-                .zip(subschema.get("minimum").and_then(Value::as_f64))
-                .is_some_and(|(minimum, schema_minimum)| schema_minimum > minimum)
+                .zip(subschema.get("minimum"))
+                .is_some_and(|(minimum, schema_minimum)| {
+                    compare_json_numbers(schema_minimum, minimum) == Some(Ordering::Greater)
+                })
             || maximum
-                .zip(subschema.get("maximum").and_then(Value::as_f64))
-                .is_some_and(|(maximum, schema_maximum)| maximum > schema_maximum)
+                .zip(subschema.get("maximum"))
+                .is_some_and(|(maximum, schema_maximum)| {
+                    compare_json_numbers(maximum, schema_maximum) == Some(Ordering::Greater)
+                })
         {
             return Err(constraint_invalid(field_path));
         }
@@ -1391,12 +1392,10 @@ fn validate_result_narrowing(
                 })
             || constraint
                 .get("minimum")
-                .and_then(Value::as_f64)
-                .is_some_and(|minimum| value.as_f64().is_some_and(|number| number < minimum))
-            || constraint
-                .get("maximum")
-                .and_then(Value::as_f64)
-                .is_some_and(|maximum| value.as_f64().is_some_and(|number| number > maximum))
+                .is_some_and(|minimum| compare_json_numbers(value, minimum) == Some(Ordering::Less))
+            || constraint.get("maximum").is_some_and(|maximum| {
+                compare_json_numbers(value, maximum) == Some(Ordering::Greater)
+            })
             || constraint
                 .get("minLength")
                 .and_then(Value::as_u64)
@@ -1418,6 +1417,91 @@ fn validate_result_narrowing(
         }
     }
     Ok(())
+}
+
+fn compare_json_numbers(left: &Value, right: &Value) -> Option<Ordering> {
+    let left = decimal_parts(left.as_number()?.to_string().as_str())?;
+    let right = decimal_parts(right.as_number()?.to_string().as_str())?;
+    if left.negative != right.negative {
+        return Some(if left.negative {
+            Ordering::Less
+        } else {
+            Ordering::Greater
+        });
+    }
+    let magnitude = compare_decimal_magnitude(&left, &right);
+    Some(if left.negative {
+        magnitude.reverse()
+    } else {
+        magnitude
+    })
+}
+
+struct DecimalParts {
+    negative: bool,
+    digits: Vec<u8>,
+    scale: i64,
+}
+
+fn decimal_parts(value: &str) -> Option<DecimalParts> {
+    let (negative, unsigned) = value
+        .strip_prefix('-')
+        .map_or((false, value), |value| (true, value));
+    let (coefficient, exponent) = unsigned
+        .split_once(['e', 'E'])
+        .map_or(Some((unsigned, 0_i64)), |(coefficient, exponent)| {
+            Some((coefficient, exponent.parse().ok()?))
+        })?;
+    let (integer, fraction) = coefficient
+        .split_once('.')
+        .map_or((coefficient, ""), |(integer, fraction)| (integer, fraction));
+    let combined = format!("{integer}{fraction}");
+    let trimmed = combined.trim_start_matches('0');
+    if trimmed.is_empty() {
+        return Some(DecimalParts {
+            negative: false,
+            digits: vec![b'0'],
+            scale: 0,
+        });
+    }
+    if !trimmed.bytes().all(|digit| digit.is_ascii_digit()) {
+        return None;
+    }
+    Some(DecimalParts {
+        negative,
+        digits: trimmed.as_bytes().to_vec(),
+        scale: exponent.checked_sub(i64::try_from(fraction.len()).ok()?)?,
+    })
+}
+
+fn compare_decimal_magnitude(left: &DecimalParts, right: &DecimalParts) -> Ordering {
+    let left_zero = left.digits == [b'0'];
+    let right_zero = right.digits == [b'0'];
+    match (left_zero, right_zero) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => return Ordering::Less,
+        (false, true) => return Ordering::Greater,
+        (false, false) => {}
+    }
+    let left_extent = i64::try_from(left.digits.len())
+        .unwrap_or(i64::MAX)
+        .saturating_add(left.scale);
+    let right_extent = i64::try_from(right.digits.len())
+        .unwrap_or(i64::MAX)
+        .saturating_add(right.scale);
+    left_extent.cmp(&right_extent).then_with(|| {
+        let width = left.digits.len().max(right.digits.len());
+        (0..width)
+            .map(|index| {
+                left.digits
+                    .get(index)
+                    .copied()
+                    .unwrap_or(b'0')
+                    .cmp(&right.digits.get(index).copied().unwrap_or(b'0'))
+            })
+            .find(|ordering| *ordering != Ordering::Equal)
+            .unwrap_or(Ordering::Equal)
+    })
 }
 
 fn character_count(text: &str) -> u64 {
@@ -2030,6 +2114,28 @@ mod tests {
 
     #[test]
     fn result_constraints_refuse_widening_and_apply_after_schema_validation() {
+        assert_eq!(
+            compare_json_numbers(
+                &json!(9_007_199_254_740_992_u64),
+                &json!(9_007_199_254_740_993_u64)
+            ),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_json_numbers(
+                &json!(-9_007_199_254_740_993_i64),
+                &json!(-9_007_199_254_740_992_i64)
+            ),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_json_numbers(&json!(0), &json!(0.5)),
+            Some(Ordering::Less)
+        );
+        assert_eq!(
+            compare_json_numbers(&json!(0.5), &json!(0)),
+            Some(Ordering::Greater)
+        );
         let snapshot = answer_policy().snapshot().unwrap();
         assert_eq!(
             snapshot.validate_result_constraints(&json!({

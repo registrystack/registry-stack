@@ -82,9 +82,15 @@ fn record(record_id: &str, entity: &str) -> Value {
             "request": {
                 "bregState": "submitted",
                 "proposalVersion": 1,
+                "effectDigest": REGISTRY_REVISION,
+                "proposal": {
+                    "review": {
+                        "authority": "casework-main",
+                        "policyId": "registry-correction"
+                    }
+                },
                 "editable": false,
-                "actions": [],
-                "decisions": []
+                "actions": []
             }
         },
         "meta": {

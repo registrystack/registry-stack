@@ -1,4 +1,5 @@
 use chrono::{DateTime, TimeDelta, Utc};
+use deadpool_postgres::GenericClient;
 use registry_casework_core::{
     evaluate_activity_clock, record_review_decision, resolve_absence_cover, submission_digest,
     AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy,
@@ -320,7 +321,12 @@ impl CaseworkService {
                             break;
                         }
                     }
-                    Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {}
+                    Err(
+                        ReviewRuntimeError::Forbidden
+                        | ReviewRuntimeError::NotFound
+                        | ReviewRuntimeError::SourceProfileRequired
+                        | ReviewRuntimeError::SourceProfileNotApplicable,
+                    ) => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -521,15 +527,20 @@ impl CaseworkService {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn assign_review_task(
         &self,
         actor: &ActorContext,
         task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         expected_revision: i64,
         request: AssignmentRequest,
         idempotency_key: &str,
     ) -> Result<ReviewerTask, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
+        self.preflight_review_source(task_id, source_profile_id, token)
+            .await?;
         let membership_kinds = self.review_task_membership_kinds(task_id).await?;
         self.store
             .assign_review_task(
@@ -545,15 +556,20 @@ impl CaseworkService {
             .await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn delegate_review_task(
         &self,
         actor: &ActorContext,
         task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         expected_revision: i64,
         request: DelegateRequest,
         idempotency_key: &str,
     ) -> Result<ReviewerTask, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
+        self.preflight_review_source(task_id, source_profile_id, token)
+            .await?;
         let membership_kinds = self.review_task_membership_kinds(task_id).await?;
         self.store
             .assign_review_task(
@@ -573,20 +589,29 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
         task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
     ) -> Result<Option<ReviewTaskDraft>, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
+        self.preflight_review_source(task_id, source_profile_id, token)
+            .await?;
         self.store.review_task_draft(actor, task_id).await
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn save_review_task_draft(
         &self,
         actor: &ActorContext,
         task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         expected_revision: i64,
         input: ReviewTaskDraftInput,
         idempotency_key: &str,
     ) -> Result<ReviewTaskDraft, ReviewRuntimeError> {
         require_human_reviewer(actor)?;
+        self.preflight_review_source(task_id, source_profile_id, token)
+            .await?;
         self.store
             .save_review_task_draft(
                 actor,
@@ -602,10 +627,14 @@ impl CaseworkService {
         &self,
         actor: &ActorContext,
         task_id: Uuid,
+        source_profile_id: Option<&str>,
+        token: &str,
         expected_revision: i64,
         idempotency_key: &str,
     ) -> Result<(), ReviewRuntimeError> {
         require_human_reviewer(actor)?;
+        self.preflight_review_source(task_id, source_profile_id, token)
+            .await?;
         self.store
             .delete_review_task_draft(actor, task_id, expected_revision, idempotency_key)
             .await
@@ -792,6 +821,10 @@ impl CaseworkService {
                 {
                     return Err(ReviewRuntimeError::Forbidden);
                 }
+                record
+                    .policy
+                    .validate_display(&serde_json::to_value(&view.disclosed)?)
+                    .map_err(|_| ReviewRuntimeError::Forbidden)?;
                 Ok(())
             }
         }
@@ -1871,8 +1904,16 @@ impl PostgresStore {
         transaction
             .execute(
                 "INSERT INTO casework_review_history(event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
-                 VALUES($1,$2,NULL,'review_created',NULL,$3,$4)",
-                &[&Uuid::new_v4(), &request_id, &json!({"completion": completion}), &now],
+                 VALUES
+                    ($1,$2,NULL,'review_created',NULL,$3,$5),
+                    ($4,$2,NULL,'request_created',NULL,'{}'::jsonb,$5)",
+                &[
+                    &Uuid::new_v4(),
+                    &request_id,
+                    &json!({"completion": completion}),
+                    &Uuid::new_v4(),
+                    &now,
+                ],
             )
             .await?;
         let accepted = ReviewRequestAccepted {
@@ -1940,7 +1981,7 @@ impl PostgresStore {
             Some(
                 client
                     .query_opt(
-                        "SELECT completed_at,event_id FROM casework_review_terminal_events
+                        "SELECT feed_position FROM casework_review_terminal_events
                          WHERE producer_id=$1 AND event_id=$2 AND retained_until>now()",
                         &[&producer_id, &cursor],
                     )
@@ -1956,12 +1997,11 @@ impl PostgresStore {
                     "SELECT event_id,request_id,result_id,completed_at
                      FROM casework_review_terminal_events
                      WHERE producer_id=$1 AND retained_until>now()
-                       AND (completed_at,event_id)>($2,$3)
-                     ORDER BY completed_at,event_id LIMIT $4",
+                       AND feed_position>$2
+                     ORDER BY feed_position LIMIT $3",
                     &[
                         &producer_id,
-                        &position.get::<_, DateTime<Utc>>(0),
-                        &position.get::<_, Uuid>(1),
+                        &position.get::<_, i64>(0),
                         &i64::try_from(limit + 1).map_err(|_| ReviewRuntimeError::Invalid)?,
                     ],
                 )
@@ -1972,7 +2012,7 @@ impl PostgresStore {
                     "SELECT event_id,request_id,result_id,completed_at
                      FROM casework_review_terminal_events
                      WHERE producer_id=$1 AND retained_until>now()
-                     ORDER BY completed_at,event_id LIMIT $2",
+                     ORDER BY feed_position LIMIT $2",
                     &[
                         &producer_id,
                         &i64::try_from(limit + 1).map_err(|_| ReviewRuntimeError::Invalid)?,
@@ -2471,6 +2511,16 @@ impl PostgresStore {
         task_id: Uuid,
     ) -> Result<Option<ReviewTaskDraft>, ReviewRuntimeError> {
         let client = self.client().await?;
+        let request_id = client
+            .query_opt(
+                "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?
+            .get::<_, Uuid>(0);
+        let record = load_request_by_id(&client, request_id, false).await?;
+        ensure_review_reviewer_access(&client, &record, actor, Some(task_id), false).await?;
         let row = client
             .query_opt(
                 "SELECT body,revision,updated_at FROM casework_review_task_drafts
@@ -2501,6 +2551,15 @@ impl PostgresStore {
         let now = Utc::now();
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        let request_id = transaction
+            .query_opt(
+                "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?
+            .get::<_, Uuid>(0);
+        let record = load_request_by_id(&transaction, request_id, true).await?;
         let row = transaction
             .query_opt(
                 "SELECT request_id,state,holder_issuer,holder_subject,revision
@@ -2509,7 +2568,7 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
-        let request_id: Uuid = row.get(0);
+        ensure_review_reviewer_access(&transaction, &record, actor, Some(task_id), true).await?;
         let resource = format!("review-task:{task_id}");
         let request_hash = review_request_hash(&(expected_revision, &body))?;
         if let Some(response) = review_idempotent_response(
@@ -2612,6 +2671,15 @@ impl PostgresStore {
         let now = Utc::now();
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
+        let request_id = transaction
+            .query_opt(
+                "SELECT request_id FROM casework_review_tasks WHERE task_id=$1",
+                &[&task_id],
+            )
+            .await?
+            .ok_or(ReviewRuntimeError::NotFound)?
+            .get::<_, Uuid>(0);
+        let record = load_request_by_id(&transaction, request_id, true).await?;
         let row = transaction
             .query_opt(
                 "SELECT request_id,state,holder_issuer,holder_subject,revision
@@ -2620,6 +2688,7 @@ impl PostgresStore {
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
+        ensure_review_reviewer_access(&transaction, &record, actor, Some(task_id), true).await?;
         let resource = format!("review-task:{task_id}");
         let request_hash = review_request_hash(&(expected_revision, "delete-draft"))?;
         if review_idempotent_response(
@@ -2686,6 +2755,7 @@ impl PostgresStore {
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
         let client = self.client().await?;
+        let record = load_request_by_id(&client, request_id, false).await?;
         if let Some(producer_id) = producer_id {
             client
                 .query_opt(
@@ -2696,29 +2766,7 @@ impl PostgresStore {
                 .await?
                 .ok_or(ReviewRuntimeError::NotFound)?;
         } else {
-            let membership = match actor.role {
-                CaseworkRole::Staff => "staff",
-                CaseworkRole::Supervisor => "supervisor",
-                CaseworkRole::Administrator | CaseworkRole::Requester => {
-                    return Err(ReviewRuntimeError::Forbidden)
-                }
-            };
-            client
-                .query_opt(
-                    "SELECT 1 FROM casework_review_tasks t
-                     JOIN casework_queue_service q ON q.queue_id=t.queue_id
-                     JOIN casework_memberships m ON m.team_id=q.team_id
-                     WHERE t.request_id=$1 AND m.issuer=$2 AND m.subject=$3
-                       AND m.membership_kind=$4 LIMIT 1",
-                    &[
-                        &request_id,
-                        &actor.principal.issuer,
-                        &actor.principal.subject,
-                        &membership,
-                    ],
-                )
-                .await?
-                .ok_or(ReviewRuntimeError::NotFound)?;
+            ensure_review_reviewer_access(&client, &record, actor, None, false).await?;
         }
         if limit == 0 || limit > 100 {
             return Err(ReviewRuntimeError::Invalid);
@@ -2764,6 +2812,7 @@ impl PostgresStore {
         producer_id: Option<&str>,
     ) -> Result<Vec<ReviewClockOccurrence>, ReviewRuntimeError> {
         let client = self.client().await?;
+        let record = load_request_by_id(&client, request_id, false).await?;
         if let Some(producer_id) = producer_id {
             if client
                 .query_opt(
@@ -2777,32 +2826,7 @@ impl PostgresStore {
                 return Err(ReviewRuntimeError::NotFound);
             }
         } else {
-            let membership = match actor.role {
-                CaseworkRole::Staff => "staff",
-                CaseworkRole::Supervisor => "supervisor",
-                CaseworkRole::Administrator | CaseworkRole::Requester => {
-                    return Err(ReviewRuntimeError::Forbidden)
-                }
-            };
-            if client
-                .query_opt(
-                    "SELECT 1 FROM casework_review_tasks t
-                     JOIN casework_queue_service q ON q.queue_id=t.queue_id
-                     JOIN casework_memberships m ON m.team_id=q.team_id
-                     WHERE t.request_id=$1 AND m.issuer=$2 AND m.subject=$3
-                       AND m.membership_kind=$4 LIMIT 1",
-                    &[
-                        &request_id,
-                        &actor.principal.issuer,
-                        &actor.principal.subject,
-                        &membership,
-                    ],
-                )
-                .await?
-                .is_none()
-            {
-                return Err(ReviewRuntimeError::NotFound);
-            }
+            ensure_review_reviewer_access(&client, &record, actor, None, false).await?;
         }
         client
             .query(
@@ -2900,7 +2924,7 @@ impl PostgresStore {
         }
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
-        load_request_by_id(&transaction, request_id, true).await?;
+        let record = load_request_by_id(&transaction, request_id, true).await?;
         if let Some(producer_id) = producer_id {
             transaction
                 .query_opt(
@@ -2911,29 +2935,7 @@ impl PostgresStore {
                 .await?
                 .ok_or(ReviewRuntimeError::NotFound)?;
         } else {
-            let membership = match actor.role {
-                CaseworkRole::Staff => "staff",
-                CaseworkRole::Supervisor => "supervisor",
-                CaseworkRole::Administrator | CaseworkRole::Requester => {
-                    return Err(ReviewRuntimeError::Forbidden)
-                }
-            };
-            transaction
-                .query_opt(
-                    "SELECT 1 FROM casework_review_tasks t
-                     JOIN casework_queue_service q ON q.queue_id=t.queue_id
-                     JOIN casework_memberships m ON m.team_id=q.team_id
-                     WHERE t.request_id=$1 AND m.issuer=$2 AND m.subject=$3
-                       AND m.membership_kind=$4 LIMIT 1 FOR KEY SHARE OF m,q",
-                    &[
-                        &request_id,
-                        &actor.principal.issuer,
-                        &actor.principal.subject,
-                        &membership,
-                    ],
-                )
-                .await?
-                .ok_or(ReviewRuntimeError::NotFound)?;
+            ensure_review_reviewer_access(&transaction, &record, actor, None, true).await?;
         }
         let resource = format!("review-request:{request_id}");
         let request_hash = review_request_hash(&request)?;
@@ -3311,6 +3313,19 @@ impl PostgresStore {
                         &[&request_id, &i32::from(next_stage), &now],
                     )
                     .await?;
+                transaction
+                    .execute(
+                        "INSERT INTO casework_review_history(
+                            event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                         VALUES($1,$2,NULL,'stage_advanced',NULL,$3,$4)",
+                        &[
+                            &Uuid::new_v4(),
+                            &request_id,
+                            &json!({"stageIndex": next_stage}),
+                            &now,
+                        ],
+                    )
+                    .await?;
             }
             ReviewTransition::Settled { settlement } => {
                 let (status, outcome, result) = settlement_columns(settlement);
@@ -3657,6 +3672,12 @@ async fn settle_review(
     result: Option<Value>,
     now: DateTime<Utc>,
 ) -> Result<ReviewResult, ReviewRuntimeError> {
+    transaction
+        .query_one(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1,0))",
+            &[&record.producer_id],
+        )
+        .await?;
     let result_id = Uuid::new_v4();
     let event_id = Uuid::new_v4();
     let available_until = now + TimeDelta::days(i64::from(record.policy.retention.terminal_days));
@@ -3692,6 +3713,19 @@ async fn settle_review(
                 &record.producer_id,
                 &now,
                 &retained_until,
+            ],
+        )
+        .await?;
+    transaction
+        .execute(
+            "INSERT INTO casework_review_history(
+                event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+             VALUES($1,$2,NULL,'review_settled',NULL,$3,$4)",
+            &[
+                &Uuid::new_v4(),
+                &record.request_id,
+                &json!({"status": status_name}),
+                &now,
             ],
         )
         .await?;
@@ -3842,7 +3876,7 @@ async fn load_request(
 }
 
 async fn load_request_by_id(
-    transaction: &Transaction<'_>,
+    transaction: &impl GenericClient,
     request_id: Uuid,
     for_update: bool,
 ) -> Result<ReviewRequestRecord, ReviewRuntimeError> {
@@ -4354,6 +4388,61 @@ fn require_human_reviewer(actor: &ActorContext) -> Result<(), ReviewRuntimeError
     )
     .then_some(())
     .ok_or(ReviewRuntimeError::Forbidden)
+}
+
+async fn ensure_review_reviewer_access(
+    client: &impl GenericClient,
+    record: &ReviewRequestRecord,
+    actor: &ActorContext,
+    task_id: Option<Uuid>,
+    lock_membership: bool,
+) -> Result<(), ReviewRuntimeError> {
+    let membership = match actor.role {
+        CaseworkRole::Staff => "staff",
+        CaseworkRole::Supervisor => "supervisor",
+        CaseworkRole::Administrator | CaseworkRole::Requester => {
+            return Err(ReviewRuntimeError::Forbidden);
+        }
+    };
+    let eligible_stages = record
+        .policy
+        .stages
+        .iter()
+        .enumerate()
+        .filter(|(_, stage)| stage.deciding_profiles.contains(&actor.profile_id))
+        .map(|(index, _)| i32::try_from(index).map_err(|_| ReviewRuntimeError::Corrupt))
+        .collect::<Result<Vec<_>, _>>()?;
+    if eligible_stages.is_empty() {
+        return Err(ReviewRuntimeError::NotFound);
+    }
+    let lock = if lock_membership {
+        " FOR KEY SHARE OF m,q"
+    } else {
+        ""
+    };
+    let query = format!(
+        "SELECT 1 FROM casework_review_tasks t
+         JOIN casework_queue_service q ON q.queue_id=t.queue_id
+         JOIN casework_memberships m ON m.team_id=q.team_id
+         WHERE t.request_id=$1 AND t.stage_index=ANY($2)
+           AND m.issuer=$3 AND m.subject=$4 AND m.membership_kind=$5
+           AND ($6::uuid IS NULL OR t.task_id=$6) LIMIT 1{lock}"
+    );
+    client
+        .query_opt(
+            &query,
+            &[
+                &record.request_id,
+                &eligible_stages,
+                &actor.principal.issuer,
+                &actor.principal.subject,
+                &membership,
+                &task_id,
+            ],
+        )
+        .await?
+        .ok_or(ReviewRuntimeError::NotFound)?;
+    Ok(())
 }
 
 fn review_clock_from_row(row: &Row) -> Result<ReviewClockOccurrence, ReviewRuntimeError> {

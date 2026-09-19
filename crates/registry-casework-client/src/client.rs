@@ -374,7 +374,6 @@ impl CaseworkClient {
         idempotency_key: &str,
         assignment: &AssignmentRequest,
     ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         self.mutate(
             &auth,
             &["v1", "review-tasks", &task_id.to_string(), "assign"],
@@ -393,7 +392,6 @@ impl CaseworkClient {
         idempotency_key: &str,
         delegation: &DelegateRequest,
     ) -> Result<CaseworkComplete<ReviewerTask>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         self.mutate(
             &auth,
             &["v1", "review-tasks", &task_id.to_string(), "delegate"],
@@ -409,7 +407,6 @@ impl CaseworkClient {
         auth: CaseworkAuth<'_>,
         task_id: Uuid,
     ) -> Result<CaseworkComplete<Option<ReviewTaskDraft>>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         let request = self.authorized(
             self.http
                 .get(self.url(&["v1", "review-tasks", &task_id.to_string(), "draft"])?),
@@ -463,7 +460,6 @@ impl CaseworkClient {
         idempotency_key: &str,
         draft: &ReviewTaskDraftInput,
     ) -> Result<CaseworkComplete<ReviewTaskDraft>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         self.mutate_with_method(
             &auth,
             Method::PUT,
@@ -482,7 +478,6 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: &str,
     ) -> Result<CaseworkComplete<()>, CaseworkClientError> {
-        reject_source_profile(&auth)?;
         validate_mutation(expected_revision, idempotency_key)?;
         let request = self.mutation_headers(
             self.authorized(

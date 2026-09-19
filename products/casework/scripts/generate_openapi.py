@@ -422,12 +422,6 @@ def schemas(problem_entries: list[dict]) -> dict:
         "x-maximum-canonical-bytes": 16_384,
         "x-maximum-depth": 16,
     }
-    result_payload = {
-        "type": "object",
-        "additionalProperties": True,
-        "x-maximum-canonical-bytes": 16_384,
-        "x-maximum-depth": 16,
-    }
     reason = {
         "type": "string",
         "minLength": 1,
@@ -1348,15 +1342,15 @@ def document(contract: dict) -> dict:
         "/v1/review-tasks/{task_id}": {"get": operation("Read one current reviewer task", "ReviewerTask", source=True, source_required=False, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/context": {"get": operation("Read bounded review task context", "ReviewTaskContext", source=True, source_required=False, parameters=[TASK_ID], description="Submitted context returns the immutable snapshot. Source context requires the current human caller's source profile and token, exact binding, and configured contextProjection; binding changes suppress projected values.")},
         "/v1/review-tasks/{task_id}/claim": {"post": operation("Claim a review task", "ReviewerTask", source=True, source_required=False, mutation=True, parameters=[TASK_ID])},
-        "/v1/review-tasks/{task_id}/assign": {"post": operation("Assign a review task", "ReviewerTask", mutation=True, body="AssignmentRequest", parameters=[TASK_ID])},
-        "/v1/review-tasks/{task_id}/delegate": {"post": operation("Delegate a held review task", "ReviewerTask", mutation=True, body="DelegateRequest", parameters=[TASK_ID])},
+        "/v1/review-tasks/{task_id}/assign": {"post": operation("Assign a review task", "ReviewerTask", source=True, source_required=False, mutation=True, body="AssignmentRequest", parameters=[TASK_ID])},
+        "/v1/review-tasks/{task_id}/delegate": {"post": operation("Delegate a held review task", "ReviewerTask", source=True, source_required=False, mutation=True, body="DelegateRequest", parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/release": {"post": operation("Release a held review task", "ReviewerTask", mutation=True, parameters=[TASK_ID])},
         "/v1/review-tasks/{task_id}/draft": {
-            "get": operation("Read the caller's private review draft", "ReviewTaskDraft", parameters=[TASK_ID]),
-            "put": operation("Save the caller's private review draft", "ReviewTaskDraft", mutation=True, body="ReviewTaskDraftInput", parameters=[TASK_ID]),
-            "delete": operation("Delete the caller's private review draft", mutation=True, parameters=[TASK_ID], status="204"),
+            "get": operation("Read the caller's private review draft", "ReviewTaskDraft", source=True, source_required=False, parameters=[TASK_ID]),
+            "put": operation("Save the caller's private review draft", "ReviewTaskDraft", source=True, source_required=False, mutation=True, body="ReviewTaskDraftInput", parameters=[TASK_ID]),
+            "delete": operation("Delete the caller's private review draft", source=True, source_required=False, mutation=True, parameters=[TASK_ID], status="204"),
         },
-        "/v1/review-tasks/{task_id}/decisions": {"post": operation("Record a held review-task decision", mutation=True, body="ReviewTaskDecisionRequest", parameters=[TASK_ID], status="204")},
+        "/v1/review-tasks/{task_id}/decisions": {"post": operation("Record a held review-task decision", source=True, source_required=False, mutation=True, body="ReviewTaskDecisionRequest", parameters=[TASK_ID], status="204")},
         "/v1/review-requests/{request_id}/history": {"get": operation("Read audience-filtered review history", "ReviewHistoryPage", parameters=[REQUEST_ID, parameter("cursor", "query", "Last delivered history event UUID.", required=False), parameter("limit", "query", "Bounded page size.", {"type": "integer", "minimum": 1, "maximum": 100}, required=False)])},
         "/v1/review-requests/{request_id}/clocks": {"get": operation("Read review clock occurrences", "ReviewClockOccurrenceList", parameters=[REQUEST_ID])},
         "/v1/review-requests/{request_id}/notes": {"post": operation("Add an explicitly audience-bound review note", "ReviewHistoryEntry", idempotency=True, body="ReviewNoteRequest", parameters=[REQUEST_ID])},

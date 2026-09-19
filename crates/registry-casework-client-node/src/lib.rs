@@ -311,6 +311,7 @@ impl CaseworkClient {
     }
 
     #[napi]
+    #[allow(clippy::too_many_arguments)] // The public binding keeps auth, revision, retry, and source context explicit.
     pub async fn assign_review_task(
         &self,
         token: String,
@@ -319,6 +320,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: String,
         request: Value,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
@@ -326,7 +328,7 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .assign_review_task(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -337,6 +339,7 @@ impl CaseworkClient {
     }
 
     #[napi]
+    #[allow(clippy::too_many_arguments)] // The public binding keeps auth, revision, retry, and source context explicit.
     pub async fn delegate_review_task(
         &self,
         token: String,
@@ -345,6 +348,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: String,
         request: Value,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
@@ -352,7 +356,7 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .delegate_review_task(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -368,16 +372,21 @@ impl CaseworkClient {
         token: String,
         profile: String,
         task_id: String,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         let token = bearer(token)?;
         outcome(
             self.inner
-                .review_task_draft(CaseworkAuth::new(&token, &profile), uuid(&task_id)?)
+                .review_task_draft(
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
+                    uuid(&task_id)?,
+                )
                 .await,
         )
     }
 
     #[napi]
+    #[allow(clippy::too_many_arguments)] // The public binding keeps auth, revision, retry, and source context explicit.
     pub async fn save_review_task_draft(
         &self,
         token: String,
@@ -386,6 +395,7 @@ impl CaseworkClient {
         expected_revision: i64,
         idempotency_key: String,
         draft: Value,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
@@ -393,7 +403,7 @@ impl CaseworkClient {
         outcome(
             self.inner
                 .save_review_task_draft(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
@@ -411,13 +421,14 @@ impl CaseworkClient {
         task_id: String,
         expected_revision: i64,
         idempotency_key: String,
+        source_profile: Option<String>,
     ) -> Result<CaseworkOutcome> {
         safe_revision(expected_revision)?;
         let token = bearer(token)?;
         outcome(
             self.inner
                 .delete_review_task_draft(
-                    CaseworkAuth::new(&token, &profile),
+                    optional_source_auth(&token, &profile, source_profile.as_deref()),
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,

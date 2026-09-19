@@ -458,11 +458,11 @@ export class CaseworkClient {
   reviewTaskContext(token: string, profile: string, taskId: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewTaskContext>>
   claimReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string | null): Promise<CaseworkOutcome<ReviewerTask>>
   releaseReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<ReviewerTask>>
-  assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest): Promise<CaseworkOutcome<ReviewerTask>>
-  delegateReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest): Promise<CaseworkOutcome<ReviewerTask>>
-  reviewTaskDraft(token: string, profile: string, taskId: string): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
-  saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput): Promise<CaseworkOutcome<ReviewTaskDraft>>
-  deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string): Promise<CaseworkOutcome<null>>
+  assignReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: AssignmentRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewerTask>>
+  delegateReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, request: DelegateRequest, sourceProfile?: string): Promise<CaseworkOutcome<ReviewerTask>>
+  reviewTaskDraft(token: string, profile: string, taskId: string, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
+  saveReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string): Promise<CaseworkOutcome<ReviewTaskDraft>>
+  deleteReviewTaskDraft(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string): Promise<CaseworkOutcome<null>>
   decideReviewTask(token: string, profile: string, taskId: string, expectedRevision: SafeInteger, idempotencyKey: string, decision: ReviewTaskDecisionRequest, sourceProfile?: string | null): Promise<CaseworkOutcome<null>>
   reviewHistory(token: string, profile: string, requestId: string, query?: ReviewPageQuery | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
   addReviewNote(token: string, profile: string, requestId: string, idempotencyKey: string, note: ReviewNoteRequest): Promise<CaseworkOutcome<ReviewHistoryEntry>>

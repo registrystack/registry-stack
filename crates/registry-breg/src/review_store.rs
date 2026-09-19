@@ -314,11 +314,11 @@ impl ReviewAuthorityRegistry {
         matched
     }
 
-    async fn authority_for_pending(
+    async fn authorities_for_pending(
         &self,
         client: &tokio_postgres::Client,
         states: &[&str],
-    ) -> Result<Option<Arc<ReviewAuthorityClient>>, MutationError> {
+    ) -> Result<Vec<Arc<ReviewAuthorityClient>>, MutationError> {
         // Bind an owned PostgreSQL text array. A slice of borrowed `&str`
         // values is not a supported tokio-postgres array parameter and fails
         // before the query reaches PostgreSQL.
@@ -326,23 +326,53 @@ impl ReviewAuthorityRegistry {
             .iter()
             .map(|state| (*state).to_owned())
             .collect::<Vec<_>>();
-        let row = client
-            .query_opt(
-                "SELECT authority
+        let rows = client
+            .query(
+                "SELECT authority,min(next_attempt_at) AS ready_at
                    FROM registry_internal.registry_request_review_submissions
                   WHERE state=ANY($1) AND next_attempt_at <= transaction_timestamp()
-                  ORDER BY next_attempt_at,created_at LIMIT 1",
+                    AND (state<>'submitting' OR lease_until < transaction_timestamp())
+                    AND (state<>'cancelling' OR lease_until IS NULL
+                         OR lease_until < transaction_timestamp())
+                  GROUP BY authority ORDER BY ready_at,authority",
                 &[&states],
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        row.map(|row| {
-            self.authorities
-                .get(row.get::<_, String>(0).as_str())
-                .cloned()
-                .ok_or(MutationError::Unavailable)
-        })
-        .transpose()
+        rows.into_iter()
+            .map(|row| {
+                self.authorities
+                    .get(row.get::<_, String>(0).as_str())
+                    .cloned()
+                    .ok_or(MutationError::Unavailable)
+            })
+            .collect()
+    }
+
+    async fn back_off_token_failure(
+        client: &tokio_postgres::Client,
+        authority: &str,
+        states: &[&str],
+    ) -> Result<(), MutationError> {
+        let states = states
+            .iter()
+            .map(|state| (*state).to_owned())
+            .collect::<Vec<_>>();
+        client
+            .execute(
+                "UPDATE registry_internal.registry_request_review_submissions
+                    SET state=CASE WHEN state='submitting' THEN 'uncertain' ELSE state END,
+                        lease_until=NULL,last_error_code='token-unavailable',
+                        next_attempt_at=transaction_timestamp()+interval '5 seconds',
+                        updated_at=transaction_timestamp()
+                  WHERE authority=$1 AND state=ANY($2)
+                    AND next_attempt_at <= transaction_timestamp()
+                    AND (state<>'submitting' OR lease_until < transaction_timestamp())",
+                &[&authority, &states],
+            )
+            .await
+            .map_err(|_| MutationError::Unavailable)?;
+        Ok(())
     }
 
     async fn run_one(&self, client: &mut tokio_postgres::Client) -> Result<bool, MutationError> {
@@ -369,28 +399,46 @@ impl ReviewAuthorityRegistry {
         {
             return Ok(true);
         }
-        if let Some(authority) = self
-            .authority_for_pending(client, &["pending", "uncertain", "submitting"])
+        let mut authority_unavailable = false;
+        for authority in self
+            .authorities_for_pending(client, &["pending", "uncertain", "submitting"])
             .await?
         {
-            let token = authority
-                .token_provider
-                .bearer_token()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            return run_one_submission(client, &authority.authority, &authority.client, &token)
-                .await;
+            let token = match authority.token_provider.bearer_token().await {
+                Ok(token) => token,
+                Err(_) => {
+                    authority_unavailable = true;
+                    Self::back_off_token_failure(
+                        client,
+                        &authority.authority,
+                        &["pending", "uncertain", "submitting"],
+                    )
+                    .await?;
+                    continue;
+                }
+            };
+            if run_one_submission(client, &authority.authority, &authority.client, &token).await? {
+                return Ok(true);
+            }
         }
-        if let Some(authority) = self.authority_for_pending(client, &["cancelling"]).await? {
-            let token = authority
-                .token_provider
-                .bearer_token()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            return run_one_cancellation(client, &authority.authority, &authority.client, &token)
-                .await;
+        for authority in self
+            .authorities_for_pending(client, &["cancelling"])
+            .await?
+        {
+            let token = match authority.token_provider.bearer_token().await {
+                Ok(token) => token,
+                Err(_) => {
+                    authority_unavailable = true;
+                    Self::back_off_token_failure(client, &authority.authority, &["cancelling"])
+                        .await?;
+                    continue;
+                }
+            };
+            if run_one_cancellation(client, &authority.authority, &authority.client, &token).await?
+            {
+                return Ok(true);
+            }
         }
-        let mut authority_unavailable = false;
         let mut unavailable_feeds = 0usize;
         let mut unavailable_lookups = 0usize;
         for authority in self.authorities.values() {
@@ -1130,7 +1178,12 @@ pub(crate) async fn schedule_cancellation(
         .execute(
             "UPDATE registry_internal.registry_request_review_submissions
                 SET withdrawn=true,
-                    state=CASE WHEN accepted_binding IS NULL THEN state ELSE 'cancelling' END,
+                    state=CASE
+                        WHEN accepted_binding IS NOT NULL THEN 'cancelling'
+                        WHEN state='pending' AND attempt_count=0 THEN 'cancelled'
+                        WHEN state IN ('submitting','uncertain') THEN 'uncertain'
+                        ELSE state
+                    END,
                     lease_until=NULL,next_attempt_at=transaction_timestamp(),
                     updated_at=transaction_timestamp()
               WHERE request_entity_id=$1 AND request_id=$2 AND proposal_version=$3
@@ -1160,13 +1213,24 @@ pub async fn claim_submission(
     let row = client
         .query_opt(
             "WITH candidate AS (
-                 SELECT request_entity_id, request_id, proposal_version
-                   FROM registry_internal.registry_request_review_submissions
+                 SELECT s.request_entity_id, s.request_id, s.proposal_version
+                   FROM registry_internal.registry_request_review_submissions s
                   WHERE next_attempt_at <= transaction_timestamp()
                     AND authority=$2
                     AND recovery_deadline > transaction_timestamp()
                     AND (state IN ('pending','uncertain')
                          OR (state='submitting' AND lease_until < transaction_timestamp()))
+                    AND (
+                        withdrawn OR NOT EXISTS (
+                            SELECT 1
+                             FROM registry_internal.registry_request_review_submissions older
+                             WHERE older.request_entity_id=s.request_entity_id
+                               AND older.request_id=s.request_id
+                               AND older.proposal_version<s.proposal_version
+                               AND older.withdrawn
+                               AND older.state IN ('pending','submitting','uncertain','cancelling')
+                        )
+                    )
                   ORDER BY next_attempt_at, created_at
                   FOR UPDATE SKIP LOCKED LIMIT 1
              )
