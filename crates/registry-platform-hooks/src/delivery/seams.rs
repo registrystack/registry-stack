@@ -84,11 +84,12 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// applies it in a fresh transaction of its own, never inside this
     /// worker's claim, material, or finalize transactions.
     ///
-    /// The application's identity is the event id, the compiled delivery id,
-    /// and the digest of exactly the answer bytes: stable across attempts
-    /// and replay generations, so a redelivered answer resolves as the same
-    /// application rather than a second one. The product's own idempotency
-    /// mechanism holds that promise; the worker relies on it.
+    /// The application's identity is the event id and the compiled delivery
+    /// id: stable across attempts, replay generations, and answer changes,
+    /// so a redelivered answer resolves as the same application rather than
+    /// a second one, and a changed answer after the commit surfaces as the
+    /// product's stable conflict. The product's own idempotency mechanism
+    /// holds that promise; the worker relies on it.
     ///
     /// Returning [`DeliveryError`] means the outcome is uncertain: the apply
     /// may or may not have committed. The worker fails closed. The delivery
@@ -234,8 +235,10 @@ pub struct ProposalApplication<'a> {
     pub envelope: &'a [u8],
     /// The canonical handler message bytes that carried the proposal.
     pub answer: &'a [u8],
-    /// The digest of exactly `answer`, the component that keeps the
-    /// application's identity stable across attempts and generations.
+    /// The digest of exactly `answer`. It binds the accepted answer to the
+    /// application without entering the application key: the product's
+    /// binding reference carries it, so a retry with the same answer replays
+    /// and a retry with a changed answer conflicts.
     pub answer_digest: &'a [u8; 32],
 }
 

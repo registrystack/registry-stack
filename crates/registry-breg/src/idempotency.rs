@@ -133,6 +133,12 @@ pub(crate) struct ActionIdempotencyBinding<'a> {
     pub target_authority: &'a BTreeMap<String, Vec<RowBoundaryContext>>,
     pub result_effects: &'a BTreeSet<String>,
     pub canonical_request_digest: [u8; 32],
+    /// The digest of exactly the handler answer an application settles, set
+    /// only by the hook proposal path. It belongs to the binding reference,
+    /// never the key: one delivery is one application whatever answer a later
+    /// attempt carries, and a changed answer surfaces as an idempotency
+    /// conflict rather than a second application.
+    pub answer_digest: Option<&'a [u8; 32]>,
 }
 
 pub(crate) struct ResolvedIdempotencyBinding {
@@ -305,6 +311,7 @@ pub(crate) fn resolve_action_binding(
         "actionContractFingerprint": binding.action_contract_fingerprint,
         "targetAuthority": target_authority,
         "resultEffects": binding.result_effects,
+        "handlerAnswerDigest": binding.answer_digest.map(|digest| hex(digest.as_slice())),
         "canonicalRequestDigest": hex(&binding.canonical_request_digest),
     }))
     .map_err(|_| IdempotencyError::InvalidInput)?;
