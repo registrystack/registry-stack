@@ -155,6 +155,53 @@ class BRegLifecycleAction:
     @property
     def review(self) -> dict[str, JsonValue] | None: ...
 
+class BRegRequestResultReference:
+    @property
+    def target_entity_identifier(self) -> str: ...
+    @property
+    def target_record_identifier(self) -> str: ...
+    @property
+    def target_revision(self) -> int: ...
+
+class BRegRetainedRequestProposal:
+    @property
+    def request_entity_identifier(self) -> str: ...
+    @property
+    def request_identifier(self) -> str: ...
+    @property
+    def proposal_version(self) -> int: ...
+    @property
+    def breg_state(self) -> Literal["draft", "submitted", "approved", "needs_changes", "rejected", "canceled", "applied"]: ...
+    @property
+    def current(self) -> bool: ...
+    @property
+    def detail_erased(self) -> bool: ...
+    @property
+    def application_identifier(self) -> str | None: ...
+    @property
+    def result_link_count(self) -> int: ...
+    @property
+    def result_references(self) -> list[BRegRequestResultReference]: ...
+
+class BRegRetainedRequestHistoryPage:
+    @property
+    def proposals(self) -> list[BRegRetainedRequestProposal]: ...
+    @property
+    def next_after_proposal_version(self) -> int | None: ...
+    def find_proposal(
+        self,
+        request_entity_identifier: str,
+        request_identifier: str,
+        proposal_version: int,
+    ) -> BRegRetainedRequestProposal | None: ...
+    def find_application(
+        self,
+        request_entity_identifier: str,
+        request_identifier: str,
+        proposal_version: int,
+        application_identifier: str,
+    ) -> BRegRetainedRequestProposal | None: ...
+
 class BRegChangeRequestStage(TypedDict):
     id: str
     approvals: int
@@ -253,6 +300,12 @@ class BaseRegistryClient:
         format: RecordFormat = "json",
         request_history_after_proposal_version: int | None = None,
     ) -> dict[str, Any]: ...
+    def request_history(
+        self,
+        record: dict[str, Any],
+        *,
+        format: RecordFormat = "json",
+    ) -> BRegRetainedRequestHistoryPage | None: ...
     def get_geojson_record(
         self,
         entity_route: str,

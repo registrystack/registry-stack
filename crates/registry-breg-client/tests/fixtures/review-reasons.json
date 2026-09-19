@@ -321,6 +321,16 @@
           "history": {
             "proposals": [
               {
+                "requestEntityId": "item",
+                "requestId": "00000000-0000-4000-8000-000000000001",
+                "proposalVersion": 7,
+                "bregState": "submitted",
+                "current": true,
+                "contractFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "detailErased": false,
+                "applicationId": null,
+                "resultLinkCount": 0,
+                "resultLinks": [],
                 "decisions": [
                   {
                     "stageId": "review",
@@ -337,7 +347,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "nextAfterProposalVersion": null
           }
         }
       },
@@ -389,6 +400,16 @@
           "history": {
             "proposals": [
               {
+                "requestEntityId": "item",
+                "requestId": "00000000-0000-4000-8000-000000000001",
+                "proposalVersion": 7,
+                "bregState": "submitted",
+                "current": true,
+                "contractFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "detailErased": false,
+                "applicationId": null,
+                "resultLinkCount": 0,
+                "resultLinks": [],
                 "decisions": [
                   {
                     "stageId": "review",
@@ -405,7 +426,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "nextAfterProposalVersion": null
           }
         }
       },
@@ -457,6 +479,16 @@
           "history": {
             "proposals": [
               {
+                "requestEntityId": "item",
+                "requestId": "00000000-0000-4000-8000-000000000001",
+                "proposalVersion": 7,
+                "bregState": "submitted",
+                "current": true,
+                "contractFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "detailErased": false,
+                "applicationId": null,
+                "resultLinkCount": 0,
+                "resultLinks": [],
                 "decisions": [
                   {
                     "stageId": "review",
@@ -473,7 +505,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "nextAfterProposalVersion": null
           }
         }
       },
@@ -521,6 +554,16 @@
           "history": {
             "proposals": [
               {
+                "requestEntityId": "item",
+                "requestId": "00000000-0000-4000-8000-000000000001",
+                "proposalVersion": 7,
+                "bregState": "submitted",
+                "current": true,
+                "contractFingerprint": "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "detailErased": false,
+                "applicationId": null,
+                "resultLinkCount": 0,
+                "resultLinks": [],
                 "decisions": [
                   {
                     "stageId": "review",
@@ -537,7 +580,8 @@
                   }
                 ]
               }
-            ]
+            ],
+            "nextAfterProposalVersion": null
           }
         }
       },

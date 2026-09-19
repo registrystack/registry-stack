@@ -302,6 +302,32 @@ native.BaseRegistryClient.prototype.lifecycleActions = function (...args) {
   }
 };
 
+const requestHistory = native.BaseRegistryClient.prototype.requestHistory;
+native.BaseRegistryClient.prototype.requestHistory = function (...args) {
+  try {
+    const sanitized = sanitizeArguments(args, new Set([0]), new Set([0]));
+    return requestHistory.apply(this, sanitized);
+  } catch (error) {
+    throw normalize(error, 'invalid_request');
+  }
+};
+
+for (const name of ['findProposal', 'findApplication']) {
+  const original = native.RetainedRequestHistoryPage.prototype[name];
+  native.RetainedRequestHistoryPage.prototype[name] = function (...args) {
+    try {
+      const proposalVersion = args[2];
+      if (!Number.isSafeInteger(proposalVersion)
+        || proposalVersion < 1 || proposalVersion > 0xffff_ffff) {
+        throw inputError('invalid_request');
+      }
+      return original.apply(this, args);
+    } catch (error) {
+      throw normalize(error, 'invalid_request');
+    }
+  };
+}
+
 const valueIn = native.BRegAttachmentSlot.prototype.valueIn;
 native.BRegAttachmentSlot.prototype.valueIn = function (...args) {
   try {
@@ -372,6 +398,9 @@ module.exports = {
   BRegPatchBinding: native.BRegPatchBinding,
   BRegLifecycleAuthority: native.BRegLifecycleAuthority,
   BRegLifecycleAction: native.BRegLifecycleAction,
+  BRegRequestResultReference: native.RequestResultReference,
+  BRegRetainedRequestProposalView: native.RetainedRequestProposal,
+  BRegRetainedRequestHistoryPage: native.RetainedRequestHistoryPage,
   BRegAttachmentSlot: native.BRegAttachmentSlot,
   BRegAttachmentUpload: native.BRegAttachmentUpload,
   BRegImmediateActionBinding: native.BRegImmediateActionBinding,

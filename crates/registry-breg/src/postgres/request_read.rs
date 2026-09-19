@@ -1971,7 +1971,17 @@ mod tests {
             "bregState": "draft", "proposalVersion": 26, "editable": false,
             "history": {
                 "proposals": (1..=25).map(|version| serde_json::json!({
-                    "proposalVersion": version, "decisions": decisions,
+                    "requestEntityId": "case-request",
+                    "requestId": "00000000-0000-4000-8000-000000000001",
+                    "proposalVersion": version,
+                    "bregState": "draft",
+                    "current": false,
+                    "contractFingerprint": "contract-fingerprint",
+                    "detailErased": false,
+                    "applicationId": null,
+                    "resultLinkCount": 0,
+                    "resultLinks": [],
+                    "decisions": decisions,
                 })).collect::<Vec<_>>(),
                 "nextAfterProposalVersion": null,
             },

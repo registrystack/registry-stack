@@ -243,6 +243,12 @@ export type BRegRequestDecision = JsonObject & {
   readonly actorReference?: string
 }
 export type BRegRequestState = 'draft' | 'submitted' | 'approved' | 'needs_changes' | 'rejected' | 'canceled' | 'applied'
+export type BRegRequestResultReferenceData = JsonObject & {
+  readonly targetEntityId: string
+  readonly targetRecordId: string
+  /** Revision written by the application, not a current ETag or precondition. */
+  readonly targetRevision: SafeInteger
+}
 export type BRegRetainedRequestProposal = JsonObject & {
   readonly requestEntityId: string
   readonly requestId: string
@@ -253,7 +259,7 @@ export type BRegRetainedRequestProposal = JsonObject & {
   readonly detailErased: boolean
   readonly applicationId: string | null
   readonly resultLinkCount: SafeInteger
-  readonly resultLinks: ReadonlyArray<JsonObject>
+  readonly resultLinks: ReadonlyArray<BRegRequestResultReferenceData>
   readonly effectDigest?: string
   readonly decisions?: ReadonlyArray<BRegRequestDecision>
 }
@@ -270,7 +276,7 @@ export type BRegRequestMetadata = JsonObject & {
   readonly detailErased?: true
   readonly actions?: ReadonlyArray<JsonObject>
   readonly application?: JsonObject | null
-  readonly history?: BRegRetainedRequestHistory
+  readonly history?: BRegRetainedRequestHistory | null
   readonly review?: BRegRequestReviewState
   readonly reviewTiming?: BRegRequestReviewTiming
   readonly submitterReference?: string
@@ -715,6 +721,45 @@ export declare class BRegLifecycleAuthority {
   private readonly __opaque: void
 }
 
+/** Inert caller-visible target provenance. It grants no read authority. */
+export declare class BRegRequestResultReference {
+  private constructor()
+  private readonly __opaque: void
+  readonly targetEntityIdentifier: string
+  readonly targetRecordIdentifier: string
+  /** Revision written by the application, not a current ETag or precondition. */
+  readonly targetRevision: SafeInteger
+  toString(): string
+}
+
+/** One exact retained proposal from an explicitly loaded history page. */
+export declare class BRegRetainedRequestProposalView {
+  private constructor()
+  private readonly __opaque: void
+  readonly requestEntityIdentifier: string
+  readonly requestIdentifier: string
+  readonly proposalVersion: SafeInteger
+  readonly bregState: BRegRequestState
+  readonly current: boolean
+  readonly detailErased: boolean
+  readonly applicationIdentifier: string | null
+  /** Caller-visible count, never an undisclosed application total. */
+  readonly resultLinkCount: SafeInteger
+  readonly resultReferences: ReadonlyArray<BRegRequestResultReference>
+  toString(): string
+}
+
+/** One page only. Call getRecord with its cursor to load another page. */
+export declare class BRegRetainedRequestHistoryPage {
+  private constructor()
+  private readonly __opaque: void
+  readonly proposals: ReadonlyArray<BRegRetainedRequestProposalView>
+  readonly nextAfterProposalVersion: SafeInteger | null
+  findProposal(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: SafeInteger): BRegRetainedRequestProposalView | null
+  findApplication(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: SafeInteger, applicationIdentifier: string): BRegRetainedRequestProposalView | null
+  toString(): string
+}
+
 /** Opaque executable action promoted from a metadata authority and one record. */
 export declare class BRegLifecycleAction {
   withReason(reason: string): BRegLifecycleAction
@@ -842,6 +887,8 @@ export declare class BaseRegistryClient {
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
+  /** Pure typed projection of one already loaded page. Performs no I/O. */
+  requestHistory(record: RecordEnvelope, format?: RecordFormat | null): BRegRetainedRequestHistoryPage | null
   prepareLifecycleAction(authority: BRegLifecycleAuthority, record: RecordEnvelope, action: BRegLifecycleAction, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedLifecycle
   prepareLifecycleActionJson(authority: BRegLifecycleAuthority, recordJson: string, action: BRegLifecycleAction, idempotencyKey: string, format?: RecordFormat | null): BRegPreparedLifecycle
   recoverLifecycleAction(authority: BRegLifecycleAuthority, prepared: BRegPreparedLifecycle): BRegRecoveredLifecycle

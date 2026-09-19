@@ -161,8 +161,18 @@ and idempotency key for an explicit retry.
 `BRegRequestMetadata::decisions()` exposes typed current-proposal decisions.
 `reason_present()` distinguishes an absent reason from one whose text is
 withheld or erased; `reason()` returns only disclosed retained text.
-`retained_history()` keeps historical decisions as inert JSON. Node and Python
-preserve both surfaces in the returned record's `request` extension.
+`retained_history()` returns one strict typed `BRegRetainedRequestHistoryPage`.
+Each proposal carries its exact request identity, proposal version, optional
+application identity, caller-visible result count, and inert result references.
+`find_application` selects only an exact identity already present on that page.
+It performs no I/O. An absent page is distinct from a loaded proposal whose
+visible result list is empty. Follow `next_after_proposal_version` explicitly
+with `request_history_after_proposal_version`.
+
+Result references grant no target authority. Read a target through an ordinary
+authorized `get_record`; the retained target revision is application provenance,
+not the target's current revision, ETag, or a write precondition. Debug output
+redacts request and target identifiers.
 
 Lifecycle action ETags are not interchangeable with record ETags. After a
 success or refusal, refetch the record before deciding which transition is

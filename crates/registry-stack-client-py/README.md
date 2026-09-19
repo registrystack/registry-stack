@@ -34,6 +34,11 @@ Wheels cover macOS arm64, Linux arm64 with glibc, and Linux x64 with glibc,
 and require glibc 2.17 or newer on Linux. Install the exact client version that
 matches the deployment.
 
+The `registry_client.breg` namespace includes the typed retained-history page,
+proposal, and inert result-reference classes exposed by the maintained BReg
+binding. Their helpers inspect only an already loaded page and do not fetch
+targets or advance pagination.
+
 The `crates/registry-stack-client-py` directory in the Registry Stack
 repository holds this public metadata and the Python facade. It is not built
 directly. `release/scripts/assemble-registry-client-wheel.py` combines the five

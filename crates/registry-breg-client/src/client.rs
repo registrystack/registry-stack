@@ -1918,7 +1918,12 @@ fn decode_breg_single(
     let RegistryRecordResponse::Single(value) = value else {
         return Err(body_failure(status, trace_id));
     };
-    validate_breg_records(std::slice::from_ref(&value.data), status, &trace_id)?;
+    validate_breg_records(
+        std::slice::from_ref(&value.data),
+        &value.meta.entity_type_identifier,
+        status,
+        &trace_id,
+    )?;
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
@@ -1944,7 +1949,12 @@ fn decode_breg_collection(
     let RegistryRecordResponse::Collection(value) = value else {
         return Err(body_failure(status, trace_id));
     };
-    validate_breg_records(&value.items, status, &trace_id)?;
+    validate_breg_records(
+        &value.items,
+        &value.meta.entity_type_identifier,
+        status,
+        &trace_id,
+    )?;
     validate_profile_link(
         link.as_deref(),
         &value.meta.entity_type_identifier,
@@ -1978,12 +1988,27 @@ fn decode_registry_record(
 
 fn validate_breg_records(
     records: &[RegistryRecord],
+    entity_type_identifier: &str,
     status: u16,
     trace_id: &TraceId,
 ) -> Result<(), BaseRegistryClientError> {
     if records.iter().any(|record| {
-        !canonical_uuid(&record.record_identifier)
+        if !canonical_uuid(&record.record_identifier)
             || !canonical_positive_revision(&record.revision_identifier)
+        {
+            return true;
+        }
+        let Ok(metadata) = BRegRequestMetadata::from_record(record) else {
+            return true;
+        };
+        metadata.is_some_and(|metadata| {
+            metadata.retained_history().is_some_and(|history| {
+                history
+                    .proposals()
+                    .iter()
+                    .any(|proposal| proposal.request_entity_identifier() != entity_type_identifier)
+            })
+        })
     }) {
         return Err(body_failure(status, trace_id.clone()));
     }

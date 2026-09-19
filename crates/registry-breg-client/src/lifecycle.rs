@@ -32,6 +32,10 @@ pub const MAX_BREG_ACTION_HREF_BYTES: usize = 2_048;
 pub const MAX_BREG_SNAPSHOT_REFERENCE_BYTES: usize = 4_096;
 /// Maximum authored review stages accepted in one request projection.
 pub const MAX_BREG_REVIEW_STAGES: usize = 32;
+/// Maximum retained proposals accepted in one caller-controlled history page.
+pub const MAX_BREG_RETAINED_PROPOSALS: usize = 50;
+/// Maximum caller-visible result references accepted for one retained proposal.
+pub const MAX_BREG_REQUEST_RESULT_REFERENCES: usize = 16;
 
 const MAX_REQUEST_EXTENSION_BYTES: usize = 2_097_152;
 const MAX_IDENTIFIER_BYTES: usize = 512;
@@ -109,6 +113,211 @@ pub enum BRegRequestState {
     Rejected,
     Canceled,
     Applied,
+}
+
+/// One caller-visible record affected by an exact applied request proposal.
+///
+/// This is provenance only. It grants no authority to read the target and its
+/// revision is not a current ETag or write precondition.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRequestResultReference {
+    target_entity_identifier: String,
+    target_record_identifier: Uuid,
+    target_revision: u64,
+}
+
+impl BRegRequestResultReference {
+    #[must_use]
+    pub fn target_entity_identifier(&self) -> &str {
+        &self.target_entity_identifier
+    }
+
+    #[must_use]
+    pub const fn target_record_identifier(&self) -> Uuid {
+        self.target_record_identifier
+    }
+
+    /// Returns the revision written by the application, not the current target revision.
+    #[must_use]
+    pub const fn target_revision(&self) -> u64 {
+        self.target_revision
+    }
+}
+
+impl fmt::Debug for BRegRequestResultReference {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRequestResultReference")
+            .field("target_entity_identifier", &"<redacted>")
+            .field("target_record_identifier", &"<redacted>")
+            .field("target_revision", &"<redacted>")
+            .finish()
+    }
+}
+
+/// One exact retained proposal from a caller-selected history page.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRetainedRequestProposal {
+    request_entity_identifier: String,
+    request_identifier: Uuid,
+    proposal_version: BRegProposalVersion,
+    breg_state: BRegRequestState,
+    current: bool,
+    contract_fingerprint: String,
+    detail_erased: bool,
+    application_identifier: Option<Uuid>,
+    result_link_count: u16,
+    result_references: Vec<BRegRequestResultReference>,
+    effect_digest: Option<BRegEffectDigest>,
+    decisions: Vec<BRegRequestDecision>,
+}
+
+impl BRegRetainedRequestProposal {
+    #[must_use]
+    pub fn request_entity_identifier(&self) -> &str {
+        &self.request_entity_identifier
+    }
+
+    #[must_use]
+    pub const fn request_identifier(&self) -> Uuid {
+        self.request_identifier
+    }
+
+    #[must_use]
+    pub const fn proposal_version(&self) -> BRegProposalVersion {
+        self.proposal_version
+    }
+
+    #[must_use]
+    pub const fn breg_state(&self) -> BRegRequestState {
+        self.breg_state
+    }
+
+    #[must_use]
+    pub const fn current(&self) -> bool {
+        self.current
+    }
+
+    #[must_use]
+    pub fn contract_fingerprint(&self) -> &str {
+        &self.contract_fingerprint
+    }
+
+    #[must_use]
+    pub const fn detail_erased(&self) -> bool {
+        self.detail_erased
+    }
+
+    #[must_use]
+    pub const fn application_identifier(&self) -> Option<Uuid> {
+        self.application_identifier
+    }
+
+    /// Caller-visible count, never an undisclosed application total.
+    #[must_use]
+    pub const fn result_link_count(&self) -> u16 {
+        self.result_link_count
+    }
+
+    /// Caller-visible inert result references in server order.
+    #[must_use]
+    pub fn result_references(&self) -> &[BRegRequestResultReference] {
+        &self.result_references
+    }
+
+    #[must_use]
+    pub fn effect_digest(&self) -> Option<&BRegEffectDigest> {
+        self.effect_digest.as_ref()
+    }
+
+    #[must_use]
+    pub fn decisions(&self) -> &[BRegRequestDecision] {
+        &self.decisions
+    }
+}
+
+impl fmt::Debug for BRegRetainedRequestProposal {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRetainedRequestProposal")
+            .field("request_entity_identifier", &"<redacted>")
+            .field("request_identifier", &"<redacted>")
+            .field("proposal_version", &self.proposal_version)
+            .field("breg_state", &self.breg_state)
+            .field("current", &self.current)
+            .field("contract_fingerprint", &"<redacted>")
+            .field("detail_erased", &self.detail_erased)
+            .field("has_application", &self.application_identifier.is_some())
+            .field("visible_result_count", &self.result_references.len())
+            .field("has_effect_digest", &self.effect_digest.is_some())
+            .field("decision_count", &self.decisions.len())
+            .finish()
+    }
+}
+
+/// One explicitly loaded retained request-history page.
+#[derive(Clone, Eq, PartialEq)]
+pub struct BRegRetainedRequestHistoryPage {
+    proposals: Vec<BRegRetainedRequestProposal>,
+    next_after_proposal_version: Option<BRegProposalVersion>,
+}
+
+impl BRegRetainedRequestHistoryPage {
+    #[must_use]
+    pub fn proposals(&self) -> &[BRegRetainedRequestProposal] {
+        &self.proposals
+    }
+
+    /// Cursor for one caller-initiated subsequent record GET.
+    #[must_use]
+    pub const fn next_after_proposal_version(&self) -> Option<BRegProposalVersion> {
+        self.next_after_proposal_version
+    }
+
+    /// Locate one exact request proposal within this page only.
+    #[must_use]
+    pub fn find_proposal(
+        &self,
+        request_entity_identifier: &str,
+        request_identifier: Uuid,
+        proposal_version: BRegProposalVersion,
+    ) -> Option<&BRegRetainedRequestProposal> {
+        self.proposals.iter().find(|proposal| {
+            proposal.request_entity_identifier == request_entity_identifier
+                && proposal.request_identifier == request_identifier
+                && proposal.proposal_version == proposal_version
+        })
+    }
+
+    /// Locate one exact applied proposal within this page only.
+    #[must_use]
+    pub fn find_application(
+        &self,
+        request_entity_identifier: &str,
+        request_identifier: Uuid,
+        proposal_version: BRegProposalVersion,
+        application_identifier: Uuid,
+    ) -> Option<&BRegRetainedRequestProposal> {
+        self.find_proposal(
+            request_entity_identifier,
+            request_identifier,
+            proposal_version,
+        )
+        .filter(|proposal| proposal.application_identifier == Some(application_identifier))
+    }
+}
+
+impl fmt::Debug for BRegRetainedRequestHistoryPage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("BRegRetainedRequestHistoryPage")
+            .field("proposal_count", &self.proposals.len())
+            .field(
+                "has_next_after_proposal_version",
+                &self.next_after_proposal_version.is_some(),
+            )
+            .finish()
+    }
 }
 
 /// Closed review policy frozen into a visible change-request proposal.
@@ -772,7 +981,7 @@ pub struct BRegRequestMetadata {
     detail_erased: bool,
     actions: Vec<InertBRegLifecycleAction>,
     application: Option<BRegRecordApplication>,
-    retained_history: Option<Value>,
+    retained_history: Option<BRegRetainedRequestHistoryPage>,
     decisions: Vec<BRegRequestDecision>,
     retained_decisions: Vec<BRegRequestDecision>,
     review: Option<BRegRequestReviewState>,
@@ -787,12 +996,22 @@ impl BRegRequestMetadata {
     pub fn from_record(
         record: &crate::RegistryRecord,
     ) -> Result<Option<Self>, BRegLifecycleDecodeError> {
-        record
+        let metadata = record
             .extensions
             .get("request")
             .cloned()
             .map(|value| Self::from_value(value, record.domain_data.is_empty()))
-            .transpose()
+            .transpose()?;
+        if metadata.as_ref().is_some_and(|metadata| {
+            metadata.retained_history.as_ref().is_some_and(|history| {
+                history.proposals.iter().any(|proposal| {
+                    proposal.request_identifier.to_string() != record.record_identifier
+                })
+            })
+        }) {
+            return Err(BRegLifecycleDecodeError::Profile);
+        }
+        Ok(metadata)
     }
 
     /// Decodes a record's `request` extension under the exact Base Registry Engine
@@ -897,21 +1116,40 @@ impl BRegRequestMetadata {
         if applier_reference.is_some() && application.is_none() {
             return Err(BRegLifecycleDecodeError::Profile);
         }
-        let mut retained_decisions = Vec::new();
         let retained_history = match object.remove("history") {
-            None => None,
-            Some(Value::Object(history)) => {
-                if let Some(Value::Array(proposals)) = history.get("proposals") {
-                    for proposal in proposals {
-                        if let Some(decisions) = proposal.get("decisions") {
-                            retained_decisions.extend(decode_decisions(decisions.clone())?);
-                        }
-                    }
-                }
-                Some(Value::Object(history))
-            }
-            Some(_) => return Err(BRegLifecycleDecodeError::Profile),
+            None | Some(Value::Null) => None,
+            Some(value) => Some(decode_retained_history(value)?),
         };
+        if let Some(current) = retained_history
+            .as_ref()
+            .and_then(|history| history.proposals.iter().find(|proposal| proposal.current))
+        {
+            let application_identifier =
+                application.as_ref().map(|application| match application {
+                    BRegRecordApplication::Retained(application) => {
+                        application.application_identifier.as_str()
+                    }
+                    BRegRecordApplication::Erased(application) => {
+                        application.application_identifier.as_str()
+                    }
+                });
+            if current.proposal_version != proposal_version
+                || current.breg_state != breg_state
+                || current
+                    .application_identifier
+                    .map(|value| value.to_string())
+                    .as_deref()
+                    != application_identifier
+            {
+                return Err(BRegLifecycleDecodeError::Profile);
+            }
+        }
+        let retained_decisions = retained_history
+            .as_ref()
+            .into_iter()
+            .flat_map(|history| &history.proposals)
+            .flat_map(|proposal| proposal.decisions.iter().cloned())
+            .collect();
 
         Ok(Self {
             breg_state,
@@ -1001,10 +1239,10 @@ impl BRegRequestMetadata {
         self.applier_reference.as_deref()
     }
 
-    /// Returns retained history as inert JSON. It is never consulted for
-    /// lifecycle execution.
+    /// Returns the explicitly loaded typed history page. It is never consulted
+    /// for lifecycle execution and does not advance pagination or fetch targets.
     #[must_use]
-    pub fn retained_history(&self) -> Option<&Value> {
+    pub fn retained_history(&self) -> Option<&BRegRetainedRequestHistoryPage> {
         self.retained_history.as_ref()
     }
 
@@ -2371,6 +2609,175 @@ fn decode_retained_application(
         applied_at,
         reason_present,
         reason,
+    })
+}
+
+fn decode_retained_history(
+    value: Value,
+) -> Result<BRegRetainedRequestHistoryPage, BRegLifecycleDecodeError> {
+    let mut object = exact_object(value, &["proposals", "nextAfterProposalVersion"], &[])?;
+    let proposals = match object.remove("proposals") {
+        Some(Value::Array(proposals)) if proposals.len() <= MAX_BREG_RETAINED_PROPOSALS => {
+            proposals
+                .into_iter()
+                .map(decode_retained_proposal)
+                .collect::<Result<Vec<_>, _>>()?
+        }
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let next_after_proposal_version = match object.remove("nextAfterProposalVersion") {
+        Some(Value::Null) => None,
+        Some(value) => Some(BRegProposalVersion::from_value(&value)?),
+        None => return Err(BRegLifecycleDecodeError::Profile),
+    };
+
+    let mut request_identity = None;
+    let mut previous_version = None;
+    let mut current_count = 0_usize;
+    for proposal in &proposals {
+        let identity = (
+            proposal.request_entity_identifier.as_str(),
+            proposal.request_identifier,
+        );
+        if request_identity.is_some_and(|expected| expected != identity) {
+            return Err(BRegLifecycleDecodeError::Profile);
+        }
+        request_identity = Some(identity);
+        if previous_version.is_some_and(|version| version >= proposal.proposal_version) {
+            return Err(BRegLifecycleDecodeError::Profile);
+        }
+        previous_version = Some(proposal.proposal_version);
+        current_count += usize::from(proposal.current);
+    }
+    if current_count > 1
+        || next_after_proposal_version.is_some_and(|cursor| {
+            proposals
+                .last()
+                .is_none_or(|proposal| proposal.proposal_version != cursor)
+        })
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+
+    Ok(BRegRetainedRequestHistoryPage {
+        proposals,
+        next_after_proposal_version,
+    })
+}
+
+fn decode_retained_proposal(
+    value: Value,
+) -> Result<BRegRetainedRequestProposal, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &[
+            "requestEntityId",
+            "requestId",
+            "proposalVersion",
+            "bregState",
+            "current",
+            "contractFingerprint",
+            "detailErased",
+            "applicationId",
+            "resultLinkCount",
+            "resultLinks",
+        ],
+        &["effectDigest", "decisions"],
+    )?;
+    let request_entity_identifier = take_string(&mut object, "requestEntityId")?;
+    validate_identifier(&request_entity_identifier)?;
+    let request_identifier = take_string(&mut object, "requestId")?;
+    validate_canonical_uuid(&request_identifier)?;
+    let request_identifier =
+        Uuid::parse_str(&request_identifier).map_err(|_| BRegLifecycleDecodeError::Profile)?;
+    let proposal_version = BRegProposalVersion::from_value(
+        &object
+            .remove("proposalVersion")
+            .ok_or(BRegLifecycleDecodeError::Profile)?,
+    )?;
+    let breg_state = BRegRequestState::parse(&take_string(&mut object, "bregState")?)
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let current = object
+        .remove("current")
+        .and_then(|value| value.as_bool())
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let contract_fingerprint = take_string(&mut object, "contractFingerprint")?;
+    validate_identifier(&contract_fingerprint)?;
+    let detail_erased = object
+        .remove("detailErased")
+        .and_then(|value| value.as_bool())
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let application_identifier = match object.remove("applicationId") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => {
+            validate_canonical_uuid(&value)?;
+            Some(Uuid::parse_str(&value).map_err(|_| BRegLifecycleDecodeError::Profile)?)
+        }
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    let result_link_count = object
+        .remove("resultLinkCount")
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| usize::from(*value) <= MAX_BREG_REQUEST_RESULT_REFERENCES)
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    let result_references = match object.remove("resultLinks") {
+        Some(Value::Array(values)) if values.len() <= MAX_BREG_REQUEST_RESULT_REFERENCES => values
+            .into_iter()
+            .map(decode_request_result_reference)
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(BRegLifecycleDecodeError::Profile),
+    };
+    if usize::from(result_link_count) != result_references.len()
+        || application_identifier.is_none() && !result_references.is_empty()
+        || application_identifier.is_some() && !matches!(breg_state, BRegRequestState::Applied)
+    {
+        return Err(BRegLifecycleDecodeError::Profile);
+    }
+    let effect_digest = take_optional_digest(&mut object, "effectDigest")?;
+    let decisions = match object.remove("decisions") {
+        None => Vec::new(),
+        Some(value) => decode_decisions(value)?,
+    };
+    Ok(BRegRetainedRequestProposal {
+        request_entity_identifier,
+        request_identifier,
+        proposal_version,
+        breg_state,
+        current,
+        contract_fingerprint,
+        detail_erased,
+        application_identifier,
+        result_link_count,
+        result_references,
+        effect_digest,
+        decisions,
+    })
+}
+
+fn decode_request_result_reference(
+    value: Value,
+) -> Result<BRegRequestResultReference, BRegLifecycleDecodeError> {
+    let mut object = exact_object(
+        value,
+        &["targetEntityId", "targetRecordId", "targetRevision"],
+        &[],
+    )?;
+    let target_entity_identifier = take_string(&mut object, "targetEntityId")?;
+    validate_identifier(&target_entity_identifier)?;
+    let target_record_identifier = take_string(&mut object, "targetRecordId")?;
+    validate_canonical_uuid(&target_record_identifier)?;
+    let target_record_identifier = Uuid::parse_str(&target_record_identifier)
+        .map_err(|_| BRegLifecycleDecodeError::Profile)?;
+    let target_revision = object
+        .remove("targetRevision")
+        .and_then(|value| value.as_u64())
+        .filter(|value| *value > 0 && *value <= 9_007_199_254_740_991)
+        .ok_or(BRegLifecycleDecodeError::Profile)?;
+    Ok(BRegRequestResultReference {
+        target_entity_identifier,
+        target_record_identifier,
+        target_revision,
     })
 }
 

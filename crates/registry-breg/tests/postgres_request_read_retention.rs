@@ -140,23 +140,21 @@ async fn heavy_retained_history_pages_decode_without_skipping_proposals_or_decis
         let history = request_metadata
             .retained_history()
             .expect("the heavy request has retained history");
-        let proposals = history["proposals"]
-            .as_array()
-            .expect("nonempty history page");
+        let proposals = history.proposals();
         assert!(!proposals.is_empty());
         for proposal in proposals {
-            versions.push(proposal["proposalVersion"].as_i64().unwrap());
-            let decisions = proposal["decisions"].as_array().unwrap();
+            versions.push(i64::from(proposal.proposal_version().get()));
+            let decisions = proposal.decisions();
             assert_eq!(decisions.len(), 1024);
-            assert_eq!(decisions[0]["stageId"], "stage-0");
-            assert_eq!(decisions[1023]["stageId"], "stage-31");
-            assert_eq!(decisions[1023]["reason"], reason);
-            assert_eq!(decisions[1023]["reasonPresent"], true);
+            assert_eq!(decisions[0].stage_id(), "stage-0");
+            assert_eq!(decisions[1023].stage_id(), "stage-31");
+            assert_eq!(decisions[1023].reason(), Some(reason.as_str()));
+            assert!(decisions[1023].reason_present());
         }
         page_count += 1;
-        after = history["nextAfterProposalVersion"]
-            .as_u64()
-            .map(|value| u32::try_from(value).expect("proposal cursor fits the client contract"));
+        after = history
+            .next_after_proposal_version()
+            .map(|value| value.get());
         if after.is_none() {
             break;
         }

@@ -13,10 +13,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "smoke-registry-client-package.py"
 VERSION = "0.0.0-smoke"
-# The namespaces the published wheel carries, with the constructor and error
-# class a caller of each one names.
+# The namespaces the published wheel carries, with public classes exercised by
+# the offline smoke.
 NAMESPACES = {
-    "breg": ("BaseRegistryClient", "BaseRegistryClientError"),
+    "breg": (
+        "BaseRegistryClient",
+        "BaseRegistryClientError",
+        "BRegRequestResultReference",
+        "BRegRetainedRequestProposal",
+        "BRegRetainedRequestHistoryPage",
+    ),
     "casework": ("CaseworkClient", "CaseworkClientError"),
     "discovery": ("DiscoveryClient", "DiscoveryClientError"),
     "evidence": ("EvidenceClient", "EvidenceClientError"),

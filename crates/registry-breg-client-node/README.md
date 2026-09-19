@@ -132,6 +132,14 @@ bounded revision collection. `requestHistoryAfterProposalVersion` is accepted
 only by `getRecord`. Every specialized object read has an exact `...Json`
 variant when record or GeoJSON values may cross JavaScript's integer boundary.
 
+`requestHistory(record)` is a pure projection over one already loaded record.
+It returns a `BRegRetainedRequestHistoryPage` with strict proposal and result
+reference types, or `null` when history was not returned. A loaded proposal with
+an empty `resultReferences` list means only that no results were visible in that
+observation. Use the page cursor in a later explicit `getRecord`; the helper does
+not page, fetch targets, retry, or widen authority. Target revisions are applied
+provenance, not current ETags or write preconditions.
+
 ## Immediate and atomic mutations
 
 For an immediate action, select its opaque binding, fetch target conditions
