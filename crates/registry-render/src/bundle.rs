@@ -4,7 +4,7 @@
 //! a sealed bundle, compiling does not.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use serde_json::Value;
@@ -212,7 +212,7 @@ fn capture_bundle_directory(
                         format!("cannot read bundle entry {}: {err}", display.display()),
                     )
                 })?;
-                let key = relative_path_key(&child_relative);
+                let key = relative_path_key(&child_relative)?;
                 if files.insert(key.clone(), Bytes::new(bytes)).is_some() {
                     return Err(RenderProblem::new(
                         ProblemKind::ManifestInvalid,
@@ -299,7 +299,7 @@ impl Bundle {
             let schema = match &spec.schema {
                 None => None,
                 Some(rel) => {
-                    let key = relative_path_key(rel);
+                    let key = relative_path_key(rel)?;
                     let bytes = snapshot.get(&key).ok_or_else(|| {
                         RenderProblem::new(
                             ProblemKind::ManifestInvalid,
@@ -318,7 +318,8 @@ impl Bundle {
             // The entry bytes must be in the same snapshot the world will
             // consume; failing here gives a plain problem instead of a
             // compile one.
-            if snapshot.get(&relative_path_key(&spec.entry)).is_none() {
+            let entry_key = relative_path_key(&spec.entry)?;
+            if snapshot.get(&entry_key).is_none() {
                 return Err(RenderProblem::new(
                     ProblemKind::ManifestInvalid,
                     format!(
@@ -505,8 +506,28 @@ fn load_fonts(snapshot: &BundleSnapshot) -> Result<Vec<typst::text::Font>, Rende
     Ok(fonts)
 }
 
-fn relative_path_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
+fn relative_path_key(path: &Path) -> Result<String, RenderProblem> {
+    let slash_path = path.to_string_lossy().replace('\\', "/");
+    let mut segments = Vec::new();
+    for component in Path::new(&slash_path).components() {
+        match component {
+            Component::Normal(segment) => segments.push(segment.to_string_lossy()),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                return Err(RenderProblem::new(
+                    ProblemKind::ManifestInvalid,
+                    format!("bundle path {} must stay inside the bundle", path.display()),
+                ));
+            }
+        }
+    }
+    if segments.is_empty() {
+        return Err(RenderProblem::new(
+            ProblemKind::ManifestInvalid,
+            "bundle path must not be empty",
+        ));
+    }
+    Ok(segments.join("/"))
 }
 
 #[cfg(test)]
@@ -560,5 +581,38 @@ mod tests {
             bundle.fonts.len() > typst_assets::fonts().count(),
             "the captured bundle font is loaded after the baseline set"
         );
+    }
+
+    #[test]
+    fn accepted_manifest_path_spellings_render_from_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("templates")).unwrap();
+        std::fs::create_dir_all(root.join("schemas")).unwrap();
+        std::fs::write(
+            root.join(MANIFEST_FILE),
+            "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: ./templates//notice.typ\n    schema: schemas//./notice.schema.json\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("templates/notice.typ"), "= Notice").unwrap();
+        std::fs::write(
+            root.join("schemas/notice.schema.json"),
+            r#"{"type":"object"}"#,
+        )
+        .unwrap();
+        Bundle::seal(root).unwrap();
+
+        let bundle = Bundle::load_sealed(root).unwrap();
+        let document = bundle.document("notice").unwrap();
+        let request = crate::render::RenderRequest {
+            locale: None,
+            data: serde_json::json!({}),
+            assets: BTreeMap::new(),
+            issued_at: "2026-09-19T00:00:00Z".parse().unwrap(),
+        };
+        let rendered = crate::render::render(&bundle, document, &request, false).unwrap();
+
+        assert_eq!(rendered.deps, vec!["templates/notice.typ"]);
+        assert_eq!(document.schema.as_ref().unwrap()["type"], "object");
     }
 }
