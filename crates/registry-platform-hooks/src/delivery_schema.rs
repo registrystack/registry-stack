@@ -496,6 +496,11 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  ) THEN
                      ALTER TABLE {schema}.registry_webhook_delivery_state
                          DROP CONSTRAINT registry_webhook_delivery_state_answer;
+                     UPDATE {schema}.registry_webhook_delivery_state
+                        SET handler_message = NULL,
+                            updated_at = transaction_timestamp()
+                      WHERE handler_message IS NOT NULL
+                        AND handler_message_digest IS NOT NULL;
                  END IF;
              END
              $registry_webhook_state_upgrade$;",
@@ -772,6 +777,21 @@ mod tests {
             })
             .count();
         assert_eq!(answers, 2);
+    }
+
+    #[test]
+    fn the_legacy_answer_upgrade_erases_raw_message_bytes_once() {
+        let statements = rendered(KERNEL_SCHEMA);
+        let upgrade = statements
+            .iter()
+            .find(|statement| {
+                statement.contains("registry_webhook_delivery_state_answer'")
+                    && statement.contains("DROP CONSTRAINT registry_webhook_delivery_state_answer")
+            })
+            .expect("the legacy answer constraint is replaced");
+        assert!(upgrade.contains("SET handler_message = NULL"));
+        assert!(upgrade.contains("WHERE handler_message IS NOT NULL"));
+        assert!(upgrade.contains("AND handler_message_digest IS NOT NULL"));
     }
 
     #[test]

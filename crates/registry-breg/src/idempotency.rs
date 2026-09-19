@@ -259,6 +259,23 @@ pub(crate) fn resolve_action_binding(
     profile: &AuditProfile,
     binding: &ActionIdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
+    let key_reference = resolve_key_reference(profile, binding.key)?;
+    resolve_action_binding_with_key_reference(profile, binding, key_reference)
+}
+
+pub(crate) fn resolve_hook_action_binding(
+    profile: &AuditProfile,
+    binding: &ActionIdempotencyBinding<'_>,
+) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
+    let key_reference = resolve_hook_key_reference(profile, binding.key)?;
+    resolve_action_binding_with_key_reference(profile, binding, key_reference)
+}
+
+fn resolve_action_binding_with_key_reference(
+    profile: &AuditProfile,
+    binding: &ActionIdempotencyBinding<'_>,
+    key_reference: String,
+) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
     if binding.route.is_empty()
         || binding.package_revision.is_empty()
         || binding.action_contract_fingerprint.is_empty()
@@ -270,7 +287,6 @@ pub(crate) fn resolve_action_binding(
         return Err(IdempotencyError::InvalidInput);
     }
     let key_hasher = profile.key_hasher();
-    let key_reference = resolve_key_reference(profile, binding.key)?;
     let principal_reference = key_hasher
         .audit_reference_hash(
             "breg-principal-v1",
@@ -333,12 +349,27 @@ pub(crate) fn resolve_key_reference(
     profile: &AuditProfile,
     key: &str,
 ) -> Result<String, IdempotencyError> {
+    resolve_key_reference_in_domain(profile, "breg-idempotency-key-v1", key)
+}
+
+pub(crate) fn resolve_hook_key_reference(
+    profile: &AuditProfile,
+    key: &str,
+) -> Result<String, IdempotencyError> {
+    resolve_key_reference_in_domain(profile, "breg-hook-proposal-key-v1", key)
+}
+
+fn resolve_key_reference_in_domain(
+    profile: &AuditProfile,
+    domain: &str,
+    key: &str,
+) -> Result<String, IdempotencyError> {
     if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
         return Err(IdempotencyError::InvalidInput);
     }
     profile
         .key_hasher()
-        .audit_reference_hash("breg-idempotency-key-v1", "", key)
+        .audit_reference_hash(domain, "", key)
         .map_err(|_| IdempotencyError::InvalidInput)
 }
 
