@@ -19,12 +19,13 @@ application uses. At the end of this page an import has committed every chunk an
 it is complete, or an export file holds every page the profile may read, and either run can be
 interrupted and resumed from its checkpoint.
 
-`data import` and `data export` drive the ordinary authenticated batch and list routes, so every
-row passes the same grants, validation, and audit as an interactive client. Nothing here bypasses
-a profile: an import needs a profile that may create or patch the entity, and an export needs one
-that is export-enabled. A chunk is one batch request the import commits as a unit; a page is one
-list response the export appends as a unit; a checkpoint is the file each command writes after
-every unit so a rerun continues where the last one stopped.
+`data import` and `data export` drive the ordinary authenticated routes, so every row passes the
+same grants, validation, and audit as an interactive client: the import commits its chunks
+through the entity's ingestion-run routes, and the export pages through the list route. Nothing
+here bypasses a profile: an import needs a profile that may create or patch the entity, and an
+export needs one that is export-enabled. A chunk is one batch request the import commits as a
+unit; a page is one list response the export appends as a unit; a checkpoint is the file each
+command writes after every unit so a rerun continues where the last one stopped.
 
 ## Prepare the inputs
 
@@ -70,10 +71,11 @@ values.
 
 ## Import with a checkpoint
 
-An import commits one bounded chunk at a time and records progress in the checkpoint file beside
-a `.state` sidecar the command owns, so a rerun with the same checkpoint resumes after the last
-committed chunk and never re-sends a committed one. `--max-chunks` bounds one operator run, which
-lets you watch the first chunks land before committing the rest:
+An import commits one bounded chunk at a time as a durable ingestion run: the server holds the
+committed boundary and the receipt of every chunk, while the checkpoint file beside its `.state`
+sidecar names the run the command created, so a rerun with the same checkpoint resumes the same
+run after the last committed chunk and never re-sends a committed one. `--max-chunks` bounds one
+operator run, which lets you watch the first chunks land before committing the rest:
 
 ```sh
 bregctl data import \
@@ -85,16 +87,23 @@ bregctl data import \
   --checkpoint /srv/registry/import/records.checkpoint --max-chunks 20
 ```
 
-Run the same command again to continue. The report carries the number of completed chunks, the
-number of committed items, and whether the import is complete; a run that stops at `--max-chunks`
-reports it as incomplete, which is the signal to run again. The checkpoint binds the package
-revision, schema fingerprint, entity, profile, and operation, so a rerun with any of them changed
-is refused rather than resumed. Do not edit the checkpoint or the sidecar: a checkpoint without
+Run the same command again to continue. The report carries the ingestion run id, the number of
+completed chunks, the number of committed items, and whether the import is complete; a run that
+stops at `--max-chunks` reports it as incomplete, which is the signal to run again. The sidecar
+binds the package revision, schema fingerprint, entity, profile, operation, and run, so a rerun
+with any of them changed is refused rather than resumed. On a rerun the server is authority over
+progress: the command re-reads the run it names and continues from the server's `nextChunkIndex`
+even when the local checkpoint lags or leads it, and a chunk answer lost in transit is recovered
+by re-reading the run and submitting the exact same chunk bytes, which replays the original
+receipt instead of writing again. Do not edit the checkpoint or the sidecar: a checkpoint without
 its sidecar, or one whose contents no longer match, is refused, and `--max-chunks 0` is refused as
-an invalid binding. A server refusal stops the run, and the checkpoint still names the last
-committed chunk, so the rerun starts after it.
+an invalid binding. A sidecar written before ingestion runs (apiVersion v1) is refused rather than
+upgraded, because resuming its committed items under a new run id would duplicate mutations; a run
+that reports `blocked` or `cancelled` refuses new chunks and surfaces as its own error, and the
+run stays inspectable.
 
-{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, load_or_start_import();
+{/* Evidence: crates/registry-bregctl/src/data_lifecycle.rs, run_import(),
+    load_or_start_ingestion(), submit_ingestion_chunks(), and recover_lost_submission();
     crates/registry-bregctl/src/lib.rs, DataImportArgs;
     crates/registry-bregctl/tests/cli.rs. */}
 
@@ -103,8 +112,10 @@ committed chunk, so the rerun starts after it.
 The checkpoint of an import is a file beside the client, so the process that resumes must reach
 the file the process that started wrote. When that is wrong for your recovery story, drive the
 same chunking as a durable ingestion run over the API instead: the server holds the checkpoint,
-and any caller with the access token and the source file continues it. A run stores no source
-rows; reading one returns operational metadata and bounded failure classifications only.
+and any caller with the access token and the source file continues it. `data import` drives
+exactly this protocol, so its runs appear in the same listing and answer the same reads. A run
+stores no source rows; reading one returns operational metadata and bounded failure
+classifications only.
 
 One run covers one input file. Create it on the entity's `ingestion-runs` route: the create or
 patch operation, the profile, the package revision and schema fingerprint, the input length, and
@@ -171,10 +182,12 @@ server response is bounded at 2 MiB.
 | The token file is refused | It must be an absolute path to a regular file holding one token and nothing else; strip everything but a trailing newline. |
 | The input is refused before any request | Check for an empty file, a symbolic link, more than 256 MiB, more than 1,000,000 lines, or a patch line with more than 128 operations. |
 | An import refuses its checkpoint | The sidecar is missing, or the package, entity, profile, or operation differs from the run that created it. Start a new checkpoint path for a new input. |
+| An import reports `data.import.checkpoint.legacy` | The sidecar predates ingestion runs and names no run to resume; resending its committed items under a new run id would duplicate mutations. Start a new import with a fresh checkpoint path. |
+| An import reports the run was cancelled | The named run was cancelled and refuses new chunks; its counts and audit are preserved. Start a new import with a fresh checkpoint path. |
 | An export refuses to start | Exactly one of the output and checkpoint files exists, or the existing output no longer matches its checkpoint. Keep both files together and unedited, or start both afresh. |
 | `data export` is refused with `data.export.checkpoint.refused` | The output file and its checkpoint no longer describe one another: the output is shorter than the checkpoint, its checkpointed prefix changed, more than one page follows the checkpoint, or the checkpoint belongs to another export. Keep both files and resume from copies you trust. A rerun discards at most the single page an interrupted run left unrecorded. |
 | The report says the run is incomplete | `--max-chunks` or `--max-pages` bounded it. Run the same command again to continue. |
-| A durable ingestion run reports `blocked` | The active package no longer matches the binding the run was created under. Read the run, then start a successor run under the new package; the blocked run stays inspectable. |
+| A durable ingestion run reports `blocked` | The active package no longer matches the binding the run was created under. Read the run, then start a successor run under the new package; the blocked run stays inspectable. `data import` surfaces the same state as `data.import.ingestion_run.blocked`. |
 
 ## Next
 
