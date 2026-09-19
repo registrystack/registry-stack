@@ -345,20 +345,20 @@ fn encrypted_field_refuses_processing_row_boundaries_and_lookupless_selectors() 
 #[test]
 fn encrypted_fields_refuse_event_projection_and_conditions() {
     let mut projected = encrypted_project();
-    projected["entities"][0]["events"] =
-        json!([{"id":"secret-seen","trigger":"created","projection":["secret"]}]);
+    projected["entities"][0]["hooks"] =
+        json!([{"id":"secret-seen","phase":"after","trigger":"created","projection":["secret"]}]);
     expect_code(&projected, "event.projection.encrypted");
 
     let mut conditioned = encrypted_project();
-    conditioned["entities"][0]["events"] = json!([{
-        "id":"secret-seen","trigger":"created","projection":["label"],
+    conditioned["entities"][0]["hooks"] = json!([{
+        "id":"secret-seen","phase":"after","trigger":"created","projection":["label"],
         "when":{"kind":"fields","afterEquals":{"secret":"canary"}}
     }]);
     expect_code(&conditioned, "event.when.encrypted");
 
     let mut changed = encrypted_project();
-    changed["entities"][0]["events"] = json!([{
-        "id":"secret-seen","trigger":"patched","projection":["label"],
+    changed["entities"][0]["hooks"] = json!([{
+        "id":"secret-seen","phase":"after","trigger":"patched","projection":["label"],
         "when":{"kind":"fields","changed":["secret"]}
     }]);
     expect_code(&changed, "event.when.encrypted");
