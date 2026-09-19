@@ -1130,7 +1130,8 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
 
     // The legs collect what each handler kind produced: the recorded answer
     // bytes, the disposition columns, and the applied record itself.
-    let mut legs: Vec<(Vec<u8>, DeliveryRow, (String, String, String))> = Vec::new();
+    type HandlerKindLeg = (Vec<u8>, DeliveryRow, (String, String, String));
+    let mut legs: Vec<HandlerKindLeg> = Vec::new();
 
     {
         let url_registry = compile_proposal_registry(
