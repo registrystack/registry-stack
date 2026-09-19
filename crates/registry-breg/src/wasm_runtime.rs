@@ -18,7 +18,7 @@
 //! validator (`action_outcome`), so authorization, write ceilings, receipt
 //! semantics, and audit content are identical by construction.
 
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
 use registry_platform_script::wasm::{
@@ -231,6 +231,31 @@ impl WasmHandlerRuntime {
 /// rather than silently served on default budgets.
 static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
 
+/// Ownership of one configured process runtime installation.
+///
+/// The guard clears only the runtime it installed. A later installation may
+/// replace it while an earlier lifecycle is still unwinding, and dropping the
+/// stale guard must not tear down that replacement.
+#[cfg(feature = "runtime")]
+pub(crate) struct ConfiguredWasmRuntime {
+    runtime: Weak<WasmHandlerRuntime>,
+}
+
+#[cfg(feature = "runtime")]
+impl Drop for ConfiguredWasmRuntime {
+    fn drop(&mut self) {
+        let mut installed = RUNTIME.write().expect("wasm runtime lock");
+        let owns_installed = self
+            .runtime
+            .upgrade()
+            .zip(installed.as_ref())
+            .is_some_and(|(owned, current)| Arc::ptr_eq(&owned, current));
+        if owns_installed {
+            drop(installed.take());
+        }
+    }
+}
+
 fn runtime() -> Result<Arc<WasmHandlerRuntime>, ActionHandlerDiagnostic> {
     RUNTIME
         .read()
@@ -260,15 +285,41 @@ pub(crate) fn install(
     backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    let runtime = WasmHandlerRuntime::new(budgets, backend, retained_modules)?;
-    *RUNTIME.write().expect("wasm runtime lock") = Some(Arc::new(runtime));
+    replace_runtime(budgets, backend, retained_modules)?;
     Ok(())
 }
 
-/// Clear the process runtime. The server shutdown path calls this; the
-/// runtime's Drop stops its ticker at the last reference, and a later
-/// evaluation refuses until a new install.
-#[cfg(any(test, feature = "runtime"))]
+fn replace_runtime(
+    budgets: WasmExecutionBudgets,
+    backend: Backend,
+    retained_modules: usize,
+) -> Result<Weak<WasmHandlerRuntime>, WasmRuntimeStartError> {
+    let runtime = Arc::new(WasmHandlerRuntime::new(budgets, backend, retained_modules)?);
+    let ownership = Arc::downgrade(&runtime);
+    *RUNTIME.write().expect("wasm runtime lock") = Some(runtime);
+    Ok(ownership)
+}
+
+/// Install the process runtime from the validated operator configuration and
+/// return its lifecycle owner. Production serving and pre-sign schema tests
+/// use this same mapping so neither path can drift on budgets, backend, or
+/// cache bounds.
+#[cfg(feature = "runtime")]
+pub(crate) fn install_configured(
+    config: crate::runtime_config::WasmExecutionConfig,
+) -> Result<ConfiguredWasmRuntime, WasmRuntimeStartError> {
+    let runtime = replace_runtime(
+        WasmExecutionBudgets::from(config),
+        crate::wasm_handler::execution_backend(config.backend()),
+        MAXIMUM_RETAINED_PREPARED_MODULES,
+    )?;
+    Ok(ConfiguredWasmRuntime { runtime })
+}
+
+/// Clear the process runtime for unit tests that exercise uninstalled state.
+/// The configured production and schema-test lifecycles use
+/// [`ConfiguredWasmRuntime`] instead so stale owners cannot clear a replacement.
+#[cfg(test)]
 pub(crate) fn shutdown() {
     drop(RUNTIME.write().expect("wasm runtime lock").take());
 }

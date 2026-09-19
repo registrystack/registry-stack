@@ -63,4 +63,9 @@ registry-platform-crypto.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+registry-breg.workspace = true
+registry-platform-testing = { workspace = true, features = ["test-utils"] }
+rustls.workspace = true
+tokio-postgres.workspace = true
+tokio-postgres-rustls.workspace = true
 wat = "1.259.0"

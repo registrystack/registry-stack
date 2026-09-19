@@ -338,6 +338,8 @@ pub struct PreparedServer {
     webhook_worker: Option<WebhookWorker>,
     attachment_verification_worker: Option<AttachmentVerificationWorker>,
     metrics: Option<PreparedMetricsListener>,
+    #[cfg(feature = "wasm")]
+    wasm_runtime: Option<crate::wasm_runtime::ConfiguredWasmRuntime>,
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
     fixture_pool: Option<RuntimePool>,
 }
@@ -381,6 +383,8 @@ impl PreparedServer {
             webhook_worker: None,
             attachment_verification_worker: None,
             metrics: None,
+            #[cfg(feature = "wasm")]
+            wasm_runtime: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
         }
@@ -402,6 +406,8 @@ impl PreparedServer {
             webhook_worker: Some(webhook_worker),
             attachment_verification_worker: None,
             metrics: None,
+            #[cfg(feature = "wasm")]
+            wasm_runtime: None,
             #[cfg(feature = "tooling")]
             fixture_pool: None,
         }
@@ -821,12 +827,8 @@ async fn finish_prepared_server(
     // the wasm feature refuse WASM handlers at admission; the section still
     // parses.
     #[cfg(feature = "wasm")]
-    crate::wasm_runtime::install(
-        crate::wasm_runtime::WasmExecutionBudgets::from(*config.wasm_execution()),
-        crate::wasm_handler::execution_backend(config.wasm_execution().backend()),
-        crate::wasm_runtime::MAXIMUM_RETAINED_PREPARED_MODULES,
-    )
-    .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?;
+    let wasm_runtime = crate::wasm_runtime::install_configured(*config.wasm_execution())
+        .map_err(|_| StartupError::RuntimeConfig(RuntimeConfigError::InvalidWasmExecution))?;
     let attachment_verification_worker = if matches!(
         attachment_verification,
         crate::attachment_verification::AttachmentVerification::Disabled
@@ -894,6 +896,8 @@ async fn finish_prepared_server(
         webhook_worker,
         attachment_verification_worker,
         metrics,
+        #[cfg(feature = "wasm")]
+        wasm_runtime: Some(wasm_runtime),
         #[cfg(all(feature = "postgres-test", feature = "tooling"))]
         fixture_pool: Some(fixture_pool),
     })
@@ -1078,6 +1082,8 @@ pub async fn serve_until_shutdown(
         webhook_worker,
         attachment_verification_worker,
         metrics,
+        #[cfg(feature = "wasm")]
+            wasm_runtime: _wasm_runtime,
         ..
     } = prepared;
     let listener = TcpListener::bind(bind)
@@ -1167,10 +1173,6 @@ pub async fn serve_until_shutdown(
             Err(StartupError::Shutdown)
         }
     };
-    // The process WASM executor stops its epoch ticker once serving and
-    // background work have ended, on both the graceful and the aborted path.
-    #[cfg(feature = "wasm")]
-    crate::wasm_runtime::shutdown();
     outcome
 }
 

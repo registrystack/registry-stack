@@ -3213,6 +3213,11 @@ fn schema_test_runtime_setup_failure(
             "evidenceProviders",
             "check the Evidence provider bindings and referenced credentials against the candidate before retrying",
         ),
+        SchemaTestRuntimeSetupError::WasmExecution => (
+            "test.wasm_execution.setup_failed",
+            "wasmExecution",
+            "check the WASM execution budgets and backend support before retrying",
+        ),
     };
     FailureReport {
         ok: false,

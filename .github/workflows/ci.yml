@@ -797,6 +797,13 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/scripts/test-postgres-tls.sh
 
+      - name: Public bregctl WASM schema-test lifecycle
+        if: matrix.lane == 'contracts'
+        env:
+          BREG_TEST_DATABASE_URL: ${{ env.BREG_TEST_TLS_DATABASE_URL }}
+          SSL_CERT_FILE: ${{ env.BREG_TEST_TLS_CA_PEM_PATH }}
+        run: cargo test --locked --profile ci -p registry-bregctl --features wasm --test wasm_test_lifecycle -- --ignored --exact
+
       - name: Base Registry Engine S3 attachment lifecycle
         if: matrix.lane == 'postgres'
         run: bash products/breg/scripts/test-attachment-s3.sh

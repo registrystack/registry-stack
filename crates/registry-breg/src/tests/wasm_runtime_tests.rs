@@ -19,7 +19,7 @@ use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::{CompiledAction, CompiledActionHandler, CompiledActionHandlerKind};
 use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
-    install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
+    install, install_configured, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
     MAXIMUM_RETAINED_PREPARED_MODULES,
 };
 
@@ -537,4 +537,29 @@ fn install_replaces_and_shutdown_clears_the_process_runtime() {
         evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap_err();
     assert_eq!(diagnostic.kind, ActionHandlerError::Execution);
     assert!(!installed());
+}
+
+#[test]
+#[cfg(feature = "runtime")]
+fn configured_runtime_guard_clears_only_its_own_installation() {
+    use crate::runtime_config::{RawWasmExecutionConfig, WasmExecutionConfig};
+
+    let _guard = INSTALL_LOCK.lock().unwrap();
+    shutdown();
+    let configured = WasmExecutionConfig::from_raw(RawWasmExecutionConfig::default())
+        .expect("default WASM execution configuration validates");
+
+    let first = install_configured(configured).expect("first configured runtime installs");
+    assert!(installed());
+    let second = install_configured(configured).expect("replacement configured runtime installs");
+    drop(first);
+    assert!(
+        installed(),
+        "a stale lifecycle guard does not clear its replacement"
+    );
+    drop(second);
+    assert!(
+        !installed(),
+        "the current lifecycle guard clears its runtime"
+    );
 }
