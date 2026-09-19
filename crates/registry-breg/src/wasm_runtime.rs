@@ -18,6 +18,7 @@
 //! validator (`action_outcome`), so authorization, write ceilings, receipt
 //! semantics, and audit content are identical by construction.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
@@ -98,13 +99,14 @@ impl From<crate::runtime_config::WasmExecutionConfig> for WasmExecutionBudgets {
 }
 
 /// Why the process runtime could not start: the engine rejected its
-/// configuration, or the epoch ticker's thread could not be spawned. Either
-/// way the caller refuses to install a running runtime: a runtime without
-/// its ticker would leave every action deadline permanently inert.
+/// configuration, the epoch ticker's thread could not be spawned, or another
+/// lifecycle already owns the process executor. Every case refuses installation
+/// rather than weakening execution bounds or replacing an active lifecycle.
 #[derive(Debug)]
 pub enum WasmRuntimeStartError {
     EngineSetup(InvokeError),
     Ticker(TickerSpawnError),
+    LifecycleActive,
 }
 
 /// One engine, one ticker, and the bounded prepared-module cache.
@@ -230,12 +232,13 @@ impl WasmHandlerRuntime {
 /// before serving; an evaluation that arrives before any install is refused
 /// rather than silently served on default budgets.
 static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
+static RUNTIME_OWNED: AtomicBool = AtomicBool::new(false);
 
 /// Ownership of one configured process runtime installation.
 ///
-/// The guard clears only the runtime it installed. A later installation may
-/// replace it while an earlier lifecycle is still unwinding, and dropping the
-/// stale guard must not tear down that replacement.
+/// Configured ownership is exclusive. The guard clears the runtime it
+/// installed and releases ownership so a later server or schema-test lifecycle
+/// can install its own configured executor.
 #[cfg(feature = "runtime")]
 pub(crate) struct ConfiguredWasmRuntime {
     runtime: Weak<WasmHandlerRuntime>,
@@ -253,6 +256,7 @@ impl Drop for ConfiguredWasmRuntime {
         if owns_installed {
             drop(installed.take());
         }
+        RUNTIME_OWNED.store(false, Ordering::Release);
     }
 }
 
@@ -274,19 +278,25 @@ fn runtime_not_installed() -> ActionHandlerDiagnostic {
     )
 }
 
-/// Install the configured runtime. Called once at server startup, before
-/// requests, and by any embedder that evaluates handlers outside the server
-/// startup path: replacing a runtime stops the previous ticker once the last
-/// evaluation holding it finishes, so no evaluation loses its backstop
-/// mid-call. A start failure (engine configuration rejected, ticker thread
-/// not spawned) is returned, never swallowed into a degraded runtime.
+/// Replace the runtime for serialized unit tests that exercise executor
+/// behavior under different configurations.
+#[cfg(test)]
 pub(crate) fn install(
     budgets: WasmExecutionBudgets,
     backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    replace_runtime(budgets, backend, retained_modules)?;
-    Ok(())
+    acquire_runtime_ownership()?;
+    let result = replace_runtime(budgets, backend, retained_modules).map(drop);
+    RUNTIME_OWNED.store(false, Ordering::Release);
+    result
+}
+
+fn acquire_runtime_ownership() -> Result<(), WasmRuntimeStartError> {
+    RUNTIME_OWNED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ())
+        .map_err(|_| WasmRuntimeStartError::LifecycleActive)
 }
 
 fn replace_runtime(
@@ -301,36 +311,61 @@ fn replace_runtime(
 }
 
 /// Install the process runtime from the validated operator configuration and
-/// return its lifecycle owner. Production serving and pre-sign schema tests
-/// use this same mapping so neither path can drift on budgets, backend, or
-/// cache bounds.
+/// return its exclusive lifecycle owner. Production serving and pre-sign
+/// schema tests use this same mapping so neither path can drift on budgets,
+/// backend, or cache bounds. An overlapping owner is refused before it can
+/// replace the active executor.
 #[cfg(feature = "runtime")]
 pub(crate) fn install_configured(
     config: crate::runtime_config::WasmExecutionConfig,
 ) -> Result<ConfiguredWasmRuntime, WasmRuntimeStartError> {
-    let runtime = replace_runtime(
+    acquire_runtime_ownership()?;
+    let runtime = match replace_runtime(
         WasmExecutionBudgets::from(config),
         crate::wasm_handler::execution_backend(config.backend()),
         MAXIMUM_RETAINED_PREPARED_MODULES,
-    )?;
+    ) {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            RUNTIME_OWNED.store(false, Ordering::Release);
+            return Err(error);
+        }
+    };
     Ok(ConfiguredWasmRuntime { runtime })
 }
 
 /// Clear the process runtime for unit tests that exercise uninstalled state.
 /// The configured production and schema-test lifecycles use
-/// [`ConfiguredWasmRuntime`] instead so stale owners cannot clear a replacement.
+/// [`ConfiguredWasmRuntime`] instead so ownership remains exclusive.
 #[cfg(test)]
 pub(crate) fn shutdown() {
     drop(RUNTIME.write().expect("wasm runtime lock").take());
+    RUNTIME_OWNED.store(false, Ordering::Release);
+}
+
+fn install_persistent(
+    budgets: WasmExecutionBudgets,
+    backend: Backend,
+    retained_modules: usize,
+) -> Result<(), WasmRuntimeStartError> {
+    acquire_runtime_ownership()?;
+    match replace_runtime(budgets, backend, retained_modules) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            RUNTIME_OWNED.store(false, Ordering::Release);
+            Err(error)
+        }
+    }
 }
 
 /// Install the process runtime with the default execution budgets, default
 /// backend, and default cache bound. The server startup path installs the
 /// configured runtime itself; an embedder assembling the HTTP app without
-/// that path calls this before serving, and every evaluation before any
+/// that path calls this once before serving. That executor owns the process
+/// runtime for the remainder of the process, and every evaluation before any
 /// install is refused.
 pub fn install_default() -> Result<(), WasmRuntimeStartError> {
-    install(
+    install_persistent(
         WasmExecutionBudgets::default(),
         crate::wasm_handler::execution_backend(crate::wasm_handler::WasmExecutionBackend::default()),
         MAXIMUM_RETAINED_PREPARED_MODULES,

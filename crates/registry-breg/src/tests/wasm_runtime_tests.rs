@@ -541,7 +541,7 @@ fn install_replaces_and_shutdown_clears_the_process_runtime() {
 
 #[test]
 #[cfg(feature = "runtime")]
-fn configured_runtime_guard_clears_only_its_own_installation() {
+fn configured_runtime_ownership_refuses_overlap_and_releases_after_drop() {
     use crate::runtime_config::{RawWasmExecutionConfig, WasmExecutionConfig};
 
     let _guard = INSTALL_LOCK.lock().unwrap();
@@ -551,12 +551,29 @@ fn configured_runtime_guard_clears_only_its_own_installation() {
 
     let first = install_configured(configured).expect("first configured runtime installs");
     assert!(installed());
-    let second = install_configured(configured).expect("replacement configured runtime installs");
-    drop(first);
     assert!(
-        installed(),
-        "a stale lifecycle guard does not clear its replacement"
+        matches!(
+            install_configured(configured),
+            Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+        ),
+        "a configured lifecycle cannot replace an active owner"
     );
+    assert!(
+        matches!(
+            install(
+                WasmExecutionBudgets::default(),
+                default_backend(),
+                MAXIMUM_RETAINED_PREPARED_MODULES,
+            ),
+            Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+        ),
+        "an embedder install cannot replace an active configured lifecycle"
+    );
+    drop(first);
+    assert!(!installed());
+
+    let second = install_configured(configured).expect("ownership releases after guard drop");
+    assert!(installed());
     drop(second);
     assert!(
         !installed(),
