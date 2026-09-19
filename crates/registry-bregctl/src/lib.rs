@@ -43,6 +43,7 @@ mod audit_lifecycle;
 mod data_lifecycle;
 mod dev;
 mod doctor;
+mod field_encryption;
 mod history_erasure_lifecycle;
 mod history_rebaseline_lifecycle;
 mod init_from_model;
@@ -163,6 +164,28 @@ enum Command {
     EvidenceRetention(EvidenceRetentionArgs),
     /// Verify, export, and prune the chained audit journal.
     Audit(AuditArgs),
+    /// Maintain field-encryption key material.
+    FieldEncryption(FieldEncryptionArgs),
+}
+
+#[derive(Debug, Args)]
+struct FieldEncryptionArgs {
+    #[command(subcommand)]
+    command: FieldEncryptionCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum FieldEncryptionCommand {
+    /// Write one fresh base64 data key for the local-file provider. The key
+    /// never reaches standard output and an existing file is never overwritten.
+    Keygen(FieldEncryptionKeygenArgs),
+}
+
+#[derive(Debug, Args)]
+struct FieldEncryptionKeygenArgs {
+    /// Absolute output path for the base64 data key (written 0600, parents 0700).
+    #[arg(long, alias = "out")]
+    output: PathBuf,
 }
 
 #[derive(Debug, Args)]
@@ -1036,6 +1059,14 @@ struct FailureReport {
     ok: bool,
     command: &'static str,
     diagnostics: Vec<ToolDiagnostic>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FieldEncryptionKeygenSuccessReport<'a> {
+    ok: bool,
+    command: &'static str,
+    output: &'a str,
 }
 
 /// CLI-owned diagnostic envelope. Shared compiler diagnostics are converted at
@@ -1931,6 +1962,23 @@ where
                     Ok(report) => write_audit_prune_success(&report, format, stdout, stderr),
                     Err(failure) => write_failure(&failure, format, stdout, stderr),
                 },
+            };
+        }
+        Command::FieldEncryption(args) => {
+            return match args.command {
+                FieldEncryptionCommand::Keygen(args) => {
+                    match field_encryption::keygen(&args.output) {
+                        Ok(outcome) => {
+                            write_field_encryption_keygen_success(&outcome, format, stdout, stderr)
+                        }
+                        Err(failure) => write_failure(
+                            &field_encryption_keygen_failure(failure),
+                            format,
+                            stdout,
+                            stderr,
+                        ),
+                    }
+                }
             };
         }
     };
@@ -9188,6 +9236,74 @@ fn write_doctor_success(
     }
 }
 
+fn write_field_encryption_keygen_success(
+    outcome: &field_encryption::KeygenOutcome,
+    format: OutputFormat,
+    stdout: &mut dyn Write,
+    stderr: &mut dyn Write,
+) -> ExitCode {
+    let report = FieldEncryptionKeygenSuccessReport {
+        ok: true,
+        command: "field-encryption keygen",
+        output: &outcome.output.display().to_string(),
+    };
+    let result = if format == OutputFormat::Json {
+        serde_json::to_writer_pretty(&mut *stdout, &report)
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(stdout))
+    } else {
+        render_report(
+            "Wrote one base64 field data key.",
+            &[("output", report.output.to_owned())],
+            stdout,
+        )
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => {
+            let _ = writeln!(stderr, "bregctl: output could not be written");
+            ExitCode::from(OPERATIONAL_FAILURE_EXIT)
+        }
+    }
+}
+
+/// One key-generation refusal. Every message is value free: the operator
+/// already named the output path on the command line, and the key material
+/// itself never exists in a message.
+fn field_encryption_keygen_failure(error: field_encryption::KeygenError) -> FailureReport {
+    let diagnostic = match error {
+        field_encryption::KeygenError::RelativeOutput => diagnostic(
+            "field_encryption.keygen.path_invalid",
+            "--output",
+            "the data-key output path must be absolute",
+        ),
+        field_encryption::KeygenError::OutputExists => diagnostic(
+            "field_encryption.keygen.output_exists",
+            "--output",
+            "refusing to overwrite an existing data-key file; choose a new output path",
+        ),
+        field_encryption::KeygenError::RandomSource => diagnostic(
+            "field_encryption.keygen.random_source_unavailable",
+            "--output",
+            "the random source refused to yield a data key",
+        ),
+        field_encryption::KeygenError::Write => diagnostic(
+            "field_encryption.keygen.write_refused",
+            "--output",
+            "the data-key file could not be written with owner-only permissions",
+        ),
+    };
+    FailureReport {
+        ok: false,
+        command: "field-encryption keygen",
+        diagnostics: vec![tool_diagnostic(
+            diagnostic,
+            DiagnosticArtifact::CommandArguments,
+            SuggestedAction::ChooseSafeOutputDirectory,
+        )],
+    }
+}
+
 fn write_verify_success(
     report: &VerifySuccessReport,
     format: OutputFormat,
@@ -11282,7 +11398,8 @@ mod tests {
                 "webhook",
                 "request-retention",
                 "evidence-retention",
-                "audit"
+                "audit",
+                "field-encryption"
             ]
         );
     }
@@ -11566,7 +11683,7 @@ mod tests {
         for (format, expected) in [
             (
                 OutputFormat::Human,
-                "8 dependency checks passed.\n\
+                "9 dependency checks passed.\n\
                  \u{20}\u{20}runtimeConfig        pass\n\
                  \u{20}\u{20}package              pass\n\
                  \u{20}\u{20}database             pass\n\
@@ -11574,11 +11691,12 @@ mod tests {
                  \u{20}\u{20}cursor               pass\n\
                  \u{20}\u{20}authentication.oidc  pass\n\
                  \u{20}\u{20}eventDestinations    pass\n\
-                 \u{20}\u{20}authentication       pass\n",
+                 \u{20}\u{20}authentication       pass\n\
+                 \u{20}\u{20}fieldEncryption      pass\n",
             ),
             (
                 OutputFormat::Json,
-                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"authentication\"\n  ]\n}\n",
+                "{\n  \"ok\": true,\n  \"command\": \"doctor\",\n  \"checked\": [\n    \"runtimeConfig\",\n    \"package\",\n    \"database\",\n    \"audit\",\n    \"cursor\",\n    \"authentication.oidc\",\n    \"eventDestinations\",\n    \"authentication\",\n    \"fieldEncryption\"\n  ]\n}\n",
             ),
         ] {
             let mut stdout = Vec::new();
@@ -12297,6 +12415,144 @@ fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
         assert!(
             !help_requested(&args(tokens)),
             "{tokens:?} carries `help` as a value, not the subcommand"
+        );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod field_encryption_keygen_tests {
+    use super::*;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn keygen_arguments(output: &Path) -> Vec<OsString> {
+        vec![
+            OsString::from("bregctl"),
+            OsString::from("field-encryption"),
+            OsString::from("keygen"),
+            OsString::from("--output"),
+            output.to_owned().into_os_string(),
+        ]
+    }
+
+    /// The rendering a pipe or captured transcript receives, ANSI-stripped the
+    /// way `main_entry` strips it for anything that is not a terminal.
+    fn plain(rendered: &[u8]) -> String {
+        let rendered = String::from_utf8(rendered.to_vec()).expect("output is UTF-8");
+        anstream::adapter::strip_str(&rendered).to_string()
+    }
+
+    #[test]
+    fn keygen_writes_an_owner_only_base64_key_it_never_prints() {
+        let directory = tempfile::tempdir().expect("test directory creates");
+        let output = directory.path().join("secrets").join("breg-field-dek");
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_from(keygen_arguments(&output), &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let rendered = plain(&stdout);
+        assert!(
+            rendered.contains("Wrote one base64 field data key."),
+            "{rendered}"
+        );
+
+        let metadata = fs::metadata(&output).expect("the data key file exists");
+        assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
+        let parent =
+            fs::metadata(directory.path().join("secrets")).expect("the created parent exists");
+        assert_eq!(parent.permissions().mode() & 0o777, 0o700);
+
+        let contents = fs::read_to_string(&output).expect("the data key file reads");
+        let decoded = STANDARD
+            .decode(contents.trim_ascii())
+            .expect("the data key file is base64");
+        assert_eq!(
+            decoded.len(),
+            32,
+            "the data key decodes to exactly 32 bytes"
+        );
+        assert!(
+            !rendered.contains(contents.trim_ascii()),
+            "the data key never reaches standard output"
+        );
+    }
+
+    #[test]
+    fn keygen_refuses_an_existing_output_without_touching_it() {
+        let directory = tempfile::tempdir().expect("test directory creates");
+        let output = directory.path().join("breg-field-dek");
+        const EXISTING: &str = "existing-key-material-canary";
+        fs::write(&output, EXISTING).expect("the existing output writes");
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_from(keygen_arguments(&output), &mut stdout, &mut stderr),
+            ExitCode::from(DOMAIN_REFUSAL_EXIT)
+        );
+        let rendered = plain(&stderr);
+        assert!(
+            rendered.contains("field_encryption.keygen.output_exists"),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains(EXISTING),
+            "the refusal never echoes the existing file's contents"
+        );
+        assert_eq!(
+            fs::read_to_string(&output).expect("the existing file reads"),
+            EXISTING,
+            "an existing data key file is never overwritten"
+        );
+    }
+
+    #[test]
+    fn keygen_refuses_a_relative_output_path() {
+        let directory = tempfile::tempdir().expect("test directory creates");
+        let relative = Path::new("breg-field-dek");
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        assert_eq!(
+            run_from(keygen_arguments(relative), &mut stdout, &mut stderr),
+            ExitCode::from(DOMAIN_REFUSAL_EXIT)
+        );
+        assert!(plain(&stderr).contains("field_encryption.keygen.path_invalid"));
+        assert!(
+            !directory.path().join("breg-field-dek").exists(),
+            "a refused relative path writes nothing"
+        );
+    }
+
+    #[test]
+    fn keygen_reports_the_machine_shape_without_the_key() {
+        let directory = tempfile::tempdir().expect("test directory creates");
+        let output = directory.path().join("machine-dek");
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut arguments = keygen_arguments(&output);
+        arguments.insert(1, OsString::from("--format"));
+        arguments.insert(2, OsString::from("json"));
+        assert_eq!(
+            run_from(arguments, &mut stdout, &mut stderr),
+            ExitCode::SUCCESS
+        );
+        assert!(stderr.is_empty());
+        let rendered = String::from_utf8(stdout.clone()).expect("json is UTF-8");
+        let value: Value = serde_json::from_str(rendered.trim_end()).expect("report is JSON");
+        assert_eq!(value["ok"], json!(true));
+        assert_eq!(value["command"], json!("field-encryption keygen"));
+        assert_eq!(value["output"], json!(output.display().to_string()));
+
+        let contents = fs::read_to_string(&output).expect("the data key file reads");
+        assert!(
+            !rendered.contains(contents.trim_ascii()),
+            "the data key never reaches the machine report"
         );
     }
 }

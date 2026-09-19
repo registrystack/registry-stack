@@ -903,6 +903,10 @@ pub struct HttpService {
     pub(crate) mutations: Option<Arc<PostgresRecordMutationService>>,
     pub(crate) readiness: Arc<dyn ReadinessProbe>,
     pub(crate) public_origin: Option<crate::runtime_config::PublicOrigin>,
+    /// Active field-encryption key state. `None` is acceptable only while the
+    /// active package declares no encrypted field; per-entity admission at the
+    /// dispatch entry points enforces that boundary.
+    pub(crate) field_encryption: Option<Arc<crate::field_encryption::FieldEncryptionService>>,
 }
 
 impl HttpService {
@@ -939,7 +943,28 @@ impl HttpService {
             mutations: None,
             readiness,
             public_origin: None,
+            field_encryption: None,
         }
+    }
+
+    /// Install active field-encryption key state. Startup calls this exactly
+    /// when the active package declares an encrypted field and the data key
+    /// resolved successfully.
+    #[must_use]
+    pub fn with_field_encryption(
+        mut self,
+        service: Arc<crate::field_encryption::FieldEncryptionService>,
+    ) -> Self {
+        self.field_encryption = Some(service);
+        self
+    }
+
+    /// The active field-encryption key state, when one was installed.
+    #[must_use]
+    pub fn field_encryption(
+        &self,
+    ) -> Option<&Arc<crate::field_encryption::FieldEncryptionService>> {
+        self.field_encryption.as_ref()
     }
 
     #[must_use]

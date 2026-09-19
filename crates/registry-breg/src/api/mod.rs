@@ -508,6 +508,9 @@ async fn read_dispatch(
         .await;
         return response;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let representation = negotiated_read_representation(&headers);
 
     if options.request_history_after_proposal_version.is_some()
@@ -773,6 +776,9 @@ async fn lookup_dispatch(
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     if surface.read_path.is_some() || options.has_non_projection_query_members() {
         return audited_read_refusal(
             &service,
@@ -955,6 +961,9 @@ async fn revision_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(record_id) = path.get("record_id") else {
         return audited_revision_refusal(
             revisions.as_ref(),
@@ -1085,6 +1094,9 @@ async fn snapshot_dispatch(
         return audited_read_concealment(&service, &route, &options, &claims, None, &correlation)
             .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let query = match read_query(
         &service,
         &route,
@@ -1361,6 +1373,9 @@ async fn create_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1480,6 +1495,9 @@ async fn patch_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1631,6 +1649,9 @@ async fn batch_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(batch) = surface.entity.batch.as_ref() else {
         return audited_mutation_refusal(
             mutations,
@@ -1762,6 +1783,9 @@ async fn tombstone_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -1893,6 +1917,9 @@ async fn request_action_dispatch(
         )
         .await;
     };
+    if let Some(refusal) = field_encryption_refusal(&service, surface.entity) {
+        return refusal;
+    }
     let Some(idempotency_key) = single_header(&headers, "idempotency-key") else {
         return audited_mutation_refusal(
             mutations,
@@ -5352,6 +5379,26 @@ fn fixed_problem(status: StatusCode, code: &'static str, detail: &'static str) -
         detail,
         code,
     )
+}
+
+/// Per-entity field-encryption admission. A route that reaches an entity with
+/// at least one encrypted field requires usable key state; without it the
+/// route answers the field-encryption problem code, while entities without
+/// encrypted fields keep serving. Startup refuses to run an encrypted package
+/// without a usable key, so this is the in-process boundary that holds even
+/// for services assembled outside full startup.
+fn field_encryption_refusal(service: &HttpService, entity: &CompiledEntity) -> Option<Response> {
+    let encrypted = entity
+        .fields
+        .values()
+        .any(|field| field.encryption.is_some());
+    (encrypted && service.field_encryption.is_none()).then(|| {
+        fixed_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
+        )
+    })
 }
 
 #[cfg(test)]

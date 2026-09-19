@@ -10,7 +10,7 @@ use registry_breg::{Diagnostic, DiagnosticSeverity};
 /// The startup dependencies `prepare()` checks, in the order it checks them.
 /// Doctor only reports success once every one of these has passed, so this is
 /// what the passing report counts and names, one line per dependency.
-pub(crate) const CHECKED_DEPENDENCIES: [&str; 8] = [
+pub(crate) const CHECKED_DEPENDENCIES: [&str; 9] = [
     "runtimeConfig",
     "package",
     "database",
@@ -19,6 +19,7 @@ pub(crate) const CHECKED_DEPENDENCIES: [&str; 8] = [
     "authentication.oidc",
     "eventDestinations",
     "authentication",
+    "fieldEncryption",
 ];
 
 /// Run startup preparation without binding a listener and discard its unbound
@@ -124,6 +125,16 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
             "attachmentStorage",
             "the attachment binding was refused: check attachmentStorage and attachmentVerification credentials and endpoints, disabled S3 versioning, and the registry's pinned backend and verification policy",
         ),
+        StartupError::FieldEncryption => (
+            "startup.field_encryption.refused",
+            "fieldEncryption",
+            "the field-encryption key state was refused: an active package with encrypted fields requires a configured fieldEncryption provider that answers, and a stored key row the provider can unwrap",
+        ),
+        StartupError::FieldEncryptionCustody => (
+            "startup.field_encryption.custody_refused",
+            "fieldEncryption",
+            "the field-encryption data-key custody was refused: a databaseInitializationEnvironment other than local requires the transit provider; localFile data keys are development-only",
+        ),
         StartupError::Listener => (
             "startup.listener.refused",
             "listener",
@@ -205,6 +216,8 @@ mod tests {
             StartupError::Oidc,
             StartupError::Authentication,
             StartupError::EventDestinations,
+            StartupError::FieldEncryption,
+            StartupError::FieldEncryptionCustody,
         ];
 
         let reported_paths: HashSet<String> = distinctly_checked
@@ -293,6 +306,16 @@ mod tests {
                 StartupError::EventDestinations,
                 "startup.event_destinations.refused",
                 "eventDestinations",
+            ),
+            (
+                StartupError::FieldEncryption,
+                "startup.field_encryption.refused",
+                "fieldEncryption",
+            ),
+            (
+                StartupError::FieldEncryptionCustody,
+                "startup.field_encryption.custody_refused",
+                "fieldEncryption",
             ),
             (
                 StartupError::Listener,
@@ -483,6 +506,11 @@ mod tests {
                 RuntimeConfigError::InvalidEventDestination,
                 "startup.runtime_config.invalid_event_destination",
                 "/eventDestinations",
+            ),
+            (
+                RuntimeConfigError::InvalidFieldEncryption,
+                "startup.runtime_config.invalid_field_encryption",
+                "/fieldEncryption",
             ),
             (
                 RuntimeConfigError::InvalidBounds,

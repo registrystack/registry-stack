@@ -3,6 +3,10 @@
 
 pub mod delivery_signature;
 pub mod field_encryption;
+#[cfg(feature = "transit")]
+pub mod transit_datakey;
+#[cfg(all(test, unix, feature = "transit"))]
+mod transit_mock;
 
 use async_trait::async_trait;
 use aws_lc_rs::encoding::{AsBigEndian as _, AsDer as _, EcPrivateKeyBin, Pkcs8V1Der};
@@ -49,7 +53,7 @@ use sha2::{Digest, Sha256};
 use std::fmt;
 use std::net::IpAddr;
 #[cfg(feature = "transit")]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 #[cfg(feature = "transit")]
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -140,7 +144,7 @@ macro_rules! define_string_roster {
 }
 
 define_string_roster! {
-    #[doc = "Shared, public provider-kind vocabulary for signing keys.\n\nProvider-specific connection fields remain product-local so simple local config, PKCS#11, KMS, and future provider syntax can evolve independently."]
+    #[doc = "Shared, public provider-kind vocabulary for signing keys and field-encryption data keys.\n\nProvider-specific connection fields remain product-local so simple local config, PKCS#11, KMS, and future provider syntax can evolve independently."]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
     #[non_exhaustive]
     pub enum KeyProviderKind {
@@ -150,6 +154,8 @@ define_string_roster! {
         LocalPkcs12File => "local_pkcs12_file",
         Kms => "kms",
         WorkloadIdentity => "workload_identity",
+        TransitDatakey => "transit_datakey",
+        LocalDatakeyFile => "local_datakey_file",
     }
 }
 
@@ -590,7 +596,7 @@ impl TransitSigner {
     /// Connect to Transit, validate custody and public identity metadata, and
     /// prove signing access without exporting private material.
     pub async fn initialize(config: TransitSignerConfig) -> Result<Self, SigningError> {
-        let client = build_transit_client(&config)?;
+        let client = build_transit_client(&config.socket_path)?;
         let signer = Self {
             client,
             metadata_url: format!(
@@ -786,20 +792,20 @@ impl SigningProvider for TransitSigner {
 }
 
 #[cfg(feature = "transit")]
-fn build_transit_client(config: &TransitSignerConfig) -> Result<reqwest::Client, SigningError> {
-    #[cfg(all(unix, feature = "transit"))]
+fn build_transit_client(socket_path: &Path) -> Result<reqwest::Client, SigningError> {
+    #[cfg(unix)]
     {
         reqwest::Client::builder()
             .no_proxy()
-            .unix_socket(config.socket_path.clone())
+            .unix_socket(socket_path.to_path_buf())
             .build()
-            .map_err(|_| transit_error("transit signer configuration is invalid"))
+            .map_err(|_| transit_error("transit provider configuration is invalid"))
     }
     #[cfg(not(unix))]
     {
-        let _ = config;
+        let _ = socket_path;
         Err(transit_error(
-            "transit signer requires Unix-domain socket support",
+            "transit provider requires Unix-domain socket support",
         ))
     }
 }
@@ -1871,14 +1877,6 @@ mod tests {
     #[cfg(all(unix, feature = "transit"))]
     use p256::pkcs8::{EncodePublicKey as _, LineEnding};
     use serde_json::json;
-    #[cfg(all(unix, feature = "transit"))]
-    use tempfile::TempDir;
-    #[cfg(all(unix, feature = "transit"))]
-    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-    #[cfg(all(unix, feature = "transit"))]
-    use tokio::net::UnixListener;
-    #[cfg(all(unix, feature = "transit"))]
-    use tokio::task::JoinHandle;
 
     const RAW_JWK: &str = r#"{"kty":"OKP","crv":"Ed25519","d":"2oPoxdKuO7Kpd-3JLfNW_4xwpFxItbS-fxe03ZybYEw","x":"1aj_rLJsGFgw-5v925EMmeZj5JqP44xegafEKfZbdxc","alg":"EdDSA","kid":"did:web:issuer.test#key-1"}"#;
     const P256_JWK: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"did:web:issuer.test#p256-key-1"}"#;
@@ -1911,88 +1909,7 @@ mod tests {
     const ES384_OPENSSL_SIGNATURE: &str = "MQ4axJZgmlYpKgUgXCxo1-9FHqhClByVu8PX9iK0BBuFD5RISplywLqpzUgd8o4uNXI8dYRxDbKaOMqKBCw0ofjUehrD7MUl1H8IGKi3km2XaTx62UrO8OH9A0lT8nmK";
 
     #[cfg(all(unix, feature = "transit"))]
-    struct MockTransitReply {
-        method: &'static str,
-        path: &'static str,
-        body: Option<Value>,
-        status: u16,
-        response: Vec<u8>,
-        delay: Duration,
-    }
-
-    #[cfg(all(unix, feature = "transit"))]
-    fn spawn_transit_mock(replies: Vec<MockTransitReply>) -> (TempDir, PathBuf, JoinHandle<()>) {
-        let directory = tempfile::tempdir().expect("temporary Transit directory");
-        let socket_path = directory.path().join("transit.sock");
-        let listener = UnixListener::bind(&socket_path).expect("bind mock Transit socket");
-        let task = tokio::spawn(async move {
-            for reply in replies {
-                let (mut stream, _) = listener.accept().await.expect("accept Transit request");
-                let mut request = Vec::new();
-                let header_end = loop {
-                    let mut chunk = [0_u8; 4096];
-                    let read = stream.read(&mut chunk).await.expect("read Transit request");
-                    assert_ne!(read, 0, "Transit request ended before its headers");
-                    request.extend_from_slice(&chunk[..read]);
-                    assert!(request.len() <= 128 * 1024, "mock request stayed bounded");
-                    if let Some(position) =
-                        request.windows(4).position(|bytes| bytes == b"\r\n\r\n")
-                    {
-                        break position + 4;
-                    }
-                };
-                let headers = std::str::from_utf8(&request[..header_end])
-                    .expect("Transit request headers are UTF-8");
-                let mut lines = headers.lines();
-                let request_line = lines.next().expect("request line");
-                let mut request_parts = request_line.split_whitespace();
-                assert_eq!(request_parts.next(), Some(reply.method));
-                assert_eq!(request_parts.next(), Some(reply.path));
-                let lower_headers = headers.to_ascii_lowercase();
-                assert!(
-                    lower_headers.contains("x-vault-request: true"),
-                    "Transit request marks the trusted proxy hop"
-                );
-                let content_length = lines
-                    .filter_map(|line| line.split_once(':'))
-                    .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-                    .map(|(_, value)| value.trim().parse::<usize>().expect("content length"))
-                    .unwrap_or(0);
-                while request.len() < header_end + content_length {
-                    let mut chunk = [0_u8; 4096];
-                    let read = stream
-                        .read(&mut chunk)
-                        .await
-                        .expect("read Transit request body");
-                    assert_ne!(read, 0, "Transit request body ended early");
-                    request.extend_from_slice(&chunk[..read]);
-                }
-                let actual_body = &request[header_end..header_end + content_length];
-                match reply.body {
-                    Some(expected) => {
-                        let actual: Value =
-                            serde_json::from_slice(actual_body).expect("Transit request JSON");
-                        assert_eq!(actual, expected);
-                    }
-                    None => assert!(actual_body.is_empty()),
-                }
-
-                if !reply.delay.is_zero() {
-                    tokio::time::sleep(reply.delay).await;
-                }
-                let reason = if reply.status == 200 { "OK" } else { "ERROR" };
-                let response_headers = format!(
-                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    reply.status,
-                    reason,
-                    reply.response.len()
-                );
-                let _ = stream.write_all(response_headers.as_bytes()).await;
-                let _ = stream.write_all(&reply.response).await;
-            }
-        });
-        (directory, socket_path, task)
-    }
+    use crate::transit_mock::{spawn_transit_mock, transit_reply, MockTransitReply};
 
     #[cfg(all(unix, feature = "transit"))]
     fn p256_public_pem(private: &PrivateJwk) -> String {
@@ -2126,23 +2043,6 @@ mod tests {
             "marshaling_algorithm": "jws",
             "prehashed": true,
         })
-    }
-
-    #[cfg(all(unix, feature = "transit"))]
-    fn transit_reply(
-        method: &'static str,
-        path: &'static str,
-        body: Option<Value>,
-        response: Value,
-    ) -> MockTransitReply {
-        MockTransitReply {
-            method,
-            path,
-            body,
-            status: 200,
-            response: serde_json::to_vec(&response).expect("mock response JSON"),
-            delay: Duration::ZERO,
-        }
     }
 
     // Test-only 2048-bit RSA private JWK (kty=RSA, alg=RS256). Generated once
