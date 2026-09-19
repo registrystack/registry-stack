@@ -592,6 +592,131 @@ export interface BRegBatchReceipt {
   }>
 }
 
+export type BRegIngestionOperation = 'create' | 'patch'
+export type BRegIngestionRunStatus = 'open' | 'complete' | 'cancelled' | 'blocked'
+export type BRegIngestionAttemptOutcome =
+  | 'committed'
+  | 'replayed'
+  | 'invalidItem'
+  | 'refused'
+  | 'bindingChanged'
+  | 'chunkMismatch'
+  | 'runNotOpen'
+  | 'unavailable'
+
+/** The whole-input announcement that opens one durable ingestion run. */
+export interface BRegIngestionRunInput {
+  operation: BRegIngestionOperation
+  profileId: string
+  packageRevision: string
+  schemaFingerprint: string
+  /** Lowercase SHA-256 of the complete raw source input. */
+  inputDigest: string
+  inputLength: SafeInteger
+  itemCount: SafeInteger
+  chunkCount: SafeInteger
+  /** The only accepted value is `greedy-canonical-http-batch-v1`. */
+  chunkAlgorithmVersion: string
+}
+
+export interface BRegIngestionRunListInput {
+  limit?: SafeInteger | null
+  after?: string | null
+  status?: BRegIngestionRunStatus | null
+  inputDigest?: string | null
+}
+
+export interface BRegIngestionAttempt {
+  readonly outcome: BRegIngestionAttemptOutcome
+  readonly chunkIndex: SafeInteger | null
+}
+
+/** Value-free durable state of one ingestion run: no source rows, no record values. */
+export interface BRegIngestionRun {
+  readonly runId: string
+  readonly status: BRegIngestionRunStatus
+  readonly blockedReason: string | null
+  readonly entityId: string
+  readonly operation: BRegIngestionOperation
+  readonly profileId: string
+  readonly packageRevision: string
+  readonly schemaFingerprint: string
+  readonly inputDigest: string
+  readonly inputLength: SafeInteger
+  readonly itemCount: SafeInteger
+  readonly chunkCount: SafeInteger
+  readonly chunkAlgorithmVersion: string
+  readonly maximumItems: SafeInteger
+  readonly maximumBytes: SafeInteger
+  readonly nextChunkIndex: SafeInteger
+  readonly committedItems: SafeInteger
+  readonly committedPrefixDigest: string
+  readonly lastAttempt: BRegIngestionAttempt | null
+  readonly createdAt: string
+  readonly updatedAt: string
+  readonly complete: boolean
+}
+
+export interface BRegIngestionRunPage {
+  readonly runs: ReadonlyArray<BRegIngestionRun>
+  readonly hasMore: boolean
+  readonly nextAfter: string | null
+}
+
+export interface BRegIngestionReceiptBatch {
+  readonly snapshot: string
+  readonly results: ReadonlyArray<JsonObject>
+}
+
+export interface BRegIngestionChunkReceipt {
+  readonly chunkIndex: SafeInteger
+  readonly digest: string
+  readonly replayed: boolean
+  readonly erased: boolean
+  readonly batch: BRegIngestionReceiptBatch
+}
+
+export interface BRegIngestionChunkSubmission {
+  readonly run: BRegIngestionRun
+  readonly receipt: BRegIngestionChunkReceipt
+}
+
+/**
+ * One bounded, digest-bound chunk of an ingestion run. The chunk digest is
+ * derived in Rust from the exact canonical batch body the items hash to.
+ */
+export declare class BRegIngestionChunk {
+  private constructor()
+  private readonly __opaque: void
+  readonly chunkIndex: SafeInteger
+  readonly itemCount: SafeInteger
+  readonly digest: string
+  readonly prefixDigest: string
+}
+
+/**
+ * Accumulate the raw source bytes of one ingestion input and derive the
+ * rolling prefix digest the run binds: the lowercase SHA-256 of everything
+ * absorbed through the end of the current chunk. The digest of an empty
+ * accumulation is `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`.
+ */
+export declare class BRegIngestionPrefixDigest {
+  constructor()
+  update(data: Buffer): void
+  digest(): string
+}
+
+/**
+ * Encode one ingestion chunk submission: derive its digest in Rust and bind
+ * the announced prefix digest into the exact wire body. `items` are the same
+ * batch items the entity's atomic batch route executes.
+ */
+export declare function encodeIngestionChunk(
+  chunkIndex: SafeInteger,
+  items: ReadonlyArray<BRegBatchItem>,
+  prefixDigest: string,
+): BRegIngestionChunk
+
 export interface BRegChangeRequestCapability {
   readonly planner: {
     readonly kind: 'declarative' | 'rhai'
@@ -839,6 +964,12 @@ export declare class BaseRegistryClient {
   patchRecord(binding: BRegPatchBinding, recordIdentifier: string, etag: string, operations: ReadonlyArray<PatchOperation | RemovePatchOperation>, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   batchRecords(binding: BRegBatchBinding, request: BRegBatchInput, idempotencyKey: string): Promise<CompleteOutcome<BRegBatchReceipt>>
   batchRecordsJson(binding: BRegBatchBinding, requestJson: string, idempotencyKey: string): Promise<JsonOutcome>
+  createIngestionRun(entityRoute: string, request: BRegIngestionRunInput): Promise<CompleteOutcome<BRegIngestionRun>>
+  listIngestionRuns(entityRoute: string, query?: BRegIngestionRunListInput | null): Promise<CompleteOutcome<BRegIngestionRunPage>>
+  readIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome<BRegIngestionRun>>
+  submitIngestionChunk(entityRoute: string, runId: string, chunk: BRegIngestionChunk): Promise<CompleteOutcome<BRegIngestionChunkSubmission>>
+  cancelIngestionRun(entityRoute: string, runId: string): Promise<CompleteOutcome<BRegIngestionRun>>
+  ingestionChunkReceipt(entityRoute: string, runId: string, chunkIndex: SafeInteger): Promise<CompleteOutcome<BRegIngestionChunkReceipt>>
   tombstoneRecord(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<CompleteOutcome<RecordEnvelope>>
   tombstoneRecordJson(binding: BRegTombstoneBinding, recordIdentifier: string, etag: string, idempotencyKey: string, format?: RecordFormat | null): Promise<JsonOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: RecordEnvelope, format?: RecordFormat | null): ReadonlyArray<BRegLifecycleAction>
