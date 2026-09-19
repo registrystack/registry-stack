@@ -85,7 +85,8 @@ impl MutationCoordinator {
         compiled_delivery_id: &str,
     ) -> Result<String, UncertainApply> {
         let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
-        resolve_key_reference(&self.audit_profile, &idempotency_key).map_err(|_| UncertainApply)
+        resolve_hook_key_reference(&self.audit_profile, &idempotency_key)
+            .map_err(|_| UncertainApply)
     }
 
     pub(crate) async fn acquire_hook_proposal_lock(
@@ -374,7 +375,7 @@ impl MutationCoordinator {
         client: &(impl tokio_postgres::GenericClient + Sync),
         idempotency_key: &str,
     ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
-        let key_reference = resolve_key_reference(&self.audit_profile, idempotency_key)
+        let key_reference = resolve_hook_key_reference(&self.audit_profile, idempotency_key)
             .map_err(|_| UncertainApply)?;
         client
             .query_opt(
@@ -673,7 +674,7 @@ impl MutationCoordinator {
                 "The proposal input could not be canonicalized for idempotency.",
             );
         };
-        let binding = match resolve_action_binding(
+        let binding = match resolve_hook_action_binding(
             &self.audit_profile,
             &ActionIdempotencyBinding {
                 key: idempotency_key,
@@ -3018,6 +3019,19 @@ mod tests {
             hook_binding.binding_reference, expected,
             "a hook answer digest still binds the exact accepted answer"
         );
+    }
+
+    #[test]
+    fn hook_receipts_do_not_share_the_caller_key_namespace() {
+        let profile = AuditProfile::unkeyed_dev_only();
+        let key = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        let caller_reference =
+            crate::idempotency::resolve_key_reference(&profile, key).expect("caller key resolves");
+        let hook_reference =
+            resolve_hook_key_reference(&profile, key).expect("hook receipt key resolves");
+
+        assert_ne!(caller_reference, hook_reference);
     }
 
     #[test]
