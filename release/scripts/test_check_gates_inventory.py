@@ -12,6 +12,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "release" / "scripts" / "check-gates-inventory.py"
+SETUP_GO_ACTION = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 
 
 def extract_top_level_block(workflow: str, name: str) -> str:
@@ -950,6 +951,15 @@ class GateInventoryTest(unittest.TestCase):
             step for step in job["steps"] if step.get("name") == "Setup Node"
         )
         self.assertEqual("22.20.0", setup_node["with"]["node-version"])
+        setup_go = next(
+            step
+            for step in job["steps"]
+            if step.get("name") == "Install Go for the AWS-LC-FIPS source build"
+        )
+        self.assertEqual(setup_go["uses"], SETUP_GO_ACTION)
+        self.assertEqual(
+            {"go-version": "1.24.4", "cache": False}, setup_go["with"]
+        )
         install = next(
             step["run"]
             for step in job["steps"]

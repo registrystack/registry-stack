@@ -68,7 +68,7 @@ class ZigGlibcCompilerTest(unittest.TestCase):
     def logged_calls(self) -> list[list[str]]:
         return [json.loads(line) for line in self.log.read_text().splitlines()]
 
-    def test_dispatches_both_drivers_and_strips_only_incoming_targets(self) -> None:
+    def test_dispatches_both_drivers_and_strips_incoming_targets(self) -> None:
         cc = self.run_wrapper(
             self.cc,
             "--target=aarch64-unknown-linux-gnu",
@@ -110,6 +110,33 @@ class ZigGlibcCompilerTest(unittest.TestCase):
             ],
         )
 
+    def test_strips_cmake_linker_version_probe_for_zig_abi_detection(self) -> None:
+        result = self.run_wrapper(
+            self.cc,
+            "-v",
+            "-Wl,-v",
+            "probe.o",
+            "-o",
+            "probe",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.logged_calls(),
+            [
+                [
+                    "-m",
+                    "ziglang",
+                    "cc",
+                    "-target",
+                    "aarch64-linux-gnu.2.17",
+                    "-v",
+                    "probe.o",
+                    "-o",
+                    "probe",
+                ]
+            ],
+        )
+
     def test_approves_the_product_release_floor_on_both_architectures(self) -> None:
         """The product binaries are built to the floor release/glibc-floor.env holds."""
         floor = product_glibc_floor()
@@ -139,6 +166,47 @@ class ZigGlibcCompilerTest(unittest.TestCase):
         text = COMPILER.read_text(encoding="utf-8")
         self.assertIsNone(
             re.search(r"\|\s*grep\b", text), "target approval pipes into grep"
+        )
+
+    def test_splits_assembly_and_dependency_generation_for_aws_lc_fips(self) -> None:
+        result = self.run_wrapper(
+            self.cc,
+            "-Iinclude",
+            "-S",
+            "-MD",
+            "-MT",
+            "bcm.c.o",
+            "-MF",
+            "bcm.c.o.d",
+            "-o",
+            "bcm.c.o",
+            "-c",
+            "bcm.c",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prefix = [
+            "-m",
+            "ziglang",
+            "cc",
+            "-target",
+            "aarch64-linux-gnu.2.17",
+        ]
+        self.assertEqual(
+            self.logged_calls(),
+            [
+                [
+                    *prefix,
+                    "-Iinclude",
+                    "-MD",
+                    "-MT",
+                    "bcm.c.o",
+                    "-MF",
+                    "bcm.c.o.d",
+                    "bcm.c",
+                    "-E",
+                ],
+                [*prefix, "-Iinclude", "-o", "bcm.c.o", "bcm.c", "-S"],
+            ],
         )
 
     def test_rejects_unapproved_or_ambiguous_configuration(self) -> None:

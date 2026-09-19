@@ -488,6 +488,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Build native platform payload once
         shell: bash
         env:
@@ -596,6 +602,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Build native macOS release shard
         shell: bash
         run: |
@@ -660,6 +672,12 @@ jobs:
           persist-credentials: false
           submodules: false
 
+      - name: Install Go for the AWS-LC-FIPS source build
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: 1.24.4
+          cache: false
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -682,9 +700,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
+          key: registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-node-client', 'release/scripts/assemble-registry-client-wheel.py', 'release/scripts/sync-registry-client-node.py', 'crates/registry-discovery-client-node/package-lock.json', 'crates/registry-evidence-client-node/package-lock.json', 'crates/registry-relay-client-node/package-lock.json', 'crates/registry-breg-client-node/package-lock.json', 'crates/registry-casework-client-node/package-lock.json', 'crates/registry-stack-client-node/package-lock.json') }}
           restore-keys: |
-            registry-stack-release-clients-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
+            registry-stack-release-clients-go-1.24.4-zig-0.12.1-glibc-2.17-${{ matrix.asset }}-
 
       - name: Build Python client wheels
         shell: bash

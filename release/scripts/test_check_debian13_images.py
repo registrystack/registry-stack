@@ -109,6 +109,16 @@ class ReleaseImagePolicyTests(unittest.TestCase):
                 "dated Debian package snapshot",
             ),
             (
+                POLICY.RUST_BUILDER_CMAKE,
+                "cmake",
+                "exact CMake build package",
+            ),
+            (
+                POLICY.RUST_BUILDER_GO,
+                "golang-go",
+                "exact Go build package",
+            ),
+            (
                 POLICY.RUST_BUILDER_LIBCLANG,
                 "libclang-19-dev",
                 "exact libclang build package",

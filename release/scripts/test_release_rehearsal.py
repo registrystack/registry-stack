@@ -16,6 +16,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/release-rehearsal.yml"
 SCRIPT = ROOT / "release/scripts/rehearse-release"
+SETUP_GO_ACTION = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 
 
 class ReleaseRehearsalTest(unittest.TestCase):
@@ -300,6 +301,15 @@ class ReleaseRehearsalTest(unittest.TestCase):
             clients["strategy"]["matrix"]["include"],
         )
         self.assertEqual("Checkout prepared branch", clients["steps"][0]["name"])
+        setup_go = next(
+            step
+            for step in clients["steps"]
+            if step.get("name") == "Install Go for the AWS-LC-FIPS source build"
+        )
+        self.assertEqual(setup_go["uses"], SETUP_GO_ACTION)
+        self.assertEqual(
+            {"go-version": "1.24.4", "cache": False}, setup_go["with"]
+        )
         self.assertFalse(
             any("upload-artifact@" in str(step) for step in clients["steps"])
         )
