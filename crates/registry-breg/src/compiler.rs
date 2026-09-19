@@ -4530,6 +4530,7 @@ fn compile_event_delivery_inventory(
                 handler,
                 projection_fields: event.projection.iter().cloned().collect(),
                 when: event.when.clone(),
+                principal: event.principal.clone(),
                 classification_ceiling,
                 data_schema: binding.data_schema,
                 data_schema_fingerprint: binding.fingerprint,

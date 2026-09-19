@@ -58,7 +58,10 @@ impl WasmExecutionBackend {
     }
 
     /// Parse the configured spelling; every other value is refused by the
-    /// configuration loader as an invalid `wasmExecution` section.
+    /// configuration loader as an invalid `wasmExecution` section. Compiled
+    /// under the `runtime` feature, the only build whose configuration
+    /// loader reads the section.
+    #[cfg(feature = "runtime")]
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "pulley" => Some(Self::Pulley),

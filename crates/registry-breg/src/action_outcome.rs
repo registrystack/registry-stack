@@ -120,8 +120,8 @@ pub(crate) fn rhai_document(value: Dynamic) -> ProposedValue {
 /// Decode parsed outcome JSON into the neutral outcome document. Total for
 /// the same reason as [`rhai_document`]: JSON numbers outside i64 decode to
 /// `Inexpressible` rather than failing the parse.
-#[cfg(feature = "wasm")]
-fn json_document(value: Value) -> ProposedValue {
+#[cfg(any(feature = "runtime", feature = "wasm"))]
+pub(crate) fn json_document(value: Value) -> ProposedValue {
     match value {
         Value::Null => ProposedValue::Absent,
         Value::Bool(value) => ProposedValue::Bool(value),

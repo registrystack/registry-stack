@@ -5,6 +5,7 @@
 mod action;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use action::erase_expired_action_evidence;
+pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
 mod request;
 pub(crate) use request::{request_action_etag, RequestEvidencePreflight};
 

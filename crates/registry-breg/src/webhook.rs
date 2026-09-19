@@ -29,8 +29,11 @@ use registry_platform_hooks::delivery::{
     DeliveryConfig, DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliveryService, DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode,
     DeliveryWorker, DestinationAnswer, HandlerRunFailure, HookDestination, HookHandlerBinding,
+    ProposalApplication, ProposalOutcome,
 };
-use registry_platform_hooks::{ErrorCategory, MAX_OUTPUT_BYTES};
+use registry_platform_hooks::{
+    BoundedText, ErrorCategory, MAX_OUTPUT_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
+};
 use registry_platform_httputil::destination::{
     DestinationRequestError, DestinationResponseError, DestinationSendError, EventDeliveryHeaders,
     EventDestinationRequest,
@@ -45,6 +48,8 @@ use crate::audit::{
 };
 use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
+use crate::model::CompiledRegistry;
+use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
 use crate::package::load_package;
 use crate::postgres::{ExpectedRegistryIdentity, RegistryLockKey, RuntimePool};
 use crate::runtime_config::load_runtime_config;
@@ -131,6 +136,7 @@ impl WebhookOperatorService {
             pool,
             destinations,
             handlers,
+            Arc::new(startup.package().registry().clone()),
             startup.expected_identity().clone(),
             startup.lock_key(),
             config.operational_timeouts().record_lock,
@@ -174,6 +180,7 @@ struct BregDeliverySeams {
     pool: RuntimePool,
     destinations: Arc<ActivatedEventDestinationRegistry>,
     handlers: Arc<HookHandlerRegistry>,
+    registry: Arc<CompiledRegistry>,
     expected: ExpectedRegistryIdentity,
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
@@ -184,6 +191,55 @@ struct BregDeliverySeams {
 impl DeliverySeams for BregDeliverySeams {
     type Destination = DestinationBinding;
     type Handler = BregHookHandler;
+
+    async fn apply_proposal(
+        &self,
+        application: ProposalApplication<'_>,
+    ) -> Result<ProposalOutcome, DeliveryError> {
+        // A per-call coordinator over the seams' own identity, so the apply
+        // runs in fresh transactions and its committed events enqueue their
+        // own delivery rows through the same destinations.
+        let coordinator = MutationCoordinator::new_with_event_destinations(
+            self.lock_key,
+            self.lock_timeout,
+            self.expected.clone(),
+            self.audit_profile.clone(),
+            Some(Arc::clone(&self.destinations)),
+        );
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let outcome = coordinator
+            .apply_hook_proposal(
+                &mut client,
+                &self.registry,
+                &HookProposalApplication {
+                    event_id: application.event_id,
+                    compiled_delivery_id: application.compiled_delivery_id,
+                    package_revision: application.package_revision,
+                    envelope: application.envelope,
+                    answer: application.answer,
+                    answer_digest: application.answer_digest,
+                },
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        Ok(match outcome {
+            HookProposalOutcome::Applied(resulting_revision) => {
+                ProposalOutcome::Applied { resulting_revision }
+            }
+            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+        })
+    }
 
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {
         let client = self
@@ -417,6 +473,26 @@ fn answer_read_category(error: DestinationResponseError) -> ErrorCategory {
     }
 }
 
+/// A product-authored refusal code, static and well inside the code bound.
+fn proposal_code(code: &'static str) -> registry_platform_hooks::delivery::ProposalCode {
+    BoundedText::new(code.to_owned()).expect("a static proposal code fits the code bound")
+}
+
+/// A product-authored refusal summary under the summary bound. Summaries are
+/// short by construction; trimming keeps the bound the contract even if one
+/// grows past it, because the disposition must stay readable either way.
+fn proposal_summary(summary: String) -> registry_platform_hooks::delivery::ProposalSummary {
+    let mut summary = summary;
+    if summary.len() > MAX_REFUSAL_SUMMARY_BYTES {
+        let mut end = MAX_REFUSAL_SUMMARY_BYTES;
+        while !summary.is_char_boundary(end) {
+            end -= 1;
+        }
+        summary.truncate(end);
+    }
+    BoundedText::new(summary).expect("a non-empty trimmed summary fits the summary bound")
+}
+
 fn audit_phase(phase: DeliveryAuditPhase) -> WebhookAuditPhase {
     match phase {
         DeliveryAuditPhase::Attempt => WebhookAuditPhase::Attempt,
@@ -498,6 +574,7 @@ impl WebhookDeliveryService {
         pool: RuntimePool,
         destinations: Arc<ActivatedEventDestinationRegistry>,
         handlers: Arc<HookHandlerRegistry>,
+        registry: Arc<CompiledRegistry>,
         expected: ExpectedRegistryIdentity,
         lock_key: RegistryLockKey,
         lock_timeout: Duration,
@@ -512,6 +589,7 @@ impl WebhookDeliveryService {
             pool,
             destinations,
             handlers,
+            registry,
             expected,
             lock_key,
             lock_timeout,

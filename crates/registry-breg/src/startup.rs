@@ -797,6 +797,7 @@ async fn finish_prepared_server(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
+        Arc::clone(&registry),
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
