@@ -205,6 +205,9 @@ pub async fn install_mutation_schema(
                      CHECK (action_contract_fingerprint ~ '^sha256:[0-9a-f]{{64}}$'),
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  principal_reference text NOT NULL CHECK (principal_reference <> ''),
+                 handler_answer_digest bytea
+                     CONSTRAINT registry_immediate_action_applications_handler_answer_digest_bounds
+                     CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32),
                  result_count smallint NOT NULL CHECK (result_count >= 0 AND result_count <= {MAX_IMMEDIATE_ACTION_RESULTS}),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
@@ -240,6 +243,13 @@ pub async fn install_mutation_schema(
                  ADD COLUMN IF NOT EXISTS proposal_version bigint CHECK (proposal_version > 0);
              ALTER TABLE registry_internal.registry_idempotency
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz;
+             ALTER TABLE registry_internal.registry_immediate_action_applications
+                 ADD COLUMN IF NOT EXISTS handler_answer_digest bytea;
+             ALTER TABLE registry_internal.registry_immediate_action_applications
+                 DROP CONSTRAINT IF EXISTS registry_immediate_action_applications_handler_answer_digest_bounds;
+             ALTER TABLE registry_internal.registry_immediate_action_applications
+                 ADD CONSTRAINT registry_immediate_action_applications_handler_answer_digest_bounds
+                     CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32);
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
              ALTER TABLE registry_internal.registry_idempotency

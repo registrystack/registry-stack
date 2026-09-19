@@ -61,6 +61,11 @@ struct ActionEffectResult {
     operation: Operation,
 }
 
+struct HookProposalReceipt {
+    answer_digest: Option<[u8; 32]>,
+    resulting_revision: i64,
+}
+
 impl MutationCoordinator {
     /// Acquire the session lock that serializes every classification for one
     /// hook delivery. The immediate-action transaction takes the same lock at
@@ -89,6 +94,28 @@ impl MutationCoordinator {
             self.lock_timeout,
             client.query_one(
                 "SELECT pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            ),
+        )
+        .await
+        .map_err(|_| UncertainApply)?
+        .map_err(|_| UncertainApply)?;
+        Ok(())
+    }
+
+    /// Acquire the delivery-scoped proposal lock on a transaction the caller
+    /// already owns. The transaction-scoped form lets lease reaping serialize
+    /// with an in-flight application without checking out a second pooled
+    /// connection while its delivery row is locked.
+    pub(crate) async fn acquire_hook_proposal_transaction_lock(
+        &self,
+        transaction: &Transaction<'_>,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        tokio::time::timeout(
+            self.lock_timeout,
+            transaction.query_one(
+                "SELECT pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
                 &[&key_reference],
             ),
         )
@@ -250,13 +277,22 @@ impl MutationCoordinator {
     ) -> Result<HookProposalOutcome, UncertainApply> {
         let idempotency_key =
             hook_proposal_idempotency_key(application.event_id, application.compiled_delivery_id);
-        let receipt_exists = self
-            .hook_proposal_receipt_exists(client, &idempotency_key)
+        let receipt = self
+            .hook_proposal_receipt(&***client, &idempotency_key)
             .await?;
+        if let Some(receipt) = &receipt {
+            if let Some(answer_digest) = receipt.answer_digest {
+                return if answer_digest == *application.answer_digest {
+                    Ok(HookProposalOutcome::Applied(receipt.resulting_revision))
+                } else {
+                    conflicting_hook_answer()
+                };
+            }
+        }
         let outcome = self
             .apply_hook_proposal_inner(client, registry, application, &idempotency_key)
             .await;
-        if receipt_exists
+        if receipt.is_some()
             && matches!(
                 &outcome,
                 Ok(HookProposalOutcome::Refused { .. } | HookProposalOutcome::DeadLettered { .. })
@@ -274,14 +310,15 @@ impl MutationCoordinator {
     /// disposition with `none`.
     pub(crate) async fn recover_hook_proposal_receipt(
         &self,
-        client: &mut Client,
+        client: &(impl tokio_postgres::GenericClient + Sync),
         event_id: Uuid,
         compiled_delivery_id: &str,
     ) -> Result<Option<HookProposalOutcome>, UncertainApply> {
         let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
         if self
-            .hook_proposal_receipt_exists(client, &idempotency_key)
+            .hook_proposal_receipt(client, &idempotency_key)
             .await?
+            .is_some()
         {
             conflicting_hook_answer().map(Some)
         } else {
@@ -289,25 +326,42 @@ impl MutationCoordinator {
         }
     }
 
-    async fn hook_proposal_receipt_exists(
+    async fn hook_proposal_receipt(
         &self,
-        client: &Client,
+        client: &(impl tokio_postgres::GenericClient + Sync),
         idempotency_key: &str,
-    ) -> Result<bool, UncertainApply> {
+    ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
         let key_reference = resolve_key_reference(&self.audit_profile, idempotency_key)
             .map_err(|_| UncertainApply)?;
         client
-            .query_one(
-                "SELECT EXISTS (
-                     SELECT 1
-                       FROM registry_internal.registry_idempotency
-                      WHERE key_reference = $1
-                 )",
+            .query_opt(
+                "SELECT application.handler_answer_digest,
+                        (SELECT result.target_record_revision
+                           FROM registry_internal.registry_immediate_action_results AS result
+                          WHERE result.key_reference = application.key_reference
+                          ORDER BY result.effect_id
+                          LIMIT 1)
+                   FROM registry_internal.registry_immediate_action_applications AS application
+                  WHERE application.key_reference = $1",
                 &[&key_reference],
             )
             .await
-            .map(|row| row.get::<_, bool>(0))
-            .map_err(|_| UncertainApply)
+            .map_err(|_| UncertainApply)?
+            .map(|row| -> Result<HookProposalReceipt, UncertainApply> {
+                let answer_digest = row
+                    .get::<_, Option<Vec<u8>>>(0)
+                    .map(|digest| digest.try_into().map_err(|_| UncertainApply))
+                    .transpose()?;
+                let resulting_revision = row
+                    .get::<_, Option<i64>>(1)
+                    .filter(|revision| *revision > 0)
+                    .ok_or(UncertainApply)?;
+                Ok(HookProposalReceipt {
+                    answer_digest,
+                    resulting_revision,
+                })
+            })
+            .transpose()
     }
 
     async fn apply_hook_proposal_inner(
@@ -2472,12 +2526,17 @@ async fn insert_action_application(
     principal_reference: &str,
     result_count: u16,
 ) -> Result<(), MutationError> {
+    let handler_answer_digest = binding
+        .handler_answer_digest
+        .as_ref()
+        .map(<[u8; 32]>::as_slice);
     let changed = transaction
         .execute(
             "INSERT INTO registry_internal.registry_immediate_action_applications
                  (key_reference, binding_reference, application_id, action_id,
-                  action_contract_fingerprint, package_revision, principal_reference, result_count)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                  action_contract_fingerprint, package_revision, principal_reference,
+                  result_count, handler_answer_digest)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &binding.key_reference,
                 &binding.binding_reference,
@@ -2487,6 +2546,7 @@ async fn insert_action_application(
                 &package_revision,
                 &principal_reference,
                 &(i16::try_from(result_count).map_err(|_| MutationError::InvalidRequest)?),
+                &handler_answer_digest,
             ],
         )
         .await

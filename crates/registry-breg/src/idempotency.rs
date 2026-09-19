@@ -146,6 +146,7 @@ pub(crate) struct ResolvedIdempotencyBinding {
     pub binding_reference: String,
     pub principal_reference: String,
     pub record_reference: String,
+    pub handler_answer_digest: Option<[u8; 32]>,
 }
 
 pub(crate) struct StoredMutationResult {
@@ -250,6 +251,7 @@ pub(crate) fn resolve_binding(
         binding_reference,
         principal_reference,
         record_reference: record_reference.unwrap_or_default(),
+        handler_answer_digest: None,
     })
 }
 
@@ -323,6 +325,7 @@ pub(crate) fn resolve_action_binding(
         binding_reference,
         principal_reference,
         record_reference: String::new(),
+        handler_answer_digest: binding.answer_digest.copied(),
     })
 }
 
