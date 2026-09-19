@@ -45,6 +45,10 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
             f"caseworkctl-{tag}-linux-amd64",
         ]
         image_bins.append(("casework", casework[0]))
+    scheduling: list[str] = []
+    if parsed >= (0, 33, 0):
+        scheduling = [f"scheduling-{tag}-linux-amd64"]
+        image_bins.append(("scheduling", scheduling[0]))
     common = [
         f"evidence-{tag}-linux-amd64",
         f"evidencectl-{tag}-linux-amd64",
@@ -60,7 +64,12 @@ def rosters(version: str) -> tuple[dict[str, list[str]], list[tuple[str, str]]]:
     for image_name in ("evidence", "mint", "relay"):
         if image_name != "mint" or parsed < MINT_RETIREMENT_VERSION:
             image_bins.append((image_name, f"{image_name}-{tag}-linux-amd64"))
-    return {"core": core, "breg": breg, "casework": casework}, image_bins
+    return {
+        "core": core,
+        "breg": breg,
+        "casework": casework,
+        "scheduling": scheduling,
+    }, image_bins
 
 
 def sha256(path: Path) -> str:
@@ -167,6 +176,7 @@ def merge(
     core: Path,
     breg: Path,
     casework: Path | None,
+    scheduling: Path | None,
     output: Path,
     builder_image: str,
 ) -> None:
@@ -199,7 +209,25 @@ def merge(
             version,
             source_sha,
         )
-    sources = inputs["core"] | inputs["breg"] | inputs["casework"]
+    if scheduling is None:
+        if shard_rosters["scheduling"]:
+            raise ShardError("scheduling shard is required from version 0.33.0")
+        inputs["scheduling"] = {}
+    else:
+        inputs["scheduling"] = validate_shard(
+            "scheduling",
+            scheduling,
+            shard_rosters["scheduling"],
+            builder_image,
+            version,
+            source_sha,
+        )
+    sources = (
+        inputs["core"]
+        | inputs["breg"]
+        | inputs["casework"]
+        | inputs["scheduling"]
+    )
     final_bin_roster: list[str] = []
     if shard_rosters["core"] and shard_rosters["core"][0].startswith("discovery-"):
         final_bin_roster.append(shard_rosters["core"][0])
@@ -244,6 +272,7 @@ def main() -> int:
     parser.add_argument("--core", required=True, type=Path)
     parser.add_argument("--breg", required=True, type=Path)
     parser.add_argument("--casework", type=Path)
+    parser.add_argument("--scheduling", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--builder-image", required=True)
     args = parser.parse_args()
@@ -254,6 +283,7 @@ def main() -> int:
             core=args.core,
             breg=args.breg,
             casework=args.casework,
+            scheduling=args.scheduling,
             output=args.output,
             builder_image=args.builder_image,
         )

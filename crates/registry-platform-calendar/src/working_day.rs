@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//! Working-day deadlines pinned to calendar and holiday-set content.
+
 use std::collections::BTreeSet;
 
-use chrono::{
-    DateTime, Datelike, Days, LocalResult, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc,
-    Weekday,
-};
+use chrono::{DateTime, Datelike, Days, NaiveDate, NaiveTime, Utc, Weekday};
 use chrono_tz::Tz;
+
+use crate::{local_instant, parse_date, CalendarEvaluationError};
 
 /// Ten years is the maximum authored working-day offset evaluated locally.
 pub const MAXIMUM_WORKING_DAY_OFFSET: u32 = 3_650;
@@ -46,36 +47,6 @@ pub struct WorkingDayDeadline {
     pub due_at: DateTime<Utc>,
     pub warning_at: Option<DateTime<Utc>>,
     pub reminder_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
-pub enum CalendarEvaluationError {
-    #[error("the calendar id is empty")]
-    EmptyCalendarId,
-    #[error("the holiday-set id is empty")]
-    EmptyHolidaySetId,
-    #[error("the holiday-set revision must be positive")]
-    InvalidHolidayRevision,
-    #[error("the calendar has no working weekdays")]
-    NoWorkingWeekdays,
-    #[error("the calendar timezone is not a named IANA timezone")]
-    InvalidTimezone,
-    #[error("holiday date at index {index} is not a valid YYYY-MM-DD date")]
-    InvalidHolidayDate { index: usize },
-    #[error("dueTime is not a valid HH:MM local time")]
-    InvalidDueTime,
-    #[error("after.workingDays must be between 1 and 3650")]
-    InvalidWorkingDayOffset,
-    #[error("atRisk.workingDaysBefore must be between 1 and 3650")]
-    InvalidWarningOffset,
-    #[error("reminders[].workingDaysBefore must be between 1 and 3650")]
-    InvalidReminderOffset,
-    #[error("the calculated local due time does not exist in the calendar timezone")]
-    NonexistentLocalTime,
-    #[error("the calculated local due time is ambiguous in the calendar timezone")]
-    AmbiguousLocalTime,
-    #[error("working-day calendar arithmetic overflowed")]
-    Overflow,
 }
 
 /// Evaluate a working-day deadline without reading mutable calendar or runtime state.
@@ -184,33 +155,8 @@ fn parse_holidays(dates: &[&str]) -> Result<BTreeSet<NaiveDate>, CalendarEvaluat
         .collect()
 }
 
-fn parse_date(value: &str) -> Option<NaiveDate> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 10
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || bytes
-            .iter()
-            .enumerate()
-            .any(|(index, byte)| index != 4 && index != 7 && !byte.is_ascii_digit())
-    {
-        return None;
-    }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
-}
-
 fn parse_due_time(value: &str) -> Result<NaiveTime, CalendarEvaluationError> {
-    let bytes = value.as_bytes();
-    if bytes.len() != 5
-        || bytes[2] != b':'
-        || bytes
-            .iter()
-            .enumerate()
-            .any(|(index, byte)| index != 2 && !byte.is_ascii_digit())
-    {
-        return Err(CalendarEvaluationError::InvalidDueTime);
-    }
-    NaiveTime::parse_from_str(value, "%H:%M").map_err(|_| CalendarEvaluationError::InvalidDueTime)
+    crate::parse_hh_mm(value).ok_or(CalendarEvaluationError::InvalidDueTime)
 }
 
 #[derive(Clone, Copy)]
@@ -288,18 +234,6 @@ fn is_working_date(
     holidays: &BTreeSet<NaiveDate>,
 ) -> bool {
     is_listed_weekday(date, working_weekdays) && !holidays.contains(&date)
-}
-
-fn local_instant(
-    date: NaiveDate,
-    time: NaiveTime,
-    timezone: Tz,
-) -> Result<DateTime<Utc>, CalendarEvaluationError> {
-    match timezone.from_local_datetime(&NaiveDateTime::new(date, time)) {
-        LocalResult::Single(value) => Ok(value.with_timezone(&Utc)),
-        LocalResult::None => Err(CalendarEvaluationError::NonexistentLocalTime),
-        LocalResult::Ambiguous(_, _) => Err(CalendarEvaluationError::AmbiguousLocalTime),
-    }
 }
 
 #[cfg(test)]

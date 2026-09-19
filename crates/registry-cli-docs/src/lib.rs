@@ -14,6 +14,8 @@ pub fn catalog() -> Catalog {
         command_reference(registry_evidencectl::command(), None, None),
         command_reference(registry_caseworkctl::command(), None, None),
         command_reference(registry_casework::command(), None, None),
+        command_reference(registry_scheduling::runtime::command(), None, None),
+        command_reference(registry_schedulingctl::command(), None, None),
         command_reference(registry_breg::command(), None, None),
         command_reference(
             registry_bregctl::command(),
@@ -91,6 +93,8 @@ mod tests {
                 "registry-render",
                 "relay",
                 "relayctl",
+                "scheduling",
+                "schedulingctl",
             ]
         );
     }

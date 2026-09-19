@@ -16,7 +16,7 @@ assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
-VERSION = "0.31.0"
+VERSION = "0.33.0"
 TAG = f"v{VERSION}"
 BUILDER = "rust:fixture@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
@@ -34,11 +34,13 @@ CASEWORK = [
     f"casework-{TAG}-linux-amd64",
     f"caseworkctl-{TAG}-linux-amd64",
 ]
+SCHEDULING = [f"scheduling-{TAG}-linux-amd64"]
 FINAL = [CORE[0], *BREG, *CASEWORK, *CORE[1:]]
 IMAGE_SOURCES = {
     "discovery": CORE[0],
     "breg": BREG[0],
     "casework": CASEWORK[0],
+    "scheduling": SCHEDULING[0],
     "evidence": CORE[1],
     "relay": CORE[5],
 }
@@ -56,6 +58,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
         self.core = self.write_shard("core", CORE)
         self.breg = self.write_shard("breg", BREG)
         self.casework = self.write_shard("casework", CASEWORK)
+        self.scheduling = self.write_shard("scheduling", SCHEDULING)
         self.output = self.root / "dist"
 
     def write_shard(self, name: str, assets: list[str]) -> Path:
@@ -85,6 +88,7 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             core=self.core,
             breg=self.breg,
             casework=self.casework,
+            scheduling=self.scheduling,
             output=self.output,
             builder_image=BUILDER,
         )
@@ -107,6 +111,8 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 if asset in BREG
                 else self.casework
                 if asset in CASEWORK
+                else self.scheduling
+                if asset in SCHEDULING
                 else self.core
             )
             self.assertEqual((source_root / "bin" / asset).read_bytes(), (bin_dir / asset).read_bytes())
@@ -117,6 +123,8 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                 if source_name in BREG
                 else self.casework
                 if source_name in CASEWORK
+                else self.scheduling
+                if source_name in SCHEDULING
                 else self.core
             )
             self.assertEqual(
@@ -158,6 +166,14 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
             ["discovery", "breg", "casework", "evidence", "mint", "relay"],
             [name for name, _ in images_030],
         )
+        rosters_032, images_032 = MODULE.rosters("0.32.0")
+        self.assertEqual([], rosters_032["scheduling"])
+        self.assertNotIn("scheduling", dict(images_032))
+        rosters_033, images_033 = MODULE.rosters("0.33.0")
+        self.assertEqual(
+            ["scheduling-v0.33.0-linux-amd64"], rosters_033["scheduling"]
+        )
+        self.assertIn("scheduling", dict(images_033))
 
     def test_mint_is_retired_only_from_v0_31_0(self) -> None:
         for version in ("0.30.0", "0.30.1"):
@@ -196,6 +212,9 @@ class MergeReleaseBinaryShardsTest(unittest.TestCase):
                         self.core = self.write_shard("core", CORE)
                         self.breg = self.write_shard("breg", BREG)
                         self.casework = self.write_shard("casework", CASEWORK)
+                        self.scheduling = self.write_shard(
+                            "scheduling", SCHEDULING
+                        )
                         self.output = fixture / "dist"
                         mutate()
                         with self.assertRaises(MODULE.ShardError):

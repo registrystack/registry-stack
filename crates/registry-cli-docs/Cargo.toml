@@ -24,5 +24,7 @@ registry-breg = { workspace = true, features = ["runtime"] }
 registry-bregctl.workspace = true
 registry-caseworkctl.workspace = true
 registry-casework.workspace = true
+registry-scheduling.workspace = true
+registry-schedulingctl.workspace = true
 serde.workspace = true
 serde_json.workspace = true

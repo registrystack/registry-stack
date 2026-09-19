@@ -46,13 +46,13 @@ pub mod casework {
         ListWorkItemsQuery, MutationResponse, NextWorkItemQuery, OccurrenceKind, OccurrenceState,
         OneOfPredicate, OpaqueActorRef, OperationName, Page, PageStatus, QueueRecord,
         RecoverAttemptRequest, ReleaseRequest, RequesterHostedItem, RoutingActivity,
-        RoutingCondition, RoutingPredicate, RoutingRule, SaveDraftRequest, SourceBinding,
-        SourcePolicy, SourceReceipt, SourceRequestPolicy, StaffingDiagnostic, SubjectClockAnchor,
-        SubjectClockCompletion, SubjectClockPause, SubjectRef, TaskApprovalRequest,
-        TaskAssertionResponse, TaskGrantBounds, TaskGrantList, TaskGrantRevocation,
-        TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView, TaskPermission,
-        TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem, WorkItemPage,
-        WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
+        RoutingCondition, RoutingPredicate, RoutingRule, SaveDraftRequest,
+        SchedulingTaskPermission, SourceBinding, SourcePolicy, SourceReceipt, SourceRequestPolicy,
+        StaffingDiagnostic, SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause,
+        SubjectRef, TaskApprovalRequest, TaskAssertionResponse, TaskGrantBounds, TaskGrantList,
+        TaskGrantRevocation, TaskGrantStatus, TaskGrantStatusDetails, TaskGrantView,
+        TaskPermission, TaskTemplatePreview, TaskTemplatePreviews, TeamRecord, Uuid, WorkItem,
+        WorkItemPage, WorkItemRouting, WorkingDaysAfter, WorkingDaysBefore, WorkingWeekday,
     };
 }
 

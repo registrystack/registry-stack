@@ -1,0 +1,77 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: counter-stations
+now: 2026-10-05T00:00:00Z
+facts:
+  locations:
+    - id: bangkok-counter
+      timezone: Asia/Bangkok
+  pools:
+    - id: update-stations
+      members:
+        - resourceId: station-1
+          capabilities: []
+          available: true
+        - resourceId: station-2
+          capabilities: []
+          available: true
+initial: []
+cases:
+  - name: first-caller-takes-a-station
+    request:
+      offering: registry-update-30
+      start: 2026-10-05T02:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      duplicateKey: subject:one
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+      resource: station-1
+  - name: same-key-retry-is-refused
+    request:
+      offering: registry-update-30
+      start: 2026-10-05T02:30:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      duplicateKey: subject:one
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: booking.duplicate-active
+  - name: second-caller-gets-the-other-station
+    request:
+      offering: registry-update-30
+      start: 2026-10-05T02:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      duplicateKey: subject:two
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1
+      resource: station-2
+  - name: both-stations-busy-refuses-another-caller
+    request:
+      offering: registry-update-30
+      start: 2026-10-05T02:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      duplicateKey: subject:three
+      policyRevision: 1
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: capacity.exhausted

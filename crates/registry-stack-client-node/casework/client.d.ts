@@ -21,8 +21,9 @@ export type PageStatus = 'complete' | 'budget_exhausted' | 'source_unavailable'
 export type HistoryKind = 'observed' | 'opened' | 'claimed' | 'assigned' | 'delegated' | 'caseload_moved' | 'clock_reminder' | 'clock_step_applied' | 'clock_recomputed' | 'released' | 'draft_saved' | 'attempt_reserved' | 'attempt_uncertain' | 'action_completed' | 'attempt_settled' | 'superseded' | 'completed'
 
 export interface IssuerPrincipal { issuer: string; subject: string }
-export type TaskGrantBounds = { type: 'evidence'; requirement: string } | { type: 'breg'; permissions: ReadonlyArray<TaskPermission> }
+export type TaskGrantBounds = { type: 'evidence'; requirement: string } | { type: 'breg'; permissions: ReadonlyArray<TaskPermission> } | { type: 'scheduling'; permissions: ReadonlyArray<SchedulingTaskPermission> }
 export interface TaskPermission { collection: string; operations: ReadonlyArray<string> }
+export interface SchedulingTaskPermission { service: string; location: string; actions: ReadonlyArray<string> }
 export interface EvidenceRequesterContext { requesterTags: ReadonlyArray<string>; audience: string }
 export interface TaskApprovalRequest { templateId: string; templateVersion: string }
 export interface TaskTemplatePreview {

@@ -1,0 +1,523 @@
+{
+  "$defs": {
+    "AuditConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "hashKeyRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "path": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "hashKeyRef"
+      ],
+      "type": "object"
+    },
+    "AuthenticationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "oidc": {
+          "$ref": "#/$defs/OidcConfig"
+        }
+      },
+      "required": [
+        "oidc"
+      ],
+      "type": "object"
+    },
+    "DatabaseConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "migrationUrlRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "runtimeUrlRef": {
+          "pattern": "^secret:(?:env|file)/",
+          "type": "string"
+        },
+        "testOnlyPlaintext": {
+          "default": false,
+          "type": "boolean"
+        },
+        "trustedRootCertificateRef": {
+          "default": null,
+          "pattern": "^secret:(?:env|file)/",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "runtimeUrlRef",
+        "migrationUrlRef"
+      ],
+      "type": "object"
+    },
+    "DestinationsConfig": {
+      "additionalProperties": false,
+      "description": "Where due reminder and lifecycle-hook intents are dispatched. An absent\nreminders destination and an empty hook map are supported: intents stay\nlocal, so an operator can adopt the product before wiring delivery buses.",
+      "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HookDestinationConfig"
+          },
+          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.",
+          "type": "object"
+        },
+        "reminders": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReminderDestinationConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "EnvironmentSecretProviderConfig": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "FileSecretProviderConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "root": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "HookDestinationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hmacSha256KeyRef": {
+          "type": "string"
+        },
+        "maximumAttempts": {
+          "default": 8,
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "hmacSha256KeyRef"
+      ],
+      "type": "object"
+    },
+    "ListenerConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bind": {
+          "default": "127.0.0.1:8105",
+          "type": "string"
+        },
+        "networkExposure": {
+          "$ref": "#/$defs/ListenerNetworkExposure"
+        },
+        "tlsTermination": {
+          "$ref": "#/$defs/TlsTermination"
+        }
+      },
+      "required": [
+        "tlsTermination"
+      ],
+      "type": "object"
+    },
+    "ListenerNetworkExposure": {
+      "description": "The operator-declared private network placement of the HTTP listener.",
+      "enum": [
+        "private-address",
+        "container-private"
+      ],
+      "type": "string"
+    },
+    "OidcConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "allowedClients": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "assertionIssuers": {
+          "additionalProperties": {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "default": {},
+          "description": "The assertion authorities each client may exchange a subject token\nfrom, keyed by client identifier.\n\nA deployment that performs no token exchange leaves this empty. Once a\nclient is listed, a token it exchanged is accepted only for one of that\nclient's declared authorities, so an assertion minted by an unrelated\nauthority the issuer happens to federate cannot become a booking\ncredential here.",
+          "maxProperties": 64,
+          "propertyNames": {
+            "maxLength": 128,
+            "minLength": 1
+          },
+          "type": "object"
+        },
+        "audience": {
+          "type": "string"
+        },
+        "explainScope": {
+          "default": "scheduling-explain",
+          "description": "The scope the separately authorized explain path requires.",
+          "type": "string"
+        },
+        "issuer": {
+          "type": "string"
+        },
+        "jwksSource": {
+          "$ref": "#/$defs/OidcJwksSource"
+        },
+        "jwksUri": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "readsScope": {
+          "default": "scheduling-read",
+          "description": "The scope every listing and availability read requires.",
+          "type": "string"
+        },
+        "scopeClaim": {
+          "default": "registry_scopes",
+          "type": "string"
+        }
+      },
+      "required": [
+        "issuer",
+        "audience"
+      ],
+      "type": "object"
+    },
+    "OidcJwksSource": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "discovery",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "documentRef": {
+              "pattern": "^(?:secret:env/[A-Z][A-Z0-9_]{0,127}|secret:file/[a-z][a-z0-9._-]{0,127})$",
+              "type": "string"
+            },
+            "kind": {
+              "const": "static",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "documentRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ReminderDestinationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "bearerTokenRef": {
+          "default": null,
+          "pattern": "^secret:(?:env|file)/",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "RetentionConfig": {
+      "additionalProperties": false,
+      "description": "Retention periods the retention sweep enforces. Every value is deployment\nconfiguration, never policy: a jurisdiction's retention schedule approves\nthe deployed numbers, and changing one is an operational event.",
+      "properties": {
+        "attemptReceiptDays": {
+          "default": 7,
+          "description": "How long a stored idempotency receipt stays replayable.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hookPayloadDays": {
+          "default": 7,
+          "description": "Lifetime of canonical hook envelopes retained for retry and\ndead-letter inspection.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RuntimePackageConfig": {
+      "additionalProperties": false,
+      "description": "The root of an authored scheduling project, holding `scheduling.yaml` and\nits optional package manifest.",
+      "properties": {
+        "root": {
+          "pattern": "^/",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root"
+      ],
+      "type": "object"
+    },
+    "SecretProvidersConfig": {
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "file": {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            }
+          },
+          "required": [
+            "file"
+          ]
+        },
+        {
+          "properties": {
+            "environment": {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            }
+          },
+          "required": [
+            "environment"
+          ]
+        }
+      ],
+      "properties": {
+        "environment": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileSecretProviderConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "TlsTermination": {
+      "description": "Declares the trusted transport boundary for the runtime's plaintext HTTP\nlistener. Production listeners require operator-controlled upstream TLS\ntermination; direct plaintext is limited to the explicit loopback-only\ndevelopment mode.",
+      "enum": [
+        "operator-controlled-upstream",
+        "development-loopback"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://id.registrystack.org/schemas/scheduling/runtime/runtime.v1alpha1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:env/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "environment": {
+                "$ref": "#/$defs/EnvironmentSecretProviderConfig"
+              }
+            },
+            "required": [
+              "environment"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "authentication": {
+            "properties": {
+              "oidc": {
+                "properties": {
+                  "jwksSource": {
+                    "properties": {
+                      "documentRef": {
+                        "pattern": "^secret:file/"
+                      }
+                    },
+                    "required": [
+                      "documentRef"
+                    ]
+                  }
+                },
+                "required": [
+                  "jwksSource"
+                ]
+              }
+            },
+            "required": [
+              "oidc"
+            ]
+          }
+        },
+        "required": [
+          "authentication"
+        ]
+      },
+      "then": {
+        "properties": {
+          "secretProviders": {
+            "properties": {
+              "file": {
+                "$ref": "#/$defs/FileSecretProviderConfig"
+              }
+            },
+            "required": [
+              "file"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "description": "The operator runtime configuration document.",
+  "properties": {
+    "apiVersion": {
+      "const": "registry.registrystack.org/scheduling-runtime/v1alpha1",
+      "type": "string"
+    },
+    "audit": {
+      "$ref": "#/$defs/AuditConfig"
+    },
+    "authentication": {
+      "$ref": "#/$defs/AuthenticationConfig"
+    },
+    "database": {
+      "$ref": "#/$defs/DatabaseConfig"
+    },
+    "destinations": {
+      "$ref": "#/$defs/DestinationsConfig"
+    },
+    "kind": {
+      "const": "SchedulingRuntimeConfig",
+      "type": "string"
+    },
+    "listener": {
+      "$ref": "#/$defs/ListenerConfig"
+    },
+    "package": {
+      "$ref": "#/$defs/RuntimePackageConfig"
+    },
+    "retention": {
+      "$ref": "#/$defs/RetentionConfig"
+    },
+    "secretProviders": {
+      "$ref": "#/$defs/SecretProvidersConfig"
+    }
+  },
+  "required": [
+    "apiVersion",
+    "kind",
+    "package",
+    "listener",
+    "secretProviders",
+    "database",
+    "authentication",
+    "audit",
+    "retention"
+  ],
+  "title": "Registry Scheduling runtime configuration",
+  "type": "object"
+}

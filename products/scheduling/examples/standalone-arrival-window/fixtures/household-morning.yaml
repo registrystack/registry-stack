@@ -1,0 +1,55 @@
+apiVersion: registry.registrystack.org/scheduling-fixture/v1alpha1
+kind: SchedulingFixture
+name: household-morning
+now: 2026-10-09T20:00:00Z
+facts:
+  locations:
+    - id: civic-hall
+      timezone: Asia/Bangkok
+initial: []
+cases:
+  - name: first-household-takes-the-public-quota
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 2
+        attendees: 3
+      channel: public
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 2
+  - name: next-public-household-finds-the-quota-spent
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      channel: public
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: refused
+      code: capacity.exhausted
+  - name: assisted-household-fits-the-protected-unit
+    request:
+      offering: household-morning
+      start: 2026-10-10T01:00:00Z
+      party:
+        recipients: 1
+        attendees: 1
+      channel: assisted
+      policyRevision: 3
+      windowRevision: 2
+      capabilities: []
+      prerequisites: []
+    expect:
+      outcome: admitted
+      units: 1

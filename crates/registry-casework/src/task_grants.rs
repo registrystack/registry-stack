@@ -780,7 +780,7 @@ fn grant_view(stored: &StoredTaskGrant) -> TaskGrantView {
 mod evidence_assertion_tests {
     use super::*;
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-    use registry_casework_core::{IssuerPrincipal, SubjectRef};
+    use registry_casework_core::{IssuerPrincipal, SubjectRef, TaskGrantBounds};
     use std::collections::BTreeMap;
 
     #[test]
@@ -866,6 +866,45 @@ mod evidence_assertion_tests {
         assert!(!serialized.contains("https://approver-issuer.test"));
         assert!(!serialized.contains("approver-subject-canary"));
         assert!(payload.get("evidence_context").is_none());
+    }
+
+    #[test]
+    fn governed_scheduling_bounds_are_the_platform_verifiers_wire_contract() {
+        let bounds: TaskGrantBounds = serde_json::from_value(json!({
+            "type":"scheduling",
+            "permissions":[{
+                "service":"registry-update",
+                "location":"bangkok-counter",
+                "actions":["appointment.create"]
+            }]
+        }))
+        .unwrap();
+        bounds.check().unwrap();
+
+        let claims: registry_platform_oidc::Claims = serde_json::from_value(json!({
+            "sub":"agent",
+            "exp":2000,
+            "registry_grant_id":"00000000-0000-4000-8000-000000000001",
+            "registry_grant_source_issuer":"https://casework.test",
+            "registry_grant_client":"scheduling-agent",
+            "registry_grant_resource":"urn:test:scheduling",
+            "registry_grant_exp":1900,
+            "registry_grant_bounds":serde_json::to_value(bounds).unwrap(),
+            "registry_purpose":"schedule-registry-update",
+            "registry_approver":"approver-reference"
+        }))
+        .unwrap();
+        let grant = registry_platform_oidc::grant_claims(
+            &claims,
+            &registry_platform_oidc::ClaimNames::default(),
+            1000,
+        )
+        .unwrap()
+        .unwrap();
+        let permissions = grant.bounds().scheduling_permissions().unwrap();
+        assert_eq!(permissions[0].service(), "registry-update");
+        assert_eq!(permissions[0].location(), "bangkok-counter");
+        assert_eq!(permissions[0].actions(), ["appointment.create"]);
     }
 }
 

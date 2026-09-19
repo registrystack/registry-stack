@@ -1,0 +1,5 @@
+locations:
+  - id: civic-hall
+    timezone: Asia/Bangkok
+pools: []
+exceptions: []

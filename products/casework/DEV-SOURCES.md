@@ -158,3 +158,12 @@ or bounds. Unknown, expired or revoked approvals fail. Restart retains the
 issuer keys, directory, database and grant deadline. `dev stop` stops owned
 services; `dev stop --remove` explicitly removes that session's database and
 private state according to the normal dev lifecycle.
+
+The destination is not limited to BREG. A shared issuer that registers a
+Scheduling resource and scope can exchange an approved `type: scheduling`
+template through the same `taskExchange` client and `dev grant` command. Set
+that client's `resource` and `scopes` in the connection file to the Scheduling
+audience and registered exchange scope. Scheduling then verifies its own exact
+service, location, action, client, resource, deadline, and assertion-issuer
+bounds; see [`../scheduling/TASK_GRANTS.md`](../scheduling/TASK_GRANTS.md) for
+the booking request.

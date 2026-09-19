@@ -3763,6 +3763,43 @@
         ],
         "type": "object"
       },
+      "SchedulingTaskPermission": {
+        "additionalProperties": false,
+        "properties": {
+          "actions": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[a-z][a-z0-9._:-]*$",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "location": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\s\\x00-\\x1f\\x7f*]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 512
+          },
+          "service": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^[^\\s\\x00-\\x1f\\x7f*]+$",
+            "type": "string",
+            "x-maximum-utf8-bytes": 512
+          }
+        },
+        "required": [
+          "service",
+          "location",
+          "actions"
+        ],
+        "type": "object"
+      },
       "SourceBinding": {
         "additionalProperties": false,
         "properties": {
@@ -4078,6 +4115,27 @@
               },
               "type": {
                 "const": "breg"
+              }
+            },
+            "required": [
+              "type",
+              "permissions"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "permissions": {
+                "items": {
+                  "$ref": "#/components/schemas/SchedulingTaskPermission"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "type": {
+                "const": "scheduling"
               }
             },
             "required": [

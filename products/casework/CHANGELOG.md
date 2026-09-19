@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Allow governed Casework task templates to approve exact Scheduling service,
+  location, and commitment-action bounds. The existing generic ThunderID
+  exchange carries them to Scheduling without a product crate dependency.
 - The inbox, the next-item result, holdings, the item view, history, and clocks
   stay readable while a subject's source binding has moved within its source
   generation but reconciliation has not applied it yet. The retained occurrence
