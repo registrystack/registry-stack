@@ -739,8 +739,9 @@ async fn handle_render(
     let timeout = Duration::from_secs(service.limits.render_timeout_seconds);
     let result = worker::supervise(worker_request, timeout).await;
     drop(permit);
-    // The seal invariant is per request: the bundle that rendered must be
-    // the bundle serve started with, not merely *a* sealed bundle.
+    // The worker already rendered from one verified immutable snapshot. Its
+    // manifest identity must also be the bundle serve started with, not merely
+    // a different valid sealed bundle installed during the request.
     match result {
         Ok(rendered) if rendered.bundle_hash != service.bundle.bundle_hash => {
             Err(RenderProblem::new(

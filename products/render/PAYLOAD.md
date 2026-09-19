@@ -57,9 +57,10 @@ Rules worth internalizing:
   the envelope or the PDF bytes.
 - **Data is inert.** Values are Typst values, never evaluated; a string
   that looks like code is just a string.
-- **Paths are contained.** `image()`/`read()` resolve only inside the
-  bundle (and the virtual `/assets/…` namespace); `..`, absolute paths,
-  and symlink escapes are refused by the renderer's world.
+- **Paths are contained.** `image()`/`read()` resolve only exact keys in the
+  immutable bundle snapshot (and the virtual `/assets/…` namespace); `..`
+  and absolute paths are refused by the renderer's world, and bundle
+  symlinks are refused before a snapshot is accepted.
 
 ## Authoring loop
 

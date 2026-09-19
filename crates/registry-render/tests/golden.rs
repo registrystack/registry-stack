@@ -279,6 +279,78 @@ fn tampered_sealed_bundle_is_refused() {
 }
 
 #[test]
+fn sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let bundle_dir = dir.path();
+    for sub in [
+        "templates",
+        "fonts",
+        "labels",
+        "packages/preview/notice/0.1.0/src",
+    ] {
+        std::fs::create_dir_all(bundle_dir.join(sub)).unwrap();
+    }
+    std::fs::write(
+        bundle_dir.join("manifest.yaml"),
+        "apiVersion: render.registrystack.org/v1alpha1\nkind: RenderBundle\nbundleVersion: 1\ndocuments:\n  - id: notice\n    version: 1\n    entry: templates/notice.typ\n",
+    )
+    .unwrap();
+    let template = "#import \"@preview/notice:0.1.0\": message\n#message #read(\"value.txt\")\n";
+    let package = "#let message = [sealed content]\n";
+    std::fs::write(bundle_dir.join("templates/notice.typ"), template).unwrap();
+    let file_path = bundle_dir.join("templates/value.txt");
+    std::fs::write(&file_path, "sealed file content\n").unwrap();
+    std::fs::write(
+        bundle_dir.join("packages/preview/notice/0.1.0/typst.toml"),
+        "[package]\nname = \"notice\"\nversion = \"0.1.0\"\nentrypoint = \"src/lib.typ\"\n",
+    )
+    .unwrap();
+    let package_path = bundle_dir.join("packages/preview/notice/0.1.0/src/lib.typ");
+    std::fs::write(&package_path, package).unwrap();
+
+    registry_render::Bundle::seal(bundle_dir).expect("bundle seals");
+    let bundle = registry_render::Bundle::load_sealed(bundle_dir).expect("sealed bundle loads");
+    let document = bundle.document("notice").unwrap().clone();
+    let request = registry_render::RenderRequest {
+        locale: None,
+        data: serde_json::json!({}),
+        assets: BTreeMap::new(),
+        issued_at: issued_at(),
+    };
+    let baseline = registry_render::render(&bundle, &document, &request, false).unwrap();
+
+    // After the seal has been verified, replace the exact template path
+    // before Typst asks the world for it. The already loaded bundle must
+    // still render only its verified snapshot bytes.
+    std::fs::write(
+        bundle_dir.join("templates/notice.typ"),
+        "tampered template content\n",
+    )
+    .unwrap();
+    let after_template_replace =
+        registry_render::render(&bundle, &document, &request, false).unwrap();
+    assert_eq!(after_template_replace.pdf, baseline.pdf);
+    assert_eq!(after_template_replace.bundle_hash, baseline.bundle_hash);
+
+    // Package source is resolved through a different Typst virtual root and
+    // must be bound to the same immutable snapshot too.
+    std::fs::write(bundle_dir.join("templates/notice.typ"), template).unwrap();
+    std::fs::write(&package_path, "#let message = [tampered package content]\n").unwrap();
+    let after_package_replace =
+        registry_render::render(&bundle, &document, &request, false).unwrap();
+    assert_eq!(after_package_replace.pdf, baseline.pdf);
+    assert_eq!(after_package_replace.bundle_hash, baseline.bundle_hash);
+
+    // Non-source reads use `World::file`; those bytes must not be reopened
+    // either. Restore the package path so this assertion isolates that path.
+    std::fs::write(&package_path, package).unwrap();
+    std::fs::write(&file_path, "tampered file content\n").unwrap();
+    let after_file_replace = registry_render::render(&bundle, &document, &request, false).unwrap();
+    assert_eq!(after_file_replace.pdf, baseline.pdf);
+    assert_eq!(after_file_replace.bundle_hash, baseline.bundle_hash);
+}
+
+#[test]
 fn unsealed_bundle_is_refused_for_serving() {
     let case = cases()
         .into_iter()

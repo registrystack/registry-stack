@@ -227,6 +227,7 @@ pub fn render_with_limits(
     // Fresh world and library per render; inputs ride the library.
     let world = RenderWorld::new(
         &bundle.root,
+        bundle.snapshot.clone(),
         bundle.fonts.clone(),
         document.spec.entry.to_string_lossy().as_ref(),
         decoded_assets,

@@ -1,12 +1,13 @@
-//! The Render Typst world: the entire filesystem a template can ever see.
+//! The Render Typst world: the entire file view a template can ever see.
 //!
-//! The world contains exactly three things: the bundle (project root), the
-//! request's decoded assets (under the virtual `assets/` namespace), and the
-//! vendored `packages/` tree. There is no host font discovery and no network
-//! path anywhere. Every `source`/`file` resolution is lexically checked,
-//! canonicalized, and constrained to one of those roots — path safety is a
-//! property of this world, not template discipline, because untrusted data
-//! can reach path-taking functions like `image()` inside a reviewed template.
+//! The world contains exactly three things: an immutable snapshot of the
+//! governed bundle, the request's decoded assets (under the virtual `assets/`
+//! namespace), and the vendored `packages/` bytes inside that snapshot. There
+//! is no host font discovery, filesystem reopen, or network path anywhere.
+//! Every `source`/`file` resolution is lexically checked and must name an exact
+//! snapshot key. Path safety is a property of this world, not template
+//! discipline, because untrusted data can reach path-taking functions like
+//! `image()` inside a reviewed template.
 //!
 //! A fresh world (and a fresh `Library`) is constructed per render: inputs
 //! live on the `Library`, so sharing either across requests would be both a
@@ -26,13 +27,17 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::World;
 
+use crate::bundle::BundleSnapshot;
+
 /// A rendered world for one request. Not `Clone`: one render, one world.
 pub struct RenderWorld {
     library: LazyHash<typst::Library>,
     book: LazyHash<FontBook>,
     fonts: Vec<Font>,
     main_id: FileId,
-    /// Canonicalized bundle root.
+    /// Immutable governed bytes verified together before this world exists.
+    snapshot: BundleSnapshot,
+    /// Bundle root retained only for defense-in-depth diagnostic redaction.
     bundle_root: PathBuf,
     /// Decoded request assets, keyed by name, served as `assets/<name>`.
     assets: BTreeMap<String, Bytes>,
@@ -46,17 +51,15 @@ pub struct RenderWorld {
 impl RenderWorld {
     /// Build a world for one render. `envelope_json` is the exact canonical
     /// byte string that `sys.inputs.data` will return.
-    pub fn new(
+    pub(crate) fn new(
         bundle_root: &Path,
+        snapshot: BundleSnapshot,
         fonts: Vec<Font>,
         main_rel_path: &str,
         assets: BTreeMap<String, Bytes>,
         issued: chrono::DateTime<chrono::Utc>,
         envelope_json: String,
     ) -> Result<Self, String> {
-        let bundle_root = bundle_root
-            .canonicalize()
-            .map_err(|err| format!("bundle root {}: {err}", bundle_root.display()))?;
         let main_id = RootedPath::new(
             VirtualRoot::Project,
             VirtualPath::new(main_rel_path).map_err(|e| e.to_string())?,
@@ -77,7 +80,8 @@ impl RenderWorld {
             book,
             fonts,
             main_id,
-            bundle_root,
+            snapshot,
+            bundle_root: bundle_root.to_path_buf(),
             assets,
             issued_utc: issued,
             closure: Mutex::new(BTreeSet::new()),
@@ -108,12 +112,9 @@ impl RenderWorld {
         self.closure.lock().expect("closure lock").insert(key);
     }
 
-    /// Map a typst virtual path to a real path under `base`, enforcing the
-    /// path rules: no `..`, no absolute components, and the canonicalized
-    /// result must stay under the canonical `base`. Symlinks that escape are
-    /// caught by the canonicalization check. Failures carry `display` — the
-    /// virtual, root-relative spelling — never the joined host path.
-    fn resolve_under(base: &Path, vpath: &str, display: &str) -> FileResult<PathBuf> {
+    /// Normalize a Typst virtual path into the slash-separated spelling used
+    /// by the sealed snapshot. No resolution ever consults the filesystem.
+    fn normalize_virtual_path(vpath: &str) -> FileResult<String> {
         let mut clean = PathBuf::new();
         for component in Path::new(vpath).components() {
             match component {
@@ -129,33 +130,32 @@ impl RenderWorld {
         if clean.as_os_str().is_empty() {
             return Err(FileError::AccessDenied);
         }
-        let joined = base.join(&clean);
-        let canon = std::fs::canonicalize(&joined).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(display)),
-            _ => FileError::AccessDenied,
-        })?;
-        if !canon.starts_with(base) {
-            return Err(FileError::AccessDenied);
-        }
-        if canon.is_dir() {
-            return Err(FileError::IsDirectory);
-        }
-        Ok(canon)
+        Ok(clean.to_string_lossy().replace('\\', "/"))
     }
 
-    fn root_for(&self, root: &VirtualRoot) -> FileResult<(PathBuf, String)> {
+    /// Return the governed snapshot key and caller-safe diagnostic spelling
+    /// for one Typst path. Package diagnostics retain Typst's `@ns/name:ver`
+    /// form while lookup uses the bundle's `packages/ns/name/ver` layout.
+    fn snapshot_path(root: &VirtualRoot, vpath: &str) -> FileResult<(String, String)> {
+        let clean = Self::normalize_virtual_path(vpath)?;
         match root {
-            VirtualRoot::Project => Ok((self.bundle_root.clone(), String::new())),
+            VirtualRoot::Project => Ok((clean.clone(), clean)),
             VirtualRoot::Package(spec) => {
-                let dir = self
-                    .bundle_root
-                    .join("packages")
-                    .join(spec.namespace.as_str())
-                    .join(spec.name.as_str())
-                    .join(spec.version.to_string());
                 let prefix = format!("@{}/{}:{}", spec.namespace, spec.name, spec.version);
-                Ok((dir, prefix))
+                let key = format!(
+                    "packages/{}/{}/{}/{}",
+                    spec.namespace, spec.name, spec.version, clean
+                );
+                Ok((key, closure_key(&prefix, &clean)))
             }
+        }
+    }
+
+    fn missing(&self, key: &str, display: &str) -> FileError {
+        if self.snapshot.is_dir(key) {
+            FileError::IsDirectory
+        } else {
+            FileError::NotFound(PathBuf::from(display))
         }
     }
 }
@@ -176,25 +176,25 @@ impl World for RenderWorld {
     fn source(&self, id: FileId) -> FileResult<Source> {
         let rooted = id.get();
         let vpath = rooted.vpath().get_without_slash().to_owned();
-        let (base, prefix) = self.root_for(rooted.root())?;
-        let display = closure_key(&prefix, &vpath);
-        let path = Self::resolve_under(&base, &vpath, &display)?;
+        let (key, display) = Self::snapshot_path(rooted.root(), &vpath)?;
+        let bytes = self
+            .snapshot
+            .get(&key)
+            .ok_or_else(|| self.missing(&key, &display))?;
         if !vpath.ends_with(".typ") {
             return Err(FileError::NotSource);
         }
-        let bytes = std::fs::read(&path).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(&display)),
-            _ => FileError::AccessDenied,
-        })?;
-        let text = String::from_utf8(bytes).map_err(|_| FileError::InvalidUtf8)?;
-        self.record(closure_key(&prefix, &vpath));
+        let text = bytes
+            .as_str()
+            .map_err(|_| FileError::InvalidUtf8)?
+            .to_owned();
+        self.record(display);
         Ok(Source::new(id, text))
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
         let rooted = id.get();
         let vpath = rooted.vpath().get_without_slash().to_owned();
-        let (base, prefix) = self.root_for(rooted.root())?;
         // The virtual assets namespace: request-scoped, never on disk.
         if matches!(rooted.root(), VirtualRoot::Project)
             && vpath.strip_prefix("assets/").is_some_and(|n| !n.is_empty())
@@ -208,17 +208,16 @@ impl World for RenderWorld {
                 .get(name)
                 .cloned()
                 .ok_or_else(|| FileError::NotFound(PathBuf::from(&vpath)))?;
-            self.record(closure_key(&prefix, &vpath));
+            self.record(vpath);
             return Ok(bytes);
         }
-        let display = closure_key(&prefix, &vpath);
-        let path = Self::resolve_under(&base, &vpath, &display)?;
-        let bytes = std::fs::read(&path).map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => FileError::NotFound(PathBuf::from(&display)),
-            _ => FileError::AccessDenied,
-        })?;
-        self.record(closure_key(&prefix, &vpath));
-        Ok(Bytes::new(bytes))
+        let (key, display) = Self::snapshot_path(rooted.root(), &vpath)?;
+        let bytes = self
+            .snapshot
+            .get(&key)
+            .ok_or_else(|| self.missing(&key, &display))?;
+        self.record(display);
+        Ok(bytes)
     }
 
     fn font(&self, index: usize) -> Option<Font> {
@@ -262,51 +261,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resolve_rejects_escape_attempts() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-        std::fs::write(root.join("ok.typ"), "x").unwrap();
-        // A symlink inside the root pointing outside.
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(outside.path().join("secret.txt"), "s").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(outside.path().join("secret.txt"), root.join("leak.txt"))
-            .unwrap();
-        assert!(RenderWorld::resolve_under(&root, "ok.typ", "ok.typ").is_ok());
+    fn virtual_paths_reject_escape_attempts() {
         assert_eq!(
-            RenderWorld::resolve_under(&root, "../ok.typ", "../ok.typ").unwrap_err(),
+            RenderWorld::normalize_virtual_path("ok.typ").unwrap(),
+            "ok.typ"
+        );
+        assert_eq!(
+            RenderWorld::normalize_virtual_path("../ok.typ").unwrap_err(),
             FileError::AccessDenied
         );
         assert_eq!(
-            RenderWorld::resolve_under(&root, "/etc/passwd", "/etc/passwd").unwrap_err(),
+            RenderWorld::normalize_virtual_path("/etc/passwd").unwrap_err(),
             FileError::AccessDenied
-        );
-        #[cfg(unix)]
-        assert_eq!(
-            RenderWorld::resolve_under(&root, "leak.txt", "leak.txt").unwrap_err(),
-            FileError::AccessDenied
-        );
-        assert_eq!(
-            RenderWorld::resolve_under(&root, "missing.typ", "missing.typ").unwrap_err(),
-            FileError::NotFound(PathBuf::from("missing.typ"))
         );
     }
 
     #[test]
     fn not_found_reports_the_virtual_path_not_the_host_root() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
-        let err = RenderWorld::resolve_under(&root, "gone.png", "gone.png").unwrap_err();
+        let root = Path::new("/deployment/private/bundle");
+        let world = RenderWorld::new(
+            root,
+            BundleSnapshot::default(),
+            Vec::new(),
+            "main.typ",
+            BTreeMap::new(),
+            chrono::Utc::now(),
+            "null".to_owned(),
+        )
+        .unwrap();
+        let err = world.missing("gone.png", "gone.png");
         assert_eq!(err, FileError::NotFound(PathBuf::from("gone.png")));
         let text = err.to_string();
         assert!(!text.contains(&*root.to_string_lossy()), "{text}");
     }
 
     fn test_world(issued: chrono::DateTime<chrono::Utc>) -> RenderWorld {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().canonicalize().unwrap();
         RenderWorld::new(
-            &root,
+            Path::new("/unused/bundle"),
+            BundleSnapshot::default(),
             Vec::new(),
             "main.typ",
             BTreeMap::new(),

@@ -87,10 +87,9 @@ Findings folded back into the product (the gate's purpose):
 2. Font book order (baseline set before bundle fonts, mirroring the CLI)
    did not change these documents — no fallback overlaps here — but the
    order stays fixed as part of the world construction rules regardless.
-3. Typst virtualizes absolute template paths as project-root-relative, so
-   containment is enforced twice: typst's normalization and the world's
-   canonicalize-then-contain check (see the `data_paths_cannot_escape_the_
-   bundle` test).
+3. Typst virtualizes absolute template paths as project-root-relative; the
+   world then applies lexical checks and requires an exact immutable snapshot
+   key (see the `data_paths_cannot_escape_the_bundle` test).
 4. `PdfOptions` must match the CLI defaults exactly (`ident: Auto`,
    `tagged: true`, `pretty: false`) — Auto derives the document ID from
    content, which the golden hashes pin. (Amended 2026-09-17, PR review
@@ -172,8 +171,8 @@ security and adopter-experience). Findings fixed in the same revision:
   pre-auth 401 events.
 - **Hash coverage** — only the root manifest is exempt from sealing; nested
   `manifest.yaml` files are governed content, and any symlink refuses
-  sealing (the world would refuse it at render, so a seal that hashed its
-  target could verify-but-not-render).
+  sealing (sealed loads also reject symlinks while capturing their immutable
+  render snapshot).
 - **Auth moved to a layer before body buffering**; the API-key file is
   rejected with leading/trailing whitespace (a silent always-401 footgun).
 - **`audit-verify` verified the wrong path** (the directory, hence an
@@ -354,6 +353,29 @@ seven more, each fixed with a failing test first except where noted:
 
 Test totals after the third pass: 71 (22 unit, 13 golden, 19 serve
 end-to-end, 17 scaffold/CLI), all green with `--locked`.
+
+## Immutable bundle snapshot hardening (2026-09-19)
+
+Sealed loads now capture the complete bundle through held directory
+descriptors, refusing symlinks and non-regular files without a pathname reopen.
+The manifest hash map is verified over those captured bytes, and the same
+immutable snapshot supplies the manifest, labels, schemas, fonts, templates,
+package sources, and other project/package files consumed by Typst.
+
+Executable proof covers both sides of the former verified/use gap:
+
+- `bundle::tests::assembly_uses_captured_bytes` changes the manifest, entry,
+  labels, schema, and font paths after capture; assembly still consumes the
+  captured bytes.
+- `golden::sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot`
+  replaces the template, a package source, and a non-source file after sealed
+  load; every render remains byte-identical under the original bundle hash.
+- The existing per-render serve drift test still refuses drift present before
+  a worker captures its snapshot.
+
+On the hardened revision, all 73 Registry Render tests pass (23 unit, 14
+golden, 19 serve end-to-end, 17 scaffold/CLI), along with locked all-target
+check, clippy with warnings denied, and formatting.
 
 ### Scaffold contents (2026-09-17)
 

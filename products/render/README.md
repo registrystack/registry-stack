@@ -89,8 +89,9 @@ exits 101):
   lockfile-pinned to the Typst release; upgrades are reviewed golden diffs.
 - **Path-safe**: a template's world contains exactly the bundle, the
   request's decoded assets (`assets/<name>`), and vendored packages —
-  enforced by the world (lexical checks + canonicalize-then-contain), not
-  by template discipline.
+  enforced by lexical checks and exact lookups in an immutable bundle
+  snapshot, not by template discipline. Sealed loads verify that snapshot
+  once, and Typst consumes those exact verified bytes.
 - **Resource-bounded**: serves render in a supervised worker process,
   killed at the timeout, memory-capped on Linux, recycled on panic.
 - **Auditable**: one value-free event per service render (hashes, versions,
