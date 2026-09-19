@@ -1050,6 +1050,7 @@ async fn revision_dispatch(
                 public_deployment_prefix(&service),
             ),
             Ok(None) => concealed(),
+            Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
             Err(_) => unavailable(),
         },
         Some(CompiledRevisionKind::Detail) => match revisions.detail(request).await {
@@ -1059,6 +1060,7 @@ async fn revision_dispatch(
                 public_deployment_prefix(&service),
             ),
             Ok(None) => concealed(),
+            Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
             Err(_) => unavailable(),
         },
         None => concealed(),

@@ -24,6 +24,7 @@ use crate::audit::{
 };
 use crate::contract::{FieldTypeSource, Operation, ProvenanceFieldSource};
 use crate::cursor::CursorRepresentation;
+use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_context::ChangeContext;
 use crate::history_migration::HISTORY_MIGRATION_SYSTEM_ORIGIN;
 use crate::history_schema::{
@@ -38,6 +39,7 @@ use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
 use super::history_read::HISTORY_STATEMENT_TIMEOUT;
+use super::read::open_row_members;
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -55,6 +57,7 @@ pub struct PostgresRevisionReadService {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit_profile: AuditProfile,
+    field_encryption: Option<SharedFieldEncryptionService>,
     fault: RevisionReadFaultControl,
 }
 
@@ -75,8 +78,18 @@ impl PostgresRevisionReadService {
             lock_key,
             lock_timeout,
             audit_profile,
+            field_encryption: None,
             fault: RevisionReadFaultControl::Disabled,
         }
+    }
+
+    /// Bind the field-encryption key state encrypted members open under at
+    /// the response edge. Absent key state is only acceptable for entities
+    /// without encrypted fields.
+    #[must_use]
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -245,7 +258,7 @@ impl PostgresRevisionReadService {
             .map_err(|error| snapshot_read_error(&error, stored_bytes::Reader::RevisionRead))?;
         let mut descriptors = BTreeMap::new();
         let mut context_visibility = BTreeMap::new();
-        let rows = revision_rows_from_rows(
+        let mut rows = revision_rows_from_rows(
             transaction.transaction(),
             &rows,
             &plan.entity,
@@ -256,6 +269,16 @@ impl PostgresRevisionReadService {
             &mut context_visibility,
         )
         .await?;
+        // The decoded rows keep tagged members until this response edge; the
+        // retained journal snapshot itself stays sealed.
+        for record in &mut rows {
+            open_row_members(
+                &plan.entity,
+                &record.id,
+                &mut record.data,
+                self.field_encryption.as_deref(),
+            )?;
+        }
         transaction
             .commit()
             .await

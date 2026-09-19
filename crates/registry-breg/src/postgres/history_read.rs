@@ -29,6 +29,7 @@ use crate::cursor::{
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation,
 };
+use crate::field_encryption::{FieldEncryptionService, SharedFieldEncryptionService};
 use crate::history_commit::{
     capture_latest_snapshot_reference, resolve_snapshot_reference, ResolvedSnapshot,
 };
@@ -46,6 +47,7 @@ use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
+use super::read::open_row_members;
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -67,6 +69,7 @@ pub struct PostgresSnapshotReadService {
     lock_timeout: Duration,
     audit_profile: AuditProfile,
     cursors: Arc<CursorCodec>,
+    field_encryption: Option<SharedFieldEncryptionService>,
     fault: SnapshotReadFaultControl,
 }
 
@@ -89,8 +92,18 @@ impl PostgresSnapshotReadService {
             lock_timeout,
             audit_profile,
             cursors,
+            field_encryption: None,
             fault: SnapshotReadFaultControl::Disabled,
         }
+    }
+
+    /// Bind the field-encryption key state encrypted members open under at
+    /// the response edge. Absent key state is only acceptable for entities
+    /// without encrypted fields.
+    #[must_use]
+    pub fn with_field_encryption(mut self, service: Arc<FieldEncryptionService>) -> Self {
+        self.field_encryption = Some(service);
+        self
     }
 
     #[cfg(feature = "postgres-test")]
@@ -357,10 +370,21 @@ impl PostgresSnapshotReadService {
         } else {
             None
         };
-        let rows = rows
+        let mut rows = rows
             .iter()
             .map(|row| row_to_record(row, &selected_fields, &descriptors))
             .collect::<Result<Vec<_>, _>>()?;
+        // The decoded rows keep tagged members until this response edge; the
+        // retained snapshot itself stays sealed so journal comparison never
+        // depends on decryption.
+        for record in &mut rows {
+            open_row_members(
+                &plan.entity,
+                &record.id,
+                &mut record.data,
+                self.field_encryption.as_deref(),
+            )?;
+        }
         guarded
             .commit()
             .await
@@ -2064,6 +2088,7 @@ mod tests {
                     },
                     required: true,
                     nullable: false,
+                    encrypted: false,
                 },
             )]),
         };

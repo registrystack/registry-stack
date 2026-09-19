@@ -289,6 +289,7 @@ async fn download(
             .body(Body::from(held.body().to_vec()))
             .unwrap_or_else(|_| unavailable()),
         Ok(None) => concealed(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(_) => unavailable(),
     }
 }

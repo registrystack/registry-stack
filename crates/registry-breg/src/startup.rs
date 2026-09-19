@@ -825,15 +825,19 @@ async fn finish_prepared_server(
         package_revision: expected.package_revision.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
     };
-    let revisions = Arc::new(PostgresRevisionReadService::new(
+    let revisions = PostgresRevisionReadService::new(
         pool.clone(),
         Arc::clone(&registry),
         expected.clone(),
         lock_key,
         config.operational_timeouts().record_lock,
         audit_profile.clone(),
-    ));
-    let snapshots = Arc::new(PostgresSnapshotReadService::new(
+    );
+    let revisions = Arc::new(match field_encryption.clone() {
+        Some(field_encryption) => revisions.with_field_encryption(field_encryption),
+        None => revisions,
+    });
+    let snapshots = PostgresSnapshotReadService::new(
         pool.clone(),
         Arc::clone(&registry),
         expected.clone(),
@@ -841,7 +845,11 @@ async fn finish_prepared_server(
         config.operational_timeouts().record_lock,
         audit_profile.clone(),
         Arc::clone(&cursor_codec),
-    ));
+    );
+    let snapshots = Arc::new(match field_encryption.clone() {
+        Some(field_encryption) => snapshots.with_field_encryption(field_encryption),
+        None => snapshots,
+    });
     let hook_handlers = Arc::new(crate::hook_handler::HookHandlerRegistry::new(
         &registry,
         &expected.package_revision,
