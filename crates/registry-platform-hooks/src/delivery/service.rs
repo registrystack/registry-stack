@@ -983,6 +983,9 @@ impl<S: DeliverySeams> DeliveryService<S> {
             .apply_proposal(ProposalApplication {
                 event_id: claim.event_id,
                 compiled_delivery_id: &claim.compiled_delivery_id,
+                generation: claim.generation,
+                attempt: claim.attempt,
+                lease_token: claim.lease_token,
                 package_revision: &claim.package_revision,
                 envelope,
                 answer: &answer.bytes,

@@ -434,9 +434,61 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
     install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("empty pre-V1 webhook schema upgrades");
+    let answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                AND conname = 'registry_action_application_answer_digest_bounds'",
+            &[],
+        )
+        .await
+        .expect("the answer digest constraint is installed")
+        .get::<_, i64>(0);
+    let delivery_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_webhook_delivery_state'::regclass
+                AND conname = 'registry_webhook_delivery_state_answer_digest_required'",
+            &[],
+        )
+        .await
+        .expect("the delivery answer constraint is installed")
+        .get::<_, i64>(0);
     install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("the internal schema upgrade is idempotent");
+    let reinstalled_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                AND conname = 'registry_action_application_answer_digest_bounds'",
+            &[],
+        )
+        .await
+        .expect("the answer digest constraint remains installed")
+        .get::<_, i64>(0);
+    assert_eq!(
+        reinstalled_answer_constraint_oid, answer_constraint_oid,
+        "a repeated activation keeps the existing constraint instead of rebuilding it"
+    );
+    let reinstalled_delivery_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_webhook_delivery_state'::regclass
+                AND conname = 'registry_webhook_delivery_state_answer_digest_required'",
+            &[],
+        )
+        .await
+        .expect("the delivery answer constraint remains installed")
+        .get::<_, i64>(0);
+    assert_eq!(
+        reinstalled_delivery_answer_constraint_oid, delivery_answer_constraint_oid,
+        "a repeated activation keeps the delivery constraint instead of rebuilding it"
+    );
 
     let columns = migration
         .query(

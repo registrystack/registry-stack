@@ -220,6 +220,9 @@ impl DeliverySeams for BregDeliverySeams {
                 &HookProposalApplication {
                     event_id: application.event_id,
                     compiled_delivery_id: application.compiled_delivery_id,
+                    generation: application.generation,
+                    attempt: application.attempt,
+                    lease_token: application.lease_token,
                     package_revision: application.package_revision,
                     envelope: application.envelope,
                     answer: application.answer,

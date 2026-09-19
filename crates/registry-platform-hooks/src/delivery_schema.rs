@@ -196,7 +196,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          AND dead_lettered_at IS NULL
                          AND expired_at IS NOT NULL)
                  ),
-                 CONSTRAINT registry_webhook_delivery_state_answer CHECK (
+                 CONSTRAINT registry_webhook_delivery_state_answer_digest_required CHECK (
                      (handler_message IS NULL AND handler_message_digest IS NULL)
                      OR (state = 'delivered'
                          AND handler_message_digest IS NOT NULL
@@ -472,6 +472,22 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                                  AND expired_at IS NOT NULL)
                          );
                  END IF;
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid =
+                            '{schema}.registry_webhook_delivery_state'::regclass
+                        AND conname = 'registry_webhook_delivery_state_answer_digest_required'
+                 ) THEN
+                     ALTER TABLE {schema}.registry_webhook_delivery_state
+                         ADD CONSTRAINT registry_webhook_delivery_state_answer_digest_required CHECK (
+                             (handler_message IS NULL AND handler_message_digest IS NULL)
+                             OR (state = 'delivered'
+                                 AND handler_message_digest IS NOT NULL
+                                 AND octet_length(handler_message_digest) = 32
+                                 AND (handler_message IS NULL
+                                      OR octet_length(handler_message) BETWEEN 1 AND 1048576))
+                         );
+                 END IF;
                  IF EXISTS (
                      SELECT 1 FROM pg_catalog.pg_constraint
                       WHERE conrelid =
@@ -481,15 +497,6 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                      ALTER TABLE {schema}.registry_webhook_delivery_state
                          DROP CONSTRAINT registry_webhook_delivery_state_answer;
                  END IF;
-                 ALTER TABLE {schema}.registry_webhook_delivery_state
-                     ADD CONSTRAINT registry_webhook_delivery_state_answer CHECK (
-                         (handler_message IS NULL AND handler_message_digest IS NULL)
-                         OR (state = 'delivered'
-                             AND handler_message_digest IS NOT NULL
-                             AND octet_length(handler_message_digest) = 32
-                             AND (handler_message IS NULL
-                                  OR octet_length(handler_message) BETWEEN 1 AND 1048576))
-                     );
              END
              $registry_webhook_state_upgrade$;",
     // Proposal bookkeeping: what became of the proposal an accepted answer
@@ -756,7 +763,7 @@ mod tests {
         let answers = statements
             .iter()
             .filter(|statement| {
-                statement.contains("registry_webhook_delivery_state_answer CHECK (")
+                statement.contains("registry_webhook_delivery_state_answer_digest_required CHECK (")
                     && statement
                         .contains("handler_message IS NULL AND handler_message_digest IS NULL")
                     && statement.contains("handler_message_digest IS NOT NULL")

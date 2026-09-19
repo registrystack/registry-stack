@@ -26,6 +26,9 @@ const HOOK_PROPOSAL_APPLY_BUDGET: Duration = Duration::from_secs(5);
 pub(crate) struct HookProposalApplication<'a> {
     pub(crate) event_id: Uuid,
     pub(crate) compiled_delivery_id: &'a str,
+    pub(crate) generation: i64,
+    pub(crate) attempt: i16,
+    pub(crate) lease_token: Uuid,
     pub(crate) package_revision: &'a str,
     pub(crate) envelope: &'a [u8],
     pub(crate) answer: &'a [u8],
@@ -289,6 +292,13 @@ impl MutationCoordinator {
                 };
             }
         }
+        if receipt.is_none()
+            && !self
+                .hook_proposal_still_owns_delivery(&***client, application)
+                .await?
+        {
+            return Err(UncertainApply);
+        }
         let outcome = self
             .apply_hook_proposal_inner(client, registry, application, &idempotency_key)
             .await;
@@ -301,6 +311,39 @@ impl MutationCoordinator {
             return conflicting_hook_answer();
         }
         outcome
+    }
+
+    /// Confirm that the worker still owns the delivery lease before a new
+    /// proposal mutation starts. Receipt replays do not need a live lease:
+    /// they return an already committed result and cannot create new state.
+    async fn hook_proposal_still_owns_delivery(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        application: &HookProposalApplication<'_>,
+    ) -> Result<bool, UncertainApply> {
+        client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_webhook_delivery_state
+                      WHERE event_id = $1
+                        AND compiled_delivery_id = $2
+                        AND generation = $3
+                        AND attempt = $4
+                        AND lease_token = $5
+                        AND state = 'leased'
+                 )",
+                &[
+                    &application.event_id,
+                    &application.compiled_delivery_id,
+                    &application.generation,
+                    &application.attempt,
+                    &application.lease_token,
+                ],
+            )
+            .await
+            .map_err(|_| UncertainApply)
+            .map(|row| row.get(0))
     }
 
     /// Recover a proposal receipt when a later accepted answer proposes
