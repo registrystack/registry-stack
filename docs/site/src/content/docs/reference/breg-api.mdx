@@ -593,8 +593,9 @@ want the published description of a refusal you have not seen before.
 
 ## Events and webhooks
 
-An event is declared as a hook on an entity or a module extension and delivered to a webhook
-destination bound in the runtime configuration. Field paths in the next table are relative to one
+An event is declared as a hook on an entity or a module extension. A `url` handler delivers to a
+webhook destination bound in the runtime configuration; a `rhai` or `wasm` handler runs its
+reviewed program in the post-commit worker. Field paths in the next table are relative to one
 hook under `entities[].hooks[]`; types, defaults, and descriptions come from the generated module
 schema, and compiler rules follow the table.
 
@@ -604,9 +605,10 @@ Compiler rules:
 
 - Hook IDs are unique across the registry.
 - A projection names at least one declared field.
-- An entity hook declares `phase: after` and `handler.kind: url`; the compiler refuses a phase or
-  a handler kind it cannot run.
-- Production compilation requires a webhook destination.
+- An entity hook declares `phase: after`; the compiler refuses any other phase. `handler.kind` is
+  `url`, `rhai`, or `wasm`; a local handler names its reviewed `script` or `module` path.
+- Production compilation requires every hook to declare a handler, either a bound destination or a
+  reviewed local program.
 - Conditions and projections use authored field IDs, not the record API's `apiName` spellings.
 - The event's classification is the highest classification of every projected or condition field,
   and a lifecycle event is at least as classified as its request entity.

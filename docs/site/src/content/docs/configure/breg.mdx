@@ -393,8 +393,8 @@ Hooks are declared on entities, in the registry file or in a module, and the pro
 | `trigger` | `created`, `patched`, `tombstoned`, or `request_lifecycle` for change-request state changes. |
 | `when` | Optional. `kind: fields` with `changed`, `beforeEquals`, and `afterEquals`; or `kind: request_lifecycle` with `transitions`, `toStates`, and `stages`. Every listed test must hold. |
 | `projection` | The field ids copied into the event payload's `values`. Restricted fields cannot be projected. |
-| `handler.kind` | `url`. An entity hook delivers to a bound destination; the engine refuses a local handler kind. |
-| `handler.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. A production compilation requires every hook to name one. |
+| `handler.kind` | `url`, `rhai`, or `wasm`. A `url` hook delivers to a bound destination; a `rhai` or `wasm` hook runs a reviewed local program in the post-commit worker. |
+| `handler.destinationId` | The key the runtime configuration binds to a receiver URL and signing key. Required for a `url` hook; a local handler names its reviewed `script` or `module` path instead. |
 
 Field ids in `when` and `projection` are the authored ids, and the payload keeps them.
 `changed` is valid only with the `patched` trigger, `beforeEquals` with `patched` and `tombstoned`, and `afterEquals` with `created` and `patched`.
