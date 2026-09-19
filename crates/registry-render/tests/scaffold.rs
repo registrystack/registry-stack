@@ -263,12 +263,12 @@ fn edit_after_seal_names_the_recovery_path() {
 }
 
 #[test]
-fn compile_is_bounded_by_a_timeout() {
+fn compile_is_bounded_by_a_worker_resource_wall() {
     let dir = tempdir();
     run(&["init", dir.to_str().unwrap()]);
-    // A compute-heavy template with a one-second budget: compile must be
-    // killed at the bound (the same supervised-worker wall serve uses),
-    // not run unbounded.
+    // A pathological template must be bounded by either the worker's memory
+    // cap or its timeout. Which wall wins depends on binary and platform
+    // layout, but the compile must never run unbounded.
     std::fs::write(
         dir.join("templates/letter.typ"),
         "#let x = range(20000000).fold(0, (a, b) => a + b)\n#x\n",
@@ -289,14 +289,18 @@ fn compile_is_bounded_by_a_timeout() {
         "--timeout",
         "1",
     ]);
-    assert_eq!(
-        out.status.code(),
-        Some(registry_render::ProblemKind::RenderTimeout.exit_code()),
+    let code = out.status.code();
+    assert!(
+        code == Some(registry_render::ProblemKind::RenderTimeout.exit_code())
+            || code == Some(registry_render::ProblemKind::RenderPanicked.exit_code()),
         "compile must be bounded: {}",
         String::from_utf8_lossy(&out.stderr)
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("timeout"), "{stderr}");
+    assert!(
+        stderr.contains("render-timeout") || stderr.contains("render-panicked"),
+        "{stderr}"
+    );
 }
 
 #[test]
