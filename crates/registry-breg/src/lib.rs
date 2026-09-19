@@ -54,6 +54,8 @@ pub mod event_destination;
 pub mod evidence_source;
 #[cfg(feature = "tooling")]
 pub mod example_references;
+#[cfg(feature = "runtime")]
+pub mod field_encryption;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod fixtures;
 pub mod generated_ddl;

@@ -25,6 +25,7 @@ use crate::api::{
 };
 use crate::attachment_verification_worker::AttachmentVerificationWorker;
 use crate::auth::RegistryAuthenticator;
+use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::metrics::{self, Metrics};
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 use crate::model::CompiledRegistry;
@@ -66,6 +67,10 @@ pub enum StartupError {
     EventDestinations,
     #[error("the Registry attachment storage or verification binding was refused")]
     AttachmentStorage,
+    #[error("the Registry field-encryption key state was refused")]
+    FieldEncryption,
+    #[error("the Registry field-encryption data-key custody was refused")]
+    FieldEncryptionCustody,
     #[error("the Registry listener could not be started")]
     Listener,
     #[error("the Registry shutdown signal failed")]
@@ -291,6 +296,10 @@ impl StartupError {
                 "the Registry attachment storage or verification binding was refused"
             }
             Self::EventDestinations => "the Registry event destination bindings were refused",
+            Self::FieldEncryption => "the Registry field-encryption key state was refused",
+            Self::FieldEncryptionCustody => {
+                "the Registry field-encryption data-key custody was refused"
+            }
             Self::Listener => "the Registry listener could not be started",
             Self::Shutdown => "the Registry shutdown signal failed",
             Self::Logging => "the Registry operational log level was refused",
@@ -761,6 +770,48 @@ async fn finish_prepared_server(
         &attachment_verification.binding_digest(),
     )
     .await?;
+    // Field-encryption key state is required exactly when the active package
+    // declares an encrypted field. Without one the service stays absent and
+    // per-entity admission never engages.
+    let declares_encrypted_fields = registry.entities().values().any(|entity| {
+        entity
+            .fields
+            .values()
+            .any(|field| field.encryption.is_some())
+    });
+    let field_encryption = if declares_encrypted_fields {
+        let provider = config
+            .field_encryption()
+            .provider()
+            .ok_or(StartupError::FieldEncryption)?;
+        if matches!(provider, FieldEncryptionProvider::LocalFile { .. })
+            && config.identity().database_initialization_environment() != "local"
+        {
+            // A plaintext data-key file is development custody; production
+            // initialization refuses it before any key material is read.
+            return Err(StartupError::FieldEncryptionCustody);
+        }
+        let secrets = config
+            .secret_resolver()
+            .map_err(|_| StartupError::FieldEncryption)?;
+        let key_client = pool
+            .get()
+            .await
+            .map_err(|_| StartupError::FieldEncryption)?;
+        let service = FieldEncryptionService::initialize(
+            provider,
+            registry.registry_id(),
+            expected.package_revision.as_str(),
+            &secrets,
+            &**key_client,
+        )
+        .await
+        .map_err(|_| StartupError::FieldEncryption)?;
+        drop(key_client);
+        Some(Arc::new(service))
+    } else {
+        None
+    };
     let records = Arc::new(
         PostgresRecordReadService::new(
             pool.clone(),
@@ -869,6 +920,9 @@ async fn finish_prepared_server(
         .with_postgres_mutations(mutations);
     if let Some(origin) = config.listener().public_origin() {
         service = service.with_public_origin(origin.clone());
+    }
+    if let Some(field_encryption) = field_encryption {
+        service = service.with_field_encryption(field_encryption);
     }
     let service = Arc::new(service);
     // The metrics registry exists only when the operator configured the

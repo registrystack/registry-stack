@@ -63,6 +63,7 @@
     - ['`source.unavailable`', '503', 'The database refused or timed out while the request held it.']
     - ['`service.unavailable`', '503', 'The runtime could not complete the mutation for a reason other than the request itself.']
     - ['`runtime.not_ready`', '503', 'The readiness probe before the package and database are usable.']
+    - ['`runtime.field_encryption.unavailable`', '503', 'The route reaches an entity with encrypted fields while the field-encryption key state is not usable. Entities without encrypted fields keep serving.']
 - id: request-actions
   title: Change request actions
   columns: [Action, Route suffix, Body, Accepted from]

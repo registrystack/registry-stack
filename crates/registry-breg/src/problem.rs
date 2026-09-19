@@ -37,6 +37,7 @@ pub enum ProblemCode {
     RequestPlanRefused,
     RequestTimeout,
     ResourceNotFound,
+    RuntimeFieldEncryptionUnavailable,
     RuntimeNotReady,
     ServiceUnavailable,
     SourceUnavailable,
@@ -61,6 +62,7 @@ impl ProblemCode {
         Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
+        Self::RuntimeFieldEncryptionUnavailable,
         Self::RuntimeNotReady,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
@@ -86,6 +88,7 @@ impl ProblemCode {
         Self::RequestPlanRefused,
         Self::RequestTimeout,
         Self::ResourceNotFound,
+        Self::RuntimeFieldEncryptionUnavailable,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
         Self::UnsupportedMediaType,
@@ -109,6 +112,7 @@ impl ProblemCode {
             Self::RequestPlanRefused => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
+            Self::RuntimeFieldEncryptionUnavailable => "runtime.field_encryption.unavailable",
             Self::RuntimeNotReady => "runtime.not_ready",
             Self::ServiceUnavailable => "service.unavailable",
             Self::SourceUnavailable => "source.unavailable",
@@ -133,6 +137,7 @@ impl ProblemCode {
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed => 500,
             Self::ActionEvidenceFailed
+            | Self::RuntimeFieldEncryptionUnavailable
             | Self::RuntimeNotReady
             | Self::ServiceUnavailable
             | Self::SourceUnavailable => 503,
@@ -183,6 +188,9 @@ impl ProblemCode {
             }
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
+            Self::RuntimeFieldEncryptionUnavailable => {
+                "The Registry field-encryption service is unavailable."
+            }
             Self::RuntimeNotReady => "Registry runtime is not ready.",
             Self::ServiceUnavailable => "The Registry mutation service is unavailable.",
             Self::SourceUnavailable => "The Registry data service is unavailable.",
