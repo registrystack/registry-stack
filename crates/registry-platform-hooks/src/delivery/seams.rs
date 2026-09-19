@@ -265,6 +265,14 @@ pub struct ProposalApplication<'a> {
     pub event_id: Uuid,
     /// The compiled delivery the proposal was delivered under.
     pub compiled_delivery_id: &'a str,
+    /// The replay generation this worker claimed.
+    pub generation: i64,
+    /// The attempt this worker claimed within the generation.
+    pub attempt: i16,
+    /// The exact lease this worker claimed. The product revalidates this
+    /// after acquiring the proposal lock so an older worker cannot apply
+    /// after a later attempt has settled the delivery.
+    pub lease_token: Uuid,
     /// The package revision the delivery row was captured under.
     pub package_revision: &'a str,
     /// The canonical stored envelope bytes that were delivered.

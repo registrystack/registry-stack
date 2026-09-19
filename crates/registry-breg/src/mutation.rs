@@ -206,7 +206,7 @@ pub async fn install_mutation_schema(
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  principal_reference text NOT NULL CHECK (principal_reference <> ''),
                  handler_answer_digest bytea
-                     CONSTRAINT registry_immediate_action_applications_handler_answer_digest_bounds
+                     CONSTRAINT registry_action_application_answer_digest_bounds
                      CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32),
                  result_count smallint NOT NULL CHECK (result_count >= 0 AND result_count <= {MAX_IMMEDIATE_ACTION_RESULTS}),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
@@ -245,11 +245,19 @@ pub async fn install_mutation_schema(
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz;
              ALTER TABLE registry_internal.registry_immediate_action_applications
                  ADD COLUMN IF NOT EXISTS handler_answer_digest bytea;
-             ALTER TABLE registry_internal.registry_immediate_action_applications
-                 DROP CONSTRAINT IF EXISTS registry_immediate_action_applications_handler_answer_digest_bounds;
-             ALTER TABLE registry_internal.registry_immediate_action_applications
-                 ADD CONSTRAINT registry_immediate_action_applications_handler_answer_digest_bounds
-                     CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32);
+             DO $registry_handler_answer_digest_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                        AND conname = 'registry_action_application_answer_digest_bounds'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_immediate_action_applications
+                         ADD CONSTRAINT registry_action_application_answer_digest_bounds
+                         CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32);
+                 END IF;
+             END
+             $registry_handler_answer_digest_upgrade$;
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
              ALTER TABLE registry_internal.registry_idempotency

@@ -1045,7 +1045,7 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
     );
     assert_eq!(
         malformed.as_db_error().and_then(|error| error.constraint()),
-        Some("registry_webhook_delivery_state_answer")
+        Some("registry_webhook_delivery_state_answer_digest_required")
     );
     assert_eq!(record_count(&setup, "followup").await, 1);
 
@@ -1488,6 +1488,85 @@ async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
     assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
     assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
     assert_eq!(record_count(&setup, "followup").await, 1);
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn real_postgres_terminal_retry_fences_a_late_proposal_application() {
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "late-proposal-fence").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    // Hold the first worker after it sent the request but before it receives
+    // the proposing answer, so it has not acquired the proposal lock yet.
+    let (request_seen_tx, request_seen_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    receiver
+        .enqueue(ResponsePlan::GatedAnswer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+            request_seen: request_seen_tx,
+            release: release_rx,
+        })
+        .await;
+    let first_service = setup.service.clone();
+    let first = tokio::spawn(async move { first_service.deliver_once().await });
+    tokio::time::timeout(Duration::from_secs(3), request_seen_rx)
+        .await
+        .expect("the first handler request arrives")
+        .expect("the receiver reports the first handler request");
+
+    expire_lease(&setup, &event, &delivery_id).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the expired first lease is reaped to its final retry"
+    );
+    wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
+    receiver
+        .enqueue(ResponsePlan::Answer { body: Vec::new() })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the final retry settles the delivery with no proposal"
+    );
+
+    let _ = release_tx.send(());
+    assert_eq!(
+        first.await.expect("the first worker joins"),
+        Err(WebhookDeliveryError::Unavailable),
+        "the stale lease cannot apply after the final retry settles"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "delivered");
+    assert_eq!(row.attempt, 2);
+    assert_eq!(row.disposition.as_deref(), Some("none"));
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        0,
+        "the late proposal creates no registry state"
+    );
 
     setup.teardown().await;
     receiver.stop().await;
@@ -2311,10 +2390,16 @@ fn write_secret(path: &std::path::Path, value: &[u8]) {
     }
 }
 
-#[derive(Clone)]
 enum ResponsePlan {
     /// A 2xx that answers with the exact body a remote hook handler returns.
     Answer { body: Vec<u8> },
+    /// A 2xx answer held after the request arrives, for ordering a worker
+    /// before proposal application without timing assumptions.
+    GatedAnswer {
+        body: Vec<u8>,
+        request_seen: oneshot::Sender<()>,
+        release: oneshot::Receiver<()>,
+    },
     /// A retryable HTTP failure that carries no accepted handler answer.
     NonSuccess,
 }
@@ -2368,8 +2453,18 @@ impl HttpsReceiver {
                     if drain_request(&mut stream).await.is_err() {
                         return;
                     }
-                    let (status, body) = match plans.lock().await.pop_front() {
+                    let plan = plans.lock().await.pop_front();
+                    let (status, body) = match plan {
                         Some(ResponsePlan::Answer { body }) => (200, body),
+                        Some(ResponsePlan::GatedAnswer {
+                            body,
+                            request_seen,
+                            release,
+                        }) => {
+                            let _ = request_seen.send(());
+                            let _ = release.await;
+                            (200, body)
+                        }
                         Some(ResponsePlan::NonSuccess) => (503, Vec::new()),
                         None => (204, Vec::new()),
                     };
