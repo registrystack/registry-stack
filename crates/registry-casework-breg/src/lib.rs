@@ -994,21 +994,15 @@ impl SourceAdapter for BregAdapter {
             .filter_map(|d| d.reason())
             .map(|s| Value::String(s.to_owned()))
             .collect();
-        if let Some(proposals) = request
-            .retained_history()
-            .and_then(|h| h.get("proposals"))
-            .and_then(Value::as_array)
-        {
-            for proposal in proposals {
-                if let Some(decisions) = proposal.get("decisions").and_then(Value::as_array) {
-                    reasons.extend(
-                        decisions
-                            .iter()
-                            .filter_map(|d| d.get("reason"))
-                            .filter(|v| v.is_string())
-                            .cloned(),
-                    );
-                }
+        if let Some(history) = request.retained_history() {
+            for proposal in history.proposals() {
+                reasons.extend(
+                    proposal
+                        .decisions()
+                        .iter()
+                        .filter_map(|decision| decision.reason())
+                        .map(|reason| Value::String(reason.to_owned())),
+                );
             }
         }
         let mut disclosed = BTreeMap::new();

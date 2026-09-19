@@ -23,6 +23,9 @@ def main() -> None:
     public_types = (
         ("breg", registry_client.breg.BaseRegistryClient),
         ("breg", registry_client.breg.BaseRegistryClientError),
+        ("breg", registry_client.breg.BRegRequestResultReference),
+        ("breg", registry_client.breg.BRegRetainedRequestProposal),
+        ("breg", registry_client.breg.BRegRetainedRequestHistoryPage),
         ("casework", registry_client.casework.CaseworkClient),
         ("casework", registry_client.casework.CaseworkClientError),
         ("discovery", registry_client.discovery.DiscoveryClient),

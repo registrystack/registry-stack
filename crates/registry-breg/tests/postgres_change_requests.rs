@@ -42,7 +42,7 @@ use registry_breg::postgres::{
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
     BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegLifecycleAction,
-    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation,
+    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation, BRegPatchRequest,
     BRegPreparedLifecycle, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
     BRegRequestMetadata, BRegRequestState, BaseRegistryClient, BaseRegistryClientConfig,
     RegistryRecordSingleResponse, StaticToken,
@@ -4363,6 +4363,7 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         "registration-change-request",
         None,
     );
+    let server = serve_change_request_client_http(app.clone()).await;
     let steward = claims("steward", "registration-steward", None);
     let operator = claims("operator", "registration-operator", None);
 
@@ -4459,14 +4460,129 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
     .await;
     assert_eq!(applied["request"]["bregState"], "applied");
 
+    let operator_client = change_request_client(server.base_url(), "operator-token");
+    let options = BRegRecordOptions::default()
+        .access_profile("operator")
+        .expect("operator profile is valid");
+    let request_record = operator_client
+        .get_record("registration-requests", &request.id, &options)
+        .await
+        .expect("the maintained client reads retained request results");
+    let request_metadata = BRegRequestMetadata::from_record(&request_record.value.data)
+        .expect("retained request metadata conforms")
+        .expect("registration request metadata is present");
+    let request_identifier = Uuid::parse_str(&request.id).expect("request id is a UUID");
+    let proposal_version = request_metadata.proposal_version();
+    let application_identifier = match request_metadata
+        .application()
+        .expect("the applied request retains application identity")
+    {
+        registry_breg_client::BRegRecordApplication::Retained(application) => {
+            application.application_identifier()
+        }
+        registry_breg_client::BRegRecordApplication::Erased(application) => {
+            application.application_identifier()
+        }
+    };
+    let application_identifier =
+        Uuid::parse_str(application_identifier).expect("application id is a UUID");
+    let proposal = request_metadata
+        .retained_history()
+        .expect("the applied proposal is loaded explicitly")
+        .find_application(
+            &request_record.value.meta.entity_type_identifier,
+            request_identifier,
+            proposal_version,
+            application_identifier,
+        )
+        .expect("the loaded page contains the exact applied proposal");
+    assert_eq!(proposal.result_link_count(), 3);
+    assert_eq!(proposal.result_references().len(), 3);
+    let person_result = proposal
+        .result_references()
+        .iter()
+        .find(|result| result.target_entity_identifier() == "person")
+        .expect("the operator sees the created person result");
+    assert_eq!(
+        person_result.target_record_identifier().to_string(),
+        person_id
+    );
+    assert_eq!(person_result.target_revision(), 1);
+
+    let current_person = operator_client
+        .get_record("people", &person_id, &options)
+        .await
+        .expect("an ordinary authorized GET resolves the current person");
+    assert_eq!(current_person.value.data.revision_identifier, "1");
+    let contract = operator_client
+        .registry_contract(Some("operator"))
+        .await
+        .expect("caller-filtered metadata loads");
+    let BRegDirectWrite::Patch(person_patch) = contract
+        .value
+        .select_direct_write("records.person.patch", "operator")
+        .expect("operator selects the ordinary person PATCH")
+    else {
+        panic!("person Patch binding")
+    };
+    let patch = BRegPatchRequest::builder()
+        .replace("displayName", json!("Ada Byron"))
+        .expect("displayName is writable")
+        .build()
+        .expect("person PATCH is bounded");
+    let current_etag = current_person
+        .metadata
+        .etag()
+        .expect("ordinary GET returns the current record ETag")
+        .clone();
+    let advanced_person = operator_client
+        .patch_record(
+            &person_patch,
+            Uuid::parse_str(&person_id).expect("captured person id is a UUID"),
+            &current_etag,
+            &patch,
+            &BRegIdempotencyKey::parse("advance-applied-person").unwrap(),
+            BRegRecordFormat::Json,
+        )
+        .await
+        .expect("ordinary authorized PATCH advances the target");
+    assert_eq!(advanced_person.value.data.revision_identifier, "2");
+    let refreshed_request = operator_client
+        .get_record("registration-requests", &request.id, &options)
+        .await
+        .expect("fresh result navigation rechecks current authority");
+    let refreshed_metadata = BRegRequestMetadata::from_record(&refreshed_request.value.data)
+        .unwrap()
+        .unwrap();
+    let refreshed_proposal = refreshed_metadata
+        .retained_history()
+        .unwrap()
+        .find_application(
+            &refreshed_request.value.meta.entity_type_identifier,
+            request_identifier,
+            proposal_version,
+            application_identifier,
+        )
+        .expect("the exact applied proposal remains selectable");
+    let refreshed_person_result = refreshed_proposal
+        .result_references()
+        .iter()
+        .find(|result| result.target_entity_identifier() == "person")
+        .unwrap();
+    assert_eq!(
+        refreshed_person_result.target_revision(),
+        1,
+        "the result revision remains application provenance after the target advances"
+    );
+
     let person = get_record(
         &app,
         &format!("/v1/records/people/{person_id}?accessProfile=operator"),
         operator.clone(),
     )
     .await;
-    assert_eq!(person.body["revision"], 1);
-    assert_eq!(person.body["data"]["displayName"], "Ada Lovelace");
+    assert_eq!(person.body["revision"], 2);
+    assert_eq!(person.body["data"]["displayName"], "Ada Byron");
 
     let membership = get_record(
         &app,
@@ -4496,11 +4612,16 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         operator.clone(),
     )
     .await;
-    assert_eq!(person_revisions[0]["operationId"], "records.person.create");
-    assert!(!person_revisions[0]["operationId"]
-        .as_str()
-        .expect("operation id")
-        .contains("registration-request"));
+    assert_revision_operations_include(
+        &person_revisions,
+        &["records.person.create", "records.person.patch"],
+    );
+    assert!(person_revisions
+        .iter()
+        .all(|revision| !revision["operationId"]
+            .as_str()
+            .expect("operation id")
+            .contains("registration-request")));
     let membership_revisions = revision_items(
         &app,
         &format!("/v1/records/memberships/{membership_id}/revisions?accessProfile=operator"),
@@ -4552,6 +4673,7 @@ async fn real_postgres_http_change_request_registration_applies_reserved_creates
         ],
     );
     assert_eq!(application_result_count(&database).await, 3);
+    server.finish().await;
     database.cleanup().await;
 }
 
@@ -6024,6 +6146,7 @@ async fn inject_change_request_client_claims(
             "Bearer reviewer-token" => Some(claims("reviewer", REVIEWER, Some("review"))),
             "Bearer applier-token" => Some(claims("applier", APPLIER, Some("apply"))),
             "Bearer steward-token" => Some(claims("steward", "client-lifecycle-steward", None)),
+            "Bearer operator-token" => Some(claims("operator", "registration-operator", None)),
             _ => None,
         });
     if let Some(claims) = claims {
@@ -7632,9 +7755,10 @@ fn registration_registry_with_pattern(pattern: Option<&str>) -> registry_breg::C
                 },
                 {
                   "entity":"person",
-                  "operations":["get","list","revisions"],
+                  "operations":["get","list","revisions","patch"],
                   "revisionAccess":true,
                   "readableFields":["tenant","display-name"],
+                  "writableFields":["display-name"],
                   "rowBoundaries":[{"field":"tenant","claim":"tenant_claim","operator":"equals"}]
                 },
                 {

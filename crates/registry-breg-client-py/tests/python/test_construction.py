@@ -74,6 +74,9 @@ class ConstructionTests(unittest.TestCase):
             "BRegAttachmentSlot",
             "BRegAttachmentUpload",
             "BRegMetadata",
+            "BRegRequestResultReference",
+            "BRegRetainedRequestProposal",
+            "BRegRetainedRequestHistoryPage",
         ):
             with self.assertRaises(TypeError):
                 getattr(breg_client, name)()

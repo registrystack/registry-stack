@@ -53,6 +53,11 @@ export declare class BaseRegistryClient {
   /** Empty one governed attachment slot. */
   deleteAttachment(slot: BRegAttachmentSlot, recordIdentifier: string, etag: string, idempotencyKey: string, formatValue?: string | undefined | null): Promise<CompleteOutcome>
   lifecycleActions(authority: BRegLifecycleAuthority, record: any, formatValue?: string | undefined | null): Array<BRegLifecycleAction>
+  /**
+   * Decode one already loaded record's retained request-history page.
+   * This performs no I/O and does not advance the returned continuation.
+   */
+  requestHistory(record: any, formatValue?: string | undefined | null): RetainedRequestHistoryPage | null
   executeLifecycleAction(action: BRegLifecycleAction, idempotencyKey: string): Promise<CompleteOutcome>
   /** Prepare inert lifecycle evidence before any token acquisition or I/O. */
   prepareLifecycleAction(authority: BRegLifecycleAuthority, record: any, action: BRegLifecycleAction, idempotencyKey: string, formatValue?: string | undefined | null): BRegPreparedLifecycle
@@ -251,6 +256,37 @@ export declare class PrivateKeyJwt {
   bearerToken(): Promise<string>
 }
 export type PrivateKeyJwtBinding = PrivateKeyJwt
+
+/** One inert caller-visible target written by an applied request. */
+export declare class RequestResultReference {
+  get targetEntityIdentifier(): string
+  get targetRecordIdentifier(): string
+  get targetRevision(): number
+  toString(): string
+}
+
+/** One explicitly loaded retained request-history page. */
+export declare class RetainedRequestHistoryPage {
+  get proposals(): Array<RetainedRequestProposal>
+  get nextAfterProposalVersion(): number | null
+  findProposal(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: number): RetainedRequestProposal | null
+  findApplication(requestEntityIdentifier: string, requestIdentifier: string, proposalVersion: number, applicationIdentifier: string): RetainedRequestProposal | null
+  toString(): string
+}
+
+/** One exact retained proposal in an explicitly loaded history page. */
+export declare class RetainedRequestProposal {
+  get requestEntityIdentifier(): string
+  get requestIdentifier(): string
+  get proposalVersion(): number
+  get bregState(): string
+  get current(): boolean
+  get detailErased(): boolean
+  get applicationIdentifier(): string | null
+  get resultLinkCount(): number
+  get resultReferences(): Array<RequestResultReference>
+  toString(): string
+}
 
 export interface CompleteOutcome {
   kind: string
