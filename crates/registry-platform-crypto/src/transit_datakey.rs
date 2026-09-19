@@ -117,7 +117,10 @@ impl fmt::Debug for TransitDataKeyConfig {
 ///
 /// Construction validates key custody metadata and proves both endpoints with
 /// a generate-and-unwrap self-test whose plaintexts must match. Every
-/// plaintext the client returns is zeroized on drop.
+/// plaintext the client returns is zeroized on drop, and the base64 member is
+/// moved out of the parsed response tree so the only owned copy is a zeroizing
+/// allocation; the HTTP response buffer itself is a transport allocation the
+/// client does not control.
 pub struct TransitDataKeyClient {
     client: reqwest::Client,
     metadata_url: String,
@@ -174,7 +177,7 @@ impl TransitDataKeyClient {
     /// [`SigningError`] when the provider refuses the request or answers with
     /// anything but a well-formed plaintext/wrapped pair.
     pub async fn generate_datakey(&self) -> Result<(Zeroizing<[u8; 32]>, String), SigningError> {
-        let document = self
+        let mut document = self
             .request_json(
                 reqwest::Method::POST,
                 &self.datakey_url,
@@ -182,18 +185,15 @@ impl TransitDataKeyClient {
             )
             .await?;
         let data = document
-            .get("data")
-            .and_then(Value::as_object)
+            .get_mut("data")
+            .and_then(Value::as_object_mut)
             .ok_or_else(|| transit_error("transit datakey response is invalid"))?;
-        let plaintext = data
-            .get("plaintext")
-            .and_then(Value::as_str)
-            .ok_or_else(|| transit_error("transit datakey response is invalid"))?;
+        let plaintext = take_datakey_plaintext(data)?;
         let wrapped = data
             .get("ciphertext")
             .and_then(Value::as_str)
             .ok_or_else(|| transit_error("transit datakey response is invalid"))?;
-        let plaintext = decode_datakey_plaintext(plaintext)?;
+        let plaintext = decode_datakey_plaintext(plaintext.as_str())?;
         validate_wrapped_datakey(wrapped)?;
         Ok((plaintext, wrapped.to_owned()))
     }
@@ -205,19 +205,19 @@ impl TransitDataKeyClient {
     /// refuses the request, or the returned plaintext is not a 256-bit key.
     pub async fn unwrap_datakey(&self, wrapped: &str) -> Result<Zeroizing<[u8; 32]>, SigningError> {
         validate_wrapped_datakey(wrapped)?;
-        let document = self
+        let mut document = self
             .request_json(
                 reqwest::Method::POST,
                 &self.decrypt_url,
                 Some(&json!({ "ciphertext": wrapped })),
             )
             .await?;
-        let plaintext = document
-            .get("data")
-            .and_then(|data| data.get("plaintext"))
-            .and_then(Value::as_str)
+        let data = document
+            .get_mut("data")
+            .and_then(Value::as_object_mut)
             .ok_or_else(|| transit_error("transit datakey response is invalid"))?;
-        decode_datakey_plaintext(plaintext)
+        let plaintext = take_datakey_plaintext(data)?;
+        decode_datakey_plaintext(plaintext.as_str())
     }
 
     /// Generate and unwrap one data key, refusing any provider whose two
@@ -327,15 +327,31 @@ fn validate_wrapped_datakey(wrapped: &str) -> Result<(), SigningError> {
     Ok(())
 }
 
+/// Move the base64 datakey plaintext out of one parsed response object.
+///
+/// Taking ownership leaves an empty string in the parsed tree and keeps the
+/// only owned copy in a zeroizing allocation for the decode that follows.
+fn take_datakey_plaintext(
+    data: &mut serde_json::Map<String, Value>,
+) -> Result<Zeroizing<String>, SigningError> {
+    match data.get_mut("plaintext") {
+        Some(Value::String(value)) => Ok(Zeroizing::new(std::mem::take(value))),
+        _ => Err(transit_error("transit datakey response is invalid")),
+    }
+}
+
 /// Decode one base64 datakey plaintext, refusing any length but 32 bytes.
 fn decode_datakey_plaintext(plaintext: &str) -> Result<Zeroizing<[u8; 32]>, SigningError> {
     if plaintext.len() > MAX_WRAPPED_DATAKEY_CHARS {
         return Err(transit_error("transit datakey plaintext is invalid"));
     }
-    let decoded = STANDARD
-        .decode(plaintext)
-        .map_err(|_| transit_error("transit datakey plaintext is invalid"))?;
+    let decoded = Zeroizing::new(
+        STANDARD
+            .decode(plaintext)
+            .map_err(|_| transit_error("transit datakey plaintext is invalid"))?,
+    );
     let bytes: [u8; 32] = decoded
+        .as_slice()
         .try_into()
         .map_err(|_| transit_error("transit datakey plaintext is invalid"))?;
     Ok(Zeroizing::new(bytes))
