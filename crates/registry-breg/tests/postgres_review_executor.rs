@@ -25,7 +25,7 @@ use registry_breg::review_store::{
 use registry_review_client::{
     submission_digest, BearerToken, ContentDigest, ReviewClient, ReviewClientConfig,
     ReviewCompletion, ReviewCompletionType, ReviewContext, ReviewCreateRequest,
-    SourceContextBinding, SubjectBinding,
+    ReviewRequestAccepted, ReviewResultResponse, SourceContextBinding, SubjectBinding,
 };
 use serde_json::{json, Value};
 use tokio::net::TcpListener;
@@ -161,6 +161,67 @@ async fn serve_authority(
         .unwrap();
     let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     (endpoint, server)
+}
+
+struct AvailableResultState {
+    accepted: Value,
+    lookups: AtomicUsize,
+}
+
+async fn empty_result_feed() -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [("traceparent", TRACEPARENT)],
+        Json(json!({"items": [], "nextCursor": null})),
+    )
+}
+
+async fn available_review_result(
+    State(state): State<Arc<AvailableResultState>>,
+    Path(request_id): Path<Uuid>,
+) -> impl IntoResponse {
+    assert_eq!(state.accepted["requestId"], request_id.to_string());
+    state.lookups.fetch_add(1, Ordering::SeqCst);
+    (
+        StatusCode::OK,
+        [("traceparent", TRACEPARENT)],
+        Json(json!({
+            "resultId": Uuid::from_u128(0xb3),
+            "requestId": request_id,
+            "subject": state.accepted["subject"].clone(),
+            "policy": state.accepted["policy"].clone(),
+            "submissionDigest": state.accepted["submissionDigest"].clone(),
+            "status": "approved",
+            "completedAt": "2026-09-20T00:00:00Z",
+            "availableUntil": "2030-09-20T00:00:00Z"
+        })),
+    )
+}
+
+async fn serve_available_result_authority(
+    accepted: Value,
+) -> (
+    reqwest::Url,
+    Arc<AvailableResultState>,
+    tokio::task::JoinHandle<()>,
+) {
+    let state = Arc::new(AvailableResultState {
+        accepted,
+        lookups: AtomicUsize::new(0),
+    });
+    let app = Router::new()
+        .route("/v1/review-results", get(empty_result_feed))
+        .route(
+            "/v1/review-requests/{request_id}/result",
+            get(available_review_result),
+        )
+        .with_state(Arc::clone(&state));
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let endpoint = format!("http://{}/", listener.local_addr().unwrap())
+        .parse()
+        .unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (endpoint, state, server)
 }
 
 async fn assert_backend_has_no_transaction_or_row_lock(
@@ -1095,5 +1156,176 @@ async fn two_authority_concurrent_workers_keep_clients_credentials_and_rows_isol
     connection_task_b.abort();
     server_a.abort();
     server_b.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test]
+async fn unavailable_authority_does_not_starve_another_authoritys_result() {
+    let database = TestDatabase::create(2).await;
+    database
+        .admin
+        .batch_execute(
+            "CREATE TABLE registry_internal.registry_request_proposals (
+                request_entity_id text NOT NULL,
+                request_id uuid NOT NULL,
+                proposal_version bigint NOT NULL,
+                PRIMARY KEY (request_entity_id,request_id,proposal_version)
+            );",
+        )
+        .await
+        .expect("proposal parent table");
+    install_review_storage_for_test(&database.admin, &database.runtime_role)
+        .await
+        .expect("review storage");
+    database
+        .admin
+        .batch_execute(&format!(
+            "GRANT USAGE ON SCHEMA registry_internal TO \"{}\";",
+            database.runtime_role.as_str()
+        ))
+        .await
+        .expect("runtime review schema access");
+
+    let request_a = Uuid::from_u128(0xa11);
+    let request_b = Uuid::from_u128(0xb11);
+    seed_submission(
+        &database.admin,
+        request_a,
+        "casework-a",
+        "producer-a",
+        "policy-a",
+    )
+    .await;
+    seed_submission(
+        &database.admin,
+        request_b,
+        "casework-b",
+        "producer-b",
+        "policy-b",
+    )
+    .await;
+
+    let submission_a = Arc::new(AuthorityState {
+        producer_id: "producer-a",
+        expected_token: "Bearer token-a",
+        expected_profile: "producer-profile-a",
+        accepted_request_id: Uuid::from_u128(0xa12),
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let submission_b = Arc::new(AuthorityState {
+        producer_id: "producer-b",
+        expected_token: "Bearer token-b",
+        expected_profile: "producer-profile-b",
+        accepted_request_id: Uuid::from_u128(0xb12),
+        requests: AtomicUsize::new(0),
+        gate: None,
+    });
+    let (endpoint_a, server_a) = serve_authority(submission_a).await;
+    let (submission_endpoint_b, submission_server_b) = serve_authority(submission_b).await;
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-a",
+        &authority_client(endpoint_a.clone(), "producer-profile-a"),
+        &BearerToken::new("token-a").unwrap(),
+    )
+    .await
+    .expect("authority A submission"));
+    assert!(run_one_submission(
+        &database.admin,
+        "casework-b",
+        &authority_client(submission_endpoint_b, "producer-profile-b"),
+        &BearerToken::new("token-b").unwrap(),
+    )
+    .await
+    .expect("authority B submission"));
+    server_a.abort();
+    submission_server_b.abort();
+
+    let accepted_b = database
+        .admin
+        .query_one(
+            "SELECT accepted_binding
+               FROM registry_internal.registry_request_review_submissions
+              WHERE authority='casework-b'",
+            &[],
+        )
+        .await
+        .expect("accepted authority B binding")
+        .get::<_, Value>(0);
+    let (result_endpoint_b, result_state_b, result_server_b) =
+        serve_available_result_authority(accepted_b.clone()).await;
+    let accepted_b: ReviewRequestAccepted =
+        serde_json::from_value(accepted_b).expect("typed authority B binding");
+    assert!(matches!(
+        authority_client(result_endpoint_b.clone(), "producer-profile-b")
+            .result(&BearerToken::new("token-b").unwrap(), &accepted_b)
+            .await
+            .expect("authority B result fixture"),
+        ReviewResultResponse::Available(_)
+    ));
+    result_state_b.lookups.store(0, Ordering::SeqCst);
+    let configured_a = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-a".to_owned(),
+            authority_client(endpoint_a, "producer-profile-a"),
+            Arc::new(registry_platform_httputil::StaticToken::new("token-a".to_owned()).unwrap()),
+            "producer-a".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("authority A configuration"),
+    );
+    let configured_b = Arc::new(
+        ReviewAuthorityClient::new(
+            "casework-b".to_owned(),
+            authority_client(result_endpoint_b, "producer-profile-b"),
+            Arc::new(registry_platform_httputil::StaticToken::new("token-b".to_owned()).unwrap()),
+            "producer-b".to_owned(),
+            7,
+            None,
+            None,
+        )
+        .expect("authority B configuration"),
+    );
+    let authorities = ReviewAuthorityRegistry::new(BTreeMap::from([
+        ("casework-a".to_owned(), configured_a),
+        ("casework-b".to_owned(), configured_b),
+    ]))
+    .expect("two-authority registry");
+    let pool = database.runtime_config.build_pool().expect("runtime pool");
+
+    assert!(run_review_authority_once_for_test(&pool, &authorities)
+        .await
+        .expect("authority B must progress while authority A is unavailable"));
+    assert_eq!(result_state_b.lookups.load(Ordering::SeqCst), 1);
+    let results = database
+        .admin
+        .query(
+            "SELECT authority,request_id
+               FROM registry_internal.registry_request_review_results
+              ORDER BY authority",
+            &[],
+        )
+        .await
+        .expect("reconciled results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].get::<_, String>(0), "casework-b");
+    assert_eq!(results[0].get::<_, Uuid>(1), request_b);
+    let retry = database
+        .admin
+        .query_one(
+            "SELECT next_result_poll_at > transaction_timestamp()
+               FROM registry_internal.registry_request_review_submissions
+              WHERE authority='casework-a'",
+            &[],
+        )
+        .await
+        .expect("authority A retry backoff")
+        .get::<_, bool>(0);
+    assert!(retry);
+
+    result_server_b.abort();
     database.cleanup().await;
 }

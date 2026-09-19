@@ -283,6 +283,9 @@ pub async fn serve_from_path(path: impl AsRef<Path>) -> Result<(), RuntimeError>
             if let Err(error) = worker_service.process_due_clocks(100).await {
                 tracing::warn!(error = %error, "Casework clock pass did not complete");
             }
+            if let Err(error) = worker_service.process_due_review_clocks(100).await {
+                tracing::warn!(error = %error, "Casework review clock pass did not complete");
+            }
             retention_ticks = (retention_ticks + 1) % 30;
             if retention_ticks == 0 {
                 if let Err(error) = worker_service.erase_expired_reviews().await {

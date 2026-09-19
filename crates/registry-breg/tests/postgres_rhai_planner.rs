@@ -456,6 +456,7 @@ fn refusing_rhai_registry() -> registry_breg::CompiledRegistry {
     .expect("refusing Rhai project closes under the Production compiler")
 }
 
+#[allow(dead_code)] // Used only by feature-selected PostgreSQL planner cases.
 fn compile_rhai_project(
     project: Value,
     profile: CompileProfile,

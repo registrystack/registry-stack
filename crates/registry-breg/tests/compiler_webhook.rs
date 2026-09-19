@@ -479,12 +479,10 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
         .with_draft(jsonschema::Draft::Draft202012)
         .compile(&schema)
         .unwrap();
-    for (transition, state) in [("apply", "applied")] {
-        let mut request = lifecycle_request(transition, state);
-        request["reasonPresent"] = json!(true);
-        request["reason"] = json!("");
-        assert!(validator.is_valid(&request));
-    }
+    let mut request = lifecycle_request("apply", "applied");
+    request["reasonPresent"] = json!(true);
+    request["reason"] = json!("");
+    assert!(validator.is_valid(&request));
 }
 
 #[test]

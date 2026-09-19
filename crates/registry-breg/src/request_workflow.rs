@@ -2532,9 +2532,7 @@ mod source_owned_review_tests {
             None,
         );
         assert_eq!(
-            refused
-                .err()
-                .expect("unsolicited review evidence must be refused"),
+            refused.expect_err("unsolicited review evidence must be refused"),
             WorkflowError::ReviewEvidenceMismatch
         );
 
@@ -2578,9 +2576,7 @@ mod source_owned_review_tests {
             None,
         );
         assert_eq!(
-            refused
-                .err()
-                .expect("missing review evidence must be refused"),
+            refused.expect_err("missing review evidence must be refused"),
             WorkflowError::ReviewEvidenceMismatch
         );
 

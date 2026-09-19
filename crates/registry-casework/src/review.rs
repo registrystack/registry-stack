@@ -1,17 +1,18 @@
 use chrono::{DateTime, TimeDelta, Utc};
 use registry_casework_core::{
-    record_review_decision, resolve_absence_cover, submission_digest, AbsenceRecord, ActorContext,
-    AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy, ContentDigest, DelegateRequest,
-    EphemeralCredential, HolidaySetDocument, IssuerPrincipal, PolicyBinding,
-    ReviewAccountabilityRecord, ReviewCancelRequest, ReviewCancelResponse, ReviewClockCorrelation,
-    ReviewClockOccurrence, ReviewClockState, ReviewCreateRequest, ReviewHistoryAudience,
-    ReviewHistoryEntry, ReviewHistoryPage, ReviewKindPolicySnapshot, ReviewNoteRequest,
-    ReviewProgress, ReviewRequestAccepted, ReviewRequestLifecycle, ReviewRequestView, ReviewResult,
-    ReviewResultFeedEntry, ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement,
-    ReviewSourceBindingStatus, ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext,
-    ReviewTaskContextData, ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition,
-    ReviewerDecision, ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, SourceAdapterError,
-    SourceContextBinding, SubjectBinding, SubjectRef,
+    evaluate_activity_clock, record_review_decision, resolve_absence_cover, submission_digest,
+    AbsenceRecord, ActorContext, AssignmentRequest, CalendarPolicy, CaseworkRole, ClockPolicy,
+    ContentDigest, DelegateRequest, EphemeralCredential, HolidaySetDocument, IssuerPrincipal,
+    PolicyBinding, ReminderOccurrence, ReviewAccountabilityRecord, ReviewCancelRequest,
+    ReviewCancelResponse, ReviewClockCorrelation, ReviewClockOccurrence, ReviewClockState,
+    ReviewCreateRequest, ReviewHistoryAudience, ReviewHistoryEntry, ReviewHistoryPage,
+    ReviewKindPolicySnapshot, ReviewNoteRequest, ReviewProgress, ReviewRequestAccepted,
+    ReviewRequestLifecycle, ReviewRequestView, ReviewResult, ReviewResultFeedEntry,
+    ReviewResultFeedPage, ReviewResultStatus, ReviewSettlement, ReviewSourceBindingStatus,
+    ReviewSourceProjection, ReviewStagePolicy, ReviewTaskContext, ReviewTaskContextData,
+    ReviewTaskDraft, ReviewTaskDraftInput, ReviewTaskPage, ReviewTransition, ReviewerDecision,
+    ReviewerDecisionKind, ReviewerTask, ReviewerTaskState, SourceAdapterError,
+    SourceContextBinding, StepOccurrence, SubjectBinding, SubjectRef,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -122,6 +123,13 @@ struct ReviewRequestRecord {
 impl CaseworkService {
     pub async fn erase_expired_reviews(&self) -> Result<u64, ReviewRuntimeError> {
         self.store.erase_expired_reviews_at(Utc::now()).await
+    }
+
+    pub async fn process_due_review_clocks(
+        &self,
+        maximum: usize,
+    ) -> Result<usize, ReviewRuntimeError> {
+        self.store.process_due_review_clocks(maximum).await
     }
 
     pub async fn create_review_request(
@@ -294,6 +302,7 @@ impl CaseworkService {
         let mut scan_cursor = cursor;
         let mut items = Vec::with_capacity(limit + 1);
         let mut examined = 0usize;
+        let mut continuation = None;
         while items.len() <= limit && examined < 1_000 {
             let page = self
                 .store
@@ -301,26 +310,37 @@ impl CaseworkService {
                 .await?;
             examined += page.items.len();
             for task in page.items {
-                if self
+                match self
                     .preflight_review_source(task.task_id, source_profile_id, token)
                     .await
-                    .is_ok()
                 {
-                    items.push(task);
-                    if items.len() > limit {
-                        break;
+                    Ok(()) => {
+                        items.push(task);
+                        if items.len() > limit {
+                            break;
+                        }
                     }
+                    Err(ReviewRuntimeError::Forbidden | ReviewRuntimeError::NotFound) => {}
+                    Err(error) => return Err(error),
                 }
             }
             let Some(next_cursor) = page.next_cursor else {
+                continuation = None;
                 break;
             };
             if scan_cursor == Some(next_cursor) {
                 return Err(ReviewRuntimeError::Corrupt);
             }
             scan_cursor = Some(next_cursor);
+            continuation = Some(next_cursor);
         }
-        let next_cursor = (items.len() > limit).then(|| items[limit - 1].task_id);
+        let next_cursor = if items.len() > limit {
+            Some(items[limit - 1].task_id)
+        } else if examined >= 1_000 {
+            continuation
+        } else {
+            None
+        };
         items.truncate(limit);
         Ok(ReviewTaskPage { items, next_cursor })
     }
@@ -598,14 +618,14 @@ impl CaseworkService {
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
-        let requester = actor.role == CaseworkRole::Requester;
-        if requester {
-            self.producer_for_actor(actor)?;
+        let producer_id = if actor.role == CaseworkRole::Requester {
+            Some(self.producer_for_actor(actor)?.producer.id)
         } else {
             require_human_reviewer(actor)?;
-        }
+            None
+        };
         self.store
-            .review_history(actor, request_id, requester, cursor, limit)
+            .review_history(actor, request_id, producer_id.as_deref(), cursor, limit)
             .await
     }
 
@@ -643,17 +663,24 @@ impl CaseworkService {
         request: ReviewNoteRequest,
         idempotency_key: &str,
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
-        let requester = actor.role == CaseworkRole::Requester;
-        if requester {
-            self.producer_for_actor(actor)?;
+        let producer_id = if actor.role == CaseworkRole::Requester {
+            let producer_id = self.producer_for_actor(actor)?.producer.id;
             if request.audience != ReviewHistoryAudience::Requester {
                 return Err(ReviewRuntimeError::Forbidden);
             }
+            Some(producer_id)
         } else {
             require_human_reviewer(actor)?;
-        }
+            None
+        };
         self.store
-            .add_review_note(actor, request_id, requester, request, idempotency_key)
+            .add_review_note(
+                actor,
+                request_id,
+                producer_id.as_deref(),
+                request,
+                idempotency_key,
+            )
             .await
     }
 
@@ -810,6 +837,260 @@ impl CaseworkService {
 }
 
 impl PostgresStore {
+    async fn process_due_review_clocks(&self, maximum: usize) -> Result<usize, ReviewRuntimeError> {
+        let limit =
+            i64::try_from(maximum.clamp(1, 100)).map_err(|_| ReviewRuntimeError::Invalid)?;
+        let now = Utc::now();
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let rows = transaction
+            .query(
+                "SELECT clock_occurrence_id,request_id,task_id
+                 FROM casework_review_clock_occurrences
+                 WHERE scope='activity'
+                   AND (state='source_facts_missing'
+                        OR (state='running' AND next_action_at<=now()))
+                 ORDER BY COALESCE(next_action_at,updated_at),clock_occurrence_id
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        let mut applied = 0usize;
+        for row in rows {
+            let occurrence_id: Uuid = row.get(0);
+            let request_id: Uuid = row
+                .get::<_, Option<Uuid>>(1)
+                .ok_or(ReviewRuntimeError::Corrupt)?;
+            let task_id: Uuid = row
+                .get::<_, Option<Uuid>>(2)
+                .ok_or(ReviewRuntimeError::Corrupt)?;
+            let Some(request) = transaction
+                .query_opt(
+                    "SELECT lifecycle,active_stage_index
+                     FROM casework_review_requests WHERE request_id=$1
+                     FOR UPDATE SKIP LOCKED",
+                    &[&request_id],
+                )
+                .await?
+            else {
+                continue;
+            };
+            let task = transaction
+                .query_opt(
+                    "SELECT state,queue_id,stage_index
+                     FROM casework_review_tasks WHERE task_id=$1 AND request_id=$2
+                     FOR UPDATE",
+                    &[&task_id, &request_id],
+                )
+                .await?
+                .ok_or(ReviewRuntimeError::Corrupt)?;
+            let Some(occurrence) = transaction
+                .query_opt(
+                    "SELECT policy,state,anchor_at,holiday_document,reminders,steps
+                     FROM casework_review_clock_occurrences
+                     WHERE clock_occurrence_id=$1 AND scope='activity'
+                       AND (state='source_facts_missing'
+                            OR (state='running' AND next_action_at<=$2))
+                     FOR UPDATE",
+                    &[&occurrence_id, &now],
+                )
+                .await?
+            else {
+                continue;
+            };
+            let definition: ReviewClockDefinition = serde_json::from_value(occurrence.get(0))?;
+            let state: String = occurrence.get(1);
+            let anchor_at: DateTime<Utc> = occurrence.get(2);
+            let (_holiday_document, reminders, steps): (
+                HolidaySetDocument,
+                Vec<ReminderOccurrence>,
+                Vec<StepOccurrence>,
+            ) = if state == "source_facts_missing" {
+                let calendar = definition
+                    .calendar
+                    .as_ref()
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let Some(holiday_row) = transaction
+                    .query_opt(
+                        "SELECT document FROM casework_holiday_sets
+                         WHERE holiday_set=$1 ORDER BY revision DESC LIMIT 1",
+                        &[&calendar.holiday_set],
+                    )
+                    .await?
+                else {
+                    transaction
+                        .execute(
+                            "UPDATE casework_review_clock_occurrences SET updated_at=$2
+                             WHERE clock_occurrence_id=$1 AND state='source_facts_missing'",
+                            &[&occurrence_id, &now],
+                        )
+                        .await?;
+                    continue;
+                };
+                let holiday: HolidaySetDocument = serde_json::from_value(holiday_row.get(0))?;
+                let evaluated =
+                    evaluate_activity_clock(&definition.clock, calendar, &holiday, anchor_at)
+                        .map_err(|_| ReviewRuntimeError::Corrupt)?;
+                let next_action_at = next_review_clock_action(
+                    &evaluated.reminders,
+                    &evaluated.steps,
+                    &std::collections::BTreeSet::new(),
+                );
+                transaction
+                    .execute(
+                        "UPDATE casework_review_clock_occurrences
+                         SET state='running',holiday_document=$2,reminders=$3,steps=$4,
+                             due_at=$5,at_risk_at=$6,next_action_at=$7,updated_at=$8
+                         WHERE clock_occurrence_id=$1 AND state='source_facts_missing'",
+                        &[
+                            &occurrence_id,
+                            &serde_json::to_value(&holiday)?,
+                            &serde_json::to_value(&evaluated.reminders)?,
+                            &serde_json::to_value(&evaluated.steps)?,
+                            &evaluated.due_at,
+                            &evaluated.at_risk_at,
+                            &next_action_at,
+                            &now,
+                        ],
+                    )
+                    .await?;
+                (holiday, evaluated.reminders, evaluated.steps)
+            } else {
+                let holiday = occurrence
+                    .get::<_, Option<Value>>(3)
+                    .map(serde_json::from_value)
+                    .transpose()?
+                    .ok_or(ReviewRuntimeError::Corrupt)?;
+                let reminders = serde_json::from_value(occurrence.get(4))?;
+                let steps = serde_json::from_value(occurrence.get(5))?;
+                (holiday, reminders, steps)
+            };
+            let task_state: String = task.get(0);
+            let current_stage: Option<i32> = request.get(1);
+            if request.get::<_, String>(0) != "reviewing"
+                || !matches!(task_state.as_str(), "open" | "claimed")
+                || current_stage != Some(task.get::<_, i32>(2))
+            {
+                transaction
+                    .execute(
+                        "UPDATE casework_review_clock_occurrences
+                         SET state='completed',completed_at=$2,next_action_at=NULL,updated_at=$2
+                         WHERE clock_occurrence_id=$1 AND state='running'",
+                        &[&occurrence_id, &now],
+                    )
+                    .await?;
+                continue;
+            }
+
+            for reminder in reminders.iter().filter(|effect| effect.at <= now) {
+                let event_id = Uuid::new_v4();
+                if transaction
+                    .execute(
+                        "INSERT INTO casework_review_clock_effects(
+                            clock_occurrence_id,effect_kind,effect_id,event_id,applied_at)
+                         VALUES($1,'reminder',$2,$3,$4) ON CONFLICT DO NOTHING",
+                        &[&occurrence_id, &reminder.id, &event_id, &now],
+                    )
+                    .await?
+                    == 1
+                {
+                    transaction
+                        .execute(
+                            "INSERT INTO casework_review_history(
+                                event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                             VALUES($1,$2,$3,'clock_reminder',NULL,$4,$5)",
+                            &[
+                                &event_id,
+                                &request_id,
+                                &task_id,
+                                &json!({
+                                    "clockOccurrenceId": occurrence_id,
+                                    "clockId": definition.clock.id(),
+                                    "effectId": reminder.id,
+                                    "at": reminder.at,
+                                }),
+                                &now,
+                            ],
+                        )
+                        .await?;
+                    applied += 1;
+                }
+            }
+            let mut prior_queue: String = task.get(1);
+            for step in steps.iter().filter(|effect| effect.at <= now) {
+                let event_id = Uuid::new_v4();
+                if transaction
+                    .execute(
+                        "INSERT INTO casework_review_clock_effects(
+                            clock_occurrence_id,effect_kind,effect_id,event_id,applied_at)
+                         VALUES($1,'step',$2,$3,$4) ON CONFLICT DO NOTHING",
+                        &[&occurrence_id, &step.id, &event_id, &now],
+                    )
+                    .await?
+                    == 1
+                {
+                    transaction
+                        .execute(
+                            "UPDATE casework_review_tasks
+                             SET queue_id=$2,state='open',holder_issuer=NULL,holder_subject=NULL,
+                                 assignment_kind=NULL,assignment_owner_issuer=NULL,
+                                 assignment_owner_subject=NULL,assigned_by_issuer=NULL,
+                                 assigned_by_subject=NULL,assignment_absence_ids='{}',
+                                 staffing_diagnostic=NULL,revision=revision+1,updated_at=$3
+                             WHERE task_id=$1 AND state IN ('open','claimed')",
+                            &[&task_id, &step.reassign_queue, &now],
+                        )
+                        .await?;
+                    transaction
+                        .execute(
+                            "INSERT INTO casework_review_history(
+                                event_id,request_id,task_id,kind,actor_ref,detail,occurred_at)
+                             VALUES($1,$2,$3,'clock_step_applied',NULL,$4,$5)",
+                            &[
+                                &event_id,
+                                &request_id,
+                                &task_id,
+                                &json!({
+                                    "clockOccurrenceId": occurrence_id,
+                                    "clockId": definition.clock.id(),
+                                    "effectId": step.id,
+                                    "because": step.because,
+                                    "previousQueue": prior_queue,
+                                    "queue": step.reassign_queue,
+                                }),
+                                &now,
+                            ],
+                        )
+                        .await?;
+                    prior_queue.clone_from(&step.reassign_queue);
+                    applied += 1;
+                }
+            }
+            let effect_rows = transaction
+                .query(
+                    "SELECT effect_kind,effect_id FROM casework_review_clock_effects
+                     WHERE clock_occurrence_id=$1",
+                    &[&occurrence_id],
+                )
+                .await?;
+            let completed = effect_rows
+                .into_iter()
+                .map(|row| (row.get::<_, String>(0), row.get::<_, String>(1)))
+                .collect::<std::collections::BTreeSet<_>>();
+            let next_action_at = next_review_clock_action(&reminders, &steps, &completed);
+            transaction
+                .execute(
+                    "UPDATE casework_review_clock_occurrences
+                     SET next_action_at=$2,updated_at=$3
+                     WHERE clock_occurrence_id=$1 AND state='running'",
+                    &[&occurrence_id, &next_action_at, &now],
+                )
+                .await?;
+        }
+        transaction.commit().await?;
+        Ok(applied)
+    }
+
     async fn review_tasks(
         &self,
         actor: &ActorContext,
@@ -2400,21 +2681,17 @@ impl PostgresStore {
         &self,
         actor: &ActorContext,
         request_id: Uuid,
-        requester: bool,
+        producer_id: Option<&str>,
         cursor: Option<Uuid>,
         limit: usize,
     ) -> Result<ReviewHistoryPage, ReviewRuntimeError> {
         let client = self.client().await?;
-        if requester {
+        if let Some(producer_id) = producer_id {
             client
                 .query_opt(
                     "SELECT 1 FROM casework_review_requests
-                     WHERE request_id=$1 AND producer_issuer=$2 AND producer_subject=$3",
-                    &[
-                        &request_id,
-                        &actor.principal.issuer,
-                        &actor.principal.subject,
-                    ],
+                     WHERE request_id=$1 AND producer_id=$2",
+                    &[&request_id, &producer_id],
                 )
                 .await?
                 .ok_or(ReviewRuntimeError::NotFound)?;
@@ -2460,7 +2737,7 @@ impl PostgresStore {
                     WHERE request_id=$1 AND event_id=$3
                  ))
                  ORDER BY occurred_at,event_id LIMIT $4",
-                &[&request_id, &requester, &cursor, &query_limit],
+                &[&request_id, &producer_id.is_some(), &cursor, &query_limit],
             )
             .await?;
         let mut items = rows
@@ -2548,8 +2825,9 @@ impl PostgresStore {
         actor: &ActorContext,
         event_id: Uuid,
     ) -> Result<ReviewAccountabilityRecord, ReviewRuntimeError> {
-        let client = self.client().await?;
-        let row = client
+        let mut client = self.client().await?;
+        let transaction = client.transaction().await?;
+        let row = transaction
             .query_opt(
                 "SELECT a.event_id,a.request_id,a.task_id,a.actor_ref,a.actor_issuer,
                         a.actor_subject,a.profile_id,a.decision,a.private_reason,a.result_digest,
@@ -2559,12 +2837,13 @@ impl PostgresStore {
                  JOIN casework_queue_service q ON q.queue_id=t.queue_id
                  JOIN casework_memberships m ON m.team_id=q.team_id
                  WHERE a.event_id=$1 AND m.issuer=$2 AND m.subject=$3
-                   AND m.membership_kind='supervisor'",
+                   AND m.membership_kind='supervisor' AND a.retained_until>now()
+                 FOR KEY SHARE OF q,m",
                 &[&event_id, &actor.principal.issuer, &actor.principal.subject],
             )
             .await?
             .ok_or(ReviewRuntimeError::NotFound)?;
-        Ok(ReviewAccountabilityRecord {
+        let record = ReviewAccountabilityRecord {
             event_id: row.get(0),
             request_id: row.get(1),
             task_id: row
@@ -2581,14 +2860,35 @@ impl PostgresStore {
             result_digest: row.get(9),
             occurred_at: row.get(10),
             retained_until: row.get(11),
-        })
+        };
+        let read_event_id = Uuid::new_v4();
+        transaction
+            .execute(
+                "INSERT INTO casework_audit_outbox(event_id,audit_record) VALUES($1,$2)",
+                &[
+                    &read_event_id,
+                    &json!({
+                        "event": "casework.review_accountability_read",
+                        "eventId": read_event_id,
+                        "accountabilityEventId": record.event_id,
+                        "actor": {
+                            "issuer": actor.principal.issuer,
+                            "subject": actor.principal.subject,
+                        },
+                        "profileId": actor.profile_id,
+                    }),
+                ],
+            )
+            .await?;
+        transaction.commit().await?;
+        Ok(record)
     }
 
     async fn add_review_note(
         &self,
         actor: &ActorContext,
         request_id: Uuid,
-        requester: bool,
+        producer_id: Option<&str>,
         request: ReviewNoteRequest,
         idempotency_key: &str,
     ) -> Result<ReviewHistoryEntry, ReviewRuntimeError> {
@@ -2601,16 +2901,12 @@ impl PostgresStore {
         let mut client = self.client().await?;
         let transaction = client.transaction().await?;
         load_request_by_id(&transaction, request_id, true).await?;
-        if requester {
+        if let Some(producer_id) = producer_id {
             transaction
                 .query_opt(
                     "SELECT 1 FROM casework_review_requests
-                     WHERE request_id=$1 AND producer_issuer=$2 AND producer_subject=$3",
-                    &[
-                        &request_id,
-                        &actor.principal.issuer,
-                        &actor.principal.subject,
-                    ],
+                     WHERE request_id=$1 AND producer_id=$2",
+                    &[&request_id, &producer_id],
                 )
                 .await?
                 .ok_or(ReviewRuntimeError::NotFound)?;
@@ -2983,6 +3279,17 @@ impl PostgresStore {
                         &[&request_id, &i32::from(stage_index), &now],
                     )
                     .await?;
+                transaction
+                    .execute(
+                        "UPDATE casework_review_clock_occurrences
+                         SET state='completed',completed_at=$3,next_action_at=NULL,updated_at=$3
+                         WHERE request_id=$1 AND task_id IN (
+                             SELECT task_id FROM casework_review_tasks
+                             WHERE request_id=$1 AND stage_index=$2
+                         ) AND scope='activity' AND state NOT IN ('completed','cancelled')",
+                        &[&request_id, &i32::from(stage_index), &now],
+                    )
+                    .await?;
                 let next_stage = progress.active_stage;
                 let tasks =
                     insert_stage_tasks(&transaction, request_id, &record.policy, next_stage, now)
@@ -3085,6 +3392,24 @@ struct ReviewClockDefinition {
     clock: ClockPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     calendar: Option<CalendarPolicy>,
+}
+
+fn next_review_clock_action(
+    reminders: &[ReminderOccurrence],
+    steps: &[StepOccurrence],
+    completed: &std::collections::BTreeSet<(String, String)>,
+) -> Option<DateTime<Utc>> {
+    reminders
+        .iter()
+        .filter(|effect| !completed.contains(&("reminder".to_owned(), effect.id.clone())))
+        .map(|effect| effect.at)
+        .chain(
+            steps
+                .iter()
+                .filter(|effect| !completed.contains(&("step".to_owned(), effect.id.clone())))
+                .map(|effect| effect.at),
+        )
+        .min()
 }
 
 async fn insert_initial_review_clocks(
@@ -3240,37 +3565,61 @@ async fn insert_review_activity_clock(
     let document = serde_json::to_value(definition)?;
     let digest = review_request_hash(&document)?;
     let correlation = format!("{task_id}:{stage_id}");
-    let (state, due_at, at_risk_at) = if let Some(calendar) = definition.calendar.as_ref() {
-        let holiday = transaction
-            .query_opt(
-                "SELECT document FROM casework_holiday_sets WHERE holiday_set=$1
+    let (state, holiday_document, due_at, at_risk_at, reminders, steps, next_action_at) =
+        if let Some(calendar) = definition.calendar.as_ref() {
+            let holiday = transaction
+                .query_opt(
+                    "SELECT document FROM casework_holiday_sets WHERE holiday_set=$1
                  ORDER BY revision DESC LIMIT 1",
-                &[&calendar.holiday_set],
-            )
-            .await?;
-        if let Some(holiday) = holiday {
-            let holiday: HolidaySetDocument = serde_json::from_value(holiday.get(0))?;
-            let evaluated = registry_casework_core::evaluate_activity_clock(
-                &definition.clock,
-                calendar,
-                &holiday,
-                now,
-            )
-            .map_err(|_| ReviewRuntimeError::Corrupt)?;
-            ("running", Some(evaluated.due_at), evaluated.at_risk_at)
+                    &[&calendar.holiday_set],
+                )
+                .await?;
+            if let Some(holiday) = holiday {
+                let holiday: HolidaySetDocument = serde_json::from_value(holiday.get(0))?;
+                let evaluated = registry_casework_core::evaluate_activity_clock(
+                    &definition.clock,
+                    calendar,
+                    &holiday,
+                    now,
+                )
+                .map_err(|_| ReviewRuntimeError::Corrupt)?;
+                let next_action_at = next_review_clock_action(
+                    &evaluated.reminders,
+                    &evaluated.steps,
+                    &std::collections::BTreeSet::new(),
+                );
+                (
+                    "running",
+                    Some(holiday),
+                    Some(evaluated.due_at),
+                    evaluated.at_risk_at,
+                    evaluated.reminders,
+                    evaluated.steps,
+                    next_action_at,
+                )
+            } else {
+                (
+                    "source_facts_missing",
+                    None,
+                    None,
+                    None,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                )
+            }
         } else {
-            ("source_facts_missing", None, None)
-        }
-    } else {
-        return Err(ReviewRuntimeError::Corrupt);
-    };
+            return Err(ReviewRuntimeError::Corrupt);
+        };
     transaction
         .execute(
             "INSERT INTO casework_review_clock_occurrences(
                 clock_occurrence_id,clock_id,scope,correlation_key,subject_source,
                 subject_type,subject_id,request_id,task_id,policy_digest,policy,state,
-                anchor_at,due_at,at_risk_at,created_at,updated_at)
-             VALUES($1,$2,'activity',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$12,$12)
+                anchor_at,due_at,at_risk_at,holiday_document,reminders,steps,next_action_at,
+                created_at,updated_at)
+             VALUES($1,$2,'activity',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,
+                    $18,$12,$12)
              ON CONFLICT DO NOTHING",
             &[
                 &Uuid::new_v4(),
@@ -3287,6 +3636,13 @@ async fn insert_review_activity_clock(
                 &now,
                 &due_at,
                 &at_risk_at,
+                &holiday_document
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()?,
+                &serde_json::to_value(&reminders)?,
+                &serde_json::to_value(&steps)?,
+                &next_action_at,
             ],
         )
         .await?;
@@ -3400,7 +3756,7 @@ async fn settle_review(
             transaction
                 .execute(
                     "UPDATE casework_review_clock_occurrences
-                     SET state='paused',paused_at=$2,updated_at=$2
+                     SET state='paused',paused_at=$2,next_action_at=NULL,updated_at=$2
                      WHERE request_id=$1 AND scope='subject' AND state='running'",
                     &[&record.request_id, &now],
                 )
@@ -3408,7 +3764,7 @@ async fn settle_review(
             transaction
                 .execute(
                     "UPDATE casework_review_clock_occurrences
-                     SET state='completed',completed_at=$2,updated_at=$2
+                     SET state='completed',completed_at=$2,next_action_at=NULL,updated_at=$2
                      WHERE request_id=$1 AND scope='activity'
                        AND state NOT IN ('completed','cancelled')",
                     &[&record.request_id, &now],
@@ -3421,7 +3777,8 @@ async fn settle_review(
             transaction
                 .execute(
                     "UPDATE casework_review_clock_occurrences
-                     SET state='completed',completed_at=$2,paused_at=NULL,updated_at=$2
+                     SET state='completed',completed_at=$2,paused_at=NULL,next_action_at=NULL,
+                         updated_at=$2
                      WHERE request_id=$1 AND state NOT IN ('completed','cancelled')",
                     &[&record.request_id, &now],
                 )
@@ -3431,7 +3788,7 @@ async fn settle_review(
             transaction
                 .execute(
                     "UPDATE casework_review_clock_occurrences
-                     SET state='cancelled',paused_at=NULL,updated_at=$2
+                     SET state='cancelled',paused_at=NULL,next_action_at=NULL,updated_at=$2
                      WHERE request_id=$1 AND scope='activity'
                        AND state NOT IN ('completed','cancelled')",
                     &[&record.request_id, &now],
@@ -3442,7 +3799,7 @@ async fn settle_review(
             transaction
                 .execute(
                     "UPDATE casework_review_clock_occurrences
-                     SET state='cancelled',paused_at=NULL,updated_at=$2
+                     SET state='cancelled',paused_at=NULL,next_action_at=NULL,updated_at=$2
                      WHERE request_id=$1 AND state NOT IN ('completed','cancelled')",
                     &[&record.request_id, &now],
                 )

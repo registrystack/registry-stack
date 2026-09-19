@@ -17,7 +17,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::body::{to_bytes, Body};
+use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use axum::middleware::Next;
 use postgres_harness::TestDatabase;
 use registry_breg as breg;
 use registry_breg::action_evidence::ActionEvidenceEvaluator;
@@ -36,14 +38,14 @@ use registry_breg::postgres::{
 };
 use registry_breg::startup::with_request_timeout_for_test;
 use registry_breg_client::{
-    BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegLifecycleAction,
-    BRegLifecycleActionReceipt, BRegLifecycleAuthority, BRegLifecycleOperation, BRegPatchRequest,
-    BRegPreparedLifecycle, BRegProblemCode, BRegRecordFormat, BRegRecordOptions,
-    BRegRequestMetadata, BRegRequestState, BaseRegistryClient, BaseRegistryClientConfig,
-    RegistryRecordSingleResponse, StaticToken,
+    BRegCreateRequest, BRegDirectWrite, BRegIdempotencyKey, BRegLifecycleOperation,
+    BRegPatchRequest, BRegPreparedLifecycle, BRegRecordFormat, BRegRecordOptions,
+    BRegRequestMetadata, BaseRegistryClient, BaseRegistryClientConfig, StaticToken,
 };
 use registry_platform_audit::AuditProfile;
 use serde_json::{json, Value};
+use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tower::Service as _;
 use uuid::Uuid;
 use zeroize::Zeroizing;
@@ -4852,111 +4854,6 @@ fn change_request_client(base_url: &str, token: &str) -> BaseRegistryClient {
         StaticToken::new(token).expect("change-request client token is an outbound bearer value"),
     ));
     BaseRegistryClient::new(config).expect("change-request client config is valid")
-}
-
-async fn lifecycle_authority(
-    client: &BaseRegistryClient,
-    access_profile: &str,
-) -> BRegLifecycleAuthority {
-    client
-        .registry_contract(Some(access_profile))
-        .await
-        .expect("caller receives bounded runtime Registry Metadata")
-        .value
-        .select_lifecycle("correction-request", access_profile)
-        .expect("caller-filtered metadata selects lifecycle authority")
-}
-
-async fn client_record(
-    client: &BaseRegistryClient,
-    entity_route: &str,
-    record_identifier: &str,
-    access_profile: &str,
-) -> RegistryRecordSingleResponse {
-    let options = BRegRecordOptions::default()
-        .access_profile(access_profile)
-        .expect("compiled access profile is a valid client identifier");
-    client
-        .get_record(entity_route, record_identifier, &options)
-        .await
-        .expect("BaseRegistryClient reads one real PostgreSQL Registry Record")
-        .value
-}
-
-async fn client_request_record(
-    client: &BaseRegistryClient,
-    record_identifier: &str,
-    access_profile: &str,
-) -> RegistryRecordSingleResponse {
-    client_record(
-        client,
-        "correction-requests",
-        record_identifier,
-        access_profile,
-    )
-    .await
-}
-
-fn request_metadata(record: &RegistryRecordSingleResponse) -> BRegRequestMetadata {
-    BRegRequestMetadata::from_record(&record.data)
-        .expect("request extension conforms to the client lifecycle profile")
-        .expect("correction-request record exposes request metadata")
-}
-
-fn promoted_client_action(
-    client: &BaseRegistryClient,
-    authority: &BRegLifecycleAuthority,
-    record: &RegistryRecordSingleResponse,
-    operation: BRegLifecycleOperation,
-) -> BRegLifecycleAction {
-    client
-        .lifecycle_actions(authority, record)
-        .expect("actor actions promote against metadata and the exact record")
-        .into_iter()
-        .find(|action| action.operation() == operation)
-        .unwrap_or_else(|| panic!("record advertises {}", operation.identifier()))
-}
-
-fn idempotency_key(value: &str) -> BRegIdempotencyKey {
-    BRegIdempotencyKey::parse(value).expect("journey provides a valid caller idempotency key")
-}
-
-async fn execute_client_action_and_refetch(
-    client: &BaseRegistryClient,
-    action: &BRegLifecycleAction,
-    key: &str,
-    record_identifier: &str,
-    access_profile: &str,
-) -> RegistryRecordSingleResponse {
-    let receipt = client
-        .execute_lifecycle_action(action, &idempotency_key(key))
-        .await
-        .expect("promoted lifecycle action succeeds with its action-specific If-Match");
-    assert!(
-        receipt.value.actor_reference().is_some(),
-        "each lifecycle receipt carries the acting caller's opaque correlation reference"
-    );
-    let refetched = client_request_record(client, record_identifier, access_profile).await;
-    assert_client_receipt_matches_refetch(&receipt.value, &refetched);
-    refetched
-}
-
-fn assert_client_receipt_matches_refetch(
-    receipt: &BRegLifecycleActionReceipt,
-    refetched: &RegistryRecordSingleResponse,
-) {
-    assert_eq!(
-        receipt.record_identifier(),
-        refetched.data.record_identifier
-    );
-    assert_eq!(
-        receipt.revision().to_string(),
-        refetched.data.revision_identifier
-    );
-    assert_eq!(
-        receipt.request().breg_state(),
-        request_metadata(refetched).breg_state()
-    );
 }
 
 fn change_request_router(

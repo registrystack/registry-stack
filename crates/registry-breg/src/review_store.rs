@@ -35,6 +35,17 @@ const SUBJECT_TYPE: &str = "change-request";
 const SUBMISSION_LEASE_SECONDS: i64 = 30;
 const MAX_APPLICATION_RESPONSE_BYTES: u64 = 256 * 1024;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReviewConfigurationError;
+
+impl std::fmt::Display for ReviewConfigurationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("invalid review integration configuration")
+    }
+}
+
+impl std::error::Error for ReviewConfigurationError {}
+
 pub struct ReviewExecutorClient {
     executor: String,
     http: reqwest::Client,
@@ -55,7 +66,7 @@ impl ReviewExecutorClient {
         access_profile: String,
         request_routes: BTreeMap<String, String>,
         request_timeout: std::time::Duration,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, ReviewConfigurationError> {
         if executor.trim().is_empty()
             || executor.len() > 128
             || registry_id.trim().is_empty()
@@ -75,16 +86,16 @@ impl ReviewExecutorClient {
                     })
             })
         {
-            return Err(());
+            return Err(ReviewConfigurationError);
         }
-        let base_url = ServiceBaseUrl::new(endpoint).map_err(|_| ())?;
+        let base_url = ServiceBaseUrl::new(endpoint).map_err(|_| ReviewConfigurationError)?;
         let http = build_client(OutboundOptions {
             request_timeout,
             connect_timeout: request_timeout,
             user_agent: Some("registry-breg-review-executor"),
             trusted_root_certificates: None,
         })
-        .map_err(|_| ())?;
+        .map_err(|_| ReviewConfigurationError)?;
         Ok(Self {
             executor,
             http,
@@ -102,13 +113,15 @@ pub struct ReviewExecutorRegistry {
 }
 
 impl ReviewExecutorRegistry {
-    pub fn new(executors: BTreeMap<String, Arc<ReviewExecutorClient>>) -> Result<Self, ()> {
+    pub fn new(
+        executors: BTreeMap<String, Arc<ReviewExecutorClient>>,
+    ) -> Result<Self, ReviewConfigurationError> {
         if executors.is_empty()
             || executors
                 .iter()
                 .any(|(id, executor)| id != &executor.executor)
         {
-            return Err(());
+            return Err(ReviewConfigurationError);
         }
         Ok(Self { executors })
     }
@@ -203,7 +216,7 @@ impl ReviewAuthorityClient {
         recovery_days: u32,
         completion_token: Option<Zeroizing<String>>,
         completion_recipient: Option<String>,
-    ) -> Result<Self, ()> {
+    ) -> Result<Self, ReviewConfigurationError> {
         if authority.trim().is_empty()
             || authority.len() > 128
             || producer_id.trim().is_empty()
@@ -220,7 +233,7 @@ impl ReviewAuthorityClient {
                     || recipient.chars().any(char::is_control)
             })
         {
-            return Err(());
+            return Err(ReviewConfigurationError);
         }
         Ok(Self {
             authority,
@@ -239,13 +252,15 @@ pub struct ReviewAuthorityRegistry {
 }
 
 impl ReviewAuthorityRegistry {
-    pub fn new(authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>) -> Result<Self, ()> {
+    pub fn new(
+        authorities: BTreeMap<String, Arc<ReviewAuthorityClient>>,
+    ) -> Result<Self, ReviewConfigurationError> {
         if authorities.is_empty()
             || authorities
                 .iter()
                 .any(|(id, authority)| id != &authority.authority)
         {
-            return Err(());
+            return Err(ReviewConfigurationError);
         }
         Ok(Self { authorities })
     }
@@ -375,38 +390,105 @@ impl ReviewAuthorityRegistry {
             return run_one_cancellation(client, &authority.authority, &authority.client, &token)
                 .await;
         }
+        let mut authority_unavailable = false;
+        let mut unavailable_feeds = 0usize;
+        let mut unavailable_lookups = 0usize;
         for authority in self.authorities.values() {
-            if consume_result_feed(client, authority).await? {
-                return Ok(true);
+            match consume_result_feed(client, authority).await {
+                Ok(true) => {
+                    if unavailable_feeds > 0 {
+                        tracing::warn!(
+                            unavailable = unavailable_feeds,
+                            "BReg review result feeds are temporarily unavailable"
+                        );
+                    }
+                    return Ok(true);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    authority_unavailable = true;
+                    unavailable_feeds += 1;
+                }
             }
         }
-        let row = client
-            .query_opt(
-                "SELECT authority
+        let rows = client
+            .query(
+                "SELECT DISTINCT authority
                    FROM registry_internal.registry_request_review_submissions s
                   WHERE state='accepted' AND NOT EXISTS (
                     SELECT 1 FROM registry_internal.registry_request_review_results r
                      WHERE r.request_entity_id=s.request_entity_id AND r.request_id=s.request_id
                        AND r.proposal_version=s.proposal_version)
                     AND next_result_poll_at <= transaction_timestamp()
-                  ORDER BY next_result_poll_at,updated_at LIMIT 1",
+                  ORDER BY authority",
                 &[],
             )
             .await
             .map_err(|_| MutationError::Unavailable)?;
-        if let Some(row) = row {
-            let authority = self
-                .authorities
-                .get(row.get::<_, String>(0).as_str())
-                .ok_or(MutationError::Unavailable)?;
-            let token = authority
-                .token_provider
-                .bearer_token()
-                .await
-                .map_err(|_| MutationError::Unavailable)?;
-            return poll_one_result(client, &authority.authority, &authority.client, &token).await;
+        for row in rows {
+            let authority_id = row.get::<_, String>(0);
+            let Some(authority) = self.authorities.get(authority_id.as_str()) else {
+                authority_unavailable = true;
+                unavailable_lookups += 1;
+                continue;
+            };
+            let outcome = match authority.token_provider.bearer_token().await {
+                Ok(token) => {
+                    poll_one_result(client, &authority.authority, &authority.client, &token).await
+                }
+                Err(_) => Err(MutationError::Unavailable),
+            };
+            match outcome {
+                Ok(true) => {
+                    if unavailable_feeds > 0 {
+                        tracing::warn!(
+                            unavailable = unavailable_feeds,
+                            "BReg review result feeds are temporarily unavailable"
+                        );
+                    }
+                    if unavailable_lookups > 0 {
+                        tracing::warn!(
+                            unavailable = unavailable_lookups,
+                            "BReg review result lookups are temporarily unavailable"
+                        );
+                    }
+                    return Ok(true);
+                }
+                Ok(false) => {}
+                Err(_) => {
+                    authority_unavailable = true;
+                    unavailable_lookups += 1;
+                    client
+                        .execute(
+                            "UPDATE registry_internal.registry_request_review_submissions
+                                SET next_result_poll_at=transaction_timestamp()+interval '5 seconds',
+                                    updated_at=transaction_timestamp()
+                              WHERE authority=$1 AND state='accepted'
+                                AND next_result_poll_at <= transaction_timestamp()",
+                            &[&authority.authority],
+                        )
+                        .await
+                        .map_err(|_| MutationError::Unavailable)?;
+                }
+            }
         }
-        Ok(false)
+        if unavailable_feeds > 0 {
+            tracing::warn!(
+                unavailable = unavailable_feeds,
+                "BReg review result feeds are temporarily unavailable"
+            );
+        }
+        if unavailable_lookups > 0 {
+            tracing::warn!(
+                unavailable = unavailable_lookups,
+                "BReg review result lookups are temporarily unavailable"
+            );
+        }
+        if authority_unavailable {
+            Err(MutationError::Unavailable)
+        } else {
+            Ok(false)
+        }
     }
 }
 
@@ -921,6 +1003,7 @@ pub(crate) async fn install(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)] // Preserve each source and authority binding explicitly.
 pub(crate) async fn enqueue_submission(
     transaction: &Transaction<'_>,
     registry: &CompiledRegistry,

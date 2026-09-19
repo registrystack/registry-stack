@@ -17,18 +17,20 @@ use registry_casework::{
     ReviewResultRead, ReviewRuntimeError, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, ActorContext, AssignmentRequest, AuthoritativeObservation,
-    CallerSubjectView, CaseworkIdentity, CaseworkProject, CaseworkRole, ClockPolicy, ContentDigest,
-    DelegateRequest, DiscoveryCursor, ElapsedDuration, EphemeralCredential, EventRequest,
-    ExecutePreparedRequest, HumanIdentity, InboxPolicy, IssuerPrincipal, PrepareActionRequest,
-    PreparedSourceAttempt, QueuePolicy, ReviewClockState, ReviewCompletionDestinationPolicy,
-    ReviewContext, ReviewContextStrategy, ReviewCreateRequest, ReviewHistoryAudience,
-    ReviewKindPolicy, ReviewKindPurpose, ReviewNoteRequest, ReviewOutcomePolicy,
-    ReviewOutcomeSettlement, ReviewProducerPolicy, ReviewRequestLifecycle, ReviewResultStatus,
-    ReviewRetentionPolicy, ReviewStagePolicy, ReviewTaskDraftInput, ReviewTransition,
-    ReviewerDecisionKind, ReviewerTaskState, SourceAdapter, SourceAdapterError, SourceBinding,
-    SourceContextBinding, SourceReceipt, SubjectBinding, SubjectClockAnchor,
-    SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint,
+    AccessProfile, ActiveSubjectsPage, ActivityClockAnchor, ActorContext, AssignmentRequest,
+    AuthoritativeObservation, CalendarPolicy, CallerSubjectView, CaseworkIdentity, CaseworkProject,
+    CaseworkRole, ClockPolicy, ClockReassignment, ClockReminder, ClockStep, ClockStepAction,
+    ClockStepInstant, ContentDigest, DelegateRequest, DiscoveryCursor, ElapsedDuration,
+    EphemeralCredential, EventRequest, ExecutePreparedRequest, HolidaySetDocument, HumanIdentity,
+    InboxPolicy, IssuerPrincipal, PrepareActionRequest, PreparedSourceAttempt, QueuePolicy,
+    ReviewClockState, ReviewCompletionDestinationPolicy, ReviewContext, ReviewContextStrategy,
+    ReviewCreateRequest, ReviewHistoryAudience, ReviewKindPolicy, ReviewKindPurpose,
+    ReviewNoteRequest, ReviewOutcomePolicy, ReviewOutcomeSettlement, ReviewProducerPolicy,
+    ReviewRequestLifecycle, ReviewResultStatus, ReviewRetentionPolicy, ReviewStagePolicy,
+    ReviewTaskDraftInput, ReviewTransition, ReviewerDecisionKind, ReviewerTaskState, SourceAdapter,
+    SourceAdapterError, SourceBinding, SourceContextBinding, SourceReceipt, SubjectBinding,
+    SubjectClockAnchor, SubjectClockCompletion, SubjectClockPause, SubjectRef, TransitionHint,
+    WorkingDaysAfter, WorkingWeekday,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
 use serde_json::json;
@@ -269,6 +271,53 @@ fn answer_project(completion: bool) -> CaseworkProject {
     if !completion {
         project.review_producers[0].completion = None;
     }
+    project
+}
+
+fn activity_clock_project() -> CaseworkProject {
+    let mut project = project("activity-clock-1");
+    project.queues.push(QueuePolicy {
+        id: "overdue-review".to_owned(),
+        label: "Overdue review".to_owned(),
+    });
+    project.review_kinds[0].stages.truncate(1);
+    project.review_kinds[0].clocks = vec!["review-deadline".to_owned()];
+    project.calendars = vec![CalendarPolicy {
+        id: "office".to_owned(),
+        timezone: "UTC".to_owned(),
+        working_weekdays: vec![
+            WorkingWeekday::Monday,
+            WorkingWeekday::Tuesday,
+            WorkingWeekday::Wednesday,
+            WorkingWeekday::Thursday,
+            WorkingWeekday::Friday,
+            WorkingWeekday::Saturday,
+            WorkingWeekday::Sunday,
+        ],
+        holiday_set: "office-holidays".to_owned(),
+    }];
+    project.clocks = vec![ClockPolicy::Activity {
+        id: "review-deadline".to_owned(),
+        anchor: ActivityClockAnchor::StageEnteredAt,
+        calendar: "office".to_owned(),
+        after: WorkingDaysAfter { working_days: 1 },
+        due_time: "17:00".to_owned(),
+        at_risk: None,
+        reminders: vec![ClockReminder {
+            id: "due-soon".to_owned(),
+            working_days_before: 1,
+        }],
+        steps: vec![ClockStep {
+            id: "overdue".to_owned(),
+            because: "The review deadline passed".to_owned(),
+            at: ClockStepInstant::Due,
+            action: ClockStepAction {
+                reassign: ClockReassignment {
+                    queue: "overdue-review".to_owned(),
+                },
+            },
+        }],
+    }];
     project
 }
 
@@ -969,6 +1018,168 @@ async fn recovery_pins_policy_and_terminal_settlement_emits_atomically() {
 }
 
 #[tokio::test]
+async fn accountability_read_requires_live_retention_and_a_committed_audit() {
+    let fixture = fixture().await;
+    let project = answer_project(false);
+    project.check().expect("accountability test project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("accountability test service");
+    let mut answer_request = request("accountability-record", "accountability-ref");
+    answer_request.kind = "registry-answer".to_owned();
+    let created = service
+        .create_review_request(&fixture.producer, answer_request, "create-accountability")
+        .await
+        .expect("create accountability review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-accountability",
+        )
+        .await
+        .expect("claim accountability review");
+    service
+        .decide_review_task(
+            &fixture.reviewer_a,
+            task,
+            ReviewTaskDecisionRequest {
+                decision: ReviewerDecisionKind::Answer {
+                    outcome: "found".to_owned(),
+                    reason: Some("private accountability reason".to_owned()),
+                    result: Some(json!({"correction": "accountable answer"})),
+                },
+            },
+            None,
+            "",
+            2,
+            "decide-accountability",
+        )
+        .await
+        .expect("decide accountability review");
+    let accountability_event: Uuid = fixture
+        .database
+        .query_one(
+            "SELECT event_id FROM casework_review_accountability WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("accountability event")
+        .get(0);
+
+    let accountability = service
+        .review_accountability(&fixture.supervisor, accountability_event)
+        .await
+        .expect("audited accountability read");
+    assert_eq!(accountability.actor, fixture.reviewer_a.principal);
+    assert_eq!(
+        accountability.private_reason.as_deref(),
+        Some("private accountability reason")
+    );
+    let read_audit: serde_json::Value = fixture
+        .database
+        .query_one(
+            "SELECT audit_record FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("committed accountability read audit")
+        .get(0);
+    assert_eq!(
+        read_audit["actor"]["subject"],
+        fixture.supervisor.principal.subject
+    );
+    assert_eq!(read_audit["profileId"], fixture.supervisor.profile_id);
+
+    fixture
+        .database
+        .batch_execute(
+            "CREATE FUNCTION reject_accountability_read_audit() RETURNS trigger
+             LANGUAGE plpgsql AS $$
+             BEGIN
+               IF NEW.audit_record->>'event'='casework.review_accountability_read' THEN
+                 RAISE EXCEPTION 'accountability audit unavailable';
+               END IF;
+               RETURN NEW;
+             END;
+             $$;
+             CREATE TRIGGER reject_accountability_read_audit
+             BEFORE INSERT ON casework_audit_outbox
+             FOR EACH ROW EXECUTE FUNCTION reject_accountability_read_audit();",
+        )
+        .await
+        .expect("install accountability audit failure");
+    assert!(matches!(
+        service
+            .review_accountability(&fixture.supervisor, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::Store(_))
+    ));
+    let committed_reads: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("count committed accountability reads")
+        .get(0);
+    assert_eq!(committed_reads, 1);
+    fixture
+        .database
+        .batch_execute(
+            "DROP TRIGGER reject_accountability_read_audit ON casework_audit_outbox;
+             DROP FUNCTION reject_accountability_read_audit();",
+        )
+        .await
+        .expect("remove accountability audit failure");
+
+    let now = Utc::now();
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_accountability
+             SET occurred_at=$2,retained_until=$3 WHERE event_id=$1",
+            &[
+                &accountability_event,
+                &(now - TimeDelta::days(2)),
+                &(now - TimeDelta::days(1)),
+            ],
+        )
+        .await
+        .expect("expire accountability record");
+    assert!(matches!(
+        service
+            .review_accountability(&fixture.supervisor, accountability_event)
+            .await,
+        Err(ReviewRuntimeError::NotFound)
+    ));
+    let reads_after_expiry: i64 = fixture
+        .database
+        .query_one(
+            "SELECT count(*) FROM casework_audit_outbox
+             WHERE audit_record->>'event'='casework.review_accountability_read'
+               AND audit_record->>'accountabilityEventId'=$1",
+            &[&accountability_event.to_string()],
+        )
+        .await
+        .expect("count accountability reads after expiry")
+        .get(0);
+    assert_eq!(reads_after_expiry, 1);
+}
+
+#[tokio::test]
 async fn standalone_structured_answers_support_polling_and_completion_modes() {
     let fixture = fixture().await;
     for (completion, subject) in [(false, "answer-poll"), (true, "answer-completion")] {
@@ -1501,12 +1712,13 @@ async fn source_context_task_disclosure_requires_a_current_caller_source_read() 
         .expect("create source-context review");
     let task = task_id(&fixture, created.accepted.request_id, 0).await;
 
-    let without_source_credential = fixture
-        .service_v2
-        .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
-        .await
-        .expect("missing source profile conceals source tasks");
-    assert!(without_source_credential.items.is_empty());
+    assert!(matches!(
+        fixture
+            .service_v2
+            .review_tasks(&fixture.reviewer_a, None, "human-bearer", None, None, 10)
+            .await,
+        Err(ReviewRuntimeError::SourceProfileRequired)
+    ));
 
     let visible = fixture
         .service_v2
@@ -1629,6 +1841,148 @@ async fn subject_clock_pauses_and_continues_across_review_rounds() {
     assert_eq!(resumed[0].clock_occurrence_id, occurrence_id);
     assert_eq!(resumed[0].anchor_at, anchor);
     assert!(resumed[0].due_at >= initial[0].due_at);
+}
+
+#[tokio::test]
+async fn review_activity_clock_recovers_after_holiday_publication_and_applies_effects_once() {
+    let fixture = fixture().await;
+    fixture
+        .database
+        .execute(
+            "INSERT INTO casework_queue_service(queue_id,team_id,revision)
+             VALUES('overdue-review','review-team',1)",
+            &[],
+        )
+        .await
+        .expect("serve overdue review queue");
+    let project = activity_clock_project();
+    project.check().expect("activity clock project");
+    let service = CaseworkService::new(
+        fixture.store.clone(),
+        project,
+        Vec::<Arc<dyn SourceAdapter>>::new(),
+    )
+    .expect("activity clock service");
+    let created = service
+        .create_review_request(
+            &fixture.producer,
+            request("record-activity-clock", "producer-ref-activity-clock"),
+            "create-activity-clock",
+        )
+        .await
+        .expect("create activity-clock review");
+    let task = task_id(&fixture, created.accepted.request_id, 0).await;
+    service
+        .claim_review_task(
+            &fixture.reviewer_a,
+            task,
+            None,
+            "",
+            1,
+            "claim-activity-clock",
+        )
+        .await
+        .expect("claim activity-clock task");
+    let occurrence = fixture
+        .database
+        .query_one(
+            "SELECT clock_occurrence_id,state
+             FROM casework_review_clock_occurrences WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("activity clock occurrence");
+    let occurrence_id: Uuid = occurrence.get(0);
+    assert_eq!(occurrence.get::<_, String>(1), "source_facts_missing");
+    fixture
+        .database
+        .execute(
+            "UPDATE casework_review_clock_occurrences
+             SET anchor_at='2020-01-06T09:00:00Z',updated_at='2020-01-06T09:00:00Z'
+             WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("place unresolved activity clock in the past");
+
+    service
+        .create_holiday_revision(
+            &actor("admin", CaseworkRole::Administrator, "administrator"),
+            &HolidaySetDocument {
+                holiday_set: "office-holidays".to_owned(),
+                revision: 1,
+                dates: Vec::new(),
+            },
+            "publish-office-holidays",
+        )
+        .await
+        .expect("publish holiday revision");
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("process recovered review clock"),
+        2
+    );
+
+    let task_row = fixture
+        .database
+        .query_one(
+            "SELECT queue_id,state,holder_issuer,revision
+             FROM casework_review_tasks WHERE task_id=$1",
+            &[&task],
+        )
+        .await
+        .expect("reassigned review task");
+    assert_eq!(task_row.get::<_, String>(0), "overdue-review");
+    assert_eq!(task_row.get::<_, String>(1), "open");
+    assert_eq!(task_row.get::<_, Option<String>>(2), None);
+    assert_eq!(task_row.get::<_, i64>(3), 3);
+    let clock_row = fixture
+        .database
+        .query_one(
+            "SELECT state,next_action_at,holiday_document->>'revision'
+             FROM casework_review_clock_occurrences WHERE clock_occurrence_id=$1",
+            &[&occurrence_id],
+        )
+        .await
+        .expect("processed review clock occurrence");
+    assert_eq!(clock_row.get::<_, String>(0), "running");
+    assert_eq!(clock_row.get::<_, Option<chrono::DateTime<Utc>>>(1), None);
+    assert_eq!(clock_row.get::<_, String>(2), "1");
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_clock_effects
+                 WHERE clock_occurrence_id=$1",
+                &[&occurrence_id],
+            )
+            .await
+            .expect("count review clock effects")
+            .get::<_, i64>(0),
+        2
+    );
+    assert_eq!(
+        fixture
+            .database
+            .query_one(
+                "SELECT count(*) FROM casework_review_history
+                 WHERE request_id=$1 AND kind IN ('clock_reminder','clock_step_applied')",
+                &[&created.accepted.request_id],
+            )
+            .await
+            .expect("count review clock history")
+            .get::<_, i64>(0),
+        2
+    );
+    assert_eq!(
+        service
+            .process_due_review_clocks(100)
+            .await
+            .expect("repeat review clock pass"),
+        0
+    );
 }
 
 #[tokio::test]

@@ -40,6 +40,7 @@ const MIGRATIONS_1_TO_15: &[(i64, &str)] = &[
     (15, include_str!("../migrations/0015_hosted_result.sql")),
 ];
 const MIGRATION_16: &str = include_str!("../migrations/0016_unified_reviews.sql");
+const MIGRATION_17: &str = include_str!("../migrations/0017_unified_review_clock_runtime.sql");
 
 struct TestSchema {
     admin: Client,
@@ -129,6 +130,18 @@ async fn apply_version_16(database: &mut Client) -> Result<(), Error> {
     transaction
         .execute(
             "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(16, now())",
+            &[],
+        )
+        .await?;
+    transaction.commit().await
+}
+
+async fn apply_version_17(database: &mut Client) -> Result<(), Error> {
+    let transaction = database.transaction().await?;
+    transaction.batch_execute(MIGRATION_17).await?;
+    transaction
+        .execute(
+            "INSERT INTO casework_schema_migrations(version, applied_at) VALUES(17, now())",
             &[],
         )
         .await?;
@@ -316,6 +329,9 @@ async fn fresh_database_applies_the_full_migration_sequence() {
     apply_version_16(&mut fixture.database)
         .await
         .expect("apply unified review migration to an empty legacy schema");
+    apply_version_17(&mut fixture.database)
+        .await
+        .expect("apply unified review clock runtime migration");
 
     let versions: Vec<i64> = fixture
         .database
@@ -328,7 +344,7 @@ async fn fresh_database_applies_the_full_migration_sequence() {
         .into_iter()
         .map(|row| row.get(0))
         .collect();
-    assert_eq!(versions, (1..=16).collect::<Vec<_>>());
+    assert_eq!(versions, (1..=17).collect::<Vec<_>>());
 
     let missing_tables: Vec<String> = fixture
         .database
@@ -344,7 +360,8 @@ async fn fresh_database_applies_the_full_migration_sequence() {
                  'casework_review_terminal_events',
                  'casework_review_completion_outbox',
                  'casework_review_history',
-                 'casework_review_accountability'
+                 'casework_review_accountability',
+                 'casework_review_clock_effects'
              ]) AS expected(name)
              WHERE to_regclass(expected.name) IS NULL",
             &[],
@@ -356,7 +373,7 @@ async fn fresh_database_applies_the_full_migration_sequence() {
         .collect();
     assert!(
         missing_tables.is_empty(),
-        "migration 16 omitted unified review tables: {missing_tables:?}"
+        "unified review migrations omitted tables: {missing_tables:?}"
     );
 
     fixture.cleanup().await;

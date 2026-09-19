@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     env,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
 };
@@ -19,7 +19,7 @@ use registry_casework::{
     PostgresStore, ReviewTaskDecisionRequest,
 };
 use registry_casework_core::{
-    AccessProfile, ActiveSubjectsPage, AuthoritativeObservation, CallerSubjectView,
+    AccessProfile, ActiveSubjectsPage, ActorContext, AuthoritativeObservation, CallerSubjectView,
     CaseworkIdentity, CaseworkProject, CaseworkRole, ContentDigest, DiscoveryCursor,
     EphemeralCredential, EventRequest, ExecutePreparedRequest, HumanIdentity, InboxPolicy,
     PrepareActionRequest, PreparedSourceAttempt, QueuePolicy, ReviewContext, ReviewContextStrategy,
@@ -45,6 +45,7 @@ const AUDIENCE: &str = "urn:test:casework-review";
 struct ReviewSource {
     revoked: Arc<AtomicBool>,
     changed: Arc<AtomicBool>,
+    failure: Arc<AtomicU8>,
 }
 
 #[async_trait]
@@ -88,7 +89,15 @@ impl SourceAdapter for ReviewSource {
         source_profile_id: &str,
         _credential: EphemeralCredential<'_>,
     ) -> Result<CallerSubjectView, SourceAdapterError> {
-        if self.revoked.load(Ordering::SeqCst) || source_profile_id != "reviewer-source" {
+        match self.failure.load(Ordering::SeqCst) {
+            1 => return Err(SourceAdapterError::Unavailable),
+            2 => return Err(SourceAdapterError::Invalid),
+            _ => {}
+        }
+        if self.revoked.load(Ordering::SeqCst)
+            || subject.id.starts_with("concealed-")
+            || source_profile_id != "reviewer-source"
+        {
             return Err(SourceAdapterError::Concealed);
         }
         Ok(CallerSubjectView {
@@ -146,6 +155,7 @@ fn project(issuer: &str) -> CaseworkProject {
             profile("supervisor", CaseworkRole::Supervisor),
             profile("administrator", CaseworkRole::Administrator),
             profile("producer", CaseworkRole::Requester),
+            profile("producer-alternate", CaseworkRole::Requester),
         ],
         queues: vec![QueuePolicy {
             id: "review".to_owned(),
@@ -218,20 +228,36 @@ fn project(issuer: &str) -> CaseworkProject {
                 }],
             },
         ],
-        review_producers: vec![ReviewProducerPolicy {
-            id: "registry".to_owned(),
-            profile: "producer".to_owned(),
-            issuer: issuer.to_owned(),
-            subject: "registry-service".to_owned(),
-            trusted_initiator_issuer: Some(issuer.to_owned()),
-            source_namespaces: vec!["registry".to_owned()],
-            kinds: vec![
-                "registry-correction".to_owned(),
-                "registry-answer".to_owned(),
-            ],
-            recovery_days: 30,
-            completion: None,
-        }],
+        review_producers: vec![
+            ReviewProducerPolicy {
+                id: "registry".to_owned(),
+                profile: "producer".to_owned(),
+                issuer: issuer.to_owned(),
+                subject: "registry-service".to_owned(),
+                trusted_initiator_issuer: Some(issuer.to_owned()),
+                source_namespaces: vec!["registry".to_owned()],
+                kinds: vec![
+                    "registry-correction".to_owned(),
+                    "registry-answer".to_owned(),
+                ],
+                recovery_days: 30,
+                completion: None,
+            },
+            ReviewProducerPolicy {
+                id: "registry-alternate".to_owned(),
+                profile: "producer-alternate".to_owned(),
+                issuer: issuer.to_owned(),
+                subject: "registry-service".to_owned(),
+                trusted_initiator_issuer: Some(issuer.to_owned()),
+                source_namespaces: vec!["registry".to_owned()],
+                kinds: vec![
+                    "registry-correction".to_owned(),
+                    "registry-answer".to_owned(),
+                ],
+                recovery_days: 30,
+                completion: None,
+            },
+        ],
         calendars: Vec::new(),
         clocks: Vec::new(),
         inbox: InboxPolicy::default(),
@@ -239,15 +265,19 @@ fn project(issuer: &str) -> CaseworkProject {
     }
 }
 
-fn review_request(reference: &str, issuer: &str) -> ReviewCreateRequest {
+fn review_request_for_subject(
+    subject_id: &str,
+    reference: &str,
+    issuer: &str,
+) -> ReviewCreateRequest {
     ReviewCreateRequest {
         kind: "registry-correction".to_owned(),
         subject: SubjectBinding {
             source: "registry".to_owned(),
             subject_type: "record".to_owned(),
-            id: "record-1".to_owned(),
+            id: subject_id.to_owned(),
             version: "1".to_owned(),
-            digest: ContentDigest::for_bytes(b"record-1"),
+            digest: ContentDigest::for_bytes(subject_id.as_bytes()),
         },
         requester_reference: reference.to_owned(),
         initiator: Some(HumanIdentity {
@@ -256,14 +286,26 @@ fn review_request(reference: &str, issuer: &str) -> ReviewCreateRequest {
         }),
         context: ReviewContext::Source {
             binding: SourceContextBinding {
-                reference: "registry:record:record-1".to_owned(),
+                reference: format!("registry:record:{subject_id}"),
             },
         },
         result_constraints: None,
     }
 }
 
-async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>, Arc<AtomicBool>) {
+fn review_request(reference: &str, issuer: &str) -> ReviewCreateRequest {
+    review_request_for_subject("record-1", reference, issuer)
+}
+
+async fn app(
+    idp: &MockIdp,
+) -> (
+    axum::Router,
+    CaseworkService,
+    Arc<AtomicBool>,
+    Arc<AtomicBool>,
+    Arc<AtomicU8>,
+) {
     let base = env::var("CASEWORK_REVIEW_TEST_DATABASE_URL")
         .expect("CASEWORK_REVIEW_TEST_DATABASE_URL is required for review HTTP tests");
     let schema = format!("review_http_{}", Uuid::new_v4().simple());
@@ -330,23 +372,27 @@ async fn app(idp: &MockIdp) -> (axum::Router, Arc<AtomicBool>, Arc<AtomicBool>) 
     );
     let revoked = Arc::new(AtomicBool::new(false));
     let changed = Arc::new(AtomicBool::new(false));
+    let failure = Arc::new(AtomicU8::new(0));
     let service = CaseworkService::new(
         store,
         project.clone(),
         [Arc::new(ReviewSource {
             revoked: Arc::clone(&revoked),
             changed: Arc::clone(&changed),
+            failure: Arc::clone(&failure),
         }) as Arc<dyn SourceAdapter>],
     )
     .expect("review HTTP service");
     (
         router(HttpState {
-            service,
+            service: service.clone(),
             authenticator: Arc::new(authenticator),
             project: Arc::new(project),
         }),
+        service,
         revoked,
         changed,
+        failure,
     )
 }
 
@@ -355,6 +401,15 @@ fn token(idp: &MockIdp) -> String {
         "aud": AUDIENCE,
         "registry_principal": "registry-service",
         "scope": "casework:producer",
+        "registry_actor_kind": "service"
+    }))
+}
+
+fn alternate_producer_token(idp: &MockIdp) -> String {
+    idp.mint_token(json!({
+        "aud": AUDIENCE,
+        "registry_principal": "registry-service",
+        "scope": "casework:producer-alternate",
         "registry_actor_kind": "service"
     }))
 }
@@ -388,7 +443,7 @@ fn create_http_request(body: &ReviewCreateRequest, token: Option<&str>) -> Reque
 #[tokio::test]
 async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     let idp = MockIdp::start().await;
-    let (app, source_revoked, source_changed) = app(&idp).await;
+    let (app, _, source_revoked, source_changed, source_failure) = app(&idp).await;
     let request = review_request("producer-ref-1", &idp.issuer());
 
     let obsolete_hosted_route = app
@@ -477,14 +532,7 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
         )
         .await
         .expect("task list response without source profile");
-    assert_eq!(missing_source_profile.status(), StatusCode::OK);
-    let missing_source_profile: ReviewTaskPage = serde_json::from_slice(
-        &to_bytes(missing_source_profile.into_body(), 32 * 1024)
-            .await
-            .expect("bounded concealed task list"),
-    )
-    .expect("concealed task list JSON");
-    assert!(missing_source_profile.items.is_empty());
+    assert_eq!(missing_source_profile.status(), StatusCode::BAD_REQUEST);
 
     let visible_tasks = app
         .clone()
@@ -508,6 +556,38 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
     .expect("visible task list JSON");
     assert_eq!(visible_tasks.items.len(), 1);
     let task_id = visible_tasks.items[0].task_id;
+
+    source_failure.store(1, Ordering::SeqCst);
+    let unavailable_tasks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("source-unavailable task list"),
+        )
+        .await
+        .expect("source-unavailable task list response");
+    assert_eq!(unavailable_tasks.status(), StatusCode::SERVICE_UNAVAILABLE);
+    source_failure.store(2, Ordering::SeqCst);
+    let invalid_source_tasks = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("invalid-source task list"),
+        )
+        .await
+        .expect("invalid-source task list response");
+    assert_eq!(invalid_source_tasks.status(), StatusCode::BAD_GATEWAY);
+    source_failure.store(0, Ordering::SeqCst);
 
     let missing_context_source_profile = app
         .clone()
@@ -693,9 +773,188 @@ async fn producer_http_create_recover_conflict_and_pending_result_are_closed() {
 }
 
 #[tokio::test]
+async fn requester_history_and_notes_require_the_admitted_producer_id_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _) = app(&idp).await;
+    let producer_token = token(&idp);
+    let created = app
+        .clone()
+        .oneshot(create_http_request(
+            &review_request("producer-isolation", &idp.issuer()),
+            Some(&producer_token),
+        ))
+        .await
+        .expect("create producer-isolation review");
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let created: ReviewRequestAccepted = serde_json::from_slice(
+        &to_bytes(created.into_body(), 32 * 1024)
+            .await
+            .expect("bounded producer-isolation create response"),
+    )
+    .expect("producer-isolation create JSON");
+
+    let alternate_token = alternate_producer_token(&idp);
+    let cross_producer_history = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {alternate_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer-alternate")
+                .body(Body::empty())
+                .expect("cross-producer history request"),
+        )
+        .await
+        .expect("cross-producer history response");
+    assert_eq!(cross_producer_history.status(), StatusCode::NOT_FOUND);
+
+    let cross_producer_note = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/v1/review-requests/{}/notes", created.request_id))
+                .header("authorization", format!("Bearer {alternate_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer-alternate")
+                .header(CONTENT_TYPE, "application/json")
+                .header("idempotency-key", "cross-producer-note")
+                .body(Body::from(
+                    serde_json::to_vec(&json!({
+                        "audience": "requester",
+                        "note": "cross-producer note must not be stored"
+                    }))
+                    .expect("serialize cross-producer note"),
+                ))
+                .expect("cross-producer note request"),
+        )
+        .await
+        .expect("cross-producer note response");
+    assert_eq!(cross_producer_note.status(), StatusCode::NOT_FOUND);
+
+    let owner_history = app
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/v1/review-requests/{}/history",
+                    created.request_id
+                ))
+                .header("authorization", format!("Bearer {producer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "producer")
+                .body(Body::empty())
+                .expect("owning producer history request"),
+        )
+        .await
+        .expect("owning producer history response");
+    assert_eq!(owner_history.status(), StatusCode::OK);
+    let owner_history = String::from_utf8(
+        to_bytes(owner_history.into_body(), 64 * 1024)
+            .await
+            .expect("bounded owning producer history")
+            .to_vec(),
+    )
+    .expect("owning producer history UTF-8");
+    assert!(!owner_history.contains("cross-producer note must not be stored"));
+
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn review_task_inbox_continues_after_the_concealed_scan_budget() {
+    let idp = MockIdp::start().await;
+    let (app, service, _, _, _) = app(&idp).await;
+    let producer = ActorContext {
+        principal: registry_casework_core::IssuerPrincipal {
+            issuer: idp.issuer(),
+            subject: "registry-service".to_owned(),
+        },
+        profile_id: "producer".to_owned(),
+        role: CaseworkRole::Requester,
+    };
+    for index in 0..1_000 {
+        service
+            .create_review_request(
+                &producer,
+                review_request_for_subject(
+                    &format!("concealed-{index:04}"),
+                    &format!("concealed-reference-{index:04}"),
+                    &idp.issuer(),
+                ),
+                &format!("concealed-create-{index:04}"),
+            )
+            .await
+            .expect("create concealed review task");
+    }
+    let visible = service
+        .create_review_request(
+            &producer,
+            review_request_for_subject(
+                "visible-after-budget",
+                "visible-after-budget-reference",
+                &idp.issuer(),
+            ),
+            "visible-after-budget-create",
+        )
+        .await
+        .expect("create visible review task");
+
+    let reviewer_token = reviewer_token(&idp);
+    let first = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/v1/review-tasks?limit=1")
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("first bounded task page"),
+        )
+        .await
+        .expect("first bounded task page response");
+    assert_eq!(first.status(), StatusCode::OK);
+    let first: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(first.into_body(), 32 * 1024)
+            .await
+            .expect("bounded first task page"),
+    )
+    .expect("first task page JSON");
+    assert!(first.items.is_empty());
+    let continuation = first
+        .next_cursor
+        .expect("scan-budget page preserves a continuation");
+
+    let second = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v1/review-tasks?limit=1&cursor={continuation}"))
+                .header("authorization", format!("Bearer {reviewer_token}"))
+                .header(CASEWORK_PROFILE_HEADER, "staff")
+                .header(SOURCE_PROFILE_HEADER, "reviewer-source")
+                .body(Body::empty())
+                .expect("continued task page"),
+        )
+        .await
+        .expect("continued task page response");
+    assert_eq!(second.status(), StatusCode::OK);
+    let second: ReviewTaskPage = serde_json::from_slice(
+        &to_bytes(second.into_body(), 32 * 1024)
+            .await
+            .expect("bounded continued task page"),
+    )
+    .expect("continued task page JSON");
+    assert_eq!(second.items.len(), 1);
+    assert_eq!(second.items[0].request_id, visible.accepted.request_id);
+
+    idp.stop().await;
+}
+
+#[tokio::test]
 async fn standalone_structured_answer_can_be_claimed_decided_and_polled_over_http() {
     let idp = MockIdp::start().await;
-    let (app, _, _) = app(&idp).await;
+    let (app, _, _, _, _) = app(&idp).await;
     let mut request = review_request("answer-ref-1", &idp.issuer());
     request.kind = "registry-answer".to_owned();
     request.subject.id = "answer-record-1".to_owned();
