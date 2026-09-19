@@ -56,7 +56,8 @@ containment is enforced by the world itself, so a template that passes request-c
 `image()` still cannot read outside the bundle. Failure messages name virtual paths, never the
 host's directory layout.
 
-{/* Evidence: crates/registry-render/src/world.rs, resolve_under and redact_host_paths;
+{/* Evidence: crates/registry-render/src/world.rs, normalize_virtual_path, snapshot_path, and
+    redact_host_paths;
     crates/registry-render/src/bundle.rs, load_fonts;
     crates/registry-render/tests/golden.rs, data_paths_cannot_escape_the_bundle. */}
 
