@@ -29,7 +29,7 @@ use registry_platform_hooks::delivery::{
     DeliveryConfig, DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliveryService, DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode,
     DeliveryWorker, DestinationAnswer, HandlerRunFailure, HookDestination, HookHandlerBinding,
-    ProposalApplication, ProposalOutcome,
+    ProposalApplication, ProposalOutcome, ProposalReceiptRecovery,
 };
 use registry_platform_hooks::{
     BoundedText, ErrorCategory, MAX_OUTPUT_BYTES, MAX_REFUSAL_SUMMARY_BYTES,
@@ -239,6 +239,45 @@ impl DeliverySeams for BregDeliverySeams {
                 summary: proposal_summary(summary),
             },
         })
+    }
+
+    async fn recover_proposal_receipt(
+        &self,
+        recovery: ProposalReceiptRecovery<'_>,
+    ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+        let coordinator = MutationCoordinator::new_with_event_destinations(
+            self.lock_key,
+            self.lock_timeout,
+            self.expected.clone(),
+            self.audit_profile.clone(),
+            Some(Arc::clone(&self.destinations)),
+        );
+        let mut client = self
+            .pool
+            .get()
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let outcome = coordinator
+            .recover_hook_proposal_receipt(
+                &mut client,
+                recovery.event_id,
+                recovery.compiled_delivery_id,
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        Ok(outcome.map(|outcome| match outcome {
+            HookProposalOutcome::Applied(resulting_revision) => {
+                ProposalOutcome::Applied { resulting_revision }
+            }
+            HookProposalOutcome::Refused { code, summary } => ProposalOutcome::Refused {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+            HookProposalOutcome::DeadLettered { code, summary } => ProposalOutcome::DeadLettered {
+                code: proposal_code(code),
+                summary: proposal_summary(summary),
+            },
+        }))
     }
 
     async fn connection(&self) -> Result<DeliveryConnection, DeliveryError> {

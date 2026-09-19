@@ -191,6 +191,75 @@ impl MutationCoordinator {
         registry: &CompiledRegistry,
         application: &HookProposalApplication<'_>,
     ) -> Result<HookProposalOutcome, UncertainApply> {
+        let idempotency_key =
+            hook_proposal_idempotency_key(application.event_id, application.compiled_delivery_id);
+        let receipt_exists = self
+            .hook_proposal_receipt_exists(client, &idempotency_key)
+            .await?;
+        let outcome = self
+            .apply_hook_proposal_inner(client, registry, application, &idempotency_key)
+            .await;
+        if receipt_exists
+            && matches!(
+                &outcome,
+                Ok(HookProposalOutcome::Refused { .. } | HookProposalOutcome::DeadLettered { .. })
+            )
+        {
+            return conflicting_hook_answer();
+        }
+        outcome
+    }
+
+    /// Recover a proposal receipt when a later accepted answer proposes
+    /// nothing. A receipt under the delivery-scoped key proves the earlier
+    /// proposal committed, so the changed answer becomes the same stable
+    /// conflict as a changed proposal instead of overwriting the row's
+    /// disposition with `none`.
+    pub(crate) async fn recover_hook_proposal_receipt(
+        &self,
+        client: &mut Client,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+    ) -> Result<Option<HookProposalOutcome>, UncertainApply> {
+        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+        if self
+            .hook_proposal_receipt_exists(client, &idempotency_key)
+            .await?
+        {
+            conflicting_hook_answer().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn hook_proposal_receipt_exists(
+        &self,
+        client: &Client,
+        idempotency_key: &str,
+    ) -> Result<bool, UncertainApply> {
+        let key_reference = resolve_key_reference(&self.audit_profile, idempotency_key)
+            .map_err(|_| UncertainApply)?;
+        client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_idempotency
+                      WHERE key_reference = $1
+                 )",
+                &[&key_reference],
+            )
+            .await
+            .map(|row| row.get::<_, bool>(0))
+            .map_err(|_| UncertainApply)
+    }
+
+    async fn apply_hook_proposal_inner(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        application: &HookProposalApplication<'_>,
+        idempotency_key: &str,
+    ) -> Result<HookProposalOutcome, UncertainApply> {
         // The envelope the worker delivered, re-read from the exact stored
         // bytes so the chain position comes from what was delivered, not
         // from anything reconstructed.
@@ -442,23 +511,6 @@ impl MutationCoordinator {
             }
         };
 
-        // The application identity: the hook delivery identity,
-        // domain-separated. No attempt, generation, or answer component, so
-        // every redelivery of one delivery resolves as the same application
-        // whichever answer a later attempt carries; the answer's digest
-        // rides in the binding reference below.
-        let mut idempotency_input = Vec::new();
-        idempotency_input.extend_from_slice(b"breg-hook-proposal-idempotency-v1");
-        append_proposal_idempotency_component(
-            &mut idempotency_input,
-            application.event_id.to_string().as_bytes(),
-        );
-        append_proposal_idempotency_component(
-            &mut idempotency_input,
-            application.compiled_delivery_id.as_bytes(),
-        );
-        let idempotency_key = format!("sha256:{}", hex::encode(Sha256::digest(idempotency_input)));
-
         let Ok(request_digest) =
             canonical_action_request_digest(action, &normalized_input, &preconditions)
         else {
@@ -470,7 +522,7 @@ impl MutationCoordinator {
         let binding = match resolve_action_binding(
             &self.audit_profile,
             &ActionIdempotencyBinding {
-                key: &idempotency_key,
+                key: idempotency_key,
                 context: &claims,
                 method: HttpMethod::Post,
                 route: &action.route,
@@ -579,10 +631,7 @@ impl MutationCoordinator {
                 // The key is the delivery, so a conflict means this delivery
                 // already settled a different answer: the first application
                 // stands and the changed one can never apply.
-                return dead_lettered_proposal(
-                    "hook.proposal.answer_conflict",
-                    "This delivery already applied a different answer; the first application stands.",
-                );
+                return conflicting_hook_answer();
             }
             Err(MutationError::PreconditionFailed) => {
                 return refused_proposal(
@@ -1741,6 +1790,24 @@ fn dead_lettered_proposal(
     })
 }
 
+fn conflicting_hook_answer() -> Result<HookProposalOutcome, UncertainApply> {
+    dead_lettered_proposal(
+        "hook.proposal.answer_conflict",
+        "This delivery already applied a different answer; the first application stands.",
+    )
+}
+
+fn hook_proposal_idempotency_key(event_id: Uuid, compiled_delivery_id: &str) -> String {
+    // The application identity is the hook delivery identity,
+    // domain-separated. No attempt, generation, or answer component enters
+    // the key; the answer digest belongs to the binding reference instead.
+    let mut input = Vec::new();
+    input.extend_from_slice(b"breg-hook-proposal-idempotency-v1");
+    append_proposal_idempotency_component(&mut input, event_id.to_string().as_bytes());
+    append_proposal_idempotency_component(&mut input, compiled_delivery_id.as_bytes());
+    format!("sha256:{}", hex::encode(Sha256::digest(input)))
+}
+
 fn append_proposal_idempotency_component(output: &mut Vec<u8>, value: &[u8]) {
     output.extend_from_slice(&(value.len() as u64).to_be_bytes());
     output.extend_from_slice(value);
@@ -2710,6 +2777,88 @@ pub(crate) async fn erase_expired_action_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_action_binding_keeps_the_released_canonical_shape() {
+        let profile = AuditProfile::unkeyed_dev_only();
+        let result_effects = BTreeSet::from(["created".to_owned()]);
+        let claims = ActionClaimContext::new(
+            "register".to_owned(),
+            "principal".to_owned(),
+            "operator".to_owned(),
+            None,
+            result_effects.clone(),
+        )
+        .expect("action claims are valid");
+        let target_authority = BTreeMap::new();
+        let request_digest = [7_u8; 32];
+        let binding = resolve_action_binding(
+            &profile,
+            &ActionIdempotencyBinding {
+                key: "ordinary-action-key",
+                context: &claims,
+                method: HttpMethod::Post,
+                route: "/v1/actions/register",
+                package_revision: "package-revision",
+                action_contract_fingerprint: "sha256:contract",
+                target_authority: &target_authority,
+                result_effects: &result_effects,
+                canonical_request_digest: request_digest,
+                answer_digest: None,
+            },
+        )
+        .expect("ordinary action binding resolves");
+
+        let canonical_context =
+            crate::idempotency::canonical_action_context(&profile, &claims, "package-revision")
+                .expect("action context canonicalizes");
+        let legacy = canonicalize_json(&json!({
+            "context": canonical_context,
+            "method": "POST",
+            "route": "/v1/actions/register",
+            "packageRevision": "package-revision",
+            "actionContractFingerprint": "sha256:contract",
+            "targetAuthority": Vec::<Value>::new(),
+            "resultEffects": result_effects,
+            "canonicalRequestDigest": hex::encode(request_digest),
+        }))
+        .expect("legacy binding canonicalizes");
+        let legacy = std::str::from_utf8(&legacy).expect("canonical JSON is UTF-8");
+        let expected = profile
+            .key_hasher()
+            .audit_reference_hash(
+                "breg-action-idempotency-binding-v1",
+                "package-revision",
+                legacy,
+            )
+            .expect("legacy binding hashes");
+        assert_eq!(
+            binding.binding_reference, expected,
+            "an absent hook answer digest must not add a null member to released action receipts"
+        );
+
+        let answer_digest = [9_u8; 32];
+        let hook_binding = resolve_action_binding(
+            &profile,
+            &ActionIdempotencyBinding {
+                key: "ordinary-action-key",
+                context: &claims,
+                method: HttpMethod::Post,
+                route: "/v1/actions/register",
+                package_revision: "package-revision",
+                action_contract_fingerprint: "sha256:contract",
+                target_authority: &target_authority,
+                result_effects: claims.result_effects(),
+                canonical_request_digest: request_digest,
+                answer_digest: Some(&answer_digest),
+            },
+        )
+        .expect("hook action binding resolves");
+        assert_ne!(
+            hook_binding.binding_reference, expected,
+            "a hook answer digest still binds the exact accepted answer"
+        );
+    }
 
     #[test]
     fn fixed_optional_from_input_has_the_same_type_contract_at_admission_and_materialization() {

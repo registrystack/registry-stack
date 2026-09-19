@@ -46,7 +46,7 @@ use crate::history_commit::{
 };
 use crate::history_context::{ChangeContext, CommitOrigin};
 use crate::idempotency::{
-    insert_result, lock_and_load, resolve_action_binding, resolve_binding,
+    insert_result, lock_and_load, resolve_action_binding, resolve_binding, resolve_key_reference,
     ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
     PermittedResponseHeader, StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
 };

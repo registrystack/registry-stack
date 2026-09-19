@@ -43,7 +43,7 @@ pub use seams::{
     DeliveryConnection, DeliveryError, DeliveryOperationalEvent, DeliverySeams,
     DeliverySignatureFields, DeliverySignatureRefused, DeliveryTransitionCode, DestinationAnswer,
     HandlerRunFailure, HookDestination, HookHandler, HookHandlerBinding, ProposalApplication,
-    ProposalCode, ProposalOutcome, ProposalSummary,
+    ProposalCode, ProposalOutcome, ProposalReceiptRecovery, ProposalSummary,
 };
 pub use service::{
     DeliveryConfig, DeliveryOutcome, DeliveryService, DeliveryStatus, DeliveryStatusKind,

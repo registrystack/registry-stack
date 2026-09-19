@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -1146,6 +1146,53 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         "the first application stands; the drifted answer applied nothing"
     );
 
+    // Cross-kind drift follows the same receipt. A later empty/none answer
+    // must not overwrite the delivery row with `none` after the first
+    // proposal already committed.
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let none_event = create_case(&setup, &mut mutation_client, "answer-drift-none").await;
+    let none_delivery_id = single_delivery(&none_event).to_owned();
+    let none_payload = outbox_payload(&setup, &none_event).await;
+    drop(mutation_client);
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    assert_eq!(record_count(&setup, "followup").await, 2);
+    rewind_to_crashed_lease(&setup, &none_event, &none_delivery_id, &none_payload).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the expired lease is reaped to a scheduled retry"
+    );
+    wait_until_delivery_is_due(&setup, &none_event, &none_delivery_id).await;
+    receiver
+        .enqueue(ResponsePlan::Answer { body: Vec::new() })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered),
+        "a changed none answer cannot hide an already committed proposal"
+    );
+    let none = delivery_row(&setup, none_event.event_id, &none_delivery_id).await;
+    assert_eq!(none.state, "dead_lettered");
+    assert_eq!(none.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(none.code.as_deref(), Some("hook.proposal.answer_conflict"));
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        2,
+        "the first applications stand and neither drifted answer applies again"
+    );
+
     setup.teardown().await;
     receiver.stop().await;
 }
@@ -1679,17 +1726,14 @@ struct DestinationFixture {
 
 impl DestinationFixture {
     fn new(receiver: &HttpsReceiver) -> Self {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock is after epoch")
-            .as_nanos();
-        let root = std::env::temp_dir()
+        let temporary_parent = std::env::temp_dir()
             .canonicalize()
-            .expect("temporary parent canonicalizes")
-            .join(format!(
-                "breg-hook-proposals-{suffix}-{}",
-                std::process::id()
-            ));
+            .expect("temporary parent canonicalizes");
+        let root = tempfile::Builder::new()
+            .prefix("breg-hook-proposals-")
+            .tempdir_in(temporary_parent)
+            .expect("unique fixture root creates")
+            .keep();
         let secret_root = root.join("secrets");
         let package_root = root.join("package");
         fs::create_dir_all(&secret_root).expect("secret root creates");

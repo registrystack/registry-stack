@@ -101,6 +101,20 @@ pub trait DeliverySeams: Send + Sync + 'static {
         application: ProposalApplication<'_>,
     ) -> Result<ProposalOutcome, DeliveryError>;
 
+    /// Recover a proposal that may already have committed when the current
+    /// accepted answer carries no proposal.
+    ///
+    /// `None` means this delivery has no committed proposal receipt and the
+    /// worker may settle the current non-proposal answer normally. A returned
+    /// outcome is recorded instead, so a proposal that committed before a
+    /// failed finalize cannot later be hidden by a changed `none` or refusal
+    /// answer. The product owns the receipt and the stable conflict outcome;
+    /// the worker supplies only the delivery identity.
+    async fn recover_proposal_receipt(
+        &self,
+        recovery: ProposalReceiptRecovery<'_>,
+    ) -> Result<Option<ProposalOutcome>, DeliveryError>;
+
     /// Record one neutral delivery-audit event in the product's audit
     /// journal, inside the transaction the worker is about to commit. Every
     /// audited occurrence and every audited field of the moved worker arrives
@@ -240,6 +254,16 @@ pub struct ProposalApplication<'a> {
     /// binding reference carries it, so a retry with the same answer replays
     /// and a retry with a changed answer conflicts.
     pub answer_digest: &'a [u8; 32],
+}
+
+/// One accepted non-proposal answer checked against any proposal receipt the
+/// product may already have committed for the same delivery.
+#[derive(Clone, Copy, Debug)]
+pub struct ProposalReceiptRecovery<'a> {
+    /// The delivered event the current answer addresses.
+    pub event_id: Uuid,
+    /// The compiled delivery whose earlier proposal may have committed.
+    pub compiled_delivery_id: &'a str,
 }
 
 /// A bounded refusal code on a proposal outcome, under the same ceiling a
