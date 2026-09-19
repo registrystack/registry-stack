@@ -18,16 +18,6 @@ not. The authoring members live in [Author a registry project](../../configure/b
 deployment binding lives in [Deploy a registry](../../operate/breg/), and the boundaries still open
 are collected in [Known limitations and non-guarantees](../known-limitations/).
 
-{/* TODO[evidence]: every section below states approved Phase 1 behavior of registry-stack
-     issue #1108 whose implementation is not yet in this tree, so no anchor resolves today.
-     When the field-encryption milestone lands, replace each TODO with an Evidence block:
-     sealing and AAD against the envelope seal/open path in crates/registry-breg/,
-     the blind index against its HMAC/normalization module, key custody against the DEK
-     provider and crates/registry-breg/src/runtime_config.rs, the refusal set against
-     crates/registry-breg/src/compiler.rs, the 503 problem against the read path and
-     crates/registry-breg/src/api/mod.rs, and the migration lifecycle against the migration
-     module. Claims stay demoted until those anchors exist. */}
-
 ## What a project declares
 
 A field opts in. Setting `encrypted: true` on a field whose classification is `restricted` and whose
@@ -40,6 +30,11 @@ Encryption is an authoring decision recorded in the project, so it is reviewed, 
 and activated exactly like the rest of the model. It is not a deployment toggle: the runtime file
 binds key custody (see [Deploy a registry](../../operate/breg/)), but the project decides which
 fields are sealed.
+
+{/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
+    crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
+    NormalizationStep; crates/registry-breg/src/compiler.rs,
+    field.encrypted.classification_invalid and field.encrypted.type_unsupported. */}
 
 ## What sealing does
 
@@ -55,17 +50,32 @@ The `pattern` member stays allowed on an encrypted field and keeps its meaning. 
 in Rust against the plaintext before the value is sealed, so a value that the pattern refuses never
 reaches the database.
 
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
+    open_field(), FieldAad, derive_field_aead_key(), and MAX_FIELD_PLAINTEXT_BYTES;
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::seal() and
+    FieldEncryptionService::open(); crates/registry-breg/src/mutation.rs,
+    encrypted_column_values() and enforce_field_pattern();
+    crates/registry-breg/src/postgres/{read,history_read,revision_read}.rs,
+    with_field_encryption(); crates/registry-breg/src/api/mod.rs, opened_held_body(). */}
+
 ## Where the key lives
 
 The DEK is generated per registry database and is wrapped by HashiCorp Vault or OpenBao Transit
 through its datakey endpoint, reached over a workload-local Unix-socket proxy; the wrapped key is
 stored in `registry_internal.registry_field_encryption_keys`. A base64 local-file DEK also exists
-for local assurance, and `bregctl check --production` refuses it: a production candidate must name
-a Transit binding.
+for local assurance, and it is refused outside local initialization: startup refuses it unless the
+runtime file's `identity.databaseInitializationEnvironment` is `local`, and
+`bregctl doctor --runtime-config <absolute-file>` reports the same refusal.
 
 Losing the wrapping key loses the data. There is no recovery path inside Base Registry Engine, and
 key escrow before enabling is an operator duty, not a compiler check. Key custody belongs on the
 [hardening checklist](../../security/hardening-checklist/).
+
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize(),
+    insert_first_field_key(), and TRANSIT_PROVIDER_KIND;
+    crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
+    crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
 
 ## What the blind index reveals
 
@@ -85,10 +95,10 @@ holds a national identifier: `trim` and `remove-separators` answer the equality 
 faces, while `uppercase` and `lowercase` invite Unicode case-folding surprises that change which
 values collide.
 
-{/* TODO[evidence]: the normalization vocabulary above is the closed set the lookup compiler
-     accepts, in declared order: trim, uppercase, lowercase, collapse-whitespace,
-     remove-separators. Anchor it, and the leakage statement, against the blind-index module
-     when it lands. */}
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac() and
+    derive_field_index_key(); crates/registry-breg/src/field_encryption.rs,
+    FieldEncryptionService::blind_index() and FieldEncryptionService::normalize();
+    crates/registry-breg/src/postgres/read.rs, lookup_sql(). */}
 
 ## What the compiler refuses
 
@@ -99,8 +109,12 @@ event projection of it. A registry whose process needs reviewed change requests 
 field cannot encrypt that field in Phase 1: the compiler refuses the combination at authoring time
 rather than at the first reviewed change.
 
-{/* TODO[evidence]: anchor each refusal to its compiler error when the milestone lands, and
-     check the summary against the full refusal list in the compiler. */}
+{/* Evidence: crates/registry-breg/src/compiler.rs, access_profile.processing.encrypted and
+    event.projection.encrypted; crates/registry-breg/src/change_request.rs,
+    change_request.effect.field_encrypted; crates/registry-breg/src/derived_sql.rs,
+    refuse_encrypted_columns(); crates/registry-breg/src/postgres/read.rs, predicate_sql();
+    crates/registry-breg/src/request_prepare.rs, refuse_encrypted_participation();
+    crates/registry-breg/src/outbox.rs, projected_event_values(). */}
 
 ## Key loss fails closed
 
@@ -110,8 +124,11 @@ and writes on an entity with encrypted fields answer with an HTTP `503` problem
 registry does not fall back to plaintext, does not cache an unsealed copy, and does not fail the
 whole deployment for one entity's missing key.
 
-{/* TODO[evidence]: anchor the problem code and the per-entity scope against the read and write
-     paths when the milestone lands. */}
+{/* Evidence: crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
+    crates/registry-breg/src/api/mod.rs, field_encryption_refusal(),
+    field_encryption_unavailable(), and opened_held_body();
+    crates/registry-breg/src/postgres/read.rs, open_row_members();
+    crates/registry-breg/src/mutation.rs, response_data(). */}
 
 ## Turning encryption on over existing plaintext
 
@@ -153,9 +170,10 @@ unreferenced but supply-chain-relevant build dependency. Upstream documents that
 has completed FIPS validation testing by an accredited lab and directs consumers to NIST CMVP for
 certification status. Registry Stack does not claim certification of itself.
 
-{/* TODO[evidence]: anchor the fips feature selection against Cargo.toml and Cargo.lock once the
-     flip lands, and keep the upstream validation sentence cited to aws-lc-fips-sys's own
-     documentation rather than strengthened here. */}
+{/* Evidence: crates/registry-platform-crypto/Cargo.toml, the aws-lc-rs workspace dependency;
+    Cargo.lock, the locked aws-lc-fips-sys backend beside the unreferenced aws-lc-sys;
+    release/notes/dependency-vetting-aws-lc-fips.md, the accepted feature selection, the
+    seal-path API usage, and the upstream validation posture. */}
 
 ## Phase 1 boundaries
 

@@ -467,14 +467,14 @@ supply-chain-relevant build dependency. Upstream documents that the bound module
 validation testing by an accredited lab and directs consumers to NIST CMVP for certification
 status. Registry Stack does not claim certification of itself.
 
-{/* TODO[evidence]: the boundary statements above are approved Phase 1 behavior of
-     registry-stack issue #1108, whose implementation is not yet in this tree, so no anchor
-     resolves today. When the field-encryption milestone lands, anchor the envelope and AAD
-     against the sealing path in crates/registry-breg/, the Transit wrapping against the DEK
-     provider and crates/registry-breg/src/runtime_config.rs, the 503 problem and per-entity
-     scope against the read path, the blind-index leakage against the blind-index module, and
-     the fips feature selection against Cargo.toml and Cargo.lock. Keep the upstream
-     validation sentence cited to aws-lc-fips-sys's own documentation; do not strengthen it. */}
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
+    open_field(), FieldAad, and blind_index_hmac();
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize();
+    crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
+    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
+    crates/registry-breg/src/api/mod.rs, field_encryption_refusal();
+    crates/registry-platform-crypto/Cargo.toml and Cargo.lock, with
+    release/notes/dependency-vetting-aws-lc-fips.md. */}
 
 ## Residual risks and what is left to the operator
 
