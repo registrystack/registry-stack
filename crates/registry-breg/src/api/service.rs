@@ -813,6 +813,10 @@ pub enum ReadServiceError {
     /// answer from that row, and the refusal names the row rather than the
     /// transport so a corrupted snapshot is not retried as an outage.
     SnapshotUnreadable,
+    /// A stored field envelope could not be opened at the response edge, or
+    /// the key state an encrypted field requires is absent. The refusal names
+    /// the failure class only, never the value or the envelope bytes.
+    FieldEncryptionUnavailable,
 }
 
 /// Record reads execute only after the HTTP layer has selected and authorized

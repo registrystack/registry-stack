@@ -1415,7 +1415,14 @@ impl MutationCoordinator {
         }
         let mut current = match effect.operation {
             Operation::Create => {
-                insert_current_row(transaction, entity, &record_uuid.to_string(), &fields).await?
+                insert_current_row(
+                    transaction,
+                    entity,
+                    &record_uuid.to_string(),
+                    &fields,
+                    self.field_encryption.as_deref(),
+                )
+                .await?
             }
             Operation::Patch => {
                 let before = before.ok_or(MutationError::PreconditionFailed)?;
@@ -1425,6 +1432,7 @@ impl MutationCoordinator {
                     &record_uuid.to_string(),
                     before.record_revision,
                     fields,
+                    self.field_encryption.as_deref(),
                 )
                 .await?;
                 next.predecessor_revision = Some(before.record_revision);

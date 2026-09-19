@@ -812,19 +812,21 @@ async fn finish_prepared_server(
     } else {
         None
     };
-    let records = Arc::new(
-        PostgresRecordReadService::new(
-            pool.clone(),
-            Arc::clone(&registry),
-            expected.clone(),
-            lock_key,
-            config.operational_timeouts().record_lock,
-            audit_profile.clone(),
-            Arc::clone(&cursor_codec),
-        )
-        .with_attachment_storage(attachment_storage.clone())
-        .with_attachment_verification(attachment_verification.clone()),
-    );
+    let records = PostgresRecordReadService::new(
+        pool.clone(),
+        Arc::clone(&registry),
+        expected.clone(),
+        lock_key,
+        config.operational_timeouts().record_lock,
+        audit_profile.clone(),
+        Arc::clone(&cursor_codec),
+    )
+    .with_attachment_storage(attachment_storage.clone())
+    .with_attachment_verification(attachment_verification.clone());
+    let records = Arc::new(match field_encryption.clone() {
+        Some(field_encryption) => records.with_field_encryption(field_encryption),
+        None => records,
+    });
     let read_identity = ReadRuntimeIdentity {
         package_revision: expected.package_revision.clone(),
         schema_fingerprint: expected.schema_fingerprint.clone(),
@@ -908,6 +910,10 @@ async fn finish_prepared_server(
     .with_task_status(task_status)
     .with_attachment_storage(attachment_storage)
     .with_attachment_verification(attachment_verification);
+    let mutations = match field_encryption.clone() {
+        Some(field_encryption) => mutations.with_field_encryption(field_encryption),
+        None => mutations,
+    };
     let mutations = Arc::new(match evidence {
         Some(evaluator) => mutations
             .with_evidence_evaluator(evaluator)

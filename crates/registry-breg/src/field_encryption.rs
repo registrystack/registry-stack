@@ -30,18 +30,20 @@ use base64::Engine as _;
 use registry_platform_config::{SecretError, SecretProvider, SecretReference, SecretResolver};
 use registry_platform_crypto::field_encryption::{
     blind_index_hmac, derive_field_aead_key, derive_field_index_key, envelope_key_version,
-    open_field, seal_field, FieldAad, FieldCryptoError, FieldKeyInfo, FIELD_ENCRYPTION_ALGORITHM,
+    open_field, parse_envelope_member, seal_field, FieldAad, FieldCryptoError, FieldKeyInfo,
+    FIELD_ENCRYPTION_ALGORITHM,
 };
 use registry_platform_crypto::transit_datakey::{
     transit_wrapped_key_version, TransitDataKeyClient, TransitDataKeyConfig,
 };
 use registry_platform_crypto::KeyProviderKind;
 use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 use tokio_postgres::GenericClient;
 use zeroize::Zeroizing;
 
-use crate::contract::NormalizationStep;
+use crate::contract::{FieldTypeSource, NormalizationStep};
 
 /// The label recorded for the Transit datakey provider in key rows.
 pub const TRANSIT_PROVIDER_KIND: &str = "transit_datakey";
@@ -442,6 +444,42 @@ async fn unwrap_stored_transit_key(
 
 /// Convenience alias for the shared service handle type.
 pub type SharedFieldEncryptionService = Arc<FieldEncryptionService>;
+
+/// Open one stored envelope member into its JSON value at a response edge.
+///
+/// Row decode keeps the tagged member so journal snapshots and captured rows
+/// canonicalize byte-identically; only the enumerated response edges call this.
+/// A null member stays null. A member that is neither null nor the tagged
+/// envelope shape, and any open failure, is a fail-closed
+/// [`FieldCryptoError`] carrying no value.
+pub(crate) fn open_member_value(
+    service: &FieldEncryptionService,
+    entity_id: &str,
+    field_id: &str,
+    record_id: &str,
+    field_type: &FieldTypeSource,
+    member: &Value,
+) -> Result<Option<Value>, FieldCryptoError> {
+    if member.is_null() {
+        return Ok(None);
+    }
+    let envelope = parse_envelope_member(member).ok_or(FieldCryptoError::MalformedEnvelope)?;
+    let plaintext = service.open(entity_id, field_id, record_id, &envelope)?;
+    let value = match field_type {
+        FieldTypeSource::Structured { .. } => serde_json::from_slice::<Value>(&plaintext)
+            .map_err(|_| FieldCryptoError::MalformedEnvelope)?,
+        FieldTypeSource::String { .. }
+        | FieldTypeSource::Text { .. }
+        | FieldTypeSource::Date
+        | FieldTypeSource::Decimal { .. } => Value::String(
+            String::from_utf8(plaintext.as_slice().to_vec())
+                .map_err(|_| FieldCryptoError::MalformedEnvelope)?,
+        ),
+        // The compiler refuses encrypted storage for every other type.
+        _ => return Err(FieldCryptoError::MalformedEnvelope),
+    };
+    Ok(Some(value))
+}
 
 /// Default Transit request timeout, matching the attachment transports.
 const DEFAULT_TRANSIT_TIMEOUT_MILLISECONDS: u64 = 5_000;

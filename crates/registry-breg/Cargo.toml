@@ -244,6 +244,7 @@ runtime = [
     "dep:tracing",
     "dep:tracing-subscriber",
     "dep:zeroize",
+    "dep:regex",
 ]
 postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-support"]
 postgres-tls-test = ["runtime"]
@@ -283,6 +284,7 @@ registry-platform-script.workspace = true
 jsonschema.workspace = true
 pg_query.workspace = true
 rhai = { workspace = true, features = ["internals"] }
+regex = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
 rustix = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }

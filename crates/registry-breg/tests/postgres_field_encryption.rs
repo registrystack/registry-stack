@@ -13,9 +13,10 @@ mod postgres_harness;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{Method, Request, StatusCode};
 use base64::Engine as _;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
@@ -32,13 +33,17 @@ use registry_breg::postgres::{
 use registry_breg::startup::{
     prepare_with_connection_config_for_test, PreparedServer, StartupError,
 };
-use registry_platform_testing::{fixtures as testing_fixtures, jwks_from_private_jwk};
+use registry_breg::CompiledRegistry;
+use registry_platform_testing::{
+    fixtures as testing_fixtures, jwks_from_private_jwk, sign_ed25519_compact_jwt,
+};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::UnixListener;
 use tokio::task::JoinHandle;
 use tower::ServiceExt as _;
+use uuid::Uuid;
 
 const COMPILER_SOURCE_REVISION: &str = "field-encryption-source";
 const INSTANCE_ID: &str = "field-encryption-instance";
@@ -97,11 +102,15 @@ entities:
     mutationMode: mutable
     tombstone: true
     classification: restricted
+    selectorProfiles:
+      - {id: by-secret, fields: [secret]}
     fields:
       - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
       - {id: label, type: string, maxLength: 128, required: true, classification: public}
       - {id: secret, type: string, maxLength: 256, required: true, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
+      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true, pattern: '^[A-Z]{3}-[0-9]{4}$'}
+      - {id: big, type: string, maxLength: 1000000, classification: restricted, encrypted: true}
     constraints:
       - {kind: unique, fields: [label]}
   - id: note
@@ -118,15 +127,18 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: holder
-        operations: [create, get, list, patch]
-        readableFields: [jurisdiction, label, secret]
-        writableFields: [jurisdiction, label, secret]
+        operations: [create, get, list, patch, lookup]
+        readableFields: [jurisdiction, label, secret, code, big]
+        writableFields: [jurisdiction, label, secret, code, big]
+        lookups:
+          - {selector: by-secret, valueOrigin: request}
         rowBoundaries:
           - {field: jurisdiction, claim: jurisdiction, operator: equals}
       - entity: note
         rowBoundaries: []
-        operations: [get, list]
+        operations: [create, get, list]
         readableFields: [text]
+        writableFields: [text]
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -221,12 +233,13 @@ fn encrypted_fixture(schema_fingerprint: &str, project: &[u8]) -> EncryptedFixtu
 
 /// The installed database an encrypted package is activated on: schema
 /// installed, fingerprint measured, package built with that fingerprint, and
-/// registry state initialized. The migration connection stays open for the
-/// caller's row and privilege assertions.
+/// registry state initialized. The compiled registry stays with it so tests
+/// can name physical columns for their direct-SQL assertions.
 struct BootedDatabase {
     database: TestDatabase,
     fixture: EncryptedFixture,
     directory: PathBuf,
+    registry: Arc<CompiledRegistry>,
 }
 
 async fn boot_encrypted_database() -> BootedDatabase {
@@ -275,6 +288,7 @@ async fn boot_encrypted_database() -> BootedDatabase {
         database,
         fixture,
         directory,
+        registry,
     }
 }
 
@@ -726,4 +740,796 @@ fn decrypt_reply() -> TransitReply {
         body: Some(json!({ "ciphertext": WRAPPED })),
         response: json!({ "data": { "plaintext": base64::engine::general_purpose::STANDARD.encode(DEK) } }),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Write and current-read path over live key state
+// ---------------------------------------------------------------------------
+
+const LOCAL_FILE_FIELD_ENCRYPTION: &str =
+    "fieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n";
+const AUTHORITY_KID: &str = "registry-platform-testing-ed25519-1";
+
+/// A prepared runtime over the encrypted fixture with local-file key state.
+/// The booted database stays alive with it: the package directory and the
+/// administrator connection the ciphertext-at-rest assertions need both live
+/// on it.
+struct LiveServer {
+    prepared: PreparedServer,
+    booted: BootedDatabase,
+}
+
+impl LiveServer {
+    fn registry(&self) -> &CompiledRegistry {
+        &self.booted.registry
+    }
+
+    async fn shutdown(self) {
+        let LiveServer { prepared, booted } = self;
+        drop(prepared);
+        booted.database.cleanup().await;
+    }
+}
+
+async fn boot_live_server() -> LiveServer {
+    let booted = boot_encrypted_database().await;
+    let secrets = booted.directory.join("secrets");
+    fs::create_dir_all(&secrets).expect("fixture secret root creates");
+    write_private(
+        &secrets.join("field-dek"),
+        format!(
+            "{}\n",
+            base64::engine::general_purpose::STANDARD.encode(DEK)
+        )
+        .as_bytes(),
+    );
+    let config = write_runtime_config(&booted, Some(LOCAL_FILE_FIELD_ENCRYPTION.to_owned()));
+    let prepared =
+        prepare_with_connection_config_for_test(&config, booted.database.runtime_config.clone())
+            .await
+            .expect("local file key state prepares the encrypted registry");
+    assert_ready(&prepared, StatusCode::OK).await;
+    LiveServer { prepared, booted }
+}
+
+/// One operator access token for the full authenticated router: issuer,
+/// audience, and authority claims match the fixture runtime configuration.
+fn operator_token() -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("clock follows epoch")
+        .as_secs();
+    sign_ed25519_compact_jwt(
+        testing_fixtures::ED25519_PRIVATE_JWK,
+        "JWT",
+        AUTHORITY_KID,
+        json!({
+            "iss": "https://auth.example.test",
+            "aud": "urn:breg:field-encryption",
+            "iat": now,
+            "nbf": now,
+            "exp": now + 600,
+            "registry_actor_kind": "service",
+            "registry_principal": "operator",
+            "jurisdiction": "area-a",
+            "purpose": "case-management",
+        }),
+    )
+}
+
+async fn send(
+    server: &LiveServer,
+    method: Method,
+    uri: &str,
+    headers: &[(&'static str, String)],
+    body: Option<Value>,
+) -> axum::response::Response {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {}", operator_token()));
+    for (name, value) in headers {
+        builder = builder.header(*name, value.as_str());
+    }
+    let request = match body {
+        Some(value) => builder.body(Body::from(
+            serde_json::to_vec(&value).expect("request serializes"),
+        )),
+        None => builder.body(Body::empty()),
+    }
+    .expect("request builds");
+    server
+        .prepared
+        .app()
+        .oneshot(request)
+        .await
+        .expect("router returns a response")
+}
+
+async fn body_json(response: axum::response::Response) -> Value {
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .expect("response body is bounded");
+    serde_json::from_slice(&bytes).expect("response body is JSON")
+}
+
+fn response_etag(response: &axum::response::Response) -> String {
+    response
+        .headers()
+        .get("etag")
+        .expect("response carries an ETag")
+        .to_str()
+        .expect("ETag is text")
+        .to_owned()
+}
+
+/// Create one holder and return its status, body, and ETag. `key` is the
+/// per-call idempotency key, so replays stay distinguishable.
+#[allow(clippy::type_complexity)]
+async fn create_holder(
+    server: &LiveServer,
+    key: &str,
+    data: Value,
+) -> (StatusCode, Value, Option<String>) {
+    let response = send(
+        server,
+        Method::POST,
+        "/v1/records/holders",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", key.to_owned()),
+        ],
+        Some(json!({ "data": data })),
+    )
+    .await;
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    let status = response.status();
+    (status, body_json(response).await, etag)
+}
+
+/// The physical envelope column of one encrypted holder field.
+fn envelope_column(registry: &CompiledRegistry, field_id: &str) -> String {
+    registry
+        .entities()
+        .get("holder")
+        .expect("holder entity compiles")
+        .fields
+        .get(field_id)
+        .unwrap_or_else(|| panic!("holder field {field_id} compiles"))
+        .physical_name
+        .clone()
+}
+
+/// The physical blind-index column of one encrypted holder field.
+fn blind_column(registry: &CompiledRegistry, field_id: &str) -> String {
+    registry
+        .entities()
+        .get("holder")
+        .expect("holder entity compiles")
+        .fields
+        .get(field_id)
+        .unwrap_or_else(|| panic!("holder field {field_id} compiles"))
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .unwrap_or_else(|| panic!("holder field {field_id} declares a blind index"))
+        .physical_name
+        .clone()
+}
+
+fn holder_table(registry: &CompiledRegistry) -> String {
+    registry
+        .entities()
+        .get("holder")
+        .expect("holder entity compiles")
+        .physical_table
+        .clone()
+}
+
+/// Count the holder rows currently at rest.
+async fn holder_row_count(server: &LiveServer) -> i64 {
+    server
+        .booted
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FROM registry_data.{}",
+                holder_table(server.registry())
+            ),
+            &[],
+        )
+        .await
+        .expect("holder row count reads")
+        .get(0)
+}
+
+/// The stored bytes of one encrypted column of one record.
+async fn stored_column(server: &LiveServer, column: &str, record_id: &str) -> Vec<u8> {
+    server
+        .booted
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {} FROM registry_data.{} WHERE record_id = $1",
+                column,
+                holder_table(server.registry())
+            ),
+            &[&Uuid::parse_str(record_id).expect("record id is a UUID")],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("stored column {column} reads: {error}"))
+        .get(0)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn encrypted_fields_round_trip_and_store_only_envelopes() {
+    let server = boot_live_server().await;
+
+    // The mutation response decrypts at the response edge.
+    let (status, created, etag) = create_holder(
+        &server,
+        "round-trip-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "round-trip",
+            "secret": "gamma-seven",
+            "code": "ABC-1234",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["data"]["domainData"]["secret"], "gamma-seven");
+    assert_eq!(created["data"]["domainData"]["code"], "ABC-1234");
+    assert!(etag.is_some(), "the create response carries an ETag");
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+
+    // Current reads decrypt at the response edge too.
+    let fetched = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched = body_json(fetched).await;
+    assert_eq!(fetched["data"]["domainData"]["secret"], "gamma-seven");
+    assert_eq!(fetched["data"]["domainData"]["code"], "ABC-1234");
+    assert_eq!(fetched["data"]["domainData"]["big"], Value::Null);
+
+    let listed = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders?$select=jurisdiction,label,secret,code,big",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let items = listed["items"].as_array().expect("list items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["domainData"]["secret"], "gamma-seven");
+
+    // At rest, only envelope and blind-index bytes exist.
+    let secret_envelope = stored_column(
+        &server,
+        &envelope_column(server.registry(), "secret"),
+        &record_id,
+    )
+    .await;
+    assert!(
+        !secret_envelope
+            .windows(b"gamma-seven".len())
+            .any(|window| window == b"gamma-seven"),
+        "the secret envelope does not contain its plaintext"
+    );
+    assert!(
+        secret_envelope.len() > 32,
+        "the envelope carries nonce, ciphertext, and tag"
+    );
+    let blind = stored_column(
+        &server,
+        &blind_column(server.registry(), "secret"),
+        &record_id,
+    )
+    .await;
+    assert_eq!(blind.len(), 32, "the blind index is one HMAC-SHA256 digest");
+    let code_envelope = stored_column(
+        &server,
+        &envelope_column(server.registry(), "code"),
+        &record_id,
+    )
+    .await;
+    assert!(
+        !code_envelope
+            .windows(b"ABC-1234".len())
+            .any(|window| window == b"ABC-1234"),
+        "the code envelope does not contain its plaintext"
+    );
+
+    // The registry_source view exposes neither the envelopes nor the indexes.
+    let registry = server.registry();
+    let holder = registry.entities().get("holder").expect("holder compiles");
+    let view_name = holder.source_relation.sql_name.clone();
+    let encrypted_columns = vec![
+        envelope_column(registry, "secret"),
+        envelope_column(registry, "code"),
+        envelope_column(registry, "big"),
+        blind_column(registry, "secret"),
+    ];
+    let exposed: i64 = server
+        .booted
+        .database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM information_schema.columns
+             WHERE table_schema = 'registry_source' AND table_name = $1
+               AND column_name = ANY($2)",
+            &[&view_name, &encrypted_columns],
+        )
+        .await
+        .expect("source view columns read")
+        .get(0);
+    assert_eq!(exposed, 0, "the source view excludes encrypted columns");
+
+    // The revision snapshot keeps the tagged member, so journal comparison
+    // canonicalizes byte-identically without decryption.
+    let snapshot: Vec<u8> = server
+        .booted
+        .database
+        .admin
+        .query_one(
+            "SELECT snapshot FROM registry_internal.registry_revisions
+             WHERE entity_id = 'holder' AND record_id = $1 AND record_revision = 1",
+            &[&Uuid::parse_str(&record_id).expect("record id is a UUID")],
+        )
+        .await
+        .expect("revision 1 snapshot exists")
+        .get(0);
+    let snapshot = String::from_utf8(snapshot).expect("snapshot is UTF-8");
+    assert!(
+        snapshot.contains("__bregEncryptedV1"),
+        "the snapshot carries the tagged member: {snapshot}"
+    );
+    assert!(!snapshot.contains("gamma-seven"));
+    assert!(!snapshot.contains("ABC-1234"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blind_index_lookup_resolves_normalized_equality() {
+    let server = boot_live_server().await;
+    let (status, created, _) = create_holder(
+        &server,
+        "lookup-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "lookup-target",
+            "secret": "gamma-seven",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+
+    let lookup = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders:lookup?$select=jurisdiction,label,secret",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "lookup-hit".to_owned()),
+        ],
+        Some(json!({"selector": "by-secret", "values": {"secret": "  GAMMA-SEVEN "}})),
+    )
+    .await;
+    assert_eq!(lookup.status(), StatusCode::OK);
+    let lookup = body_json(lookup).await;
+    assert_eq!(lookup["data"]["recordIdentifier"], record_id);
+    assert_eq!(lookup["data"]["domainData"]["secret"], "gamma-seven");
+
+    // A value nothing normalizes to leaves the lookup unresolved and the
+    // response value-free.
+    let unresolved = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders:lookup?$select=jurisdiction,label,secret",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "lookup-miss".to_owned()),
+        ],
+        Some(json!({"selector": "by-secret", "values": {"secret": "unknown-value"}})),
+    )
+    .await;
+    assert_eq!(unresolved.status(), StatusCode::NOT_FOUND);
+    let unresolved = body_json(unresolved).await;
+    assert_eq!(unresolved["code"], "lookup.unresolved");
+    assert!(!unresolved.to_string().contains("unknown-value"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn blind_index_unique_violation_maps_to_conflict() {
+    let server = boot_live_server().await;
+    let (status, _, _) = create_holder(
+        &server,
+        "unique-first",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "unique-first",
+            "secret": "alpha-one",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+
+    // The trim-and-uppercase normalization makes "ALPHA-ONE" collide on the
+    // unique blind index, and the violation surfaces as an ordinary conflict.
+    let (status, body, _) = create_holder(
+        &server,
+        "unique-second",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "unique-second",
+            "secret": "ALPHA-ONE",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "mutation.conflict");
+    assert!(!body.to_string().contains("ALPHA-ONE"));
+    assert_eq!(holder_row_count(&server).await, 1);
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn encrypted_pattern_is_enforced_in_rust_before_sealing() {
+    let server = boot_live_server().await;
+    let (status, body, _) = create_holder(
+        &server,
+        "pattern-violation",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "pattern-violation",
+            "secret": "gamma-seven",
+            "code": "nope",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["code"], "mutation.conflict");
+    assert_eq!(body["entityId"], "holder");
+    assert_eq!(body["fieldId"], "code");
+    assert_eq!(holder_row_count(&server).await, 0, "no row was written");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn oversized_encrypted_plaintext_is_refused() {
+    let server = boot_live_server().await;
+    let (status, body, _) = create_holder(
+        &server,
+        "oversize",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "oversize",
+            "secret": "gamma-seven",
+            "big": "x".repeat(70_000),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "request.invalid");
+    assert_eq!(holder_row_count(&server).await, 0, "no row was written");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tampered_envelope_fails_closed_and_sibling_entity_serves() {
+    let server = boot_live_server().await;
+
+    // A sibling entity without encrypted fields keeps serving.
+    let note = send(
+        &server,
+        Method::POST,
+        "/v1/records/notes",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "tamper-note".to_owned()),
+        ],
+        Some(json!({"data": {"text": "plain note"}})),
+    )
+    .await;
+    assert_eq!(note.status(), StatusCode::CREATED);
+
+    let (status, created, _) = create_holder(
+        &server,
+        "tamper-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "tamper-target",
+            "secret": "gamma-seven",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+
+    // Corrupt one tag byte of the stored envelope directly in the database.
+    let envelope = envelope_column(server.registry(), "secret");
+    server
+        .booted
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{table}
+                 SET {envelope} = set_byte(
+                     {envelope},
+                     octet_length({envelope}) - 1,
+                     get_byte({envelope}, octet_length({envelope}) - 1) # 1)
+                 WHERE record_id = $1",
+                table = holder_table(server.registry()),
+            ),
+            &[&Uuid::parse_str(&record_id).expect("record id is a UUID")],
+        )
+        .await
+        .expect("tampered envelope writes");
+
+    let fetched = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let fetched = body_json(fetched).await;
+    assert_eq!(fetched["code"], "runtime.field_encryption.unavailable");
+    assert!(
+        !fetched.to_string().contains("gamma"),
+        "the refusal stays value-free"
+    );
+
+    let listed = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders?$select=jurisdiction,label,secret",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(
+        listed.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "a listing that would surface the tampered row fails closed too"
+    );
+
+    let notes = send(
+        &server,
+        Method::GET,
+        "/v1/records/notes?$select=text",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(notes.status(), StatusCode::OK);
+    let notes = body_json(notes).await;
+    let items = notes["items"].as_array().expect("note items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["domainData"]["text"], "plain note");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn aad_binds_the_record_row() {
+    let server = boot_live_server().await;
+    let (_, first, _) = create_holder(
+        &server,
+        "aad-first",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "aad-first",
+            "secret": "alpha-secret",
+        }),
+    )
+    .await;
+    let (_, second, _) = create_holder(
+        &server,
+        "aad-second",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "aad-second",
+            "secret": "beta-secret",
+        }),
+    )
+    .await;
+    let first_id = first["data"]["recordIdentifier"]
+        .as_str()
+        .expect("first record identifier is present")
+        .to_owned();
+    let second_id = second["data"]["recordIdentifier"]
+        .as_str()
+        .expect("second record identifier is present")
+        .to_owned();
+
+    // Move the first record's envelope onto the second row. The envelope's
+    // AAD names the first record, so it must not open there. The blind index
+    // stays per-row: its unique index would refuse the copy anyway.
+    let envelope = envelope_column(server.registry(), "secret");
+    server
+        .booted
+        .database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{table} AS target
+                 SET {envelope} = source.{envelope}
+                 FROM registry_data.{table} AS source
+                 WHERE source.record_id = $1 AND target.record_id = $2",
+                table = holder_table(server.registry()),
+            ),
+            &[
+                &Uuid::parse_str(&first_id).expect("first record id is a UUID"),
+                &Uuid::parse_str(&second_id).expect("second record id is a UUID"),
+            ],
+        )
+        .await
+        .expect("row-move tamper writes");
+
+    let moved = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{second_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(moved.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let moved = body_json(moved).await;
+    assert_eq!(moved["code"], "runtime.field_encryption.unavailable");
+    assert!(
+        !moved.to_string().contains("secret"),
+        "the refusal stays value-free"
+    );
+
+    let original = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{first_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(original.status(), StatusCode::OK);
+    let original = body_json(original).await;
+    assert_eq!(original["data"]["domainData"]["secret"], "alpha-secret");
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn patch_replaces_the_envelope_and_test_op_is_refused() {
+    let server = boot_live_server().await;
+    let (status, created, create_etag) = create_holder(
+        &server,
+        "patch-create",
+        json!({
+            "jurisdiction": "area-a",
+            "label": "patch-target",
+            "secret": "gamma-seven",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+    let before = stored_column(
+        &server,
+        &envelope_column(server.registry(), "secret"),
+        &record_id,
+    )
+    .await;
+
+    let patched = send(
+        &server,
+        Method::PATCH,
+        &format!("/v1/records/holders/{record_id}"),
+        &[
+            ("content-type", "application/json-patch+json".to_owned()),
+            ("idempotency-key", "patch-replace".to_owned()),
+            ("if-match", create_etag.expect("create carries an ETag")),
+        ],
+        Some(json!([
+            {"op": "replace", "path": "/data/secret", "value": "delta-two"},
+        ])),
+    )
+    .await;
+    assert_eq!(patched.status(), StatusCode::OK);
+    let patched_etag = response_etag(&patched);
+    let patched = body_json(patched).await;
+    assert_eq!(patched["data"]["domainData"]["secret"], "delta-two");
+
+    // The stored envelope was resealed, not edited in place.
+    let after = stored_column(
+        &server,
+        &envelope_column(server.registry(), "secret"),
+        &record_id,
+    )
+    .await;
+    assert_ne!(before, after);
+
+    let fetched = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status(), StatusCode::OK);
+    let fetched = body_json(fetched).await;
+    assert_eq!(fetched["data"]["domainData"]["secret"], "delta-two");
+
+    // The blind index followed the new value.
+    let lookup = send(
+        &server,
+        Method::POST,
+        "/v1/records/holders:lookup?$select=label,secret",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "patch-lookup".to_owned()),
+        ],
+        Some(json!({"selector": "by-secret", "values": {"secret": "delta-two"}})),
+    )
+    .await;
+    assert_eq!(lookup.status(), StatusCode::OK);
+
+    // A JSON-Patch test against an opaque envelope can neither pass nor fail
+    // honestly, so the operation is refused instead of compared.
+    let tested = send(
+        &server,
+        Method::PATCH,
+        &format!("/v1/records/holders/{record_id}"),
+        &[
+            ("content-type", "application/json-patch+json".to_owned()),
+            ("idempotency-key", "patch-test-op".to_owned()),
+            ("if-match", patched_etag),
+        ],
+        Some(json!([
+            {"op": "test", "path": "/data/secret", "value": "delta-two"},
+        ])),
+    )
+    .await;
+    assert_eq!(tested.status(), StatusCode::BAD_REQUEST);
+    let tested = body_json(tested).await;
+    assert_eq!(tested["code"], "request.invalid");
+
+    server.shutdown().await;
 }

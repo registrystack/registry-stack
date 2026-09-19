@@ -619,6 +619,7 @@ async fn read_dispatch(
                 Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
                     unavailable()
                 }
+                Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -739,6 +740,7 @@ async fn read_dispatch(
                 Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => {
                     unavailable()
                 }
+                Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
                 Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
             }
         }
@@ -917,6 +919,7 @@ async fn lookup_dispatch(
         ),
         Ok(None) => lookup_unresolved(),
         Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -1141,6 +1144,7 @@ async fn snapshot_dispatch(
             public_deployment_prefix(&service),
         ),
         Err(ReadServiceError::Unavailable | ReadServiceError::SnapshotUnreadable) => unavailable(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(ReadServiceError::CursorInvalid) => cursor_invalid(),
     }
 }
@@ -4755,6 +4759,14 @@ fn unavailable() -> Response {
     )
 }
 
+fn field_encryption_unavailable() -> Response {
+    fixed_problem(
+        StatusCode::SERVICE_UNAVAILABLE,
+        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
+        crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
+    )
+}
+
 fn invalid_query() -> Response {
     fixed_problem(
         StatusCode::BAD_REQUEST,
@@ -5340,6 +5352,11 @@ fn mutation_problem(error: MutationError) -> Response {
             entity_id,
             field_id,
         } => crate::correlation::field_pattern_response(entity_id, field_id),
+        MutationError::FieldEncryptionUnavailable => fixed_problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
+            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
+        ),
         MutationError::PlannerFailure(error) => {
             let (status, code, detail) = planner_failure_problem(error);
             fixed_problem(status, code, detail)
@@ -5392,13 +5409,7 @@ fn field_encryption_refusal(service: &HttpService, entity: &CompiledEntity) -> O
         .fields
         .values()
         .any(|field| field.encryption.is_some());
-    (encrypted && service.field_encryption.is_none()).then(|| {
-        fixed_problem(
-            StatusCode::SERVICE_UNAVAILABLE,
-            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.code(),
-            crate::problem::ProblemCode::RuntimeFieldEncryptionUnavailable.description(),
-        )
-    })
+    (encrypted && service.field_encryption.is_none()).then(field_encryption_unavailable)
 }
 
 #[cfg(test)]
