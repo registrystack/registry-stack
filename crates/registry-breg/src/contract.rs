@@ -2464,6 +2464,12 @@ pub struct HookSource {
     /// Optional field tests, combined with AND. Omit to run on every matching trigger.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
+    /// The access profile a proposal from this hook is applied under.
+    /// Optional: a hook that declares none is a non-proposing hook, and a
+    /// proposal from one is refused and dead-lettered at delivery time.
+    /// Declaring none is not an authoring error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
     /// Declared field identifiers to include in `values`. System event metadata is included separately.
     pub projection: BTreeSet<String>,
     /// Governed, destination-neutral delivery. `destinationId` is a key in

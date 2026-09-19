@@ -634,6 +634,14 @@ pub(crate) async fn append_webhook_audit(
             WebhookAuditOutcome::Delivered,
             WebhookAuditDisposition::Delivered,
         )
+        // A delivered answer whose proposal dead-lettered: the egress attempt
+        // succeeded, and the deterministic proposal refusal is what made the
+        // row terminal.
+        | (
+            WebhookAuditPhase::Terminal,
+            WebhookAuditOutcome::Delivered,
+            WebhookAuditDisposition::DeadLettered,
+        )
         | (
             WebhookAuditPhase::Terminal,
             WebhookAuditOutcome::HttpNonSuccess

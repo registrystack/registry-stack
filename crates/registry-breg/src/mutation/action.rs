@@ -2,11 +2,54 @@
 
 use super::*;
 
+use registry_platform_hooks::{
+    Causation, EnvelopeLimits, HandlerOutputLimits, HookEnvelope, HookMessage,
+};
+
 use crate::action_evidence::FrozenEvidenceEvaluation;
 use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
+use crate::action_outcome::{
+    bound_document, decode_document, json_document, validate_proposed_outcome,
+};
 use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput};
 
 type ActionInputs = Map<String, Value>;
+
+/// The budget one hook-proposal application runs under. It sits inside the
+/// delivery lease that holds the row, so the apply cannot outlive the
+/// attempt it settles.
+const HOOK_PROPOSAL_APPLY_BUDGET: Duration = Duration::from_secs(5);
+
+/// One accepted hook proposal the delivery worker settled, ready for the
+/// same mutation path an action handler's outcome takes. Every field is
+/// identity and the exact bytes the delivery row records.
+pub(crate) struct HookProposalApplication<'a> {
+    pub(crate) event_id: Uuid,
+    pub(crate) compiled_delivery_id: &'a str,
+    pub(crate) package_revision: &'a str,
+    pub(crate) envelope: &'a [u8],
+    pub(crate) answer: &'a [u8],
+    pub(crate) answer_digest: &'a [u8; 32],
+}
+
+/// What became of one hook proposal the mutation path was asked to apply.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HookProposalOutcome {
+    /// The proposal applied; the revision the applied mutation produced.
+    Applied(i64),
+    /// Deterministically refused: retrying the same answer cannot apply it,
+    /// and the delivery row still completes as delivered.
+    Refused { code: &'static str, summary: String },
+    /// The proposal can never be applied under this deployment; the delivery
+    /// row dead-letters with this reason.
+    DeadLettered { code: &'static str, summary: String },
+}
+
+/// The apply may or may not have committed. The caller fails closed: the
+/// delivery row keeps its lease and expiry recovery retries, and the
+/// idempotent replay of the same application resolves it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UncertainApply;
 
 struct ActionEffectResult {
     effect_id: String,
@@ -89,6 +132,7 @@ impl MutationCoordinator {
                     deadline,
                     &mut candidate,
                     None,
+                    None,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -114,6 +158,449 @@ impl MutationCoordinator {
             MutationError::RetryableConflict => MutationError::Unavailable,
             other => other,
         })
+    }
+
+    /// Apply one settled hook proposal through the immediate-action path.
+    ///
+    /// The proposal runs the same validation, authorization, and mutation
+    /// machinery an action handler's outcome runs: the proposed outcome is
+    /// decoded and validated through [`validate_proposed_outcome`], the
+    /// declared principal selects the action grant the proposal is applied
+    /// under, and the mutation itself commits in this method's own fresh
+    /// transactions, never inside the delivery worker's claim, material, or
+    /// finalize transactions.
+    ///
+    /// The applied mutation's own events are children of the delivered
+    /// event: the child causation is computed before any transaction opens,
+    /// and a chain whose next hop would exceed the platform causation
+    /// ceiling is refused here, before anything is enqueued, so the refusal
+    /// is a dead letter the row keeps its payload for.
+    ///
+    /// Idempotency is the immediate-action receipt under a key derived from
+    /// the hook delivery identity (event id, compiled delivery id, and the
+    /// digest of exactly the answer bytes, domain-separated). The key is
+    /// stable across attempts and replay generations, so a redelivered
+    /// answer resolves through receipt recovery as a replay of the same
+    /// application rather than a second one.
+    pub(crate) async fn apply_hook_proposal(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        application: &HookProposalApplication<'_>,
+    ) -> Result<HookProposalOutcome, UncertainApply> {
+        // The envelope the worker delivered, re-read from the exact stored
+        // bytes so the chain position comes from what was delivered, not
+        // from anything reconstructed.
+        let Ok(envelope) =
+            HookEnvelope::from_canonical_bytes(application.envelope, &EnvelopeLimits::default())
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.envelope_refused",
+                "The delivered envelope bytes could not be re-read as an envelope.",
+            );
+        };
+        let Ok(message) =
+            HookMessage::from_canonical_json(application.answer, &HandlerOutputLimits::default())
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.answer_refused",
+                "The settled answer bytes could not be re-read as a handler message.",
+            );
+        };
+        let HookMessage::Proposal { document } = message else {
+            return dead_lettered_proposal(
+                "hook.proposal.answer_refused",
+                "The settled answer does not carry a proposal.",
+            );
+        };
+
+        // The proposal document: exact members, with the action, the input
+        // values, the proposed outcome, and optional existing-target
+        // preconditions.
+        let Value::Object(members) = &document.0 else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Return the proposal document as a JSON object.",
+            );
+        };
+        if members.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "action" | "input" | "outcome" | "preconditions"
+            )
+        }) {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "The proposal document may contain only action, input, outcome, and preconditions.",
+            );
+        }
+        let Some(action_id) = members
+            .get("action")
+            .and_then(Value::as_str)
+            .filter(|action_id| !action_id.is_empty())
+        else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Name the proposed action as a non-empty string.",
+            );
+        };
+        let Some(input_values) = members.get("input").and_then(Value::as_object) else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Carry the proposal input as a JSON object.",
+            );
+        };
+        let input_values = input_values.clone();
+        let Some(outcome_value) = members.get("outcome") else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Carry the proposed outcome under outcome.",
+            );
+        };
+        let mut preconditions = BTreeMap::<String, String>::new();
+        match members.get("preconditions") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(entries)) => {
+                for (input_id, value) in entries {
+                    let Some(record_id) = value.as_str().filter(|id| !id.is_empty()) else {
+                        return refused_proposal(
+                            "hook.proposal.document_refused",
+                            "Carry each precondition as the target record id string.",
+                        );
+                    };
+                    preconditions.insert(input_id.clone(), record_id.to_owned());
+                }
+            }
+            Some(_) => {
+                return refused_proposal(
+                    "hook.proposal.document_refused",
+                    "Carry the proposal preconditions as a JSON object.",
+                );
+            }
+        }
+
+        // The compiled delivery the proposal arrived under, and the package
+        // revision it must still match.
+        if application.package_revision != self.expected.package_revision {
+            return dead_lettered_proposal(
+                "hook.proposal.package_unavailable",
+                "The delivery row was captured under a package this deployment no longer holds.",
+            );
+        }
+        let Some(delivery) = registry
+            .event_deliveries()
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.id == application.compiled_delivery_id)
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.package_unavailable",
+                "The compiled package declares no delivery under this binding.",
+            );
+        };
+
+        // The principal a proposal from this hook is applied under. A hook
+        // that declared none is a deployment defect a proposal exposes: the
+        // proposal can never name an authority, so it dead-letters.
+        let Some(principal) = delivery.principal.as_deref() else {
+            return dead_lettered_proposal(
+                "hook.proposal.no_principal",
+                "The hook declares no principal, so its proposal names no authority to apply under.",
+            );
+        };
+
+        let Some(action) = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+        else {
+            return refused_proposal(
+                "hook.proposal.action_not_found",
+                "The proposal names an action the compiled package does not declare.",
+            );
+        };
+        let Some(handler) = action.handler.as_ref() else {
+            return refused_proposal(
+                "hook.proposal.action_without_handler",
+                "The proposal names an action that declares no reviewed handler.",
+            );
+        };
+        let Some(grant) = action
+            .permissions
+            .iter()
+            .find(|grant| grant.profile_id == principal)
+        else {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal holds no permission on the proposed action.",
+            );
+        };
+        if !grant.operations.contains(&Operation::Invoke) {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal may not invoke the proposed action.",
+            );
+        }
+        if grant.results.is_empty() {
+            return refused_proposal(
+                "hook.proposal.no_visible_results",
+                "The declared principal's grant declares no result effects, so nothing could be recorded.",
+            );
+        }
+        let Ok(claims) = ActionClaimContext::new(
+            action.id.clone(),
+            format!("hook:{principal}"),
+            principal.to_owned(),
+            None,
+            grant.results.clone(),
+        ) else {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal does not form a bounded authority context.",
+            );
+        };
+        // A hook holds no claims, so a grant that row-boundaries its targets
+        // can never be satisfied by this path and is refused outright.
+        let mut target_authority = BTreeMap::<String, Vec<RowBoundaryContext>>::new();
+        for target in &grant.targets {
+            if target.row_boundaries.is_empty() {
+                target_authority.insert(target.entity_id.clone(), Vec::new());
+            } else {
+                return refused_proposal(
+                    "hook.proposal.boundaries_unsatisfiable",
+                    "The declared principal's grant carries row boundaries a hook holds no claims to satisfy.",
+                );
+            }
+        }
+        if validate_action_claims(action, &claims, Operation::Invoke).is_err() {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal's grant does not authorize this invocation.",
+            );
+        }
+        let Ok(normalized_input) = validate_action_input(action, input_values) else {
+            return refused_proposal(
+                "hook.proposal.input_refused",
+                "The proposal input does not satisfy the action's declared inputs.",
+            );
+        };
+        if validate_precondition_set(action, &preconditions).is_err() {
+            return refused_proposal(
+                "hook.proposal.precondition_refused",
+                "The proposal preconditions do not match the action's existing-target inputs.",
+            );
+        }
+
+        // The proposed outcome runs the exact validation an action handler's
+        // returned outcome runs, against the same declared write slots.
+        let outcome_document = json_document(outcome_value.clone());
+        if bound_document(&outcome_document, action.maximum_snapshot_bytes).is_err() {
+            return refused_proposal(
+                "hook.proposal.outcome_refused",
+                "The proposed outcome exceeds the action's snapshot bound.",
+            );
+        }
+        let proposed = match decode_document(outcome_document) {
+            Ok(proposed) => proposed,
+            Err(_) => {
+                return refused_proposal(
+                    "hook.proposal.outcome_refused",
+                    "The proposed outcome is not a valid effects or refusal document.",
+                );
+            }
+        };
+        let outcome_effects = match validate_proposed_outcome(action, handler, proposed) {
+            Ok(ActionHandlerOutcome::Effects(effects)) => effects,
+            Ok(ActionHandlerOutcome::Refusal(refusal)) => {
+                return refused_proposal(
+                    "hook.proposal.handler_refusal",
+                    format!(
+                        "The proposed outcome refused the action with the declared refusal {}.",
+                        refusal.code
+                    ),
+                );
+            }
+            Err(diagnostic) => {
+                return refused_proposal("hook.proposal.outcome_refused", diagnostic.message);
+            }
+        };
+
+        // The child causation is computed before any transaction opens, so a
+        // refused chain never enqueues anything and the dead letter keeps
+        // its payload.
+        let causation = match envelope.causation.child(&envelope.id) {
+            Ok(causation) => causation,
+            Err(error) => {
+                return dead_lettered_proposal(
+                    "hook.causation.hop_beyond_ceiling",
+                    error.to_string(),
+                );
+            }
+        };
+
+        // The application identity: the hook delivery identity and the
+        // digest of exactly the answer bytes, domain-separated. No attempt
+        // or generation component, so every redelivery of the same answer
+        // resolves as the same application.
+        let mut idempotency_input = Vec::new();
+        idempotency_input.extend_from_slice(b"breg-hook-proposal-idempotency-v1");
+        append_proposal_idempotency_component(
+            &mut idempotency_input,
+            application.event_id.to_string().as_bytes(),
+        );
+        append_proposal_idempotency_component(
+            &mut idempotency_input,
+            application.compiled_delivery_id.as_bytes(),
+        );
+        append_proposal_idempotency_component(&mut idempotency_input, application.answer_digest);
+        let idempotency_key = format!("sha256:{}", hex::encode(Sha256::digest(idempotency_input)));
+
+        let Ok(request_digest) =
+            canonical_action_request_digest(action, &normalized_input, &preconditions)
+        else {
+            return refused_proposal(
+                "hook.proposal.input_refused",
+                "The proposal input could not be canonicalized for idempotency.",
+            );
+        };
+        let binding = match resolve_action_binding(
+            &self.audit_profile,
+            &ActionIdempotencyBinding {
+                key: &idempotency_key,
+                context: &claims,
+                method: HttpMethod::Post,
+                route: &action.route,
+                package_revision: &self.expected.package_revision,
+                action_contract_fingerprint: &action.contract_fingerprint,
+                target_authority: &target_authority,
+                result_effects: claims.result_effects(),
+                canonical_request_digest: request_digest,
+            },
+        ) {
+            Ok(binding) => binding,
+            Err(_) => {
+                return dead_lettered_proposal(
+                    "hook.proposal.binding_refused",
+                    "The proposal's idempotency binding could not be resolved.",
+                );
+            }
+        };
+        let Ok(reserved_creates) = reserve_action_create_ids(action) else {
+            return Err(UncertainApply);
+        };
+        let Some(route_id) = registry
+            .actions()
+            .routes
+            .iter()
+            .find(|route| route.action_id == action.id && route.kind == ActionRouteKind::Invoke)
+            .map(|route| route.id.clone())
+        else {
+            return refused_proposal(
+                "hook.proposal.action_not_found",
+                "The proposed action declares no invoke route.",
+            );
+        };
+        let application_id = Uuid::new_v4();
+        let correlation = RequestCorrelation::breg_created();
+        self.record_action_boundary_audit(
+            client,
+            &claims,
+            &route_id,
+            &correlation,
+            PreIoAuditKind::Attempt,
+        )
+        .await
+        .map_err(|_| UncertainApply)?;
+
+        let deadline = tokio::time::Instant::now() + HOOK_PROPOSAL_APPLY_BUDGET;
+        let fault = FaultControl::Disabled;
+        let mut candidate = Some(outcome_effects);
+        let mut retryable_attempts = 0;
+        let result = loop {
+            let attempt = self
+                .execute_immediate_action_after_attempt(
+                    client,
+                    registry,
+                    action,
+                    &claims,
+                    &target_authority,
+                    &normalized_input,
+                    &preconditions,
+                    &binding,
+                    &reserved_creates,
+                    application_id,
+                    &route_id,
+                    &correlation,
+                    fault,
+                    deadline,
+                    &mut candidate,
+                    None,
+                    Some(&causation),
+                )
+                .await;
+            if matches!(attempt, Err(MutationError::RetryableConflict))
+                && retryable_attempts < 2
+                && !fault.is_enabled()
+            {
+                retryable_attempts += 1;
+                continue;
+            }
+            break attempt;
+        };
+        if result.is_err() && !fault.is_enabled() {
+            self.record_action_boundary_audit(
+                client,
+                &claims,
+                &route_id,
+                &correlation,
+                PreIoAuditKind::Refusal,
+            )
+            .await
+            .map_err(|_| UncertainApply)?;
+        }
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(
+                MutationError::ActionRefusal(_)
+                | MutationError::ActionHandlerFailure(_)
+                | MutationError::ActionEvidenceFailure { .. },
+            ) => {
+                return refused_proposal(
+                    "hook.proposal.handler_refusal",
+                    "The proposed outcome was refused by the action's handler contract.",
+                );
+            }
+            Err(MutationError::PreconditionFailed) => {
+                return refused_proposal(
+                    "hook.proposal.precondition_failed",
+                    "The proposed mutation found its target in an unexpected state.",
+                );
+            }
+            Err(MutationError::InvalidRequest) => {
+                return refused_proposal(
+                    "hook.proposal.mutation_refused",
+                    "The proposed mutation was refused by the mutation contract.",
+                );
+            }
+            Err(_) => return Err(UncertainApply),
+        };
+
+        // The held response carries one results entry per granted effect,
+        // each with the revision the applied mutation produced.
+        let Ok(body) = serde_json::from_slice::<Value>(outcome.response.body()) else {
+            return Err(UncertainApply);
+        };
+        let Some(resulting_revision) = body
+            .get("results")
+            .and_then(Value::as_object)
+            .and_then(|results| results.values().next())
+            .and_then(|result| result.get("revision"))
+            .and_then(Value::as_i64)
+        else {
+            return Err(UncertainApply);
+        };
+        Ok(HookProposalOutcome::Applied(resulting_revision))
     }
 
     pub(crate) async fn action_target_conditions(
@@ -215,6 +702,7 @@ impl MutationCoordinator {
         deadline: tokio::time::Instant,
         candidate: &mut Option<Vec<CompiledActionEffect>>,
         frozen: Option<&FrozenEvidenceEvaluation>,
+        causation: Option<&Causation>,
     ) -> Result<MutationOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -446,7 +934,7 @@ impl MutationCoordinator {
                     envelope: EnvelopeBinding {
                         source: &event_source,
                         data_schemas: &data_schemas,
-                        causation: None,
+                        causation,
                     },
                 },
             )
@@ -1213,6 +1701,31 @@ fn action_for_route<'a>(
                 }
         })
         .ok_or(MutationError::InvalidRequest)
+}
+
+fn refused_proposal(
+    code: &'static str,
+    summary: impl Into<String>,
+) -> Result<HookProposalOutcome, UncertainApply> {
+    Ok(HookProposalOutcome::Refused {
+        code,
+        summary: summary.into(),
+    })
+}
+
+fn dead_lettered_proposal(
+    code: &'static str,
+    summary: impl Into<String>,
+) -> Result<HookProposalOutcome, UncertainApply> {
+    Ok(HookProposalOutcome::DeadLettered {
+        code,
+        summary: summary.into(),
+    })
+}
+
+fn append_proposal_idempotency_component(output: &mut Vec<u8>, value: &[u8]) {
+    output.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    output.extend_from_slice(value);
 }
 
 fn validate_action_claims(
@@ -2065,6 +2578,7 @@ impl MutationCoordinator {
                     deadline,
                     &mut candidate,
                     Some(frozen),
+                    None,
                 )
                 .await;
             if matches!(result, Err(MutationError::RetryableConflict))

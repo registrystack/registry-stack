@@ -927,6 +927,10 @@ pub struct CompiledEventDelivery {
     pub projection_fields: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
+    /// The access profile a proposal from this hook is applied under, carried
+    /// opaquely from the declaration. Absent for a non-proposing hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
     pub classification_ceiling: Classification,
     pub data_schema: String,
     pub data_schema_fingerprint: String,

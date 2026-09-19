@@ -362,6 +362,7 @@ async fn real_postgres_request_lifecycle_webhook_retries_and_operator_replay_kee
             &compiled,
             &identity.package_revision,
         )),
+        Arc::new(compiled.clone()),
         identity,
         RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives"),
         Duration::from_secs(2),
@@ -586,6 +587,7 @@ fn configured_events() -> BTreeMap<String, HookSource> {
             stages: BTreeSet::from(["review".to_owned()]),
         }),
         handler: None,
+        principal: None,
     };
     BTreeMap::from([(event.id.clone(), event)])
 }
