@@ -119,15 +119,19 @@ The rewrite is mechanical: rename the member to `hooks`, add `phase: after` to
 every hook, and replace `webhook: {destinationId: X}` with
 `handler: {kind: url, destinationId: X}`. `id`, `trigger`, `projection`, and
 `when` keep their spelling and meaning. An entity hook runs after the
-triggering transaction commits, so the compiler refuses `phase: before` and
-refuses the local `rhai` and `wasm` handler kinds the shared declaration also
-offers.
+triggering transaction commits, so the compiler refuses `phase: before`. The
+local `rhai` and `wasm` handler kinds the shared declaration also offers run in
+the post-commit worker and name a reviewed script or module path instead of a
+destination.
 
-Nothing else moves. Runtime `eventDestinations` keeps its name and its keys,
-the delivered CloudEvents request is byte-identical, the `X-Registry-Signature`
-bytes are unchanged, and retained delivery state keyed on the compiled delivery
-id survives a package upgrade. Diagnostic codes still read `event.*`, because
-they name the operator-facing concept rather than the authored member.
+Runtime `eventDestinations` keeps its name and its keys, and retained delivery
+state keyed on the compiled delivery id survives a package upgrade. The stored
+and delivered body is the shared hook envelope rather than the bare
+CloudEvents request, and `X-Registry-Signature` covers exactly the envelope
+bytes a receiver is sent. A receiver built against the earlier request shape
+must verify the new body, and the outbox must be drained before upgrading.
+Diagnostic codes still read `event.*`, because they name the operator-facing
+concept rather than the authored member.
 
 Because a module's lock digest covers its parsed document, renaming the member
 changes every locked digest. Run `bregctl project lock PROJECT` after the

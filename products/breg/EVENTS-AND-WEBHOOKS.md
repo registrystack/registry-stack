@@ -63,13 +63,15 @@ hooks:
 - Lifecycle events use `kind: request_lifecycle` with at least one nonempty
   `transitions`, `toStates`, or `stages` list. Each nonempty list must match;
   field predicates are not available for this trigger.
-- `handler` declares `kind: url` and the logical `destinationId`. The compiler
-  refuses the local handler kinds the shared declaration also offers, because
-  an entity hook delivers to a bound destination. One event has at most one
-  destination. A project that needs fanout uses an external event gateway until
-  native fanout is justified.
-- Production compilation rejects an event without a delivery because Version
-  1 has no supported outbox consumer API.
+- `handler` declares either `kind: url` with the logical `destinationId`, or
+  one of the local kinds: `kind: rhai` with a reviewed `script` path, or
+  `kind: wasm` with a reviewed `module` path. A url handler delivers to a bound
+  destination; a local handler runs its program in the post-commit worker and
+  records its answer on the delivery. One event has at most one handler. A
+  project that needs fanout uses an external event gateway until native fanout
+  is justified.
+- Production compilation rejects an event without a handler because Version 1
+  has no supported outbox consumer API.
 
 Modules may add hooks to an existing entity using the normal deterministic
 entity-extension mechanism. They may not silently replace an event owned by
