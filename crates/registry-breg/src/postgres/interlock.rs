@@ -1092,6 +1092,19 @@ impl DedicatedApplyConnection {
             // Draining chunk: verify stored content before any reviewed DROP
             // COLUMN can run, record the flip boundary, and close the step in
             // this one transaction so a failure leaves the step resumable.
+            let history_commit_position = transaction
+                .query_one(
+                    "SELECT latest_position
+                       FROM registry_internal.registry_commit_head
+                      WHERE singleton
+                      FOR UPDATE",
+                    &[],
+                )
+                .await
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                .get::<_, i64>(0)
+                .checked_add(1)
+                .ok_or(PostgresKernelError::RegistryUnavailable)?;
             for field in covered {
                 let verification = verify_field_encryption_content(
                     &transaction,
@@ -1106,6 +1119,7 @@ impl DedicatedApplyConnection {
                     field,
                     target_package_revision,
                     history_choice,
+                    history_commit_position,
                     &verification,
                 )
                 .await?;
@@ -1479,6 +1493,10 @@ impl DedicatedApplyConnection {
             ));
         }
         let transaction = self.client.transaction().await?;
+        // Refuse before maintenance or ledger state can start: otherwise a
+        // successor could add new flip rows while an erase lifecycle is using
+        // the current durable flip manifest for crash-resumable correlation.
+        verify_complete_history_coverage(&transaction).await?;
         verify_retained_webhook_delivery_bindings(
             &transaction,
             event_destination_compatibility_inventory,
@@ -1660,6 +1678,13 @@ impl DedicatedApplyConnection {
             runtime_role,
         )
         .await?;
+        // A field-encryption erase lifecycle marks coverage incomplete before
+        // releasing its first lock transaction. Refusing successor activation
+        // until rebaseline completes freezes the durable flip manifest used to
+        // correlate crash-resumable audit counts.
+        if current.is_some() {
+            verify_complete_history_coverage(&transaction).await?;
+        }
         record_applied(&transaction, ledger).await?;
         let changed = if let Some(current) = current {
             current.validate()?;
@@ -2035,6 +2060,25 @@ impl DedicatedApplyConnection {
         self.connection_task.abort();
         Ok(())
     }
+}
+
+async fn verify_complete_history_coverage(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<()> {
+    let complete = client
+        .query_opt(
+            "SELECT coverage_ready AND unavailable_after_position IS NULL
+               FROM registry_internal.registry_commit_head
+              WHERE singleton
+              FOR UPDATE",
+            &[],
+        )
+        .await?
+        .is_some_and(|row| row.get::<_, bool>(0));
+    if !complete {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
 }
 
 /// Refuse a successor before changing maintenance state when its activated
@@ -2549,31 +2593,25 @@ async fn verify_field_encryption_content(
         u64::try_from(accepted_plaintext_journal.get::<_, i64>(0))
             .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
-    // Target copies are counted by key and tagged-member presence. Proposal
-    // copies use their frozen nested effects and field changes; neither path
-    // parses and rewrites workflow payloads during apply verification.
+    // Every target copy present while the flip transaction holds the apply
+    // lock predates the flip. A structured plaintext value can legitimately
+    // have the envelope tag's JSON shape, so value shape cannot subtract it
+    // from the accepted pre-flip count. Proposal copies use their frozen
+    // nested effects and field changes.
     let request_targets = transaction
         .query_one(
-            "SELECT count(*) FILTER (WHERE base_snapshot ? $2 OR after_snapshot ? $2)::bigint,
-                    count(*) FILTER (WHERE (base_snapshot -> $2 ->> $3) IS NOT NULL
-                                       OR (after_snapshot -> $2 ->> $3) IS NOT NULL)::bigint
+            "SELECT count(*) FILTER (
+                        WHERE base_snapshot ? $2 OR after_snapshot ? $2
+                    )::bigint
                FROM registry_internal.registry_request_targets
               WHERE target_entity_id = $1",
-            &[
-                &entity_id,
-                &field_id,
-                &registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG,
-            ],
+            &[&entity_id, &field_id],
         )
         .await
         .map_err(|_| PostgresKernelError::Connection)?;
     let target_mentions: i64 = request_targets.get(0);
-    let target_sealed: i64 = request_targets.get(1);
-    if target_sealed > target_mentions {
-        return Err(PostgresKernelError::RegistryUnavailable);
-    }
-    verification.accepted_request_target_rows = u64::try_from(target_mentions - target_sealed)
-        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+    verification.accepted_request_target_rows =
+        u64::try_from(target_mentions).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
 
     let request_proposals = transaction
         .query_one(
@@ -2650,6 +2688,7 @@ async fn record_field_encryption_flip(
     field: &FieldEncryptionCoveredField<'_>,
     boundary_package_revision: &str,
     history_choice: ReviewedFieldEncryptionHistory,
+    history_commit_position: i64,
     verification: &FieldEncryptionContentVerification,
 ) -> Result<()> {
     let history_choice = match history_choice {
@@ -2660,16 +2699,18 @@ async fn record_field_encryption_flip(
         .execute(
             "INSERT INTO registry_internal.registry_field_encryption_flips (
                  entity_id, field_id, boundary_package_revision, history_choice,
+                 history_commit_position,
                  sealed_row_count, sealed_journal_row_count,
                  accepted_plaintext_journal_row_count, accepted_request_target_row_count,
                  accepted_request_proposal_row_count, accepted_idempotency_row_count,
                  accepted_outbox_row_count
-             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
             &[
                 &field.entity_id,
                 &field.candidate.id,
                 &boundary_package_revision,
                 &history_choice,
+                &history_commit_position,
                 &i64::try_from(verification.sealed_rows)
                     .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
                 &i64::try_from(verification.sealed_journal_rows)

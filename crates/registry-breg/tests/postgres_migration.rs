@@ -903,6 +903,54 @@ async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plainte
     );
     let keys = flip_key_source();
 
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = false, unavailable_after_position = 0
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test marks history coverage incomplete");
+    let coverage_refusal = apply_flip(&database, &package, &active, &keys, None).await;
+    assert_eq!(
+        coverage_refusal.expect_err("incomplete coverage refuses successor begin"),
+        MigrationError::ApplyFailed
+    );
+    let untouched = database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT maintenance_status = 'ready'
+                    AND maintenance_target_revision IS NULL
+                    FROM registry_internal.registry_state WHERE singleton),
+                 NOT EXISTS (
+                     SELECT 1 FROM registry_internal.registry_migrations
+                      WHERE target_package_revision = $1
+                 ),
+                 NOT EXISTS (
+                     SELECT 1 FROM registry_internal.registry_field_encryption_flips
+                      WHERE boundary_package_revision = $1
+                 )",
+            &[&package.manifest().package_revision],
+        )
+        .await
+        .expect("refused successor leaves no durable migration state");
+    assert!(untouched.get::<_, bool>(0));
+    assert!(untouched.get::<_, bool>(1));
+    assert!(untouched.get::<_, bool>(2));
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = true, unavailable_after_position = NULL
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test restores complete history coverage");
+
     let interrupted = apply_flip(&database, &package, &active, &keys, Some(1)).await;
     let error = interrupted.expect_err("the injected fault interrupts the flip after one chunk");
     assert_eq!(error, MigrationError::ApplyFailed);
@@ -2376,7 +2424,8 @@ async fn assert_flip_boundary_row(
         .admin
         .query_one(
             "SELECT boundary_package_revision, history_choice, sealed_row_count,
-                    sealed_journal_row_count, accepted_plaintext_journal_row_count
+                    sealed_journal_row_count, accepted_plaintext_journal_row_count,
+                    history_commit_position
              FROM registry_internal.registry_field_encryption_flips
              WHERE entity_id = 'asset' AND field_id = 'secret'",
             &[],
@@ -2388,6 +2437,10 @@ async fn assert_flip_boundary_row(
     assert_eq!(row.get::<_, i64>(2), sealed_rows);
     assert_eq!(row.get::<_, i64>(3), sealed_journal_rows);
     assert_eq!(row.get::<_, i64>(4), accepted_plaintext_journal_rows);
+    assert!(
+        row.get::<_, i64>(5) > 0,
+        "the flip records a positive exclusive history cutoff"
+    );
 }
 
 async fn assert_flip_boundary_absent(database: &TestDatabase) {

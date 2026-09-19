@@ -31,6 +31,7 @@ use rcgen::{generate_simple_self_signed, CertifiedKey};
 use registry_breg::compiler::{compile_project_with_assets, CompileProfile};
 use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
+use registry_breg::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use registry_breg::hook_handler::HookHandlerRegistry;
 use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
@@ -42,6 +43,7 @@ use registry_breg::postgres::{
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_breg::webhook::{WebhookDeliveryError, WebhookDeliveryService, WebhookWorkOutcome};
 use registry_platform_audit::AuditProfile;
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
 use serde_json::{json, Map, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -245,6 +247,40 @@ fn proposal_registry() -> CompiledRegistry {
     )
 }
 
+/// The standard proposal registry with the action's `origin` target sealed
+/// at rest. The proposal still carries plaintext process-local input; only
+/// the committed field changes storage shape.
+fn encrypted_proposal_registry() -> CompiledRegistry {
+    let hooks = format!(
+        "[{}]",
+        hook_json("case-created", true, PROPOSING_RHAI_HANDLER)
+    );
+    let mut project_json: Value = serde_json::from_str(&hook_project_json(
+        &hooks,
+        "[]",
+        r#""results":["followup"]"#,
+        "",
+    ))
+    .expect("hook proposal fixture is JSON");
+    project_json["entities"][1]["classification"] = json!("restricted");
+    project_json["entities"][1]["fields"][2]["classification"] = json!("restricted");
+    project_json["entities"][1]["fields"][2]["encrypted"] = json!(true);
+    let project = parse_project_json(
+        &serde_json::to_vec(&project_json).expect("hook proposal fixture serializes"),
+    )
+    .expect("encrypted hook proposal fixture parses");
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[
+            rhai_asset("scripts/open-followup.rhai", ACTION_HANDLER_SCRIPT),
+            rhai_asset("hooks/propose.rhai", PROPOSAL_HOOK_SCRIPT),
+        ],
+        CompileProfile::Authoring,
+    )
+    .expect("encrypted hook proposal fixture compiles")
+}
+
 /// The loop journey registry: the followup entity carries the same proposing
 /// hook, so every applied proposal creates the next event whose hook proposes
 /// again, and only the causation ceiling ends the chain.
@@ -384,6 +420,24 @@ async fn setup_with_pool_size(
     with_destinations: bool,
     pool_size: usize,
 ) -> Setup {
+    setup_with_options(compiled, receiver, with_destinations, pool_size, false).await
+}
+
+async fn setup_with_field_encryption(
+    compiled: CompiledRegistry,
+    receiver: &HttpsReceiver,
+    with_destinations: bool,
+) -> Setup {
+    setup_with_options(compiled, receiver, with_destinations, 8, true).await
+}
+
+async fn setup_with_options(
+    compiled: CompiledRegistry,
+    receiver: &HttpsReceiver,
+    with_destinations: bool,
+    pool_size: usize,
+    enable_field_encryption: bool,
+) -> Setup {
     let database = TestDatabase::create(pool_size).await;
     let (migration, migration_task) = database.connect_migration().await;
     install_compiled_schema(&migration, &compiled, &database.runtime_role)
@@ -397,6 +451,11 @@ async fn setup_with_pool_size(
     )
     .await
     .expect("migration initializes active package identity with empty history");
+    let field_encryption = if enable_field_encryption {
+        Some(test_field_encryption_service(&migration).await)
+    } else {
+        None
+    };
     migration_task.abort();
 
     let fixture = DestinationFixture::new(receiver);
@@ -420,7 +479,11 @@ async fn setup_with_pool_size(
         audit_profile.clone(),
         Some(Arc::clone(&destinations)),
     );
-    let service = WebhookDeliveryService::new(
+    let coordinator = match field_encryption.clone() {
+        Some(field_encryption) => coordinator.with_field_encryption(field_encryption),
+        None => coordinator,
+    };
+    let service = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
         Arc::clone(&destinations),
         Arc::new(HookHandlerRegistry::new(
@@ -432,6 +495,7 @@ async fn setup_with_pool_size(
         lock_key,
         Duration::from_secs(2),
         audit_profile.clone(),
+        field_encryption,
     );
     drop(destinations);
     Setup {
@@ -443,6 +507,36 @@ async fn setup_with_pool_size(
         service,
         fixture,
     }
+}
+
+async fn test_field_encryption_service(
+    store: &tokio_postgres::Client,
+) -> Arc<FieldEncryptionService> {
+    let root = tempfile::Builder::new()
+        .prefix("breg-hook-field-dek-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("temporary parent canonicalizes"),
+        )
+        .expect("field-encryption secret root creates");
+    let dek_path = root.path().join("field-dek");
+    write_secret(&dek_path, STANDARD.encode([0x42_u8; 32]).as_bytes());
+    let dek_ref = SecretReference::parse("secret:file/field-dek")
+        .expect("field-encryption key reference parses");
+    let secrets = SecretResolver::new([SecretProvider::File], root.path())
+        .expect("field-encryption secret resolver builds");
+    Arc::new(
+        FieldEncryptionService::initialize(
+            &FieldEncryptionProvider::LocalFile { dek_ref },
+            "hook-proposal-registry",
+            PACKAGE_REVISION,
+            &secrets,
+            store,
+        )
+        .await
+        .expect("field-encryption key state activates"),
+    )
 }
 
 impl Setup {
@@ -863,6 +957,78 @@ async fn grant_followup_insert(setup: &Setup) {
 fn single_delivery(event: &CapturedEvent) -> &str {
     assert_eq!(event.compiled_delivery_ids.len(), 1);
     &event.compiled_delivery_ids[0]
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn real_postgres_hook_proposal_seals_an_encrypted_action_field() {
+    let receiver = HttpsReceiver::start().await;
+    let setup = setup_with_field_encryption(encrypted_proposal_registry(), &receiver, false).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "encrypted-proposal").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    let delivery = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(delivery.disposition.as_deref(), Some("applied"));
+    assert_eq!(delivery.resulting_revision, Some(1));
+    assert_eq!(delivery.message, None, "the plaintext proposal is erased");
+
+    let followup = setup
+        .compiled
+        .entities()
+        .get("followup")
+        .expect("the followup entity compiles");
+    let origin = followup
+        .fields
+        .get("origin")
+        .expect("the encrypted origin field compiles");
+    assert!(origin.encryption.is_some());
+    let data_type: String = setup
+        .database
+        .admin
+        .query_one(
+            "SELECT data_type
+               FROM information_schema.columns
+              WHERE table_schema = 'registry_data'
+                AND table_name = $1
+                AND column_name = $2",
+            &[&followup.physical_table, &origin.physical_name],
+        )
+        .await
+        .expect("the encrypted field's physical column exists")
+        .get(0);
+    assert_eq!(data_type, "bytea", "the field has only envelope storage");
+    let envelope: Vec<u8> = setup
+        .database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT {} FROM registry_data.{}",
+                origin.physical_name, followup.physical_table
+            ),
+            &[],
+        )
+        .await
+        .expect("the applied followup stores one envelope")
+        .get(0);
+    assert!(envelope.len() > 32, "the stored value is a sealed envelope");
+    assert!(
+        !envelope
+            .windows(b"hook-proposal".len())
+            .any(|window| window == b"hook-proposal"),
+        "the envelope does not retain the proposed plaintext"
+    );
+
+    setup.teardown().await;
+    receiver.stop().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
