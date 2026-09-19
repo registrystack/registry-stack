@@ -63,6 +63,7 @@ if [[ "$lane" == all || "$lane" == postgres ]]; then
     --test postgres_mutation_logical_names \
     --test postgres_webhook_outbox \
     --test postgres_webhook_delivery \
+    --test postgres_hook_proposals \
     --test postgres_temporal_corrections \
     --test postgres_batch \
     --test postgres_data_facility \
