@@ -162,11 +162,30 @@ pub async fn rebaseline_history_coverage(
         .map_err(|_| HistoryRebaselineError::Unavailable)?;
     verify_ready_identity(&transaction, request.expected).await?;
 
-    let head = lock_history_head(&transaction).await?;
+    let outcome = rebaseline_history_coverage_in_transaction(&transaction, &request).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|_| HistoryRebaselineError::Unavailable)?;
+    Ok(outcome)
+}
+
+/// Re-establish coverage and append the rebaseline audit inside a caller-owned
+/// maintenance transaction. The caller must already hold the Registry advisory
+/// lock and have verified the ready identity. Keeping commit ownership outside
+/// this helper lets a compound maintenance lifecycle add its own terminal audit
+/// before either the coverage change or any audit becomes durable.
+pub(crate) async fn rebaseline_history_coverage_in_transaction(
+    transaction: &tokio_postgres::Transaction<'_>,
+    request: &HistoryRebaselineRequest<'_>,
+) -> Result<HistoryRebaselineOutcome, HistoryRebaselineError> {
+    validate_request(request)?;
+
+    let head = lock_history_head(transaction).await?;
     if head.coverage_ready && head.unavailable_after_position.is_none() {
         return Err(HistoryRebaselineError::CoverageComplete);
     }
-    if has_unindexed_journal_heads(&transaction).await? {
+    if has_unindexed_journal_heads(transaction).await? {
         return Err(HistoryRebaselineError::UnindexedRevisions);
     }
 
@@ -182,10 +201,10 @@ pub async fn rebaseline_history_coverage(
     // other role keeps its policies, and the force is restored before the
     // transaction commits.
     let tables = entity_tables(request.registry);
-    set_force_row_security(&transaction, &tables, false).await?;
+    set_force_row_security(transaction, &tables, false).await?;
     let verified =
-        verify_live_rows_match_journal_heads(&transaction, request.registry.entities(), None).await;
-    set_force_row_security(&transaction, &tables, true).await?;
+        verify_live_rows_match_journal_heads(transaction, request.registry.entities(), None).await;
+    set_force_row_security(transaction, &tables, true).await?;
     let members = verified?;
 
     // Every retained journal head is already indexed, which the refusal above
@@ -193,7 +212,7 @@ pub async fn rebaseline_history_coverage(
     // covered position reconstruction starts from; the members earlier commits
     // hold reproduce the live rows verified here.
     let committed = allocate_coverage_baseline_commit(
-        &transaction,
+        transaction,
         &head,
         &request.expected.package_revision,
         BASELINE_SYSTEM_ORIGIN,
@@ -224,11 +243,7 @@ pub async fn rebaseline_history_coverage(
         previous_coverage_baseline_position: head.coverage_baseline_position,
         previous_unavailable_after_position: head.unavailable_after_position,
     };
-    append_history_rebaseline_audit(&transaction, &request, &outcome).await?;
-    transaction
-        .commit()
-        .await
-        .map_err(|_| HistoryRebaselineError::Unavailable)?;
+    append_history_rebaseline_audit(transaction, request, &outcome).await?;
     Ok(outcome)
 }
 

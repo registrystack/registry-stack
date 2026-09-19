@@ -47,6 +47,7 @@ use crate::audit::{
     WebhookAuditPhase,
 };
 use crate::event_destination::{ActivatedEventDestination, ActivatedEventDestinationRegistry};
+use crate::field_encryption::FieldEncryptionService;
 use crate::hook_handler::{BregHookHandler, HookHandlerRegistry};
 use crate::model::CompiledRegistry;
 use crate::mutation::{HookProposalApplication, HookProposalOutcome, MutationCoordinator};
@@ -185,6 +186,25 @@ struct BregDeliverySeams {
     lock_key: RegistryLockKey,
     lock_timeout: Duration,
     audit_profile: AuditProfile,
+    field_encryption: Option<Arc<FieldEncryptionService>>,
+}
+
+impl BregDeliverySeams {
+    fn mutation_coordinator(&self) -> MutationCoordinator {
+        let coordinator = MutationCoordinator::new_with_event_destinations(
+            self.lock_key,
+            self.lock_timeout,
+            self.expected.clone(),
+            self.audit_profile.clone(),
+            Some(Arc::clone(&self.destinations)),
+        );
+        match &self.field_encryption {
+            Some(field_encryption) => {
+                coordinator.with_field_encryption(Arc::clone(field_encryption))
+            }
+            None => coordinator,
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -199,13 +219,7 @@ impl DeliverySeams for BregDeliverySeams {
         // A per-call coordinator over the seams' own identity, so the apply
         // runs in fresh transactions and its committed events enqueue their
         // own delivery rows through the same destinations.
-        let coordinator = MutationCoordinator::new_with_event_destinations(
-            self.lock_key,
-            self.lock_timeout,
-            self.expected.clone(),
-            self.audit_profile.clone(),
-            Some(Arc::clone(&self.destinations)),
-        );
+        let coordinator = self.mutation_coordinator();
         let mut application_lock = HookProposalLock::acquire(
             self.pool.clone(),
             &coordinator,
@@ -251,13 +265,7 @@ impl DeliverySeams for BregDeliverySeams {
         &self,
         recovery: ProposalReceiptRecovery<'_>,
     ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-        let coordinator = MutationCoordinator::new_with_event_destinations(
-            self.lock_key,
-            self.lock_timeout,
-            self.expected.clone(),
-            self.audit_profile.clone(),
-            Some(Arc::clone(&self.destinations)),
-        );
+        let coordinator = self.mutation_coordinator();
         let mut application_lock = HookProposalLock::acquire(
             self.pool.clone(),
             &coordinator,
@@ -294,13 +302,7 @@ impl DeliverySeams for BregDeliverySeams {
         transaction: &Transaction<'_>,
         recovery: ProposalReceiptRecovery<'_>,
     ) -> Result<Option<ProposalOutcome>, DeliveryError> {
-        let coordinator = MutationCoordinator::new_with_event_destinations(
-            self.lock_key,
-            self.lock_timeout,
-            self.expected.clone(),
-            self.audit_profile.clone(),
-            Some(Arc::clone(&self.destinations)),
-        );
+        let coordinator = self.mutation_coordinator();
         let key_reference = coordinator
             .hook_proposal_key_reference(recovery.event_id, recovery.compiled_delivery_id)
             .map_err(|_| DeliveryError::Unavailable)?;
@@ -745,6 +747,34 @@ impl WebhookDeliveryService {
         lock_timeout: Duration,
         audit_profile: AuditProfile,
     ) -> Self {
+        Self::new_with_field_encryption(
+            pool,
+            destinations,
+            handlers,
+            registry,
+            expected,
+            lock_key,
+            lock_timeout,
+            audit_profile,
+            None,
+        )
+    }
+
+    /// Bind the delivery worker to the same optional field-encryption key
+    /// state used by request-path mutations.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_field_encryption(
+        pool: RuntimePool,
+        destinations: Arc<ActivatedEventDestinationRegistry>,
+        handlers: Arc<HookHandlerRegistry>,
+        registry: Arc<CompiledRegistry>,
+        expected: ExpectedRegistryIdentity,
+        lock_key: RegistryLockKey,
+        lock_timeout: Duration,
+        audit_profile: AuditProfile,
+        field_encryption: Option<Arc<FieldEncryptionService>>,
+    ) -> Self {
         let config = DeliveryConfig {
             schema: DELIVERY_SCHEMA.to_owned(),
             idempotency_domain: IDEMPOTENCY_DOMAIN.to_vec(),
@@ -759,6 +789,7 @@ impl WebhookDeliveryService {
             lock_key,
             lock_timeout,
             audit_profile,
+            field_encryption,
         };
         Self {
             delivery: DeliveryService::new(seams, config),

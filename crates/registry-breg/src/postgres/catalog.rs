@@ -717,6 +717,9 @@ pub(crate) async fn install_registry_state_schema(
                  history_choice text NOT NULL
                      CONSTRAINT registry_field_encryption_flip_choice_closed
                      CHECK (history_choice IN ('erase-and-rebaseline', 'retain-plaintext-history')),
+                 history_commit_position bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_history_position_positive
+                     CHECK (history_commit_position > 0),
                  sealed_row_count bigint NOT NULL
                      CONSTRAINT registry_field_encryption_flip_sealed_rows_nonnegative
                      CHECK (sealed_row_count >= 0),
@@ -741,6 +744,16 @@ pub(crate) async fn install_registry_state_schema(
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
                  PRIMARY KEY (entity_id, field_id)
              );
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 ADD COLUMN IF NOT EXISTS history_commit_position bigint;
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 DROP CONSTRAINT IF EXISTS registry_field_encryption_flip_history_position_positive;
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 ADD CONSTRAINT registry_field_encryption_flip_history_position_positive
+                 CHECK (
+                     history_commit_position IS NULL
+                     OR history_commit_position > 0
+                 );
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM PUBLIC;",
         ))
         .await?;

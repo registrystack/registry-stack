@@ -854,7 +854,7 @@ async fn finish_prepared_server(
         &registry,
         &expected.package_revision,
     ));
-    let webhook_delivery = WebhookDeliveryService::new(
+    let webhook_delivery = WebhookDeliveryService::new_with_field_encryption(
         pool.clone(),
         Arc::clone(&event_destinations),
         hook_handlers,
@@ -863,6 +863,7 @@ async fn finish_prepared_server(
         lock_key,
         config.operational_timeouts().record_lock,
         audit_profile.clone(),
+        field_encryption.clone(),
     );
     webhook_delivery
         .verify_retained_bindings()

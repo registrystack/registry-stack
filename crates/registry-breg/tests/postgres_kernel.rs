@@ -111,12 +111,13 @@ async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
             .batch_execute(
                 "INSERT INTO registry_internal.registry_field_encryption_flips (
                      entity_id, field_id, boundary_package_revision, history_choice,
+                     history_commit_position,
                      sealed_row_count, sealed_journal_row_count,
                      accepted_plaintext_journal_row_count, accepted_request_target_row_count,
                      accepted_request_proposal_row_count, accepted_idempotency_row_count,
                      accepted_outbox_row_count
                  ) VALUES ('asset', 'secret', 'package-1', 'retain-plaintext-history',
-                           0, 0, 0, 0, 0, 0, 0)"
+                           1, 0, 0, 0, 0, 0, 0, 0)"
             )
             .await
             .is_err(),

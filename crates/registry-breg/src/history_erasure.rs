@@ -16,7 +16,7 @@
 use std::fmt;
 
 use registry_platform_audit::AuditProfile;
-use serde_json::json;
+use serde_json::{json, Value};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -170,6 +170,28 @@ pub async fn erase_record_history(
     client: &mut Client,
     request: HistoryErasureRequest<'_>,
 ) -> Result<HistoryErasureOutcome, HistoryErasureError> {
+    erase_record_history_scoped(client, request, None).await
+}
+
+/// Run the ordinary bounded erasure while correlating its durable audit record
+/// to a parent maintenance lifecycle. The public generic erasure API remains
+/// unscoped; only product-owned compound maintenance uses this marker.
+pub(crate) async fn erase_record_history_for_lifecycle(
+    client: &mut Client,
+    request: HistoryErasureRequest<'_>,
+    lifecycle_reference: &str,
+) -> Result<HistoryErasureOutcome, HistoryErasureError> {
+    if lifecycle_reference.is_empty() {
+        return Err(HistoryErasureError::InvalidInput);
+    }
+    erase_record_history_scoped(client, request, Some(lifecycle_reference)).await
+}
+
+async fn erase_record_history_scoped(
+    client: &mut Client,
+    request: HistoryErasureRequest<'_>,
+    lifecycle_reference: Option<&str>,
+) -> Result<HistoryErasureOutcome, HistoryErasureError> {
     validate_request(&request)?;
     verify_migration_role(client, request.migration_role).await?;
 
@@ -236,7 +258,7 @@ pub async fn erase_record_history(
         scrubbed_request_proposal_count,
         removed_descriptor_count,
     };
-    append_history_erasure_audit(&transaction, &request, &outcome).await?;
+    append_history_erasure_audit(&transaction, &request, &outcome, lifecycle_reference).await?;
     transaction
         .commit()
         .await
@@ -481,6 +503,7 @@ async fn append_history_erasure_audit(
     transaction: &tokio_postgres::Transaction<'_>,
     request: &HistoryErasureRequest<'_>,
     outcome: &HistoryErasureOutcome,
+    lifecycle_reference: Option<&str>,
 ) -> Result<(), HistoryErasureError> {
     if !profile_is_keyed(request.audit_profile) {
         return Err(HistoryErasureError::InvalidInput);
@@ -512,34 +535,39 @@ async fn append_history_erasure_audit(
             request.reason,
         )
         .map_err(|_| HistoryErasureError::InvalidInput)?;
-    append_audit_envelope(
-        transaction,
-        request.audit_profile,
-        json!({
-            "schema": "breg-history-erasure-audit/v1",
-            "phase": "terminal",
-            "outcome": "committed",
-            "operationId": AUDIT_OPERATION_ID,
-            "packageRevision": request.expected.package_revision,
-            "operatorReference": operator_reference,
-            "targetReference": target_reference,
-            "reasonReference": reason_reference,
-            "coverageReady": outcome.coverage_ready,
-            "unavailableAfterPosition": outcome.unavailable_after_position,
-            "affectedCommitCount": outcome.affected_commit_count,
-            "erasedRevisionCount": outcome.erased_revision_count,
-            "erasedCommitMemberCount": outcome.erased_commit_member_count,
-            "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
-            "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
-            "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
-            "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
-            "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
-            "removedDescriptorCount": outcome.removed_descriptor_count,
-            "operatorResponsibility": "saved_exports_event_consumers_and_backups",
-            "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",
-        }),
-    )
-    .await?;
+    let mut record = json!({
+        "schema": "breg-history-erasure-audit/v1",
+        "phase": "terminal",
+        "outcome": "committed",
+        "operationId": AUDIT_OPERATION_ID,
+        "packageRevision": request.expected.package_revision,
+        "operatorReference": operator_reference,
+        "targetReference": target_reference,
+        "reasonReference": reason_reference,
+        "coverageReady": outcome.coverage_ready,
+        "unavailableAfterPosition": outcome.unavailable_after_position,
+        "affectedCommitCount": outcome.affected_commit_count,
+        "erasedRevisionCount": outcome.erased_revision_count,
+        "erasedCommitMemberCount": outcome.erased_commit_member_count,
+        "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
+        "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
+        "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
+        "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
+        "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
+        "removedDescriptorCount": outcome.removed_descriptor_count,
+        "operatorResponsibility": "saved_exports_event_consumers_and_backups",
+        "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",
+    });
+    if let Some(lifecycle_reference) = lifecycle_reference {
+        let object = record
+            .as_object_mut()
+            .ok_or(HistoryErasureError::Unavailable)?;
+        object.insert(
+            "lifecycleReference".to_owned(),
+            Value::String(lifecycle_reference.to_owned()),
+        );
+    }
+    append_audit_envelope(transaction, request.audit_profile, record).await?;
     Ok(())
 }
 
