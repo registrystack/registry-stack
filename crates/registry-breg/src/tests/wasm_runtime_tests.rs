@@ -22,6 +22,8 @@ use crate::wasm_runtime::{
     install, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
     MAXIMUM_RETAINED_PREPARED_MODULES,
 };
+#[cfg(feature = "runtime")]
+use crate::wasm_runtime::{install_configured, install_default};
 
 /// The process runtime is global; serialize every test that touches it.
 static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -537,4 +539,54 @@ fn install_replaces_and_shutdown_clears_the_process_runtime() {
         evaluate_admitted_action_detailed(&action, &person_inputs(), deadline(60)).unwrap_err();
     assert_eq!(diagnostic.kind, ActionHandlerError::Execution);
     assert!(!installed());
+}
+
+#[test]
+#[cfg(feature = "runtime")]
+fn configured_runtime_ownership_refuses_overlap_and_releases_after_drop() {
+    use crate::runtime_config::{RawWasmExecutionConfig, WasmExecutionConfig};
+
+    let _guard = INSTALL_LOCK.lock().unwrap();
+    shutdown();
+    let configured = WasmExecutionConfig::from_raw(RawWasmExecutionConfig::default())
+        .expect("default WASM execution configuration validates");
+
+    let first = install_configured(configured).expect("first configured runtime installs");
+    assert!(installed());
+    assert!(
+        matches!(
+            install_configured(configured),
+            Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+        ),
+        "a configured lifecycle cannot replace an active owner"
+    );
+    assert!(
+        matches!(
+            install(
+                WasmExecutionBudgets::default(),
+                default_backend(),
+                MAXIMUM_RETAINED_PREPARED_MODULES,
+            ),
+            Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+        ),
+        "an embedder install cannot replace an active configured lifecycle"
+    );
+    drop(first);
+    assert!(!installed());
+
+    let second = install_configured(configured).expect("ownership releases after guard drop");
+    assert!(installed());
+    drop(second);
+    assert!(
+        !installed(),
+        "the current lifecycle guard clears its runtime"
+    );
+
+    install_default().expect("the persistent default runtime installs");
+    install_default().expect("repeated default installation is idempotent");
+    assert!(matches!(
+        install_configured(configured),
+        Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+    ));
+    shutdown();
 }

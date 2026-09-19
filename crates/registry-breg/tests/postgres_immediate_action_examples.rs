@@ -39,6 +39,8 @@ use serde_json::{json, Value};
 use tempfile::TempDir;
 
 const AUDIENCE: &str = "urn:breg:immediate-action-examples";
+// Each fixture owns the process-global configured WASM runtime until finish.
+static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn asset_registration_action_example_runs_through_authenticated_postgres_fixture_runner() {
@@ -198,6 +200,7 @@ async fn facility_action_example_runs_authorized_transfer_and_emits_schema_test_
 }
 
 struct RunningFixture {
+    runtime_guard: tokio::sync::MutexGuard<'static, ()>,
     database: TestDatabase,
     registry: Arc<CompiledRegistry>,
     prepared: PreparedServer,
@@ -208,6 +211,7 @@ struct RunningFixture {
 
 impl RunningFixture {
     async fn start(name: &str) -> Self {
+        let runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
         let sources = ExampleSources::load(name);
         let registry = Arc::new(sources.compiled.clone());
         let database = TestDatabase::create(8).await;
@@ -247,6 +251,7 @@ impl RunningFixture {
                 .expect("verified startup constructs the authenticated action example runtime");
 
         Self {
+            runtime_guard,
             database,
             registry,
             prepared,
@@ -258,6 +263,7 @@ impl RunningFixture {
 
     async fn finish(self) {
         let Self {
+            runtime_guard,
             database,
             registry,
             prepared,
@@ -271,6 +277,7 @@ impl RunningFixture {
         drop(sources);
         idp.stop().await;
         database.cleanup().await;
+        drop(runtime_guard);
     }
 }
 

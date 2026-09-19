@@ -68,9 +68,12 @@ journeys:
         expect: {outcome: success, status: 200, count: 0}
 "#;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+// Each prepared server owns the process-global configured WASM runtime.
+static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_binding() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     verify_runtime_role(&migration, &database.migration_role)
@@ -240,6 +243,7 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_database() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
     verify_runtime_role(&migration, &database.migration_role)
@@ -347,6 +351,7 @@ async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_databas
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
@@ -730,6 +735,7 @@ async fn live_old_server_drains_apply_and_exact_successor_restart_becomes_ready(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn audit_and_oidc_failures_refuse_before_listener_bind() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(2).await;
     let (migration, migration_task) = database.connect_migration().await;
     let fixture = StartupFixture::new();
