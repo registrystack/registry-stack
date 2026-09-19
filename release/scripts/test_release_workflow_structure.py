@@ -1246,6 +1246,7 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
                 "publish_client_npm",
                 "publish_client_pypi",
                 "dispatch-docs",
+                "publish-identifiers",
             ],
         )
         self.assertEqual(
@@ -1635,6 +1636,53 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
             "docs_sha256=${{ needs.verify.outputs.docs_sha256 }}",
             dispatch_run,
         )
+
+    def test_dispatches_and_waits_for_exact_identifier_publication(self) -> None:
+        _, document = workflow("release.yml")
+        verify = step_run(
+            document,
+            "verify",
+            "Verify binding, candidate, and attestations",
+        )
+        self.assertIn(
+            "products/identifiers/generated/catalog.v1.json",
+            verify,
+        )
+        self.assertIn(
+            "identifier_catalog_sha256=${identifier_catalog_sha256}",
+            verify,
+        )
+        self.assertEqual(
+            document["jobs"]["verify"]["outputs"]["identifier_catalog_sha256"],
+            "${{ steps.candidate.outputs.identifier_catalog_sha256 }}",
+        )
+
+        publication = document["jobs"]["publish-identifiers"]
+        self.assertIn("needs.publish.result == 'success'", publication["if"])
+        self.assertIn(
+            "needs.closeout-published.result == 'success'",
+            publication["if"],
+        )
+        self.assertEqual(
+            publication["needs"],
+            ["verify", "publish", "closeout-published"],
+        )
+        run = step_run(
+            document,
+            "publish-identifiers",
+            "Dispatch and verify exact identifier publication",
+        )
+        self.assertIn("registrystack/registrystack-id", run)
+        self.assertIn(
+            '-f "source_sha=${{ needs.verify.outputs.source_sha }}"',
+            run,
+        )
+        self.assertIn(
+            '-f "catalog_sha256=${{ needs.verify.outputs.identifier_catalog_sha256 }}"',
+            run,
+        )
+        self.assertIn('gh run watch "${target_run_id}"', run)
+        self.assertIn("--exit-status", run)
 
     def test_promotes_exact_client_packages_with_oidc_and_retry_safety(self) -> None:
         text, document = workflow("release.yml")
