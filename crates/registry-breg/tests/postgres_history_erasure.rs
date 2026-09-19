@@ -83,6 +83,10 @@ use history_store::retain_descriptor;
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, CompileProfile};
 use registry_breg::contract::parse_project_json;
+use registry_breg::field_encryption_backfill::{
+    erase_field_encryption_history, FieldEncryptionHistoryErasureError,
+    FieldEncryptionHistoryErasureRequest,
+};
 use registry_breg::history_erasure::{
     erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts, RecordHistoryErasureTarget,
 };
@@ -411,13 +415,11 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     database.cleanup().await;
 }
 
-/// A record erasure reaches the change-request copies of that record's stored
-/// values: the applied request's target snapshots and proposal snapshot are
-/// cleared whole and tombstoned, format-agnostic, while a request targeting a
-/// different record keeps every byte. The maintenance audit records counts,
-/// never the scrubbed payloads.
+/// Generic record-history erasure does not erase change-request workflow
+/// records. Proposals, target snapshots, and application receipts have their
+/// own retention contract even when they refer to the erased record.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn erasure_scrubs_change_request_target_and_proposal_payloads_whole() {
+async fn erasure_preserves_change_request_target_and_proposal_payloads() {
     let database = TestDatabase::create(4).await;
     let (mut migration, migration_task) = database.connect_migration().await;
     let registry = compiled_registry();
@@ -510,18 +512,16 @@ async fn erasure_scrubs_change_request_target_and_proposal_payloads_whole() {
     .expect("targeted erasure succeeds");
 
     assert_eq!(outcome.erased_revision_count, 1);
-    assert_eq!(
-        outcome.scrubbed_request_target_count, 1,
-        "only the request targeting the erased record is scrubbed"
-    );
-    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+    assert_eq!(outcome.scrubbed_request_target_count, 0);
+    assert_eq!(outcome.scrubbed_request_proposal_count, 0);
 
     let state = migration
         .query_one(
             "SELECT
-                 (SELECT base_snapshot IS NULL AND after_snapshot IS NULL AND erased_at IS NOT NULL
+                 (SELECT base_snapshot ? 'household' AND after_snapshot ? 'household'
+                                          AND erased_at IS NULL
                     FROM registry_internal.registry_request_targets WHERE request_id = $1),
-                 (SELECT snapshot IS NULL AND erased_at IS NOT NULL
+                 (SELECT snapshot ? 'reasonText' AND erased_at IS NULL
                     FROM registry_internal.registry_request_proposals WHERE request_id = $1),
                  (SELECT base_snapshot ? 'household' AND after_snapshot ? 'household'
                                           AND erased_at IS NULL
@@ -531,14 +531,14 @@ async fn erasure_scrubs_change_request_target_and_proposal_payloads_whole() {
             &[&request_a, &request_b],
         )
         .await
-        .expect("migration can inspect the scrubbed and kept copies");
+        .expect("migration can inspect the preserved copies");
     assert!(
         state.get::<_, bool>(0),
-        "the erased record's target snapshots are cleared whole and tombstoned"
+        "the erased record's target snapshots remain workflow history"
     );
     assert!(
         state.get::<_, bool>(1),
-        "the proposal version of the erased record's request is cleared whole and tombstoned"
+        "the erased record's proposal remains workflow history"
     );
     assert!(
         state.get::<_, bool>(2),
@@ -560,6 +560,243 @@ async fn erasure_scrubs_change_request_target_and_proposal_payloads_whole() {
         assert!(!text.contains("cr-scrub-canary"));
         assert!(!text.contains("cr-kept-canary"));
     }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn field_encryption_erasure_scrubs_orphan_canceled_create_snapshots() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x76; 32].into())
+        .expect("test owns a keyed audit profile");
+    let request_id = Uuid::from_u128(0xCA11);
+    let reserved_record_id = Uuid::from_u128(0xCA12);
+    let fingerprint = format!("sha256:{}", "7".repeat(64));
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_erase_field_flip(&transaction, "household").await;
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_state
+                 (request_entity_id, request_id, owner_reference, state,
+                  proposal_version, workflow_revision, review_completed_at)
+             VALUES ('membership-request', $1, 'owner:hash', 'canceled', 1, 1,
+                     transaction_timestamp())",
+            &[&request_id],
+        )
+        .await
+        .expect("canceled request state inserts");
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_proposals
+                 (request_entity_id, request_id, proposal_version, request_record_revision,
+                  contract_fingerprint, effect_digest, snapshot)
+             VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
+            &[
+                &request_id,
+                &fingerprint,
+                &json!({
+                    "effects": [{
+                        "id": "create-membership",
+                        "operation": "create",
+                        "target": {
+                            "kind": "ReservedCreate",
+                            "entityId": ENTITY,
+                            "reservedRecordId": reserved_record_id.to_string()
+                        },
+                        "fieldChanges": [{
+                            "field": "household",
+                            "before": {"kind": "Missing"},
+                            "after": {"kind": "Present", "value": "proposal-plaintext-canary"}
+                        }]
+                    }]
+                }),
+            ],
+        )
+        .await
+        .expect("orphan proposal inserts");
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_request_targets
+                 (request_entity_id, request_id, proposal_version, target_entity_id,
+                  target_record_id, operation, expected_revision, base_snapshot,
+                  after_snapshot)
+             VALUES ('membership-request', $1, 1, $2, $3, 'create', NULL, NULL, $4)",
+            &[
+                &request_id,
+                &ENTITY,
+                &reserved_record_id,
+                &json!({"household": "target-plaintext-canary"}),
+            ],
+        )
+        .await
+        .expect("orphan create target inserts");
+    transaction.commit().await.expect("orphan request commits");
+    let proposal_counts = migration
+        .query_one(
+            "SELECT
+                 count(*) FILTER (WHERE snapshot ? 'household')::bigint,
+                 count(*) FILTER (WHERE EXISTS (
+                     SELECT 1
+                       FROM jsonb_array_elements(
+                                COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                            ) AS effect
+                       CROSS JOIN LATERAL jsonb_array_elements(
+                           COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                       ) AS field_change
+                      WHERE effect -> 'target' ->> 'entityId' = $1
+                        AND field_change ->> 'field' = 'household'
+                 ))::bigint
+               FROM registry_internal.registry_request_proposals AS proposal
+              WHERE request_id = $2",
+            &[&ENTITY, &request_id],
+        )
+        .await
+        .expect("nested proposal field count resolves");
+    assert_eq!(proposal_counts.get::<_, i64>(0), 0);
+    assert_eq!(
+        proposal_counts.get::<_, i64>(1),
+        1,
+        "the proposal count follows effects[].fieldChanges[], including an orphan create"
+    );
+
+    let outcome = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: "field-encryption-operator",
+            reason: "destroy pre-flip request snapshots",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect("field-encryption erasure handles a request with no created revision");
+    assert_eq!(outcome.erased_record_count, 0);
+    assert_eq!(outcome.scrubbed_request_target_count, 1);
+    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+
+    let erased = migration
+        .query_one(
+            "SELECT
+                 (SELECT snapshot IS NULL AND erased_at IS NOT NULL
+                    FROM registry_internal.registry_request_proposals WHERE request_id = $1),
+                 (SELECT base_snapshot IS NULL AND after_snapshot IS NULL AND erased_at IS NOT NULL
+                    FROM registry_internal.registry_request_targets WHERE request_id = $1)",
+            &[&request_id],
+        )
+        .await
+        .expect("migration can inspect erased orphan snapshots");
+    assert!(erased.get::<_, bool>(0));
+    assert!(erased.get::<_, bool>(1));
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn field_encryption_erasure_resumes_rebaseline_after_final_erase_crash() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x77; 32].into())
+        .expect("test owns a keyed audit profile");
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = true,
+                    unavailable_after_position = 0,
+                    updated_at = transaction_timestamp()
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("crash point leaves coverage incomplete");
+    transaction.commit().await.expect("crash point persists");
+
+    let without_flip = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: "field-encryption-operator",
+            reason: "must not repair generic coverage",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect_err("generic incomplete coverage is not field-encryption work");
+    assert_eq!(
+        without_flip,
+        FieldEncryptionHistoryErasureError::NoPendingPlaintextHistory
+    );
+    let still_incomplete: bool = migration
+        .query_one(
+            "SELECT unavailable_after_position IS NOT NULL
+               FROM registry_internal.registry_commit_head WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("coverage head remains readable")
+        .get(0);
+    assert!(still_incomplete);
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_erase_field_flip(&transaction, "household").await;
+    transaction.commit().await.expect("flip marker persists");
+
+    let outcome = erase_field_encryption_history(
+        &mut migration,
+        FieldEncryptionHistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: "field-encryption-operator",
+            reason: "resume closing rebaseline",
+            registry: &registry,
+        },
+    )
+    .await
+    .expect("retry rebaselines even though no plaintext target remains");
+    assert_eq!(outcome.erased_record_count, 0);
+    let coverage_ready: bool = migration
+        .query_one(
+            "SELECT coverage_ready AND unavailable_after_position IS NULL
+               FROM registry_internal.registry_commit_head WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("coverage head remains readable")
+        .get(0);
+    assert!(coverage_ready);
 
     migration_task.abort();
     database.cleanup().await;
@@ -1180,6 +1417,23 @@ async fn insert_revision(
         )
         .await
         .expect("test revision inserts");
+}
+
+async fn insert_erase_field_flip(transaction: &tokio_postgres::Transaction<'_>, field_id: &str) {
+    transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_flips
+                 (entity_id, field_id, boundary_package_revision, history_choice,
+                  sealed_row_count, sealed_journal_row_count,
+                  accepted_plaintext_journal_row_count,
+                  accepted_request_target_row_count,
+                  accepted_request_proposal_row_count,
+                  accepted_idempotency_row_count, accepted_outbox_row_count)
+             VALUES ($1, $2, $3, 'erase-and-rebaseline', 0, 0, 0, 0, 0, 0, 0)",
+            &[&ENTITY, &field_id, &CURRENT_PACKAGE],
+        )
+        .await
+        .expect("field-encryption flip inserts");
 }
 
 async fn insert_revision_range(

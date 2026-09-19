@@ -276,13 +276,14 @@ binding's custody before the first encrypted field is activated:
 
 :::caution[Losing the Transit key loses the sealed values]
 Fields the project declares `encrypted` are sealed under a data-encryption key that Transit wraps
-and only Transit unwraps. If the key is lost, or the `fieldEncryption` binding cannot reach it,
-entities with encrypted fields fail closed: reads and writes answer HTTP `503` with the
-`runtime.field_encryption.unavailable` problem, and entities without encrypted fields keep
-serving. Base Registry Engine stores only the wrapped key and offers no recovery, so escrow the
-Transit key before enabling. The local file provider is development custody: startup refuses it
-unless the runtime file's `identity.databaseInitializationEnvironment` is `local`, and
-`bregctl doctor --runtime-config <absolute-file>` reports the same refusal.
+and only Transit unwraps. If startup or restart cannot reach Transit or unwrap the key, Base
+Registry Engine stops before serving any entity. After a successful start, an envelope that cannot
+be opened fails the affected encrypted-field read or write with the HTTP `503` problem
+`runtime.field_encryption.unavailable`; sibling entities without encrypted fields keep serving.
+Base Registry Engine stores only the wrapped key and offers no recovery, so escrow the Transit key
+before enabling. The local file provider is development custody: startup refuses it unless the
+runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bregctl doctor
+--runtime-config <absolute-file>` reports the same refusal.
 :::
 
 {/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,

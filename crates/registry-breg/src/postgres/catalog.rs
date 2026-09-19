@@ -345,7 +345,7 @@ impl ExpectedManagedCatalog {
         );
         catalog.table(
             "registry_internal.registry_field_encryption_flips",
-            ["INSERT", "SELECT"],
+            ["SELECT"],
             std::iter::empty::<&str>(),
             Some((false, false)),
         );
@@ -684,20 +684,20 @@ pub(crate) async fn install_registry_state_schema(
         .batch_execute(&format!(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_field_encryption_keys (
                  key_version integer PRIMARY KEY
-                     CONSTRAINT registry_field_encryption_key_version_positive
-                     CHECK (key_version > 0),
+                     CONSTRAINT registry_field_encryption_key_version_one
+                     CHECK (key_version = 1),
                  provider_kind text NOT NULL
-                     CONSTRAINT registry_field_encryption_provider_kind_closed
-                     CHECK (provider_kind IN ('transit_datakey', 'local_datakey_file')),
+                     CONSTRAINT registry_field_encryption_provider_kind_transit
+                     CHECK (provider_kind = 'transit_datakey'),
                  algorithm text NOT NULL
                      CONSTRAINT registry_field_encryption_algorithm_closed
                      CHECK (algorithm = '{FIELD_ENCRYPTION_ALGORITHM}'),
                  wrapped_dek text NOT NULL
                      CONSTRAINT registry_field_encryption_wrapped_nonempty
                      CHECK (wrapped_dek <> ''),
-                 transit_key_version integer
+                 transit_key_version integer NOT NULL
                      CONSTRAINT registry_field_encryption_transit_version_positive
-                     CHECK (transit_key_version IS NULL OR transit_key_version > 0),
+                     CHECK (transit_key_version > 0),
                  activated_package_revision text NOT NULL
                      CONSTRAINT registry_field_encryption_revision_nonempty
                      CHECK (activated_package_revision <> ''),
@@ -754,7 +754,7 @@ pub(crate) async fn install_registry_state_schema(
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM {};\n\
              GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM {};\n\
-             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
+             GRANT SELECT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
             runtime_role.quoted(),
             runtime_role.quoted(),
             runtime_role.quoted(),

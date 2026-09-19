@@ -273,27 +273,21 @@ pub(crate) fn generate_ddl_with_actions(
         }
         for field in entity.fields.values() {
             if let Some(pattern) = &field.pattern {
-                // An encrypted column stores ciphertext, so a plaintext regex
-                // CHECK can never hold; authoring keeps the pattern for the
-                // runtime value contract instead of a storage constraint.
-                if field.encryption.is_none() {
-                    // Explicit escape strings preserve regex backslashes independently
-                    // of the migration session's standard_conforming_strings setting.
-                    let pattern =
-                        format!("E'{}'", pattern.replace('\\', "\\\\").replace('\'', "''"));
-                    statements.push(DdlStatement {
-                        id: format!("entity.{}.field.{}.pattern", entity.id, field.id),
-                        kind: DdlStatementKind::Constraint,
-                        // Evaluate the native expression even when the table is empty.
-                        // No second regex engine participates in authoring or runtime.
-                        sql: format!(
-                            "SELECT '' ~ {pattern}; ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} CHECK ({column} ~ {pattern})",
-                            table = quote_identifier(&entity.physical_table),
-                            name = quote_identifier(&field_pattern_constraint_name(&entity.id, &field.id)),
-                            column = quote_identifier(&field.physical_name),
-                        ),
-                    });
-                }
+                // Explicit escape strings preserve regex backslashes independently
+                // of the migration session's standard_conforming_strings setting.
+                let pattern = format!("E'{}'", pattern.replace('\\', "\\\\").replace('\'', "''"));
+                statements.push(DdlStatement {
+                    id: format!("entity.{}.field.{}.pattern", entity.id, field.id),
+                    kind: DdlStatementKind::Constraint,
+                    // Evaluate the native expression even when the table is empty.
+                    // No second regex engine participates in authoring or runtime.
+                    sql: format!(
+                        "SELECT '' ~ {pattern}; ALTER TABLE registry_data.{table} ADD CONSTRAINT {name} CHECK ({column} ~ {pattern})",
+                        table = quote_identifier(&entity.physical_table),
+                        name = quote_identifier(&field_pattern_constraint_name(&entity.id, &field.id)),
+                        column = quote_identifier(&field.physical_name),
+                    ),
+                });
             }
             if let FieldTypeSource::Reference { target, .. } = &field.field_type {
                 let constraint_name = derived_reference_name(entity_names, &field.id);

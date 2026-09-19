@@ -23,6 +23,111 @@ const PACKAGE_ID: &str = "kernel-registry";
 const INSTANCE_ID: &str = "kernel-instance";
 const DATABASE_ID: &str = "kernel-database";
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn field_encryption_catalog_enforces_key_state_and_runtime_authority() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .execute("CREATE EXTENSION btree_gist", &[])
+        .await
+        .expect("kernel prerequisite installs");
+    let (migration, migration_task) = database.connect_migration().await;
+    install_kernel_schema(&migration, &database.runtime_role)
+        .await
+        .expect("migration role installs field-encryption catalog objects");
+
+    for (table, privilege, expected) in [
+        (
+            "registry_internal.registry_field_encryption_keys",
+            "INSERT",
+            true,
+        ),
+        (
+            "registry_internal.registry_field_encryption_flips",
+            "SELECT",
+            true,
+        ),
+        (
+            "registry_internal.registry_field_encryption_flips",
+            "INSERT",
+            false,
+        ),
+    ] {
+        let granted: bool = database
+            .admin
+            .query_one(
+                "SELECT has_table_privilege($1, $2, $3)",
+                &[&database.runtime_role.as_str(), &table, &privilege],
+            )
+            .await
+            .expect("field-encryption privilege reads")
+            .get(0);
+        assert_eq!(
+            granted, expected,
+            "runtime {privilege} privilege on {table}"
+        );
+    }
+
+    for (key_version, provider_kind, transit_key_version) in [
+        (2_i32, "transit_datakey", Some(1_i32)),
+        (1_i32, "local_datakey_file", None),
+        (1_i32, "transit_datakey", None),
+    ] {
+        let invalid = migration
+            .execute(
+                "INSERT INTO registry_internal.registry_field_encryption_keys (
+                     key_version, provider_kind, algorithm, wrapped_dek,
+                     transit_key_version, activated_package_revision
+                 ) VALUES ($1, $2, 'aes-256-gcm', 'wrapped', $3, 'package-1')",
+                &[&key_version, &provider_kind, &transit_key_version],
+            )
+            .await;
+        assert!(
+            invalid.is_err(),
+            "invalid Phase 1 key state must be refused by PostgreSQL"
+        );
+    }
+
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_keys (
+                 key_version, provider_kind, algorithm, wrapped_dek,
+                 transit_key_version, activated_package_revision
+             ) VALUES (1, 'transit_datakey', 'aes-256-gcm', 'wrapped', 1, 'package-1')",
+            &[],
+        )
+        .await
+        .expect("the exact Phase 1 Transit key row is admitted");
+
+    let runtime = database
+        .runtime_config
+        .build_pool()
+        .expect("runtime pool builds")
+        .get_for_test()
+        .await
+        .expect("runtime connection is available");
+    assert!(
+        runtime
+            .batch_execute(
+                "INSERT INTO registry_internal.registry_field_encryption_flips (
+                     entity_id, field_id, boundary_package_revision, history_choice,
+                     sealed_row_count, sealed_journal_row_count,
+                     accepted_plaintext_journal_row_count, accepted_request_target_row_count,
+                     accepted_request_proposal_row_count, accepted_idempotency_row_count,
+                     accepted_outbox_row_count
+                 ) VALUES ('asset', 'secret', 'package-1', 'retain-plaintext-history',
+                           0, 0, 0, 0, 0, 0, 0)"
+            )
+            .await
+            .is_err(),
+        "runtime cannot forge a reviewed field-encryption flip boundary"
+    );
+
+    drop(runtime);
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 /// Run with `cargo test --locked --release -p registry-breg --features postgres-test
 /// --test postgres_kernel benchmark_record_transaction -- --ignored --nocapture`.
 /// Requires the same disposable PostgreSQL administrator as the kernel tests.

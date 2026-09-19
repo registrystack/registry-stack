@@ -2009,6 +2009,13 @@ fn validate_entity_fields(
         }
         if field.encrypted {
             let path = format!("entities[{}].fields[{}].encrypted", entity.id, field.id);
+            if field.pattern.is_some() {
+                errors.push(Diagnostic::error(
+                    "field.encrypted.pattern_refused",
+                    format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                    "an encrypted field cannot declare pattern in Phase 1; remove pattern or store the field as plaintext",
+                ));
+            }
             if field.classification != Classification::Restricted {
                 errors.push(Diagnostic::error(
                     "field.encrypted.classification_invalid",

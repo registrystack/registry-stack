@@ -264,24 +264,18 @@ fn non_unique_lookup_declares_no_unique_index_and_no_blind_column() {
 }
 
 #[test]
-fn encrypted_columns_carry_no_pattern_check() {
+fn encrypted_field_refuses_pattern_with_a_pinned_diagnostic() {
     let mut source = encrypted_project();
     source["entities"][0]["fields"][1]["pattern"] = json!("^[0-9]{13}$");
-    let registry = compile_value(&source).unwrap();
-    assert!(registry
-        .ddl()
-        .statements
-        .iter()
-        .any(|statement| statement.id == "entity.case.field.secret.lookup-unique"));
-    assert!(registry
-        .ddl()
-        .statements
-        .iter()
-        .all(|statement| statement.id != "entity.case.field.secret.pattern"));
-    // The runtime value contract keeps the authored pattern.
+    let failure = compile_value(&source).unwrap_err();
+    let diagnostics = failure.diagnostics();
+    assert_eq!(diagnostics.len(), 1, "the refusal stays stable and focused");
+    let diagnostic = &diagnostics[0];
+    assert_eq!(diagnostic.code, "field.encrypted.pattern_refused");
+    assert_eq!(diagnostic.path, "entities[case].fields[secret].pattern");
     assert_eq!(
-        encrypted_field(&registry).pattern.as_deref(),
-        Some("^[0-9]{13}$")
+        diagnostic.message,
+        "an encrypted field cannot declare pattern in Phase 1; remove pattern or store the field as plaintext"
     );
 }
 

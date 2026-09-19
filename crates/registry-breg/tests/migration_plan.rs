@@ -610,6 +610,44 @@ fn reviewed_encryption_flip_refuses_a_chunk_size_beyond_the_commit_budget() {
     );
 }
 
+#[test]
+fn reviewed_encryption_flip_refuses_plaintext_drop_before_backfill() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let mut artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let entity = &previous.entities()["asset"];
+    let plaintext = &entity.fields["secret"];
+    let step_path = "modules/core/migrations/encryption-flip/steps/drop-plaintext.sql".to_owned();
+    artifacts.descriptor.steps.insert(
+        0,
+        ReviewedMigrationStepDescriptor::TransactionalSql {
+            id: "drop-plaintext".to_owned(),
+            sql_path: step_path,
+            objects: vec![ReviewedMigrationObject {
+                schema: "registry_data".to_owned(),
+                table: entity.physical_table.clone(),
+                entity_id: "asset".to_owned(),
+                kind: ReviewedMigrationObjectKind::Field,
+                member_id: Some("secret".to_owned()),
+                physical_name: plaintext.physical_name.clone(),
+            }],
+            affected_rows: None,
+        },
+    );
+    artifacts.step_sql = format!(
+        "ALTER TABLE registry_data.{} DROP COLUMN {}",
+        entity.physical_table, plaintext.physical_name
+    )
+    .into_bytes();
+    artifacts.rebind();
+    assert_refused(
+        Variant::EncryptedFlipOn,
+        previous,
+        vec![artifacts.source()],
+        "dropping the plaintext column before its sealing backfill",
+    );
+}
+
 fn statement<'a>(
     statements: &'a [registry_breg::generated_ddl::DdlStatement],
     id: &str,

@@ -231,16 +231,15 @@ fields:
     required: true
     maxLength: 32
     classification: restricted
-    pattern: '^[0-9]{10}$'
     encrypted: true
     lookup:
       normalization: [trim, remove-separators]
       unique: true
 ```
 
-`pattern` stays allowed on an encrypted field, and it keeps its meaning: the rule is enforced in
-Rust against the plaintext before the value is sealed, so a value the pattern refuses never reaches
-the database.
+Phase 1 refuses `pattern` on an encrypted field with `field.encrypted.pattern_refused`, because
+native patterns are PostgreSQL checks and encrypted plaintext must not reach PostgreSQL. Remove
+`pattern`, or keep the field in plaintext storage when the native pattern is required.
 
 The `lookup` block declares the blind index that equality lookups resolve through.
 `normalization` lists the transformations applied to the value in declared order, from a closed
@@ -258,10 +257,10 @@ exact value.
 {/* Evidence: products/breg/generated/authoring/registry-project.schema.json;
     crates/registry-breg/src/contract.rs, FieldSource, FieldLookupSource, and
     NormalizationStep; crates/registry-breg/src/compiler.rs,
-    field.encrypted.classification_invalid and field.encrypted.type_unsupported;
+    field.encrypted.classification_invalid, field.encrypted.type_unsupported, and
+    field.encrypted.pattern_refused;
     crates/registry-breg/src/change_request.rs, change_request.effect.field_encrypted;
-    crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns();
-    crates/registry-breg/src/mutation.rs, enforce_field_pattern(). */}
+    crates/registry-breg/src/derived_sql.rs, refuse_encrypted_columns(). */}
 
 ## Related records
 

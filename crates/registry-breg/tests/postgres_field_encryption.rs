@@ -110,7 +110,7 @@ entities:
       - {id: label, type: string, maxLength: 128, required: true, classification: public}
       - {id: secret, type: string, maxLength: 256, required: true, classification: restricted, encrypted: true,
          lookup: {normalization: [trim, uppercase], unique: true}}
-      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true, pattern: '^[A-Z]{3}-[0-9]{4}$'}
+      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true}
       - {id: big, type: string, maxLength: 1000000, classification: restricted, encrypted: true}
     constraints:
       - {kind: unique, fields: [label]}
@@ -1512,29 +1512,6 @@ async fn blind_index_unique_violation_maps_to_conflict() {
     assert_eq!(body["code"], "mutation.conflict");
     assert!(!body.to_string().contains("ALPHA-ONE"));
     assert_eq!(holder_row_count(&server).await, 1);
-
-    server.shutdown().await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn encrypted_pattern_is_enforced_in_rust_before_sealing() {
-    let server = boot_live_server().await;
-    let (status, body, _) = create_holder(
-        &server,
-        "pattern-violation",
-        json!({
-            "jurisdiction": "area-a",
-            "label": "pattern-violation",
-            "secret": "gamma-seven",
-            "code": "nope",
-        }),
-    )
-    .await;
-    assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(body["code"], "mutation.conflict");
-    assert_eq!(body["entityId"], "holder");
-    assert_eq!(body["fieldId"], "code");
-    assert_eq!(holder_row_count(&server).await, 0, "no row was written");
 
     server.shutdown().await;
 }
