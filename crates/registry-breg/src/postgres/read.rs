@@ -497,6 +497,7 @@ impl PostgresRecordReadService {
             request,
             claims,
             &plan.entity,
+            self.field_encryption.as_deref(),
             record_uuid,
             i64::from(proposal_version),
             slot_id,
@@ -824,6 +825,7 @@ impl PostgresRecordReadService {
             request,
             claims,
             &plan.entity,
+            self.field_encryption.as_deref(),
             &mut rows,
         )
         .await?;
@@ -1317,6 +1319,50 @@ fn decrypt_materialized_rows(
     rows: &mut [RecordEnvelope],
     field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<(), ReadServiceError> {
+    for record in rows {
+        open_row_members(entity, &record.id, &mut record.data, field_encryption)?;
+    }
+    Ok(())
+}
+
+/// Open every encrypted member of one decoded row map at a response edge.
+///
+/// Row members key by their active API name, like the materialized read
+/// response rows and the history and revision rows below. Members stay tagged
+/// until the enumerated caller-authorized response edges call this, and any
+/// open failure fails the whole read closed with the field-encryption
+/// problem, value-free. An entity without encrypted fields returns without
+/// touching key state.
+pub(super) fn open_row_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(), ReadServiceError> {
+    open_members(entity, record_id, data, field_encryption, true)
+}
+
+/// Open every encrypted member of one retained-snapshot member map.
+///
+/// Retained snapshot members key by field id, like the request target and
+/// guard snapshots the change-request surfaces authorize against. The opening
+/// rules match [`open_row_members`].
+pub(super) fn open_snapshot_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+) -> Result<(), ReadServiceError> {
+    open_members(entity, record_id, data, field_encryption, false)
+}
+
+fn open_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+    keyed_by_api_name: bool,
+) -> Result<(), ReadServiceError> {
     let encrypted_fields = entity
         .stored_fields
         .iter()
@@ -1325,25 +1371,28 @@ fn decrypt_materialized_rows(
     if encrypted_fields.is_empty() {
         return Ok(());
     }
-    // Dispatch admission refuses these entities without key state, so a row
+    // Dispatch admission refuses these entities without key state, so members
     // reaching here without it means that boundary was bypassed.
     let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
-    for record in rows {
-        for field in &encrypted_fields {
-            let Some(member) = record.data.get_mut(field.logical.api_name.as_str()) else {
-                continue;
-            };
-            let opened = open_member_value(
-                service,
-                &entity.id,
-                &field.logical.id,
-                &record.id,
-                &field.logical.field_type,
-                member,
-            )
-            .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)?;
-            *member = opened.unwrap_or(Value::Null);
-        }
+    for field in &encrypted_fields {
+        let key = if keyed_by_api_name {
+            field.logical.api_name.as_str()
+        } else {
+            field.logical.id.as_str()
+        };
+        let Some(member) = data.get_mut(key) else {
+            continue;
+        };
+        let opened = open_member_value(
+            service,
+            &entity.id,
+            &field.logical.id,
+            record_id,
+            &field.logical.field_type,
+            member,
+        )
+        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)?;
+        *member = opened.unwrap_or(Value::Null);
     }
     Ok(())
 }

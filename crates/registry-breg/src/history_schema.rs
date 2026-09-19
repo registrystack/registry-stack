@@ -20,6 +20,12 @@ use crate::model::{CompiledEntity, CompiledRegistry};
 pub const HISTORY_SCHEMA_ENCODING_VERSION: &str = "breg-history-schema-v1";
 pub const MAX_HISTORY_SCHEMA_DESCRIPTOR_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_HISTORY_SNAPSHOT_BYTES: usize = 2 * 1024 * 1024;
+/// The member name an encrypted stored field records in a revision snapshot.
+/// It matches `registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG`,
+/// which this always-compiled module cannot reach: the crypto crate is a
+/// runtime-only dependency. The response edge, not the decoder, opens the
+/// member, so nothing here needs the crypto layer itself.
+pub const ENVELOPE_MEMBER_TAG: &str = "__bregEncryptedV1";
 
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HistorySchemaError {
@@ -202,6 +208,7 @@ impl From<&CompiledEntity> for HistoryEntityDescriptor {
             required: true,
             nullable: false,
             valid_time_role: None,
+            encrypted: false,
         };
         let stored_fields = entity
             .stored_fields
@@ -218,6 +225,7 @@ impl From<&CompiledEntity> for HistoryEntityDescriptor {
                         required: field.required,
                         nullable: !field.required,
                         valid_time_role: field.valid_time_role,
+                        encrypted: field.logical.encryption.is_some(),
                     },
                 )
             })
@@ -275,6 +283,7 @@ impl HistoryEntityDescriptor {
                         field_type: active.field_type.clone(),
                         required: false,
                         nullable: true,
+                        encrypted: false,
                     },
                 );
                 continue;
@@ -291,6 +300,7 @@ impl HistoryEntityDescriptor {
                     field_type: retained.field_type.clone(),
                     required: active.required,
                     nullable: !active.required,
+                    encrypted: retained.encrypted,
                 },
             );
         }
@@ -326,7 +336,7 @@ impl HistoryEntityDescriptor {
                     .ok_or(HistorySchemaError::MissingRequiredField)?,
                 HistoryValueSource::AbsentAtRecording => Value::Null,
             };
-            validate_history_value(&value, &field.field_type, field.required)?;
+            validate_history_value(&value, &field.field_type, field.required, field.encrypted)?;
             if by_field_id
                 .insert(field.field_id.clone(), value.clone())
                 .is_some()
@@ -387,6 +397,10 @@ pub struct HistoryFieldDescriptor {
     pub nullable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub valid_time_role: Option<ValidTimeRole>,
+    /// Whether the revision recorded this field as a tagged envelope member.
+    /// Descriptors recorded before field encryption default to false.
+    #[serde(default)]
+    pub encrypted: bool,
 }
 
 impl HistoryFieldDescriptor {
@@ -401,6 +415,11 @@ impl HistoryFieldDescriptor {
         if self.valid_time_role != active.valid_time_role {
             return Ok(false);
         }
+        // Recorded plaintext must never surface as an envelope, and recorded
+        // envelopes must never surface as plaintext, so either flip refuses.
+        if self.encrypted != active.encrypted {
+            return Ok(false);
+        }
         Ok(true)
     }
 
@@ -413,6 +432,7 @@ impl HistoryFieldDescriptor {
                 if self.id != "id"
                     || self.field_type != FieldTypeSource::Uuid
                     || self.valid_time_role.is_some()
+                    || self.encrypted
                 {
                     return Err(HistorySchemaError::MalformedDescriptor);
                 }
@@ -529,6 +549,7 @@ pub struct HistoryFieldCompatibility {
     pub field_type: FieldTypeSource,
     pub required: bool,
     pub nullable: bool,
+    pub encrypted: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -585,15 +606,38 @@ fn validate_history_value(
     value: &Value,
     field_type: &FieldTypeSource,
     required: bool,
+    encrypted: bool,
 ) -> Result<(), HistorySchemaError> {
     if value.is_null() {
         return (!required)
             .then_some(())
             .ok_or(HistorySchemaError::MissingRequiredField);
     }
+    if encrypted {
+        // An encrypted field records exactly the tagged envelope member, and
+        // it stays sealed here: the caller-authorized response edge opens it.
+        // Anything else was never sealed, so it refuses instead of surfacing.
+        return tagged_envelope_member(value)
+            .then_some(())
+            .ok_or(HistorySchemaError::IncompatibleField);
+    }
     validate_field_value(FieldValue::Json(value), field_type)
         .then_some(())
         .ok_or(HistorySchemaError::IncompatibleField)
+}
+
+/// Whether `value` is the single-key tagged envelope member an encrypted
+/// stored field records: an object naming only the envelope tag with a string
+/// payload. The payload's base64 and the envelope itself stay the crypto
+/// layer's business at the response edge.
+fn tagged_envelope_member(value: &Value) -> bool {
+    let Value::Object(member) = value else {
+        return false;
+    };
+    member.len() == 1
+        && member
+            .get(ENVELOPE_MEMBER_TAG)
+            .is_some_and(Value::is_string)
 }
 
 #[derive(Clone, Copy)]
@@ -603,6 +647,7 @@ struct ActiveField<'a> {
     field_type: &'a FieldTypeSource,
     required: bool,
     valid_time_role: Option<ValidTimeRole>,
+    encrypted: bool,
 }
 
 fn active_field<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<ActiveField<'a>> {
@@ -613,6 +658,7 @@ fn active_field<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<Active
             field_type: &entity.canonical_id.field_type,
             required: true,
             valid_time_role: None,
+            encrypted: false,
         });
     }
     entity
@@ -625,6 +671,7 @@ fn active_field<'a>(entity: &'a CompiledEntity, field_id: &str) -> Option<Active
             field_type: &field.logical.field_type,
             required: field.required,
             valid_time_role: field.valid_time_role,
+            encrypted: field.logical.encryption.is_some(),
         })
 }
 
@@ -796,8 +843,32 @@ mod tests {
         fields.iter().map(|field| (*field).to_owned()).collect()
     }
 
+    /// Declare one stored field of the entity encrypted, mirroring what the
+    /// compiler records for `encrypted: true`.
+    fn encrypt_field(entity: &mut CompiledEntity, field_id: &str) {
+        let encryption = crate::model::CompiledFieldEncryption { blind_index: None };
+        let stored = entity
+            .stored_fields
+            .iter_mut()
+            .find(|field| field.logical.id == field_id)
+            .expect("fixture field exists");
+        stored.logical.encryption = Some(encryption.clone());
+        entity
+            .fields
+            .get_mut(field_id)
+            .expect("fixture field compiles")
+            .encryption = Some(encryption);
+    }
+
     fn snapshot(value: Value) -> Vec<u8> {
         canonicalize_json(&value).expect("snapshot canonicalizes")
+    }
+
+    /// One tagged envelope member carrying `payload` as its opaque string.
+    fn tagged_member(payload: &str) -> Value {
+        let mut member = Map::new();
+        member.insert(ENVELOPE_MEMBER_TAG.to_owned(), json!(payload));
+        Value::Object(member)
     }
 
     #[test]
@@ -1196,6 +1267,188 @@ mod tests {
                 value_kind: HistoryTemporalValueKind::Date,
                 semantics: HistoryTemporalSemantics::StartInclusiveEndExclusive,
             })
+        );
+    }
+
+    #[test]
+    fn encrypted_members_decode_as_tagged_envelopes_and_stay_tagged() {
+        let mut entity = membership_entity();
+        add_note_field(&mut entity, false);
+        encrypt_field(&mut entity, "note");
+        let descriptor = descriptor_for(&entity);
+        assert!(
+            descriptor
+                .entity("membership")
+                .expect("entity exists")
+                .field("note")
+                .expect("note field exists")
+                .encrypted,
+            "the retained descriptor marks the encrypted field"
+        );
+
+        let compatibility = descriptor
+            .compatibility_for_fields(&entity, &required(&["note"]), &required(&[]))
+            .expect("an encrypted retained field stays compatible with itself");
+        assert!(compatibility.fields["note"].encrypted);
+
+        // The tagged envelope member decodes and stays the tagged member: the
+        // response edge opens it, never the decoder. Envelope bytes and their
+        // base64 stay the crypto layer's business; decode recognizes the tag.
+        let member = tagged_member("AAAA");
+        let decoded = descriptor
+            .decode_snapshot_for_fields(
+                &compatibility,
+                &snapshot(json!({
+                    "person": "00000000-0000-4000-8000-000000000001",
+                    "household": "A",
+                    "valid-from": "2026-01-01",
+                    "valid-to": null,
+                    "note": member.clone(),
+                })),
+                None,
+            )
+            .expect("the tagged envelope member decodes");
+        assert_eq!(decoded.by_field_id["note"], member);
+        assert_eq!(decoded.by_api_name["note"], member);
+
+        // An optional encrypted member a revision recorded as null reads null.
+        let decoded = descriptor
+            .decode_snapshot_for_fields(
+                &compatibility,
+                &snapshot(json!({
+                    "person": "00000000-0000-4000-8000-000000000001",
+                    "household": "A",
+                    "valid-from": "2026-01-01",
+                    "valid-to": null,
+                    "note": null,
+                })),
+                None,
+            )
+            .expect("a null encrypted member decodes");
+        assert_eq!(decoded.by_field_id["note"], Value::Null);
+
+        // Anything but null and the exact single-key tagged shape is refused.
+        let non_string_member = {
+            let mut member = Map::new();
+            member.insert(ENVELOPE_MEMBER_TAG.to_owned(), json!(7));
+            Value::Object(member)
+        };
+        let foreign_member = {
+            let mut member = Map::new();
+            member.insert("other".to_owned(), json!("member"));
+            Value::Object(member)
+        };
+        let extra_key_member = {
+            let mut member = Map::new();
+            member.insert(ENVELOPE_MEMBER_TAG.to_owned(), json!("AAAA"));
+            member.insert("extra".to_owned(), json!("member"));
+            Value::Object(member)
+        };
+        for malformed in [
+            json!("recorded plaintext"),
+            non_string_member,
+            foreign_member,
+            extra_key_member,
+        ] {
+            assert_eq!(
+                descriptor
+                    .decode_snapshot_for_fields(
+                        &compatibility,
+                        &snapshot(json!({
+                            "person": "00000000-0000-4000-8000-000000000001",
+                            "household": "A",
+                            "valid-from": "2026-01-01",
+                            "valid-to": null,
+                            "note": malformed,
+                        })),
+                        None,
+                    )
+                    .expect_err("only the tagged envelope member decodes"),
+                HistorySchemaError::IncompatibleField
+            );
+        }
+    }
+
+    #[test]
+    fn descriptors_recorded_before_the_encrypted_marker_still_parse() {
+        let mut entity = membership_entity();
+        add_note_field(&mut entity, false);
+        encrypt_field(&mut entity, "note");
+        let descriptor = descriptor_for(&entity);
+        let bytes = serialize_descriptor(&descriptor).expect("descriptor serializes");
+
+        // Strip every encrypted marker by hand, as a descriptor recorded by an
+        // older revision of the runtime looks.
+        let mut stripped = serde_json::from_slice::<Value>(&bytes).expect("descriptor is JSON");
+        for entity in stripped
+            .get_mut("entities")
+            .and_then(Value::as_object_mut)
+            .expect("entities object")
+            .values_mut()
+        {
+            if let Some(fields) = entity
+                .get_mut("storedFields")
+                .and_then(Value::as_object_mut)
+            {
+                for field in fields.values_mut() {
+                    field
+                        .as_object_mut()
+                        .expect("field object")
+                        .remove("encrypted");
+                }
+            }
+        }
+        let stripped = canonicalize_json(&stripped).expect("stripped descriptor canonicalizes");
+        let parsed = parse_descriptor(&stripped).expect("old descriptors keep parsing");
+        assert!(
+            !parsed
+                .entity("membership")
+                .expect("entity exists")
+                .field("note")
+                .expect("note field exists")
+                .encrypted
+        );
+    }
+
+    #[test]
+    fn encryption_state_flips_are_incompatible_in_both_directions() {
+        let mut plain = membership_entity();
+        add_note_field(&mut plain, false);
+        let mut encrypted = plain.clone();
+        encrypt_field(&mut encrypted, "note");
+
+        // Retained plaintext against an active encrypted declaration.
+        let plain_descriptor = descriptor_for(&plain);
+        assert_eq!(
+            plain_descriptor
+                .compatibility_for_fields(&encrypted, &required(&["note"]), &required(&[]))
+                .expect_err("recorded plaintext cannot be read as an envelope"),
+            HistorySchemaError::IncompatibleField
+        );
+
+        // Retained envelopes against an active plaintext declaration.
+        let encrypted_descriptor = descriptor_for(&encrypted);
+        assert_eq!(
+            encrypted_descriptor
+                .compatibility_for_fields(&plain, &required(&["note"]), &required(&[]))
+                .expect_err("recorded envelopes must not surface as plaintext"),
+            HistorySchemaError::IncompatibleField
+        );
+    }
+
+    #[test]
+    fn canonical_id_cannot_declare_encryption() {
+        let entity = membership_entity();
+        let mut descriptor = descriptor_for(&entity);
+        descriptor
+            .entities
+            .get_mut("membership")
+            .expect("entity exists")
+            .canonical_id
+            .encrypted = true;
+        assert_eq!(
+            serialize_descriptor(&descriptor).expect_err("an encrypted canonical id is malformed"),
+            HistorySchemaError::MalformedDescriptor
         );
     }
 }

@@ -120,6 +120,39 @@ entities:
     classification: restricted
     fields:
       - {id: text, type: string, maxLength: 200, required: true, classification: restricted}
+  - id: dossier
+    primaryDataset: fixture-registry
+    route: dossiers
+    mutationMode: mutable
+    changeControl: {requiredFor: [patch]}
+    classification: restricted
+    fields:
+      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
+      - {id: label, type: string, maxLength: 128, required: true, classification: public}
+      - {id: code, type: string, maxLength: 32, classification: restricted, encrypted: true}
+  - id: dossier-request
+    primaryDataset: fixture-registry
+    route: dossier-requests
+    mutationMode: mutable
+    classification: restricted
+    fields:
+      - {id: jurisdiction, type: string, maxLength: 32, required: true, classification: public}
+      - {id: reason, type: string, maxLength: 128, required: true, classification: public}
+      - {id: dossier, type: reference, target: dossier, required: true, classification: public}
+      - {id: code, type: string, maxLength: 32, required: true, classification: public}
+      - {id: secret, type: string, maxLength: 32, required: true, classification: restricted, encrypted: true}
+    attachments:
+      - {id: evidence, required: true, maximumBytes: 1024, contentTypes: [application/octet-stream], classification: restricted}
+    changeRequest:
+      effects:
+        - id: correct-code
+          target: {fromField: dossier}
+          operation: patch
+          set: {code: {fromField: code}}
+      review:
+        stages:
+          - {id: review, approvals: 1}
+      retention: {mode: operator_erase}
 accessProfiles:
   - id: operator
     default: true
@@ -127,7 +160,9 @@ accessProfiles:
     requiredPurposes: [case-management]
     permissions:
       - entity: holder
-        operations: [create, get, list, patch, lookup]
+        operations: [create, get, list, patch, lookup, revisions, snapshot]
+        revisionAccess: true
+        allowCount: true
         readableFields: [jurisdiction, label, secret, code, big]
         writableFields: [jurisdiction, label, secret, code, big]
         lookups:
@@ -139,6 +174,43 @@ accessProfiles:
         operations: [create, get, list]
         readableFields: [text]
         writableFields: [text]
+      - entity: dossier
+        operations: [create, get, list]
+        readableFields: [jurisdiction, label, code]
+        writableFields: [jurisdiction, label, code]
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+      - entity: dossier-request
+        operations: [create, get, list, patch, submit_request, cancel_request, apply_request]
+        readableFields: [jurisdiction, reason, dossier, code, secret, evidence]
+        writableFields: [jurisdiction, reason, dossier, code, secret, evidence]
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        requestVisibility: owner
+        applyTargets:
+          - entity: dossier
+            rowBoundaries:
+              - {field: jurisdiction, claim: jurisdiction, operator: equals}
+  - id: reviewer
+    principalClaim: registry_principal
+    requiredPurposes: [case-management]
+    permissions:
+      - entity: dossier-request
+        operations: [get, approve_request, reject_request, request_revision]
+        readableFields: [jurisdiction, reason, dossier, secret, evidence]
+        writableFields: []
+        rowBoundaries:
+          - {field: jurisdiction, claim: jurisdiction, operator: equals}
+        reviewStages:
+          - stage: review
+            targets:
+              - entity: dossier
+                readableFields: [jurisdiction, label, code]
+                rowBoundaries:
+                  - {field: jurisdiction, claim: jurisdiction, operator: equals}
+              - entity: dossier-request
+                readableFields: [evidence]
+                rowBoundaries: []
 "#;
 
 const JOURNEY_SOURCE: &str = r#"journeys:
@@ -792,9 +864,9 @@ async fn boot_live_server() -> LiveServer {
     LiveServer { prepared, booted }
 }
 
-/// One operator access token for the full authenticated router: issuer,
-/// audience, and authority claims match the fixture runtime configuration.
-fn operator_token() -> String {
+/// One access token for the full authenticated router: issuer, audience, and
+/// authority claims match the fixture runtime configuration.
+fn token_for(principal: &str, jurisdiction: &str) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock follows epoch")
@@ -810,11 +882,16 @@ fn operator_token() -> String {
             "nbf": now,
             "exp": now + 600,
             "registry_actor_kind": "service",
-            "registry_principal": "operator",
-            "jurisdiction": "area-a",
+            "registry_principal": principal,
+            "jurisdiction": jurisdiction,
             "purpose": "case-management",
         }),
     )
+}
+
+/// The default operator principal, inside the area-a row boundary.
+fn operator_token() -> String {
+    token_for("operator", "area-a")
 }
 
 async fn send(
@@ -824,17 +901,38 @@ async fn send(
     headers: &[(&'static str, String)],
     body: Option<Value>,
 ) -> axum::response::Response {
+    send_as(server, method, uri, headers, body, &operator_token()).await
+}
+
+async fn send_as(
+    server: &LiveServer,
+    method: Method,
+    uri: &str,
+    headers: &[(&'static str, String)],
+    body: Option<Value>,
+    token: &str,
+) -> axum::response::Response {
+    let body = body.map(|value| serde_json::to_vec(&value).expect("request serializes"));
+    send_bytes_as(server, method, uri, headers, body, token).await
+}
+
+async fn send_bytes_as(
+    server: &LiveServer,
+    method: Method,
+    uri: &str,
+    headers: &[(&'static str, String)],
+    body: Option<Vec<u8>>,
+    token: &str,
+) -> axum::response::Response {
     let mut builder = Request::builder()
         .method(method)
         .uri(uri)
-        .header("authorization", format!("Bearer {}", operator_token()));
+        .header("authorization", format!("Bearer {token}"));
     for (name, value) in headers {
         builder = builder.header(*name, value.as_str());
     }
     let request = match body {
-        Some(value) => builder.body(Body::from(
-            serde_json::to_vec(&value).expect("request serializes"),
-        )),
+        Some(bytes) => builder.body(Body::from(bytes)),
         None => builder.body(Body::empty()),
     }
     .expect("request builds");
@@ -847,10 +945,14 @@ async fn send(
 }
 
 async fn body_json(response: axum::response::Response) -> Value {
-    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+    serde_json::from_slice(&body_bytes(response).await).expect("response body is JSON")
+}
+
+async fn body_bytes(response: axum::response::Response) -> Vec<u8> {
+    axum::body::to_bytes(response.into_body(), 1024 * 1024)
         .await
-        .expect("response body is bounded");
-    serde_json::from_slice(&bytes).expect("response body is JSON")
+        .expect("response body is bounded")
+        .to_vec()
 }
 
 fn response_etag(response: &axum::response::Response) -> String {
@@ -965,6 +1067,61 @@ async fn stored_column(server: &LiveServer, column: &str, record_id: &str) -> Ve
         .await
         .unwrap_or_else(|error| panic!("stored column {column} reads: {error}"))
         .get(0)
+}
+
+/// The stored snapshot bytes of one revision journal row.
+async fn revision_snapshot(
+    server: &LiveServer,
+    entity_id: &str,
+    record_id: &str,
+    revision: i64,
+) -> Vec<u8> {
+    server
+        .booted
+        .database
+        .admin
+        .query_one(
+            "SELECT snapshot FROM registry_internal.registry_revisions
+             WHERE entity_id = $1 AND record_id = $2 AND record_revision = $3",
+            &[
+                &entity_id,
+                &Uuid::parse_str(record_id).expect("record id is a UUID"),
+                &revision,
+            ],
+        )
+        .await
+        .unwrap_or_else(|error| panic!("revision {revision} snapshot reads: {error}"))
+        .get(0)
+}
+
+/// Corrupt one base64 character of the first tagged envelope member in a
+/// stored snapshot without touching any other byte, so the tamper targets the
+/// envelope alone.
+fn tamper_encrypted_member(snapshot: &[u8]) -> Vec<u8> {
+    let text = String::from_utf8(snapshot.to_vec()).expect("snapshot is UTF-8");
+    let tag = "\"__bregEncryptedV1\":\"";
+    let start = text.find(tag).expect("snapshot carries a tagged member");
+    let payload_start = start + tag.len();
+    let payload_end = text[payload_start..].find('"').expect("member value ends") + payload_start;
+    assert!(payload_end > payload_start, "member carries base64 bytes");
+    let mut tampered = text.into_bytes();
+    let flipped = if tampered[payload_start] == b'A' {
+        b'B'
+    } else {
+        b'A'
+    };
+    tampered[payload_start] = flipped;
+    tampered
+}
+
+/// One action link of a request record, by operation name.
+fn find_action<'a>(record: &'a Value, operation: &str) -> &'a Value {
+    record["data"]["request"]["actions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("request exposes actions: {record}"))
+        .iter()
+        .find(|action| action["operation"] == operation)
+        .unwrap_or_else(|| panic!("request exposes the {operation} action: {record}"))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1530,6 +1687,524 @@ async fn patch_replaces_the_envelope_and_test_op_is_refused() {
     assert_eq!(tested.status(), StatusCode::BAD_REQUEST);
     let tested = body_json(tested).await;
     assert_eq!(tested["code"], "request.invalid");
+
+    server.shutdown().await;
+}
+
+// ---------------------------------------------------------------------------
+// History, revision, review-snapshot, and attachment read edges
+// ---------------------------------------------------------------------------
+
+/// Create one holder, patch its secret, and return the record id. The holder
+/// ends at revision 2 with `delta-nine` sealed in place of `gamma-seven`.
+async fn holder_at_revision_two(server: &LiveServer, key: &str) -> String {
+    let (status, created, etag) = create_holder(
+        server,
+        key,
+        json!({
+            "jurisdiction": "area-a",
+            "label": "history-target",
+            "secret": "gamma-seven",
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let record_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("record identifier is present")
+        .to_owned();
+    let patched = send(
+        server,
+        Method::PATCH,
+        &format!("/v1/records/holders/{record_id}"),
+        &[
+            ("content-type", "application/json-patch+json".to_owned()),
+            ("idempotency-key", format!("{key}-patch")),
+            ("if-match", etag.expect("create carries an ETag")),
+        ],
+        Some(json!([
+            {"op": "replace", "path": "/data/secret", "value": "delta-nine"},
+        ])),
+    )
+    .await;
+    assert_eq!(patched.status(), StatusCode::OK);
+    record_id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn revision_and_history_reads_decrypt_at_the_response_edge() {
+    // The decoder keeps its own copy of the envelope tag because it cannot
+    // link the runtime-only crypto crate; this pins the two together.
+    assert_eq!(
+        registry_breg::history_schema::ENVELOPE_MEMBER_TAG,
+        registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG
+    );
+    let server = boot_live_server().await;
+    let record_id = holder_at_revision_two(&server, "history-edge").await;
+
+    // The revision list serves both revisions with opened members.
+    let listed = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let items = listed["items"].as_array().expect("revision items");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["revisionIdentifier"], "2");
+    assert_eq!(items[0]["domainData"]["secret"], "delta-nine");
+    assert_eq!(items[1]["domainData"]["secret"], "gamma-seven");
+
+    // The revision detail read opens the same stored member.
+    let detail = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions/1"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(detail.status(), StatusCode::OK);
+    let detail = body_json(detail).await;
+    assert_eq!(detail["data"]["domainData"]["secret"], "gamma-seven");
+
+    // The stored-record snapshot query surface opens the latest revision.
+    let snapshot = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders:snapshot?$select=jurisdiction,label,secret&$count=true",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+    let snapshot = body_json(snapshot).await;
+    let items = snapshot["items"].as_array().expect("snapshot items");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["domainData"]["secret"], "delta-nine");
+
+    // Every stored revision snapshot keeps only the tagged member.
+    for revision in [1, 2] {
+        let bytes = revision_snapshot(&server, "holder", &record_id, revision).await;
+        let text = String::from_utf8(bytes).expect("snapshot is UTF-8");
+        assert!(
+            text.contains("__bregEncryptedV1"),
+            "revision {revision} keeps the tagged member: {text}"
+        );
+        assert!(!text.contains("gamma-seven"));
+        assert!(!text.contains("delta-nine"));
+    }
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn tampered_revision_snapshot_fails_closed_and_sibling_surfaces_serve() {
+    let server = boot_live_server().await;
+
+    let note = send(
+        &server,
+        Method::POST,
+        "/v1/records/notes",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "history-tamper-note".to_owned()),
+        ],
+        Some(json!({"data": {"text": "plain note"}})),
+    )
+    .await;
+    assert_eq!(note.status(), StatusCode::CREATED);
+
+    let record_id = holder_at_revision_two(&server, "history-tamper").await;
+
+    // Corrupt revision 1's tagged envelope directly in the journal.
+    let stored = revision_snapshot(&server, "holder", &record_id, 1).await;
+    let tampered = tamper_encrypted_member(&stored);
+    server
+        .booted
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_revisions SET snapshot = $1
+             WHERE entity_id = 'holder' AND record_id = $2 AND record_revision = 1",
+            &[
+                &tampered,
+                &Uuid::parse_str(&record_id).expect("record id is a UUID"),
+            ],
+        )
+        .await
+        .expect("tampered revision snapshot writes");
+
+    // The listing that would surface the tampered revision refuses closed,
+    // value-free.
+    let listed = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(listed.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let listed = body_json(listed).await;
+    assert_eq!(listed["code"], "runtime.field_encryption.unavailable");
+    assert!(
+        !listed.to_string().contains("gamma"),
+        "the refusal stays value-free"
+    );
+
+    // The tampered revision's own detail read refuses the same way, while the
+    // untampered revision beside it still serves.
+    let tampered_detail = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions/1"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(tampered_detail.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let tampered_detail = body_json(tampered_detail).await;
+    assert_eq!(
+        tampered_detail["code"],
+        "runtime.field_encryption.unavailable"
+    );
+
+    let intact_detail = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}/revisions/2"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(intact_detail.status(), StatusCode::OK);
+    let intact_detail = body_json(intact_detail).await;
+    assert_eq!(intact_detail["data"]["domainData"]["secret"], "delta-nine");
+
+    // The live row and the latest-revision snapshot surface never read the
+    // tampered journal row, and the sibling entity keeps serving.
+    let fetched = send(
+        &server,
+        Method::GET,
+        &format!("/v1/records/holders/{record_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(fetched.status(), StatusCode::OK);
+
+    let snapshot = send(
+        &server,
+        Method::GET,
+        "/v1/records/holders:snapshot?$select=jurisdiction,label,secret",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(snapshot.status(), StatusCode::OK);
+
+    let notes = send(
+        &server,
+        Method::GET,
+        "/v1/records/notes?$select=text",
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(notes.status(), StatusCode::OK);
+
+    server.shutdown().await;
+}
+
+/// One submitted dossier-request with an uploaded attachment: the draft, its
+/// evidence file, and the submission that freezes proposal version 1.
+async fn submitted_dossier_request(server: &LiveServer, dossier_id: &str) -> String {
+    let response = send(
+        server,
+        Method::POST,
+        "/v1/records/dossier-requests",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "dossier-request-create".to_owned()),
+        ],
+        Some(json!({ "data": {
+            "jurisdiction": "area-a",
+            "reason": "correct the code",
+            "dossier": dossier_id,
+            "code": "XYZ-9999",
+            "secret": "delta-nine",
+        }})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED, "the draft creates");
+    let created = body_json(response).await;
+    let request_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("request identifier is present")
+        .to_owned();
+
+    let before = send(
+        server,
+        Method::GET,
+        &format!("/v1/records/dossier-requests/{request_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(before.status(), StatusCode::OK);
+    let etag = response_etag(&before);
+
+    let uploaded = send_bytes_as(
+        server,
+        Method::PATCH,
+        &format!("/v1/records/dossier-requests/{request_id}/attachments/evidence"),
+        &[
+            ("content-type", "application/octet-stream".to_owned()),
+            ("idempotency-key", "dossier-evidence-upload".to_owned()),
+            ("if-match", etag),
+        ],
+        Some(b"dossier evidence".to_vec()),
+        &operator_token(),
+    )
+    .await;
+    assert_eq!(uploaded.status(), StatusCode::OK, "the attachment uploads");
+
+    // The upload advanced the record revision, so the submit action and its
+    // precondition come from a fresh read.
+    let after = send(
+        server,
+        Method::GET,
+        &format!("/v1/records/dossier-requests/{request_id}"),
+        &[],
+        None,
+    )
+    .await;
+    assert_eq!(after.status(), StatusCode::OK);
+    let after = body_json(after).await;
+    let submit = find_action(&after, "submit_request");
+    let submitted = send_as(
+        server,
+        Method::POST,
+        submit["href"].as_str().expect("submit href"),
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "dossier-request-submit".to_owned()),
+            (
+                "if-match",
+                submit["ifMatch"].as_str().expect("submit etag").to_owned(),
+            ),
+        ],
+        Some(json!({})),
+        &operator_token(),
+    )
+    .await;
+    assert_eq!(submitted.status(), StatusCode::OK, "the request submits");
+    request_id
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn review_snapshot_opens_target_before_for_the_reviewer() {
+    let server = boot_live_server().await;
+
+    let response = send(
+        &server,
+        Method::POST,
+        "/v1/records/dossiers",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "review-dossier-create".to_owned()),
+        ],
+        Some(json!({ "data": {
+            "jurisdiction": "area-a",
+            "label": "review-target",
+            "code": "ABC-1234",
+        }})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = body_json(response).await;
+    let dossier_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("dossier identifier is present")
+        .to_owned();
+
+    let request_id = submitted_dossier_request(&server, &dossier_id).await;
+
+    // The reviewer sees the captured target row opened at the display edge.
+    let reviewed = send_as(
+        &server,
+        Method::GET,
+        &format!("/v1/records/dossier-requests/{request_id}?accessProfile=reviewer"),
+        &[],
+        None,
+        &token_for("reviewer", "area-a"),
+    )
+    .await;
+    assert_eq!(reviewed.status(), StatusCode::OK);
+    let reviewed = body_json(reviewed).await;
+    let approve = find_action(&reviewed, "approve_request");
+    let targets = approve["review"]["targets"]
+        .as_array()
+        .expect("the approve action carries review targets");
+    let target = targets
+        .iter()
+        .find(|target| target["entityId"] == "dossier")
+        .expect("the dossier target is reviewed");
+    assert_eq!(
+        target["before"]["code"], "ABC-1234",
+        "the captured before row opens for the reviewer"
+    );
+    assert_eq!(target["after"]["code"], "XYZ-9999");
+
+    // The stored target reference keeps the tagged member.
+    let base_snapshot: String = server
+        .booted
+        .database
+        .admin
+        .query_one(
+            "SELECT base_snapshot::text FROM registry_internal.registry_request_targets
+             WHERE request_entity_id = 'dossier-request' AND request_id = $1
+               AND target_entity_id = 'dossier'",
+            &[&Uuid::parse_str(&request_id).expect("request id is a UUID")],
+        )
+        .await
+        .expect("the stored target base snapshot reads")
+        .get(0);
+    assert!(
+        base_snapshot.contains("__bregEncryptedV1"),
+        "the stored base snapshot keeps the tagged member: {base_snapshot}"
+    );
+    assert!(!base_snapshot.contains("ABC-1234"));
+
+    server.shutdown().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn attachment_authorization_over_encrypted_records_fails_closed() {
+    let server = boot_live_server().await;
+
+    let response = send(
+        &server,
+        Method::POST,
+        "/v1/records/dossiers",
+        &[
+            ("content-type", "application/json".to_owned()),
+            ("idempotency-key", "attachment-dossier-create".to_owned()),
+        ],
+        Some(json!({ "data": {
+            "jurisdiction": "area-a",
+            "label": "attachment-target",
+            "code": "ABC-1234",
+        }})),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let created = body_json(response).await;
+    let dossier_id = created["data"]["recordIdentifier"]
+        .as_str()
+        .expect("dossier identifier is present")
+        .to_owned();
+
+    let request_id = submitted_dossier_request(&server, &dossier_id).await;
+    let download = format!(
+        "/v1/records/dossier-requests/{request_id}/attachments/evidence?proposalVersion=1&accessProfile=reviewer"
+    );
+
+    // An authorized reviewer downloads the retained attachment.
+    let authorized = send_as(
+        &server,
+        Method::GET,
+        &download,
+        &[],
+        None,
+        &token_for("reviewer", "area-a"),
+    )
+    .await;
+    assert_eq!(authorized.status(), StatusCode::OK);
+    let bytes = body_bytes(authorized).await;
+    assert_eq!(bytes, b"dossier evidence");
+
+    // A reviewer outside the row boundary is refused without the bytes.
+    let unauthorized = send_as(
+        &server,
+        Method::GET,
+        &download,
+        &[],
+        None,
+        &token_for("reviewer", "area-b"),
+    )
+    .await;
+    assert_eq!(
+        unauthorized.status(),
+        StatusCode::NOT_FOUND,
+        "an excluded row cannot authorize attachment disclosure"
+    );
+
+    // Corrupt the tagged envelope in every revision snapshot of the request
+    // record, so whichever revision the retained-attachment guard froze as its
+    // intake refuses to open.
+    let record_uuid = Uuid::parse_str(&request_id).expect("request id is a UUID");
+    let revisions: Vec<i64> = server
+        .booted
+        .database
+        .admin
+        .query(
+            "SELECT record_revision FROM registry_internal.registry_revisions
+             WHERE entity_id = 'dossier-request' AND record_id = $1
+             ORDER BY record_revision",
+            &[&record_uuid],
+        )
+        .await
+        .expect("the request record revisions read")
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+    assert!(!revisions.is_empty(), "the request record has revisions");
+    for revision in revisions {
+        let stored = revision_snapshot(&server, "dossier-request", &request_id, revision).await;
+        let Ok(text) = String::from_utf8(stored) else {
+            continue;
+        };
+        if !text.contains("__bregEncryptedV1") {
+            continue;
+        }
+        let tampered = tamper_encrypted_member(text.as_bytes());
+        server
+            .booted
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_revisions SET snapshot = $1
+                 WHERE entity_id = 'dossier-request' AND record_id = $2 AND record_revision = $3",
+                &[&tampered, &record_uuid, &revision],
+            )
+            .await
+            .expect("tampered intake snapshot writes");
+    }
+
+    // The tampered envelope refuses the disclosure closed instead of
+    // authorizing it, value-free.
+    let refused = send_as(
+        &server,
+        Method::GET,
+        &download,
+        &[],
+        None,
+        &token_for("reviewer", "area-a"),
+    )
+    .await;
+    assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let refused = body_json(refused).await;
+    assert_eq!(refused["code"], "runtime.field_encryption.unavailable");
+    assert!(
+        !refused.to_string().contains("delta"),
+        "the refusal stays value-free"
+    );
 
     server.shutdown().await;
 }
