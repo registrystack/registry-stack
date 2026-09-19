@@ -486,8 +486,7 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                          OR (state = 'delivered'
                              AND octet_length(handler_message_digest) = 32
                              AND (handler_message IS NULL
-                                  OR octet_length(handler_message)
-                                     BETWEEN 1 AND 1048576))
+                                  OR octet_length(handler_message) BETWEEN 1 AND 1048576))
                      );
              END
              $registry_webhook_state_upgrade$;",

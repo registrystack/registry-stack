@@ -189,9 +189,7 @@ pub(crate) fn resolve_binding(
     profile: &AuditProfile,
     binding: &IdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
-    if binding.key.is_empty()
-        || binding.key.len() > MAX_IDEMPOTENCY_KEY_BYTES
-        || binding.route.is_empty()
+    if binding.route.is_empty()
         || binding.package_revision.is_empty()
         || binding.response_fields.iter().any(|field| field.is_empty())
     {
@@ -199,9 +197,7 @@ pub(crate) fn resolve_binding(
     }
 
     let key_hasher = profile.key_hasher();
-    let key_reference = key_hasher
-        .audit_reference_hash("breg-idempotency-key-v1", "", binding.key)
-        .map_err(|_| IdempotencyError::InvalidInput)?;
+    let key_reference = resolve_key_reference(profile, binding.key)?;
     let canonical_context =
         canonical_claim_context(profile, binding.context, binding.package_revision)?;
     let principal_reference = key_hasher
@@ -261,9 +257,7 @@ pub(crate) fn resolve_action_binding(
     profile: &AuditProfile,
     binding: &ActionIdempotencyBinding<'_>,
 ) -> Result<ResolvedIdempotencyBinding, IdempotencyError> {
-    if binding.key.is_empty()
-        || binding.key.len() > MAX_IDEMPOTENCY_KEY_BYTES
-        || binding.route.is_empty()
+    if binding.route.is_empty()
         || binding.package_revision.is_empty()
         || binding.action_contract_fingerprint.is_empty()
         || binding
@@ -274,9 +268,7 @@ pub(crate) fn resolve_action_binding(
         return Err(IdempotencyError::InvalidInput);
     }
     let key_hasher = profile.key_hasher();
-    let key_reference = key_hasher
-        .audit_reference_hash("breg-idempotency-key-v1", "", binding.key)
-        .map_err(|_| IdempotencyError::InvalidInput)?;
+    let key_reference = resolve_key_reference(profile, binding.key)?;
     let principal_reference = key_hasher
         .audit_reference_hash(
             "breg-principal-v1",
@@ -303,7 +295,7 @@ pub(crate) fn resolve_action_binding(
             }))
         })
         .collect::<Result<Vec<_>, IdempotencyError>>()?;
-    let canonical = canonicalize_json(&json!({
+    let mut canonical_binding = json!({
         "context": canonical_context,
         "method": method_name(binding.method),
         "route": binding.route,
@@ -311,10 +303,13 @@ pub(crate) fn resolve_action_binding(
         "actionContractFingerprint": binding.action_contract_fingerprint,
         "targetAuthority": target_authority,
         "resultEffects": binding.result_effects,
-        "handlerAnswerDigest": binding.answer_digest.map(|digest| hex(digest.as_slice())),
         "canonicalRequestDigest": hex(&binding.canonical_request_digest),
-    }))
-    .map_err(|_| IdempotencyError::InvalidInput)?;
+    });
+    if let Some(answer_digest) = binding.answer_digest {
+        canonical_binding["handlerAnswerDigest"] = Value::String(hex(answer_digest.as_slice()));
+    }
+    let canonical =
+        canonicalize_json(&canonical_binding).map_err(|_| IdempotencyError::InvalidInput)?;
     let canonical = std::str::from_utf8(&canonical).map_err(|_| IdempotencyError::InvalidInput)?;
     let binding_reference = key_hasher
         .audit_reference_hash(
@@ -329,6 +324,19 @@ pub(crate) fn resolve_action_binding(
         principal_reference,
         record_reference: String::new(),
     })
+}
+
+pub(crate) fn resolve_key_reference(
+    profile: &AuditProfile,
+    key: &str,
+) -> Result<String, IdempotencyError> {
+    if key.is_empty() || key.len() > MAX_IDEMPOTENCY_KEY_BYTES {
+        return Err(IdempotencyError::InvalidInput);
+    }
+    profile
+        .key_hasher()
+        .audit_reference_hash("breg-idempotency-key-v1", "", key)
+        .map_err(|_| IdempotencyError::InvalidInput)
 }
 
 /// Canonical, value-safe identity of every verified authorization input that

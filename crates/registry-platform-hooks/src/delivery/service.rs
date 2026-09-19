@@ -26,7 +26,7 @@ use super::seams::{
     DeliveryAuditDisposition, DeliveryAuditOutcome, DeliveryAuditPhase, DeliveryAuditRecord,
     DeliveryError, DeliveryOperationalEvent, DeliverySeams, DeliverySignatureFields,
     DeliveryTransitionCode, DestinationAnswer, HookDestination, HookHandler, HookHandlerBinding,
-    ProposalApplication, ProposalOutcome,
+    ProposalApplication, ProposalOutcome, ProposalReceiptRecovery,
 };
 use crate::delivery_schema;
 use crate::envelope::{EnvelopeLimits, HookEnvelope};
@@ -942,6 +942,13 @@ impl<S: DeliverySeams> DeliveryService<S> {
             return Ok(result);
         };
         if !matches!(answer.message, HookMessage::Proposal { .. }) {
+            result.proposal = self
+                .seams
+                .recover_proposal_receipt(ProposalReceiptRecovery {
+                    event_id: claim.event_id,
+                    compiled_delivery_id: &claim.compiled_delivery_id,
+                })
+                .await?;
             return Ok(result);
         }
         let outcome = self
@@ -1886,6 +1893,13 @@ mod tests {
         ) -> Result<ProposalOutcome, DeliveryError> {
             Err(DeliveryError::Unavailable)
         }
+
+        async fn recover_proposal_receipt(
+            &self,
+            _recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            Err(DeliveryError::Unavailable)
+        }
     }
 
     const STORED_EVENT_ID: &str = "4e2f6d6c-6f0a-4c2f-9c1a-2d0f7a8b6c51";
@@ -2290,7 +2304,9 @@ mod tests {
     /// step uses still refuses, so nothing but the apply seam is reachable.
     struct ProposalSeams {
         applications: Arc<Mutex<Vec<RecordedApplication>>>,
+        recoveries: Arc<Mutex<Vec<RecordedRecovery>>>,
         answer: Result<ProposalOutcome, DeliveryError>,
+        recovery: Result<Option<ProposalOutcome>, DeliveryError>,
     }
 
     struct RecordedApplication {
@@ -2300,6 +2316,11 @@ mod tests {
         envelope: Vec<u8>,
         answer: Vec<u8>,
         answer_digest: [u8; 32],
+    }
+
+    struct RecordedRecovery {
+        event_id: Uuid,
+        compiled_delivery_id: String,
     }
 
     #[async_trait::async_trait]
@@ -2353,6 +2374,20 @@ mod tests {
                 });
             self.answer.clone()
         }
+
+        async fn recover_proposal_receipt(
+            &self,
+            recovery: ProposalReceiptRecovery<'_>,
+        ) -> Result<Option<ProposalOutcome>, DeliveryError> {
+            self.recoveries
+                .lock()
+                .expect("recoveries lock")
+                .push(RecordedRecovery {
+                    event_id: recovery.event_id,
+                    compiled_delivery_id: recovery.compiled_delivery_id.to_owned(),
+                });
+            self.recovery.clone()
+        }
     }
 
     fn proposal_claim() -> DeliveryClaim {
@@ -2373,12 +2408,16 @@ mod tests {
 
     fn proposal_service(
         applications: Arc<Mutex<Vec<RecordedApplication>>>,
+        recoveries: Arc<Mutex<Vec<RecordedRecovery>>>,
         answer: Result<ProposalOutcome, DeliveryError>,
+        recovery: Result<Option<ProposalOutcome>, DeliveryError>,
     ) -> DeliveryService<ProposalSeams> {
         DeliveryService::new(
             ProposalSeams {
                 applications,
+                recoveries,
                 answer,
+                recovery,
             },
             DeliveryConfig {
                 schema: "hooks_delivery_proposal_test".to_owned(),
@@ -2397,11 +2436,14 @@ mod tests {
     #[tokio::test]
     async fn an_accepted_proposal_is_handed_to_the_product_seam() {
         let applications = Arc::new(Mutex::new(Vec::new()));
+        let recoveries = Arc::new(Mutex::new(Vec::new()));
         let service = proposal_service(
             Arc::clone(&applications),
+            Arc::clone(&recoveries),
             Ok(ProposalOutcome::Applied {
                 resulting_revision: 7,
             }),
+            Ok(None),
         );
         let claim = proposal_claim();
         let envelope = stored_envelope_bytes();
@@ -2436,7 +2478,13 @@ mod tests {
         // cannot know: the attempt result must not become a delivered row, so
         // the error propagates and the lease is left for expiry recovery.
         let applications = Arc::new(Mutex::new(Vec::new()));
-        let service = proposal_service(Arc::clone(&applications), Err(DeliveryError::Unavailable));
+        let recoveries = Arc::new(Mutex::new(Vec::new()));
+        let service = proposal_service(
+            Arc::clone(&applications),
+            Arc::clone(&recoveries),
+            Err(DeliveryError::Unavailable),
+            Ok(None),
+        );
         let claim = proposal_claim();
         let envelope = stored_envelope_bytes();
         let answer = br#"{"answer":"proposal","document":{"kind":"action-outcome"}}"#;
@@ -2455,13 +2503,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_answer_that_proposes_nothing_never_reaches_the_apply_seam() {
+    async fn an_answer_that_proposes_nothing_checks_only_for_a_committed_proposal() {
         let applications = Arc::new(Mutex::new(Vec::new()));
+        let recoveries = Arc::new(Mutex::new(Vec::new()));
         let service = proposal_service(
             Arc::clone(&applications),
+            Arc::clone(&recoveries),
             Ok(ProposalOutcome::Applied {
                 resulting_revision: 7,
             }),
+            Ok(None),
         );
         let claim = proposal_claim();
         let envelope = stored_envelope_bytes();
@@ -2474,7 +2525,7 @@ mod tests {
             let settled = service
                 .settle_answer(&claim, &envelope, accepted_answer_result(body))
                 .await
-                .expect("an answer without a proposal settles without the seam");
+                .expect("an answer without a proposal checks for an earlier receipt");
             assert!(
                 settled.proposal.is_none(),
                 "a none or refusal answer carries no proposal to apply"
@@ -2484,6 +2535,44 @@ mod tests {
             applications.lock().expect("applications lock").is_empty(),
             "the apply seam is only asked for a proposal answer"
         );
+        let recoveries = recoveries.lock().expect("recoveries lock");
+        assert_eq!(recoveries.len(), 3);
+        assert!(recoveries.iter().all(|recovery| {
+            recovery.event_id == claim.event_id
+                && recovery.compiled_delivery_id == claim.compiled_delivery_id
+        }));
+    }
+
+    #[tokio::test]
+    async fn a_non_proposal_answer_keeps_a_recovered_proposal_conflict() {
+        let applications = Arc::new(Mutex::new(Vec::new()));
+        let recoveries = Arc::new(Mutex::new(Vec::new()));
+        let conflict = ProposalOutcome::DeadLettered {
+            code: crate::BoundedText::try_from("hook.proposal.answer_conflict")
+                .expect("within the code bound"),
+            summary: crate::BoundedText::try_from(
+                "This delivery already applied a different answer; the first application stands.",
+            )
+            .expect("within the summary bound"),
+        };
+        let service = proposal_service(
+            Arc::clone(&applications),
+            Arc::clone(&recoveries),
+            Err(DeliveryError::Unavailable),
+            Ok(Some(conflict.clone())),
+        );
+        let claim = proposal_claim();
+        let settled = service
+            .settle_answer(
+                &claim,
+                &stored_envelope_bytes(),
+                accepted_answer_result(br#"{"answer":"none"}"#),
+            )
+            .await
+            .expect("the committed proposal receipt settles the changed answer");
+        assert_eq!(settled.proposal, Some(conflict));
+        assert!(applications.lock().expect("applications lock").is_empty());
+        assert_eq!(recoveries.lock().expect("recoveries lock").len(), 1);
     }
 
     #[test]
