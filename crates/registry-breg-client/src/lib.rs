@@ -12,6 +12,7 @@ mod config;
 mod error;
 mod extended_mutation;
 mod geojson;
+mod ingestion;
 mod lifecycle;
 mod metadata;
 mod mutation;
@@ -33,6 +34,7 @@ pub use error::{
     BaseRegistryClientError, TransportKind,
 };
 pub use geojson::*;
+pub use ingestion::*;
 pub use lifecycle::*;
 pub use metadata::*;
 pub use mutation::*;

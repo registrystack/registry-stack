@@ -1,0 +1,1243 @@
+// SPDX-License-Identifier: Apache-2.0
+
+#![cfg(feature = "postgres-test")]
+
+#[path = "support/postgres_harness.rs"]
+#[allow(dead_code)]
+mod postgres_harness;
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::{to_bytes, Body};
+use axum::http::{HeaderName, HeaderValue, Method, Request, StatusCode};
+use postgres_harness::TestDatabase;
+use registry_breg::api::{
+    router, HttpService, ReadRuntimeIdentity, ReadinessProbe, ServiceFuture, VerifiedClaimValue,
+    VerifiedRequestClaims,
+};
+use registry_breg::compiler::{compile_project, CompileProfile};
+use registry_breg::contract::parse_project_json;
+use registry_breg::cursor::CursorCodec;
+use registry_breg::mutation::MutationFaultPoint;
+use registry_breg::postgres::{
+    initialize_compiled_registry_state_for_test, install_compiled_schema,
+    PostgresRecordMutationService, PostgresRecordReadService, RegistryLockKey,
+    RegistryStateTestIdentity,
+};
+use registry_platform_audit::AuditProfile;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use tower::Service as _;
+use uuid::Uuid;
+use zeroize::Zeroizing;
+
+const PRINCIPAL: &str = "ingestion-principal-must-not-enter-run-rows";
+const OTHER_PRINCIPAL: &str = "ingestion-other-principal";
+const RECORD_CANARY: &str = "ingestion-record-value-must-not-enter-run-rows";
+const PACKAGE_ID: &str = "ingestion-registry";
+const PACKAGE_REVISION: &str = "package-ingestion-1";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ingestion_run_journey_commits_resumes_and_replays_without_duplicates() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items: Vec<Value> = (0..5)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{RECORD_CANARY}-{index}"),
+                "quantity": index
+            }})
+        })
+        .collect();
+    let chunks = plan_chunks(&items, 3);
+
+    let created = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run = body_json(created).await["run"].clone();
+    assert_eq!(run["status"], "open");
+    assert_eq!(run["complete"], false);
+    assert_eq!(run["nextChunkIndex"], 0);
+    assert_eq!(run["committedItems"], 0);
+    assert_eq!(run["itemCount"], 5);
+    assert_eq!(run["chunkCount"], 2);
+    assert_eq!(run["maximumItems"], 3);
+    assert_eq!(
+        run["chunkAlgorithmVersion"],
+        "greedy-canonical-http-batch-v1"
+    );
+    assert_eq!(run["lastAttempt"], Value::Null);
+    let run_id = run["runId"].as_str().expect("run id").to_owned();
+
+    let first = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first_body = body_json(first).await;
+    assert_eq!(first_body["run"]["nextChunkIndex"], 1);
+    assert_eq!(first_body["run"]["committedItems"], 3);
+    assert_eq!(first_body["run"]["complete"], false);
+    assert_eq!(first_body["receipt"]["chunkIndex"], 0);
+    assert_eq!(first_body["receipt"]["replayed"], false);
+    assert_eq!(first_body["receipt"]["digest"], chunks.digests[0]);
+    assert_eq!(
+        first_body["receipt"]["batch"]["results"]
+            .as_array()
+            .expect("receipt results")
+            .len(),
+        3
+    );
+
+    // A restarted process resumes from the stored checkpoint alone: the new
+    // router shares only the database with the one that committed chunk 0.
+    let resumed = harness.restart(None).await;
+    let second = resumed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(second.status(), StatusCode::OK);
+    let second_body = body_json(second).await;
+    assert_eq!(second_body["run"]["status"], "complete");
+    assert_eq!(second_body["run"]["complete"], true);
+    assert_eq!(second_body["run"]["committedItems"], 5);
+    assert_eq!(second_body["run"]["nextChunkIndex"], 2);
+    assert_eq!(second_body["receipt"]["replayed"], false);
+
+    let durable = durable_widget_count(&harness).await;
+    assert_eq!(durable, 5, "every announced item is committed exactly once");
+
+    // Resubmitting the exact final chunk answers with the original receipt
+    // and mutates nothing.
+    let replay = resumed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_body = body_json(replay).await;
+    assert_eq!(replay_body["receipt"]["replayed"], true);
+    assert_eq!(
+        replay_body["receipt"]["batch"],
+        second_body["receipt"]["batch"]
+    );
+    assert_eq!(durable_widget_count(&harness).await, 5);
+
+    // The receipt-recovery endpoint returns the same stored receipt.
+    let recovered = resumed
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks/0/receipt"),
+            &claims,
+        )
+        .await;
+    assert_eq!(recovered.status(), StatusCode::OK);
+    let recovered_body = body_json(recovered).await;
+    assert_eq!(recovered_body["chunkIndex"], 0);
+    assert_eq!(recovered_body["digest"], chunks.digests[0]);
+    assert_eq!(recovered_body["replayed"], true);
+    assert_eq!(
+        recovered_body["batch"]["results"]
+            .as_array()
+            .expect("results")
+            .len(),
+        3
+    );
+
+    // A completed run refuses further chunks.
+    let refused = resumed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            json!({"chunkIndex": 2, "items": [
+                {"operation":"create", "data": {"jurisdiction": "zone-a", "label": "post-completion", "quantity": 1}
+            }], "digest": zero_digest(), "prefixDigest": zero_digest()}),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.run_not_open");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn lost_chunk_response_replays_original_receipt_without_duplicate_mutation() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items: Vec<Value> = (0..5)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{RECORD_CANARY}-faulted-{index}"),
+                "quantity": index
+            }})
+        })
+        .collect();
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    // The commit lands and the response is lost: the client sees an outage.
+    let faulted = harness
+        .restart(Some(MutationFaultPoint::AfterCommitBeforeResponseRelease))
+        .await;
+    let lost = faulted
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(lost.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // The same client rereads the file and resubmits the exact chunk.
+    let recovered = harness.restart(None).await;
+    let replay = recovered
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    let replay_body = body_json(replay).await;
+    assert_eq!(replay_body["receipt"]["replayed"], true);
+    assert_eq!(replay_body["receipt"]["chunkIndex"], 0);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+    assert_eq!(
+        replay_body["run"]["committedItems"], 3,
+        "the lost-response recovery advances the checkpoint exactly once"
+    );
+
+    // The run still finishes from the recovered checkpoint.
+    let finish = recovered
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks"),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(finish.status(), StatusCode::OK);
+    assert_eq!(body_json(finish).await["run"]["complete"], true);
+    assert_eq!(durable_widget_count(&harness).await, 5);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn divergent_chunk_submissions_are_refused_without_moving_the_checkpoint() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items: Vec<Value> = (0..5)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{RECORD_CANARY}-diverge-{index}"),
+                "quantity": index
+            }})
+        })
+        .collect();
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let uri = format!("/v1/records/widgets/ingestion-runs/{run_id}/chunks");
+
+    // Skipping ahead past the next expected chunk is a mismatch.
+    let ahead = harness
+        .post_json(&uri, &claims, chunk_body(&chunks, 1))
+        .await;
+    assert_eq!(ahead.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(ahead).await["code"], "ingestion.chunk_mismatch");
+
+    // Item bytes that do not hash to the announced digest are a mismatch.
+    let mut swapped = chunk_body(&chunks, 0);
+    swapped["items"][0]["data"]["label"] = json!(format!("{RECORD_CANARY}-swapped"));
+    let mismatch = harness.post_json(&uri, &claims, swapped).await;
+    assert_eq!(mismatch.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(mismatch).await["code"],
+        "ingestion.chunk_mismatch"
+    );
+
+    // An item no chunk operation admits is an invalid request.
+    let invalid = harness
+        .post_json(
+            &uri,
+            &claims,
+            json!({"chunkIndex": 0, "items": [{"operation":"upsert","data":{}}], "digest": zero_digest(), "prefixDigest": zero_digest()}),
+        )
+        .await;
+    assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+
+    // The checkpoint has not moved under any refusal.
+    let run = harness.read_run(&claims, &run_id).await;
+    assert_eq!(run["nextChunkIndex"], 0);
+    assert_eq!(run["committedItems"], 0);
+    assert_eq!(run["lastAttempt"]["outcome"], "chunkMismatch");
+
+    // The exact chunk still commits after the refusals.
+    let accepted = harness
+        .post_json(&uri, &claims, chunk_body(&chunks, 0))
+        .await;
+    assert_eq!(accepted.status(), StatusCode::OK);
+
+    // Committing past the announced item total is a mismatch: the remaining
+    // chunk may not carry more items than the run announced in total.
+    let mut overrun = chunk_body(&chunks, 1);
+    overrun["items"]
+        .as_array_mut()
+        .expect("items")
+        .push(json!({"operation":"create", "data": {
+            "jurisdiction": "zone-a", "label": format!("{RECORD_CANARY}-overrun"), "quantity": 9
+        }}));
+    overrun["digest"] = json!(chunk_digest(overrun["items"].as_array().expect("items")));
+    let exceeded = harness.post_json(&uri, &claims, overrun).await;
+    assert_eq!(exceeded.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(exceeded).await["code"],
+        "ingestion.chunk_mismatch"
+    );
+
+    // Replaying a committed chunk index with different bytes is a mismatch.
+    let mut divergent = chunk_body(&chunks, 0);
+    divergent["items"][1]["data"]["label"] = json!(format!("{RECORD_CANARY}-rewritten"));
+    divergent["digest"] = json!(chunk_digest(divergent["items"].as_array().expect("items")));
+    let rewritten = harness.post_json(&uri, &claims, divergent).await;
+    assert_eq!(rewritten.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(rewritten).await["code"],
+        "ingestion.chunk_mismatch"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_access_is_creator_scoped_and_possession_grants_nothing() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let other = operator_claims(OTHER_PRINCIPAL, "zone-a");
+    let items = announce_items("scoped", 1);
+    let chunks = plan_chunks(&items, 1);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let foreign_read = harness
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}", run_id),
+            &other,
+        )
+        .await;
+    assert_eq!(foreign_read.status(), StatusCode::NOT_FOUND);
+
+    let foreign_chunk = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &other,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(foreign_chunk.status(), StatusCode::NOT_FOUND);
+
+    let foreign_receipt = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{}/chunks/0/receipt",
+                run_id
+            ),
+            &other,
+        )
+        .await;
+    assert_eq!(foreign_receipt.status(), StatusCode::NOT_FOUND);
+
+    let foreign_cancel = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{}/cancel", run_id),
+            &other,
+        )
+        .await;
+    assert_eq!(foreign_cancel.status(), StatusCode::NOT_FOUND);
+
+    // Another principal still creates and lists their own runs.
+    let own = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &other,
+            harness.run_body(
+                "create",
+                &plan_chunks(&announce_items("scoped-other", 1), 1),
+            ),
+        )
+        .await;
+    assert_eq!(own.status(), StatusCode::CREATED);
+
+    let listed = harness
+        .get_json("/v1/records/widgets/ingestion-runs", &claims)
+        .await;
+    assert_eq!(listed.status(), StatusCode::OK);
+    let listed = body_json(listed).await;
+    let runs = listed["runs"].as_array().expect("runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0]["runId"], run_id.as_str());
+    assert_eq!(listed["hasMore"], false);
+
+    // An unauthenticated caller cannot create a run at all.
+    let anonymous = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs",
+            &anonymous_claims(),
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    assert_ne!(anonymous.status(), StatusCode::CREATED);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_creation_refuses_mismatched_profiles_bindings_and_algorithms() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("refused", 1);
+    let chunks = plan_chunks(&items, 1);
+
+    let mut mismatched = harness.run_body("create", &chunks);
+    mismatched["profileId"] = json!("operator-minimal");
+    let profile = harness
+        .post_json(
+            "/v1/records/widgets/ingestion-runs?accessProfile=operator",
+            &claims,
+            mismatched,
+        )
+        .await;
+    assert_eq!(profile.status(), StatusCode::FORBIDDEN);
+    assert_eq!(
+        body_json(profile).await["code"],
+        "ingestion.profile_mismatch"
+    );
+
+    let mut stale = harness.run_body("create", &chunks);
+    stale["packageRevision"] = json!("package-ingestion-0");
+    let refused = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, stale)
+        .await;
+    assert_eq!(refused.status(), StatusCode::PRECONDITION_FAILED);
+
+    let mut algorithm = harness.run_body("create", &chunks);
+    algorithm["chunkAlgorithmVersion"] = json!("future-algorithm-v9");
+    let refused = harness
+        .post_json("/v1/records/widgets/ingestion-runs", &claims, algorithm)
+        .await;
+    assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+
+    let refused = harness
+        .post_json(
+            "/v1/records/ledgers/ingestion-runs",
+            &claims,
+            harness.run_body("create", &chunks),
+        )
+        .await;
+    // The ledger entity carries no batch surface, so no ingestion-run
+    // resource exists for it at all.
+    assert_eq!(refused.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn package_change_blocks_the_run_and_keeps_it_inspectable() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("blocked", 5);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    assert_eq!(durable_widget_count(&harness).await, 3);
+
+    // A new active package revision must not reinterpret remaining source
+    // bytes: the run is blocked, not silently re-bound.
+    let changed = harness.restart_with_revision("package-ingestion-2").await;
+    let blocked = changed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(blocked.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(blocked).await["code"], "ingestion.run_blocked");
+
+    let inspected = changed
+        .get_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}", run_id),
+            &claims,
+        )
+        .await;
+    assert_eq!(inspected.status(), StatusCode::OK);
+    let run = body_json(inspected).await["run"].clone();
+    assert_eq!(run["status"], "blocked");
+    assert_eq!(run["blockedReason"], "activePackageChanged");
+    assert_eq!(run["committedItems"], 3);
+    assert_eq!(run["nextChunkIndex"], 1);
+
+    // A blocked run refuses again, consistently.
+    let refused = changed
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 1),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.run_blocked");
+
+    // The creator may still cancel a blocked run.
+    let cancelled = changed
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{}/cancel", run_id),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    assert_eq!(body_json(cancelled).await["run"]["status"], "cancelled");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_closes_the_run_and_preserves_the_committed_prefix() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("cancelled", 4);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let cancelled = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{}/cancel", run_id),
+            &claims,
+        )
+        .await;
+    assert_eq!(cancelled.status(), StatusCode::OK);
+    let run = body_json(cancelled).await["run"].clone();
+    assert_eq!(run["status"], "cancelled");
+    assert_eq!(run["committedItems"], 0);
+
+    let refused = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(refused).await["code"], "ingestion.run_not_open");
+
+    // Cancelling twice reports the already-closed state.
+    let second = harness
+        .post_empty(
+            &format!("/v1/records/widgets/ingestion-runs/{}/cancel", run_id),
+            &claims,
+        )
+        .await;
+    assert_eq!(second.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(second).await["code"], "ingestion.run_not_open");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn erasing_record_history_erases_the_receipt_that_describes_it() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items("erased", 2);
+    let chunks = plan_chunks(&items, 2);
+    let run_id = harness.create_run(&claims, &chunks).await;
+
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+    let receipt = body_json(committed).await["receipt"].clone();
+    let erased_record = receipt["batch"]["results"][0]["id"]
+        .as_str()
+        .expect("receipt carries a created record id")
+        .to_owned();
+
+    let before = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{}/chunks/0/receipt",
+                run_id
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(before.status(), StatusCode::OK);
+
+    harness.erase_widget_history(&erased_record).await;
+
+    // The receipt described erased history: recovery reports it gone instead
+    // of replaying bytes the record history no longer backs.
+    let after = harness
+        .get_json(
+            &format!(
+                "/v1/records/widgets/ingestion-runs/{}/chunks/0/receipt",
+                run_id
+            ),
+            &claims,
+        )
+        .await;
+    assert_eq!(after.status(), StatusCode::GONE);
+    assert_eq!(body_json(after).await["code"], "ingestion.receipt_erased");
+
+    let replay = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(replay.status(), StatusCode::GONE);
+    assert_eq!(body_json(replay).await["code"], "ingestion.receipt_erased");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn run_rows_and_audit_never_carry_source_values() {
+    let harness = IngestionHarness::create().await;
+    let claims = operator_claims(PRINCIPAL, "zone-a");
+    let items = announce_items(RECORD_CANARY, 3);
+    let chunks = plan_chunks(&items, 3);
+    let run_id = harness.create_run(&claims, &chunks).await;
+    let committed = harness
+        .post_json(
+            &format!("/v1/records/widgets/ingestion-runs/{}/chunks", run_id),
+            &claims,
+            chunk_body(&chunks, 0),
+        )
+        .await;
+    assert_eq!(committed.status(), StatusCode::OK);
+
+    // The run row, the run audit, and the shared audit journal carry digests,
+    // counts, and hashed references only. The stored chunk receipt is the
+    // replayable batch answer and holds the same profile-bound projection the
+    // ordinary batch route returned, so it is out of scope for this sweep.
+    for table in ["registry_ingestion_runs"] {
+        let row = harness
+            .database
+            .admin
+            .query_one(
+                &format!(
+                    "SELECT count(*) FROM (
+                         SELECT scanned::text AS row_text
+                           FROM registry_internal.{table} AS scanned
+                     ) rows WHERE row_text LIKE '%' || $1 || '%'"
+                ),
+                &[&RECORD_CANARY],
+            )
+            .await
+            .unwrap_or_else(|error| panic!("{table} must be scannable: {error}"));
+        assert_eq!(row.get::<_, i64>(0), 0, "{table} carries no source canary");
+    }
+
+    for canary in [RECORD_CANARY, PRINCIPAL] {
+        let row = harness
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_audit
+                 WHERE envelope::text LIKE '%' || $1 || '%'",
+                &[&canary],
+            )
+            .await
+            .expect("audit envelopes are readable");
+        assert_eq!(
+            row.get::<_, i64>(0),
+            0,
+            "no audit envelope carries the canary"
+        );
+    }
+}
+
+struct IngestionHarness {
+    database: TestDatabase,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    audit_profile: AuditProfile,
+    app: axum::Router,
+}
+
+impl IngestionHarness {
+    async fn create() -> Self {
+        let database = TestDatabase::create(8).await;
+        let (migration, migration_task) = database.connect_migration().await;
+        let registry = Arc::new(compiled_registry());
+        install_compiled_schema(&migration, &registry, &database.runtime_role)
+            .await
+            .expect("migration installs the compiler-owned schema");
+        let identity = initialize_compiled_registry_state_for_test(
+            &migration,
+            &database.runtime_role,
+            &registry,
+            RegistryStateTestIdentity {
+                package_id: PACKAGE_ID,
+                environment: "local",
+                instance_id: "ingestion-instance",
+                database_id: "ingestion-database",
+                package_revision: PACKAGE_REVISION,
+                package_sequence: 1,
+            },
+        )
+        .await
+        .expect("active package identity is initialized");
+        migration_task.abort();
+        let lock_key = RegistryLockKey::derive(PACKAGE_ID).expect("lock key derives");
+        let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x7c; 32].into())
+            .expect("test owns a keyed audit profile");
+        let pool = database
+            .runtime_config
+            .build_pool()
+            .expect("bounded runtime pool builds");
+        let app = build_router(
+            pool,
+            registry.clone(),
+            identity.clone(),
+            lock_key,
+            audit_profile.clone(),
+            None,
+        );
+        Self {
+            database,
+            registry,
+            identity,
+            lock_key,
+            audit_profile,
+            app,
+        }
+    }
+
+    /// Rebuild the HTTP surface from the same database, as a restarted
+    /// process would, optionally under an injected mutation fault.
+    async fn restart(&self, fault: Option<MutationFaultPoint>) -> Surface {
+        let pool = self
+            .database
+            .runtime_config
+            .build_pool()
+            .expect("bounded runtime pool builds");
+        Surface {
+            app: build_router(
+                pool,
+                self.registry.clone(),
+                self.identity.clone(),
+                self.lock_key,
+                self.audit_profile.clone(),
+                fault,
+            ),
+        }
+    }
+
+    async fn restart_with_revision(&self, package_revision: &str) -> Surface {
+        let successor = registry_breg::postgres::ExpectedRegistryIdentity {
+            package_revision: package_revision.to_owned(),
+            package_sequence: 2,
+            ..self.identity.clone()
+        };
+        let changed = self
+            .database
+            .admin
+            .execute(
+                "UPDATE registry_internal.registry_state
+                    SET active_package_revision = $1, schema_fingerprint = $2,
+                        package_sequence = $3
+                  WHERE singleton",
+                &[
+                    &successor.package_revision,
+                    &successor.schema_fingerprint,
+                    &successor.package_sequence,
+                ],
+            )
+            .await
+            .expect("successor revision activates");
+        assert_eq!(changed, 1);
+        let pool = self
+            .database
+            .runtime_config
+            .build_pool()
+            .expect("bounded runtime pool builds");
+        Surface {
+            app: build_router(
+                pool,
+                self.registry.clone(),
+                successor,
+                self.lock_key,
+                self.audit_profile.clone(),
+                None,
+            ),
+        }
+    }
+
+    async fn post_empty(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+    ) -> axum::response::Response {
+        post_empty(&self.app, uri, claims).await
+    }
+
+    fn run_body(&self, operation: &str, plan: &ChunkPlan) -> Value {
+        run_body(operation, &self.identity.schema_fingerprint, plan)
+    }
+
+    async fn post_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+        body: Value,
+    ) -> axum::response::Response {
+        post_json(&self.app, uri, claims, body).await
+    }
+
+    async fn get_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+    ) -> axum::response::Response {
+        get_json(&self.app, uri, claims).await
+    }
+
+    async fn create_run(&self, claims: &VerifiedRequestClaims, plan: &ChunkPlan) -> String {
+        let response = self
+            .post_json(
+                "/v1/records/widgets/ingestion-runs",
+                claims,
+                self.run_body("create", plan),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        body_json(response).await["run"]["runId"]
+            .as_str()
+            .expect("run id")
+            .to_owned()
+    }
+
+    async fn read_run(&self, claims: &VerifiedRequestClaims, run_id: &str) -> Value {
+        let response = self
+            .get_json(
+                &format!("/v1/records/widgets/ingestion-runs/{}", run_id),
+                claims,
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        body_json(response).await["run"].clone()
+    }
+
+    async fn erase_widget_history(&self, record_id: &str) {
+        use registry_breg::history_erasure::{
+            erase_record_history, HistoryErasureRequest, HistoryErasureTimeouts,
+            RecordHistoryErasureTarget,
+        };
+        let (mut migration, migration_task) = self.database.connect_migration().await;
+        let target = RecordHistoryErasureTarget::new(
+            "widget",
+            Uuid::parse_str(record_id).expect("record id parses"),
+            1,
+        );
+        erase_record_history(
+            &mut migration,
+            HistoryErasureRequest {
+                expected: &self.identity,
+                migration_role: &self.database.migration_role,
+                lock_key: self.lock_key,
+                timeouts: HistoryErasureTimeouts::new(
+                    Duration::from_secs(5),
+                    Duration::from_secs(5),
+                )
+                .expect("timeouts are bounded"),
+                audit_profile: &self.audit_profile,
+                operator_reference: "ingestion-erasure-operator",
+                reason: "ingestion-receipt-erasure-proof",
+                target,
+            },
+        )
+        .await
+        .expect("targeted erasure succeeds");
+        migration_task.abort();
+    }
+}
+
+fn build_router(
+    pool: registry_breg::postgres::RuntimePool,
+    registry: Arc<registry_breg::CompiledRegistry>,
+    identity: registry_breg::postgres::ExpectedRegistryIdentity,
+    lock_key: RegistryLockKey,
+    profile: AuditProfile,
+    fault: Option<MutationFaultPoint>,
+) -> axum::Router {
+    let cursors = Arc::new(
+        CursorCodec::new(Zeroizing::new(vec![0x53; 32]), Duration::from_secs(300))
+            .expect("cursor key is valid"),
+    );
+    let records = Arc::new(PostgresRecordReadService::new(
+        pool.clone(),
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        profile.clone(),
+        cursors.clone(),
+    ));
+    let mutations = PostgresRecordMutationService::new(
+        pool,
+        registry.clone(),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        profile,
+    );
+    let mutations = match fault {
+        Some(fault) => mutations.with_fault_for_test(fault),
+        None => mutations,
+    };
+    router(Arc::new(
+        HttpService::new(
+            registry,
+            ReadRuntimeIdentity {
+                package_revision: identity.package_revision,
+                schema_fingerprint: identity.schema_fingerprint,
+            },
+            records,
+            Arc::new(AlwaysReady),
+            cursors,
+        )
+        .with_postgres_mutations(Arc::new(mutations)),
+    ))
+}
+
+/// A restarted HTTP surface over the same database, so a test can drive the
+/// run through a process boundary with the same request helpers.
+struct Surface {
+    app: axum::Router,
+}
+
+impl Surface {
+    async fn post_empty(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+    ) -> axum::response::Response {
+        post_empty(&self.app, uri, claims).await
+    }
+
+    async fn post_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+        body: Value,
+    ) -> axum::response::Response {
+        post_json(&self.app, uri, claims, body).await
+    }
+
+    async fn get_json(
+        &self,
+        uri: &str,
+        claims: &VerifiedRequestClaims,
+    ) -> axum::response::Response {
+        get_json(&self.app, uri, claims).await
+    }
+}
+
+async fn post_json(
+    app: &axum::Router,
+    uri: &str,
+    claims: &VerifiedRequestClaims,
+    body: Value,
+) -> axum::response::Response {
+    send(
+        app,
+        Method::POST,
+        uri,
+        Some(claims.clone()),
+        &[("content-type", "application/json")],
+        serde_json::to_vec(&body).expect("request JSON"),
+    )
+    .await
+}
+
+async fn get_json(
+    app: &axum::Router,
+    uri: &str,
+    claims: &VerifiedRequestClaims,
+) -> axum::response::Response {
+    send(app, Method::GET, uri, Some(claims.clone()), &[], Vec::new()).await
+}
+
+/// A body-less POST with no Content-Type, as the cancel route requires.
+async fn post_empty(
+    app: &axum::Router,
+    uri: &str,
+    claims: &VerifiedRequestClaims,
+) -> axum::response::Response {
+    send(
+        app,
+        Method::POST,
+        uri,
+        Some(claims.clone()),
+        &[],
+        Vec::new(),
+    )
+    .await
+}
+
+struct AlwaysReady;
+
+impl ReadinessProbe for AlwaysReady {
+    fn is_ready(&self) -> ServiceFuture<'_, bool> {
+        Box::pin(async { true })
+    }
+}
+
+fn operator_claims(principal: &str, jurisdiction: &str) -> VerifiedRequestClaims {
+    VerifiedRequestClaims::authenticated(
+        "registry_principal",
+        principal,
+        BTreeSet::new(),
+        Some("case-management".to_owned()),
+        BTreeMap::from([(
+            "jurisdiction".to_owned(),
+            VerifiedClaimValue::direct_string(jurisdiction).expect("direct claim"),
+        )]),
+    )
+    .expect("verified claims are bounded")
+}
+
+fn anonymous_claims() -> VerifiedRequestClaims {
+    VerifiedRequestClaims::anonymous()
+}
+
+const FIXTURE_HEAD: &str = r#"{
+  "apiVersion":"registry.registrystack.org/v1alpha1",
+  "kind":"RegistryProject",
+  "registry":{"id":"ingestion-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+  "entities":[{
+    "id":"widget","primaryDataset":"test-dataset","route":"widgets","mutationMode":"mutable","classification":"public",
+    "batch":{"maximumItems":3,"maximumBytes":8192},
+    "constraints":[{"kind":"unique","fields":["label"]}],
+    "fields":[
+      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+      {"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},
+      {"id":"quantity","type":"int64","required":true,"classification":"public"}
+    ],
+    "hooks":[
+      {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+      {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
+    ]
+  },{
+    "id":"ledger","primaryDataset":"test-dataset","route":"ledgers","mutationMode":"create_only","classification":"public",
+    "fields":[
+      {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+      {"id":"memo","type":"string","maxLength":128,"required":true,"classification":"public"}
+    ]
+  }],"#;
+
+const FIXTURE_TAIL: &str = r#"
+  "accessProfiles":[{
+    "id":"operator","default":true,"principalClaim":"registry_principal",
+    "requiredPurposes":["case-management","case-review"],
+    "permissions":[{
+      "entity":"widget","operations":["create","get","patch","batch"],
+      "readableFields":["jurisdiction","label","quantity"],
+      "writableFields":["jurisdiction","label","quantity"],
+      "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+    }]
+  },{
+    "id":"operator-minimal","principalClaim":"registry_principal",
+    "requiredPurposes":["case-management"],
+    "permissions":[{
+      "entity":"widget","operations":["create","patch","batch"],
+      "readableFields":["label"],
+      "writableFields":["jurisdiction","label","quantity"],
+      "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+    }]
+  },{
+    "id":"anonymous-reader","anonymous":true,
+    "permissions":[{
+      "entity":"widget","operations":["get","list"],
+      "readableFields":["label"],
+      "rowBoundaries":[]
+    }]
+  }]
+}"#;
+
+fn compiled_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(format!("{FIXTURE_HEAD}{FIXTURE_TAIL}").as_bytes())
+        .expect("ingestion fixture parses");
+    compile_project(&project, &[], CompileProfile::Authoring)
+        .expect("ingestion fixture compiles to trusted inventories")
+}
+
+/// The client-side chunk plan over the full item array, derived exactly the
+/// way the durable-run client contract derives it: greedy fixed-size chunks
+/// of canonical items, each chunk bound to its digest and a rolling prefix
+/// digest.
+struct ChunkPlan {
+    items: Vec<Value>,
+    starts: Vec<usize>,
+    ends: Vec<usize>,
+    digests: Vec<String>,
+    prefix_digests: Vec<String>,
+    input_digest: String,
+    input_length: i64,
+    item_count: i64,
+    chunk_count: i64,
+}
+
+fn announce_items(label_prefix: &str, count: i64) -> Vec<Value> {
+    (0..count)
+        .map(|index| {
+            json!({"operation":"create", "data": {
+                "jurisdiction": "zone-a",
+                "label": format!("{label_prefix}-{index}"),
+                "quantity": index
+            }})
+        })
+        .collect()
+}
+
+fn canonical_digest(value: &Value) -> String {
+    let canonical =
+        registry_platform_canonical_json::canonicalize_json(value).expect("canonical JSON derives");
+    hex_digest(&canonical)
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in Sha256::digest(bytes) {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
+fn zero_digest() -> String {
+    "0".repeat(64)
+}
+
+fn chunk_digest(items: &[Value]) -> String {
+    canonical_digest(&json!({ "items": items }))
+}
+
+fn plan_chunks(items: &[Value], maximum_per_chunk: usize) -> ChunkPlan {
+    assert!(!items.is_empty(), "a run announces at least one item");
+    let mut starts = Vec::new();
+    let mut ends = Vec::new();
+    let mut digests = Vec::new();
+    let mut prefix_digests = Vec::new();
+    let mut prefix = String::new();
+    let mut start = 0;
+    while start < items.len() {
+        let end = (start + maximum_per_chunk).min(items.len());
+        let chunk = &items[start..end];
+        let digest = chunk_digest(chunk);
+        prefix = canonical_digest(&json!({"prefix": prefix, "chunk": digest}));
+        starts.push(start);
+        ends.push(end);
+        digests.push(digest);
+        prefix_digests.push(prefix.clone());
+        start = end;
+    }
+    let canonical = registry_platform_canonical_json::canonicalize_json(&json!({ "items": items }))
+        .expect("canonical JSON derives");
+    let chunk_count = ends.len() as i64;
+    ChunkPlan {
+        items: items.to_vec(),
+        starts,
+        ends,
+        digests,
+        prefix_digests,
+        input_digest: hex_digest(&canonical),
+        input_length: canonical.len() as i64,
+        item_count: items.len() as i64,
+        chunk_count,
+    }
+}
+
+fn chunk_body(plan: &ChunkPlan, index: usize) -> Value {
+    json!({
+        "chunkIndex": index,
+        "items": plan.items[plan.starts[index]..plan.ends[index]],
+        "digest": plan.digests[index],
+        "prefixDigest": plan.prefix_digests[index],
+    })
+}
+
+fn run_body(operation: &str, schema_fingerprint: &str, plan: &ChunkPlan) -> Value {
+    json!({
+        "operation": operation,
+        "profileId": "operator",
+        "packageRevision": PACKAGE_REVISION,
+        "schemaFingerprint": schema_fingerprint,
+        "inputDigest": plan.input_digest,
+        "inputLength": plan.input_length,
+        "itemCount": plan.item_count,
+        "chunkCount": plan.chunk_count,
+        "chunkAlgorithmVersion": "greedy-canonical-http-batch-v1",
+    })
+}
+
+async fn send(
+    app: &axum::Router,
+    method: Method,
+    uri: &str,
+    claims: Option<VerifiedRequestClaims>,
+    headers: &[(&str, &str)],
+    body: Vec<u8>,
+) -> axum::response::Response {
+    let mut request = Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::from(body))
+        .expect("request");
+    for (name, value) in headers {
+        request.headers_mut().append(
+            HeaderName::from_bytes(name.as_bytes()).expect("header name"),
+            HeaderValue::from_str(value).expect("header value"),
+        );
+    }
+    if let Some(claims) = claims {
+        request.extensions_mut().insert(claims);
+    }
+    let mut app = app.clone();
+    app.call(request).await.expect("response")
+}
+
+async fn body_json(response: axum::response::Response) -> Value {
+    let bytes = to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("response body");
+    serde_json::from_slice(&bytes).expect("JSON response")
+}
+
+async fn durable_widget_count(harness: &IngestionHarness) -> i64 {
+    let table = &harness.registry.entities()["widget"].physical_table;
+    let row = harness
+        .database
+        .admin
+        .query_one(
+            &format!("SELECT count(*) FROM registry_data.\"{table}\""),
+            &[],
+        )
+        .await
+        .expect("widget rows are readable");
+    row.get(0)
+}

@@ -89,6 +89,7 @@ pub struct HistoryErasureOutcome {
     pub scrubbed_change_context_count: u64,
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
+    pub scrubbed_ingestion_receipt_count: u64,
     pub removed_descriptor_count: u64,
 }
 
@@ -204,6 +205,12 @@ pub async fn erase_record_history(
         &affected_positions,
     )
     .await?;
+    let scrubbed_ingestion_receipt_count = crate::ingestion_store::scrub_receipts_for_records(
+        &transaction,
+        &[request.target.record_id],
+    )
+    .await
+    .map_err(|_| HistoryErasureError::Unavailable)?;
     let scrubbed_outbox_payload_count =
         scrub_outbox_payloads(&transaction, &request.target).await?;
     let scrubbed_change_context_count =
@@ -224,6 +231,7 @@ pub async fn erase_record_history(
         scrubbed_change_context_count,
         scrubbed_outbox_payload_count,
         scrubbed_cached_response_count,
+        scrubbed_ingestion_receipt_count,
         removed_descriptor_count,
     };
     append_history_erasure_audit(&transaction, &request, &outcome).await?;
@@ -522,6 +530,7 @@ async fn append_history_erasure_audit(
             "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
             "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
             "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
+            "scrubbedIngestionReceiptCount": outcome.scrubbed_ingestion_receipt_count,
             "removedDescriptorCount": outcome.removed_descriptor_count,
             "operatorResponsibility": "saved_exports_event_consumers_and_backups",
             "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",

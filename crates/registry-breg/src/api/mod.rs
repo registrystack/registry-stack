@@ -11,6 +11,7 @@ mod change_request_action_tests;
 mod change_request_read_tests;
 mod context;
 mod gis;
+mod ingestion;
 mod metadata;
 mod service;
 
@@ -197,6 +198,7 @@ fn route_set(service: Arc<HttpService>) -> Router {
 
     app.merge(attachments::routes(&service))
         .merge(gis::routes())
+        .merge(ingestion::routes(&service))
         .fallback(not_found)
         .method_not_allowed_fallback(not_found)
         .with_state(service)
@@ -332,6 +334,7 @@ async fn openapi(
     let has_request_actions = !action_input_schemas.is_empty();
     schemas.extend(action_input_schemas);
     actions::append_openapi(&visible_actions, &mut paths, &mut schemas);
+    ingestion::append_openapi(&service, &visible, &mut paths, &mut schemas);
     Json(json!({
         "openapi": "3.1.0",
         "info": {"title": service.registry.registry_id(), "version": service.registry.version()},
@@ -5280,6 +5283,7 @@ fn mutation_problem(error: MutationError) -> Response {
             "idempotency.conflict",
             "The idempotency key is bound to another request.",
         ),
+        MutationError::IngestionRefusal(refusal) => ingestion::batch_refusal_problem(refusal),
         MutationError::Unavailable | MutationError::RetryableConflict => fixed_problem(
             StatusCode::SERVICE_UNAVAILABLE,
             "service.unavailable",

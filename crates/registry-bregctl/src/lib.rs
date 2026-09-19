@@ -11543,6 +11543,7 @@ mod tests {
                 scrubbed_change_context_count: 1,
                 scrubbed_outbox_payload_count: 1,
                 scrubbed_cached_response_count: 1,
+                scrubbed_ingestion_receipt_count: 1,
                 removed_descriptor_count: 0,
             },
         };
@@ -11556,6 +11557,7 @@ mod tests {
         let rendered = String::from_utf8(stdout).expect("json is utf8");
         assert!(rendered.contains("\"command\": \"history erase\""));
         assert!(rendered.contains("\"scrubbedCachedResponseCount\": 1"));
+        assert!(rendered.contains("\"scrubbedIngestionReceiptCount\": 1"));
         assert!(!rendered.contains("018feaa0-68f9-4a45-b9e3-58436df07af7"));
         assert!(!rendered.contains("operator"));
         assert!(!rendered.contains("reason"));

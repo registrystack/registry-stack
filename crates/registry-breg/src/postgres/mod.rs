@@ -52,7 +52,10 @@ pub(crate) use migration_ledger::{
     statement_checksum, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
     MigrationLedgerStepKind, MigrationPlanKind,
 };
-pub use mutation::PostgresRecordMutationService;
+pub use mutation::{
+    IngestionChunkSubmitInput, IngestionRunCreateInput, IngestionRunListQuery,
+    IngestionServiceError, PostgresRecordMutationService,
+};
 pub use read::PostgresRecordReadService;
 #[cfg(feature = "postgres-test")]
 pub use read::ReadFaultPoint;
