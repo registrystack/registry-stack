@@ -106,6 +106,7 @@ impl MutationCoordinator {
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),
+                answer_digest: None,
                 canonical_request_digest: request_digest,
             },
         )?;
@@ -177,11 +178,13 @@ impl MutationCoordinator {
     /// is a dead letter the row keeps its payload for.
     ///
     /// Idempotency is the immediate-action receipt under a key derived from
-    /// the hook delivery identity (event id, compiled delivery id, and the
-    /// digest of exactly the answer bytes, domain-separated). The key is
-    /// stable across attempts and replay generations, so a redelivered
-    /// answer resolves through receipt recovery as a replay of the same
-    /// application rather than a second one.
+    /// the hook delivery identity (event id and compiled delivery id,
+    /// domain-separated). The key is stable across attempts, replay
+    /// generations, and answer changes, so one delivery is one application;
+    /// the digest of exactly the answer bytes rides in the binding reference
+    /// instead, so a redelivered answer resolves through receipt recovery as
+    /// a replay of the same application, while a changed answer after the
+    /// commit surfaces as a stable dead-letter conflict.
     pub(crate) async fn apply_hook_proposal(
         &self,
         client: &mut Client,
@@ -439,10 +442,11 @@ impl MutationCoordinator {
             }
         };
 
-        // The application identity: the hook delivery identity and the
-        // digest of exactly the answer bytes, domain-separated. No attempt
-        // or generation component, so every redelivery of the same answer
-        // resolves as the same application.
+        // The application identity: the hook delivery identity,
+        // domain-separated. No attempt, generation, or answer component, so
+        // every redelivery of one delivery resolves as the same application
+        // whichever answer a later attempt carries; the answer's digest
+        // rides in the binding reference below.
         let mut idempotency_input = Vec::new();
         idempotency_input.extend_from_slice(b"breg-hook-proposal-idempotency-v1");
         append_proposal_idempotency_component(
@@ -453,7 +457,6 @@ impl MutationCoordinator {
             &mut idempotency_input,
             application.compiled_delivery_id.as_bytes(),
         );
-        append_proposal_idempotency_component(&mut idempotency_input, application.answer_digest);
         let idempotency_key = format!("sha256:{}", hex::encode(Sha256::digest(idempotency_input)));
 
         let Ok(request_digest) =
@@ -475,6 +478,7 @@ impl MutationCoordinator {
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority: &target_authority,
                 result_effects: claims.result_effects(),
+                answer_digest: Some(application.answer_digest),
                 canonical_request_digest: request_digest,
             },
         ) {
@@ -559,8 +563,8 @@ impl MutationCoordinator {
             .await
             .map_err(|_| UncertainApply)?;
         }
-        let outcome = match result {
-            Ok(outcome) => outcome,
+        match result {
+            Ok(_) => {}
             Err(
                 MutationError::ActionRefusal(_)
                 | MutationError::ActionHandlerFailure(_)
@@ -569,6 +573,15 @@ impl MutationCoordinator {
                 return refused_proposal(
                     "hook.proposal.handler_refusal",
                     "The proposed outcome was refused by the action's handler contract.",
+                );
+            }
+            Err(MutationError::IdempotencyConflict) => {
+                // The key is the delivery, so a conflict means this delivery
+                // already settled a different answer: the first application
+                // stands and the changed one can never apply.
+                return dead_lettered_proposal(
+                    "hook.proposal.answer_conflict",
+                    "This delivery already applied a different answer; the first application stands.",
                 );
             }
             Err(MutationError::PreconditionFailed) => {
@@ -584,22 +597,27 @@ impl MutationCoordinator {
                 );
             }
             Err(_) => return Err(UncertainApply),
-        };
+        }
 
-        // The held response carries one results entry per granted effect,
-        // each with the revision the applied mutation produced.
-        let Ok(body) = serde_json::from_slice::<Value>(outcome.response.body()) else {
-            return Err(UncertainApply);
-        };
-        let Some(resulting_revision) = body
-            .get("results")
-            .and_then(Value::as_object)
-            .and_then(|results| results.values().next())
-            .and_then(|result| result.get("revision"))
-            .and_then(Value::as_i64)
-        else {
-            return Err(UncertainApply);
-        };
+        // The committed revision comes from the applied result records,
+        // which hold every effect the mutation produced. The response the
+        // grant returns is disclosure-filtered, so a grant whose result set
+        // hides every applied effect would leave the row forever uncertain
+        // if completion were derived from it.
+        let resulting_revision = client
+            .query_opt(
+                "SELECT target_record_revision
+                   FROM registry_internal.registry_immediate_action_results
+                  WHERE key_reference = $1
+                  ORDER BY effect_id
+                  LIMIT 1",
+                &[&binding.key_reference],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .map(|row| row.get::<_, i64>(0))
+            .filter(|revision| *revision > 0)
+            .ok_or(UncertainApply)?;
         Ok(HookProposalOutcome::Applied(resulting_revision))
     }
 
@@ -2456,6 +2474,7 @@ impl MutationCoordinator {
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),
+                answer_digest: None,
                 canonical_request_digest: canonical_action_request_digest(
                     action,
                     &normalized,

@@ -6,11 +6,11 @@
 //!
 //! Every proposing fixture answers with the same canonical proposal message
 //! over the same `open-followup` action, so the handler kinds are the only
-//! moving part and the parity journey compares bytes, dispositions, and the
-//! record each kind produced. The apply target is the `followup` entity,
-//! which carries no hooks of its own in every registry except the loop
-//! journey, where one followup hook makes the chain self-referential and the
-//! causation ceiling is the only thing that ends it.
+//! moving part and the parity journey compares answer digests, dispositions,
+//! and the record each kind produced. The apply target is the `followup`
+//! entity, which carries no hooks of its own in every registry except the
+//! loop journey, where one followup hook makes the chain self-referential
+//! and the causation ceiling is the only thing that ends it.
 
 #![cfg(feature = "postgres-test")]
 
@@ -63,10 +63,17 @@ const CA_REF_CANARY: &str = "hook-proposal-ca-bundle-canary";
 ///
 /// The keys are fully sorted at every level, so the Rhai literal, the URL
 /// response body, and the WASM result window all produce these exact bytes,
-/// and the delivery row records the same message whichever kind answered.
+/// and the delivery row records the same digest whichever kind answered.
 const HOOK_PROPOSAL_STR: &str = r#"{"answer":"proposal","document":{"action":"open-followup","input":{"jurisdiction":"zone-a","origin":"hook-proposal"},"outcome":{"effects":[{"id":"followup","set":{"jurisdiction":"zone-a","label":"hook followup","origin":"hook-proposal"}}]}}}"#;
 
 const HOOK_PROPOSAL_MESSAGE: &[u8] = HOOK_PROPOSAL_STR.as_bytes();
+
+/// A second valid proposal for the same action with materially different
+/// values: the answer a changed handler returns on retry after the first
+/// application committed but finalization did not happen.
+const DRIFTED_PROPOSAL_STR: &str = r#"{"answer":"proposal","document":{"action":"open-followup","input":{"jurisdiction":"zone-a","origin":"hook-proposal-drift"},"outcome":{"effects":[{"id":"followup","set":{"jurisdiction":"zone-a","label":"hook followup drifted","origin":"hook-proposal-drift"}}]}}}"#;
+
+const DRIFTED_PROPOSAL_MESSAGE: &[u8] = DRIFTED_PROPOSAL_STR.as_bytes();
 
 /// The proposing hook: reads the change, answers with the proposal above.
 /// Rhai map literals open with `#{` at every level, so the answer's nested
@@ -120,8 +127,16 @@ fn rhai_asset(path: &str, bytes: &[u8]) -> ModuleAssetSource {
 /// The shared proposal project: a hooked `case` entity, an unhooked
 /// `followup` target, the `open-followup` handler action, and the two
 /// profiles that matter, the operator who creates cases and the `case-hook`
-/// principal a proposal is applied under.
-fn hook_project_json(case_hooks: &str, followup_hooks: &str) -> String {
+/// principal a proposal is applied under. The `case-hook` grant's result set
+/// and the action's declared write slots are parameterized, so a journey can
+/// expose a declared slot the proposal never applies: a legal nonempty grant
+/// whose filtering hides every applied effect.
+fn hook_project_json(
+    case_hooks: &str,
+    followup_hooks: &str,
+    case_hook_results: &str,
+    extra_writes: &str,
+) -> String {
     format!(
         r#"{{
           "apiVersion":"registry.registrystack.org/v1alpha1",
@@ -152,7 +167,7 @@ fn hook_project_json(case_hooks: &str, followup_hooks: &str) -> String {
             ],
             "handler":{{
               "kind":"rhai","script":"scripts/open-followup.rhai","abi":"registry.action-handler/v1",
-              "writes":[{{"id":"followup","target":{{"entity":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}]
+              "writes":[{{"id":"followup","target":{{"entity":"followup"}},"operation":"create","fields":["jurisdiction","label","origin"]}}{extra_writes}]
             }}
           }}],
           "accessProfiles":[{{
@@ -169,12 +184,14 @@ fn hook_project_json(case_hooks: &str, followup_hooks: &str) -> String {
             "permissions":[{{
               "action":"open-followup","operations":["invoke"],
               "targets":[{{"entity":"followup","rowBoundaries":[]}}],
-              "results":["followup"]
+              {case_hook_results}
             }}]
           }}]
         }}"#,
         case_hooks = case_hooks,
         followup_hooks = followup_hooks,
+        case_hook_results = case_hook_results,
+        extra_writes = extra_writes,
     )
 }
 
@@ -183,8 +200,27 @@ fn compile_proposal_registry(
     followup_hooks: &str,
     hook_assets: &[ModuleAssetSource],
 ) -> CompiledRegistry {
-    let project = parse_project_json(hook_project_json(case_hooks, followup_hooks).as_bytes())
-        .expect("hook proposal fixture parses");
+    compile_proposal_registry_with_grant(
+        case_hooks,
+        followup_hooks,
+        r#""results":["followup"]"#,
+        "",
+        hook_assets,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn compile_proposal_registry_with_grant(
+    case_hooks: &str,
+    followup_hooks: &str,
+    case_hook_results: &str,
+    extra_writes: &str,
+    hook_assets: &[ModuleAssetSource],
+) -> CompiledRegistry {
+    let project = parse_project_json(
+        hook_project_json(case_hooks, followup_hooks, case_hook_results, extra_writes).as_bytes(),
+    )
+    .expect("hook proposal fixture parses");
     let mut assets = vec![rhai_asset(
         "scripts/open-followup.rhai",
         ACTION_HANDLER_SCRIPT,
@@ -295,6 +331,25 @@ fn silent_registry() -> CompiledRegistry {
         ),
         "[]",
         &[rhai_asset("hooks/silent.rhai", SILENT_HOOK_SCRIPT)],
+    )
+}
+
+/// The hidden-result journey registry: the action declares a second write slot
+/// the proposal never applies, and the `case-hook` grant's result set names
+/// only that slot. The grant is legal and nonempty, but its disclosure
+/// filtering hides every applied effect, so the delivery row's completion
+/// cannot come from the response the grant filters.
+fn hidden_result_registry() -> CompiledRegistry {
+    compile_proposal_registry_with_grant(
+        &format!(
+            "[{}]",
+            hook_json("case-created", true, PROPOSING_RHAI_HANDLER)
+        ),
+        "[]",
+        r#""results":["note"]"#,
+        r#",
+              {"id":"note","target":{"entity":"followup"},"operation":"create","fields":["jurisdiction","label","origin"]}"#,
+        &[rhai_asset("hooks/propose.rhai", PROPOSAL_HOOK_SCRIPT)],
     )
 }
 
@@ -479,7 +534,8 @@ async fn create_case(
 }
 
 /// The delivery-state columns an operator reads to know what became of the
-/// proposal one delivery carried.
+/// proposal one delivery carried. A terminal row retains the answer's digest
+/// and never the answer bytes themselves.
 struct DeliveryRow {
     state: String,
     attempt: i16,
@@ -488,6 +544,7 @@ struct DeliveryRow {
     code: Option<String>,
     summary: Option<String>,
     message: Option<Vec<u8>>,
+    message_digest: Option<Vec<u8>>,
 }
 
 async fn delivery_row(setup: &Setup, event_id: Uuid, compiled_delivery_id: &str) -> DeliveryRow {
@@ -496,7 +553,7 @@ async fn delivery_row(setup: &Setup, event_id: Uuid, compiled_delivery_id: &str)
         .admin
         .query_one(
             "SELECT state, attempt, proposal_disposition, proposal_resulting_revision,
-                    proposal_code, proposal_summary, handler_message
+                    proposal_code, proposal_summary, handler_message, handler_message_digest
              FROM registry_internal.registry_webhook_delivery_state
              WHERE event_id = $1 AND compiled_delivery_id = $2",
             &[&event_id, &compiled_delivery_id],
@@ -511,7 +568,15 @@ async fn delivery_row(setup: &Setup, event_id: Uuid, compiled_delivery_id: &str)
         code: row.get(4),
         summary: row.get(5),
         message: row.get(6),
+        message_digest: row.get(7),
     }
+}
+
+/// The digest of exactly the canonical proposal message, the value a terminal
+/// delivery row retains in place of the answer bytes.
+fn proposal_message_digest() -> Vec<u8> {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(HOOK_PROPOSAL_MESSAGE).to_vec()
 }
 
 /// Every (event, delivery) pair the case entity's hooks captured, ordered by
@@ -891,7 +956,15 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
     assert_eq!(first.attempt, 1);
     assert_eq!(first.disposition.as_deref(), Some("applied"));
     assert_eq!(first.resulting_revision, Some(1));
-    assert_eq!(first.message.as_deref(), Some(HOOK_PROPOSAL_MESSAGE));
+    assert_eq!(
+        first.message, None,
+        "the raw answer is erased at settlement"
+    );
+    assert_eq!(
+        first.message_digest.as_deref(),
+        Some(proposal_message_digest().as_slice()),
+        "the digest of exactly the answer is what the row retains"
+    );
     assert_eq!(record_count(&setup, "followup").await, 1);
 
     // The worker applied the proposal and died before finalization: the row
@@ -913,6 +986,11 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
     assert_eq!(second.state, "delivered");
     assert_eq!(second.attempt, 2, "the redelivery was a second attempt");
     assert_eq!(second.disposition.as_deref(), Some("applied"));
+    assert_eq!(second.message, None);
+    assert_eq!(
+        second.message_digest, first.message_digest,
+        "the redelivery retained the same digest, and still no bytes"
+    );
     assert_eq!(
         second.resulting_revision,
         Some(1),
@@ -928,6 +1006,177 @@ async fn real_postgres_redelivered_hook_answer_applies_once() {
         1,
         "the triggering record is still the only case"
     );
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_a_retained_local_delivery_survives_restart_verification() {
+    let receiver = HttpsReceiver::start().await;
+    let setup = setup(proposal_registry(), &receiver, false).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "retained-local").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    // A local delivery holds no logical destination, so restart verification
+    // must check it against the deployed handler binding, not the destination
+    // table: a healthy undelivered local row is not a deployment defect.
+    setup
+        .service
+        .verify_retained_bindings()
+        .await
+        .expect("a retained local delivery verifies against its handler binding");
+
+    // The same row with a digest no deployed program answers to is a genuine
+    // binding mismatch, and startup still refuses it.
+    let changed = setup
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_deliveries
+             SET destination_binding_digest = $3
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[
+                &event.event_id,
+                &delivery_id,
+                &"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            ],
+        )
+        .await
+        .expect("administrator corrupts one retained local binding");
+    assert_eq!(changed, 1);
+    assert_eq!(
+        setup.service.verify_retained_bindings().await,
+        Err(WebhookDeliveryError::Unavailable),
+        "a retained local delivery whose digest no handler answers to still blocks startup"
+    );
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "answer-drift").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    let payload = outbox_payload(&setup, &event).await;
+    drop(mutation_client);
+
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered)
+    );
+    let first = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(first.state, "delivered");
+    assert_eq!(first.disposition.as_deref(), Some("applied"));
+    assert_eq!(first.resulting_revision, Some(1));
+    assert_eq!(record_count(&setup, "followup").await, 1);
+
+    // The worker applied the proposal and died before finalization; the
+    // recovered retry now meets a handler whose answer changed. One delivery
+    // is one application: the first stands, and the drifted answer terminates
+    // as a readable conflict instead of applying a second record.
+    rewind_to_crashed_lease(&setup, &event, &delivery_id, &payload).await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Idle),
+        "the expired lease is reaped to a scheduled retry"
+    );
+    wait_until_delivery_is_due(&setup, &event, &delivery_id).await;
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: DRIFTED_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::DeadLettered),
+        "a changed answer after the commit dead-letters as a stable conflict"
+    );
+    let drifted = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(drifted.state, "dead_lettered");
+    assert_eq!(drifted.attempt, 2);
+    assert_eq!(drifted.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(drifted.resulting_revision, None);
+    assert_eq!(
+        drifted.code.as_deref(),
+        Some("hook.proposal.answer_conflict"),
+        "the row names the answer conflict without logs"
+    );
+    assert!(
+        drifted
+            .summary
+            .as_deref()
+            .is_some_and(|summary| !summary.is_empty()),
+        "the conflict records a bounded human-readable reason"
+    );
+    assert_eq!(
+        record_count(&setup, "followup").await,
+        1,
+        "the first application stands; the drifted answer applied nothing"
+    );
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_a_hidden_effect_proposal_finalizes_as_applied() {
+    let receiver = HttpsReceiver::start().await;
+    let setup = setup(hidden_result_registry(), &receiver, false).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "hidden-result").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    assert_eq!(
+        setup.service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "a proposal whose granted result set hides every applied effect still completes"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "delivered");
+    assert_eq!(row.disposition.as_deref(), Some("applied"));
+    assert_eq!(
+        row.resulting_revision,
+        Some(1),
+        "the committed revision comes from the applied result records, not the filtered response"
+    );
+    assert_eq!(record_count(&setup, "followup").await, 1);
 
     setup.teardown().await;
     receiver.stop().await;
@@ -958,6 +1207,7 @@ async fn real_postgres_uncertain_hook_apply_fails_closed_and_recovers() {
     assert_eq!(uncertain.state, "leased", "the row keeps its lease");
     assert_eq!(uncertain.attempt, 1);
     assert_eq!(uncertain.message, None, "no answer is recorded");
+    assert_eq!(uncertain.message_digest, None);
     assert_eq!(uncertain.disposition, None, "no disposition is recorded");
     assert_eq!(uncertain.resulting_revision, None);
     assert_eq!(uncertain.code, None);
@@ -1060,9 +1310,13 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
     assert_eq!(none_row.resulting_revision, None);
     assert_eq!(none_row.code, None);
     assert_eq!(
-        none_row.message.as_deref(),
-        Some(br#"{"answer":"none"}"#.as_slice()),
-        "the silent hook's empty answer is recorded as the none answer"
+        none_row.message, None,
+        "the none answer's bytes are not retained"
+    );
+    assert_eq!(
+        none_row.message_digest.as_ref().map(Vec::len),
+        Some(32),
+        "the none answer is recorded by its digest"
     );
 
     let applied_row = delivery_row(
@@ -1075,7 +1329,11 @@ async fn real_postgres_hook_delivery_rows_record_every_proposal_disposition() {
     assert_eq!(applied_row.disposition.as_deref(), Some("applied"));
     assert_eq!(applied_row.resulting_revision, Some(1));
     assert_eq!(applied_row.code, None);
-    assert_eq!(applied_row.message.as_deref(), Some(HOOK_PROPOSAL_MESSAGE));
+    assert_eq!(applied_row.message, None);
+    assert_eq!(
+        applied_row.message_digest.as_deref(),
+        Some(proposal_message_digest().as_slice())
+    );
 
     let refused_row = delivery_row(
         &setup,
@@ -1129,7 +1387,7 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
     let receiver = HttpsReceiver::start().await;
 
     // The legs collect what each handler kind produced: the recorded answer
-    // bytes, the disposition columns, and the applied record itself.
+    // digest, the disposition columns, and the applied record itself.
     type HandlerKindLeg = (Vec<u8>, DeliveryRow, (String, String, String));
     let mut legs: Vec<HandlerKindLeg> = Vec::new();
 
@@ -1166,7 +1424,9 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
-            row.message.clone().expect("the url answer is recorded"),
+            row.message_digest
+                .clone()
+                .expect("the url answer digest is recorded"),
             row,
             followup_content(&setup).await,
         ));
@@ -1197,7 +1457,9 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
-            row.message.clone().expect("the rhai answer is recorded"),
+            row.message_digest
+                .clone()
+                .expect("the rhai answer digest is recorded"),
             row,
             followup_content(&setup).await,
         ));
@@ -1240,7 +1502,9 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         );
         let row = delivery_row(&setup, event.event_id, &delivery_id).await;
         legs.push((
-            row.message.clone().expect("the wasm answer is recorded"),
+            row.message_digest
+                .clone()
+                .expect("the wasm answer digest is recorded"),
             row,
             followup_content(&setup).await,
         ));
@@ -1251,12 +1515,13 @@ async fn real_postgres_the_same_proposal_applies_identically_across_handler_kind
         legs.len() >= 2,
         "at least the url and rhai legs ran in this build"
     );
-    for (message, row, followup) in &legs {
+    for (message_digest, row, followup) in &legs {
         assert_eq!(
-            message.as_slice(),
-            HOOK_PROPOSAL_MESSAGE,
-            "every kind recorded the same canonical proposal message"
+            message_digest.as_slice(),
+            proposal_message_digest().as_slice(),
+            "every kind recorded the same canonical proposal digest"
         );
+        assert_eq!(row.message, None, "no kind retains the answer bytes");
         assert_eq!(row.state, "delivered");
         assert_eq!(row.disposition.as_deref(), Some("applied"));
         assert_eq!(row.resulting_revision, Some(1));
