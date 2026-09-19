@@ -878,7 +878,9 @@ class CiChangesTest(unittest.TestCase):
             "release/requirements/maturin-1.9.6.txt",
             "release/scripts/assemble-registry-client-packages.py",
             "release/scripts/assemble-registry-client-wheel.py",
+            "release/scripts/build-linux-python-client",
             "release/scripts/smoke-registry-client-package.py",
+            "release/scripts/zig-glibc-compiler",
         ):
             with self.subTest(path=path):
                 self.assertTrue(
@@ -1502,11 +1504,13 @@ class CiChangesTest(unittest.TestCase):
             "rust-toolchain.toml",
             "release/glibc-floor.env",
             "release/requirements/maturin-1.9.6.txt",
+            "release/scripts/build-linux-python-client",
             "release/scripts/build-linux-node-client",
             "release/scripts/smoke-discovery-client-package.js",
             "release/scripts/smoke-evidence-client-package.js",
             "release/scripts/smoke-relay-client-package.js",
             "release/scripts/test_build_linux_node_client.py",
+            "release/scripts/test_build_linux_python_client.py",
             "release/scripts/test_zig_glibc_compiler.py",
             "release/scripts/zig-glibc-compiler",
             "release/scripts/assemble-registry-client-wheel.py",

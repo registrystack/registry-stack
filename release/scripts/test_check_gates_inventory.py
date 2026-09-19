@@ -1005,6 +1005,17 @@ class GateInventoryTest(unittest.TestCase):
         self.assertNotIn("docker run", proof)
         self.assertFalse(any("upload-artifact@" in str(step) for step in job["steps"]))
         self.assertNotIn("contents: write", str(job))
+        python_proof = next(
+            step["run"]
+            for step in job["steps"]
+            if step.get("name") == "Prove production Linux Python client recipe"
+        )
+        self.assertIn("release/scripts/build-linux-python-client", python_proof)
+        self.assertIn('--client evidence', python_proof)
+        self.assertIn('--target "${{ matrix.target }}"', python_proof)
+        self.assertIn('--compatibility manylinux_2_17', python_proof)
+        self.assertIn('--profile ci', python_proof)
+        self.assertIn('expected exactly one audited Evidence wheel', python_proof)
         for forbidden in ("npm publish", "gh release", "docker push"):
             self.assertNotIn(forbidden, str(job))
         self.assertIn(
@@ -1020,7 +1031,7 @@ class GateInventoryTest(unittest.TestCase):
                 "Release Linux Node client path filter",
             ),
             (
-                "release-linux-node-clients:\n    name: Release Linux Node clients",
+                "release-linux-node-clients:\n    name: Release Linux native clients",
                 "release-linux-node-clients:\n    name: Disabled Linux Node clients",
                 "Release Linux Node client proof job",
             ),
@@ -1162,6 +1173,10 @@ class GateInventoryTest(unittest.TestCase):
             (
                 "release/scripts/test_build_linux_node_client.py",
                 "Linux Node client release build helper tests",
+            ),
+            (
+                "release/scripts/test_build_linux_python_client.py",
+                "Linux Python client release build helper tests",
             ),
             (
                 "release/scripts/test_zig_glibc_compiler.py",

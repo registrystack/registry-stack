@@ -1028,6 +1028,9 @@ jobs:
       - name: Test Linux Node client release build helper
         run: python3 -m unittest release/scripts/test_build_linux_node_client.py
 
+      - name: Test Linux Python client release build helper
+        run: python3 -m unittest release/scripts/test_build_linux_python_client.py
+
       - name: Test Zig glibc compiler wrapper
         run: python3 -m unittest release/scripts/test_zig_glibc_compiler.py
 
@@ -1222,17 +1225,14 @@ jobs:
           # The output stays inside the workspace, because the container step
           # below mounts the workspace and nothing else.
           out_dir="${GITHUB_WORKSPACE}/target/evidence-tutorial-client"
-          # maturin --zig resolves zig through the python3 on PATH, so the
-          # environment's interpreter, which carries the pinned ziglang, must
-          # come first, as in the release workflows.
-          export PATH="${RUNNER_TEMP}/maturin/bin:${PATH}"
           python3 release/scripts/assemble-registry-client-packages.py \
             --artifacts python \
             --include-casework \
             --python-profile ci \
             --output-dir "${out_dir}" \
             --work-dir "${RUNNER_TEMP}/client-assembly" \
-            --maturin "${RUNNER_TEMP}/maturin/bin/maturin"
+            --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+            --zig-python "${RUNNER_TEMP}/maturin/bin/python"
           wheel="$(find "${out_dir}" -maxdepth 1 -name 'registry_stack_client-*.whl')"
           if [[ "$(printf '%s\n' "${wheel}" | wc -l)" -ne 1 || ! -f "${wheel}" ]]; then
             echo "expected exactly one assembled client wheel in ${out_dir}" >&2
@@ -1760,7 +1760,7 @@ jobs:
           done
 
   release-linux-node-clients:
-    name: Release Linux Node clients (${{ matrix.asset }})
+    name: Release Linux native clients (${{ matrix.asset }})
     needs: changes
     if: needs.changes.outputs.release_linux_node_clients == 'true'
     runs-on: ${{ matrix.runner }}
@@ -1865,6 +1865,28 @@ jobs:
             "${smoke}/"
           (cd "${smoke}" && node smoke-registry-client-package.js)
           (cd "${smoke}" && node smoke-registry-client-package.mjs)
+
+      - name: Prove production Linux Python client recipe
+        shell: bash
+        run: |
+          set -euo pipefail
+          wheel_dir="${RUNNER_TEMP}/python-client-wheel"
+          mkdir -p "${wheel_dir}"
+          release/scripts/build-linux-python-client \
+            --client evidence \
+            --target "${{ matrix.target }}" \
+            --compatibility manylinux_2_17 \
+            --zig-python "${RUNNER_TEMP}/maturin/bin/python" \
+            --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+            --out "${wheel_dir}" \
+            --profile ci
+          shopt -s nullglob
+          wheels=("${wheel_dir}"/registry_evidence_client-*.whl)
+          if (( "${#wheels[@]}" != 1 )); then
+            printf 'expected exactly one audited Evidence wheel, found %s\n' \
+              "${#wheels[@]}" >&2
+            exit 1
+          fi
 
   ci-result:
     name: CI result

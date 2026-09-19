@@ -216,13 +216,33 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         matrix = clients["strategy"]["matrix"]["include"]
         self.assertEqual(
             {
-                (entry["asset"], entry["wheel_tag"], entry["napi_platform"])
+                (
+                    entry["asset"],
+                    entry["target"],
+                    entry["wheel_tag"],
+                    entry["napi_platform"],
+                )
                 for entry in matrix
             },
             {
-                ("linux-amd64", "cp310-abi3-linux_x86_64", "linux-x64-gnu"),
-                ("linux-arm64", "cp310-abi3-linux_aarch64", "linux-arm64-gnu"),
-                ("macos-arm64", "cp310-abi3-macosx_11_0_arm64", "darwin-arm64"),
+                (
+                    "linux-amd64",
+                    "x86_64-unknown-linux-gnu",
+                    "cp310-abi3-linux_x86_64",
+                    "linux-x64-gnu",
+                ),
+                (
+                    "linux-arm64",
+                    "aarch64-unknown-linux-gnu",
+                    "cp310-abi3-linux_aarch64",
+                    "linux-arm64-gnu",
+                ),
+                (
+                    "macos-arm64",
+                    "aarch64-apple-darwin",
+                    "cp310-abi3-macosx_11_0_arm64",
+                    "darwin-arm64",
+                ),
             },
         )
         self.assertEqual(clients["env"]["RUSTUP_TOOLCHAIN"], "1.95.0")
@@ -233,6 +253,11 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
         # instead of maturin's symbol-derived manylinux audit, and exactly one
         # wheel per platform rather than one per interpreter version.
         self.assertIn("--compatibility linux", wheel)
+        self.assertIn("release/scripts/build-linux-python-client", wheel)
+        self.assertIn('--target "${{ matrix.target }}"', wheel)
+        self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', wheel)
+        self.assertNotIn(" --zig ", wheel)
+        self.assertIn("--require-hashes --only-binary=:all:", wheel)
         self.assertIn("expected exactly one wheel", wheel)
         node = step_run(document, "clients", "Build the Node client package")
         self.assertIn(
@@ -808,14 +833,19 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
         self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
         self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
         self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
+        self.assertIn("release/scripts/build-linux-python-client", cache_key)
         self.assertIn("release/scripts/build-linux-node-client", cache_key)
         self.assertIn(
             "crates/registry-evidence-client-node/package-lock.json", cache_key
         )
         self.assertIn("crates/registry-relay-client-node/package-lock.json", cache_key)
         wheel = step_run(document, "clients", "Build Python client wheels")
-        self.assertIn("--compatibility linux", wheel)
-        self.assertIn("--compatibility manylinux_2_17 --zig", wheel)
+        self.assertIn("compatibility=linux", wheel)
+        self.assertIn("compatibility=manylinux_2_17", wheel)
+        self.assertIn("release/scripts/build-linux-python-client", wheel)
+        self.assertIn('--target "${{ matrix.target }}"', wheel)
+        self.assertIn('--zig-python "${RUNNER_TEMP}/maturin/bin/python"', wheel)
+        self.assertNotIn(" --zig ", wheel)
         self.assertIn("matrix.registry_wheel_tag", wheel)
         self.assertIn("registry_${client}_client", wheel)
         self.assertIn("expected_wheels=2", wheel)

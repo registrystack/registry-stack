@@ -219,6 +219,7 @@ jobs:
         include:
           - runner: ubuntu-24.04
             asset: linux-amd64
+            target: x86_64-unknown-linux-gnu
             # `pyo3`'s `abi3-py310` feature (see the workspace `Cargo.toml`)
             # makes one wheel per platform cover every CPython from 3.10 up,
             # so these tags are the whole roster: no Python-version matrix.
@@ -226,10 +227,12 @@ jobs:
             napi_platform: linux-x64-gnu
           - runner: ubuntu-24.04-arm
             asset: linux-arm64
+            target: aarch64-unknown-linux-gnu
             wheel_tag: cp310-abi3-linux_aarch64
             napi_platform: linux-arm64-gnu
           - runner: macos-14
             asset: macos-arm64
+            target: aarch64-apple-darwin
             wheel_tag: cp310-abi3-macosx_11_0_arm64
             napi_platform: darwin-arm64
     steps:
@@ -261,9 +264,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: registry-evidence-dev-clients-go-1.24.4-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}
+          key: registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock', 'release/requirements/maturin-1.9.6.txt', 'release/scripts/zig-glibc-compiler', 'release/scripts/build-linux-python-client') }}
           restore-keys: |
-            registry-evidence-dev-clients-go-1.24.4-${{ matrix.asset }}-
+            registry-evidence-dev-clients-go-1.24.4-zig-0.12.1-${{ matrix.asset }}-
 
       - name: Build the Python client wheel
         working-directory: crates/registry-evidence-client-py
@@ -274,7 +277,9 @@ jobs:
           # `maturin` gets its own environment: the wheel is smoked below in a
           # separate one, which must hold the wheel and nothing else.
           python3 -m venv "${RUNNER_TEMP}/maturin"
-          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet maturin==1.9.6
+          "${RUNNER_TEMP}/maturin/bin/pip" install --quiet \
+            --require-hashes --only-binary=:all: \
+            --requirement "${GITHUB_WORKSPACE}/release/requirements/maturin-1.9.6.txt"
           # The version `maturin` stamps into the wheel comes from this file's
           # own `[project] version`, hand-synced with the workspace version, so
           # the development version has to be written here before the build.
@@ -292,12 +297,18 @@ jobs:
           # manylinux audit: the audit picks a glibc floor from the symbols the
           # compiled extension happens to need, so its platform tag is not
           # predictable from the source, and this workflow publishes a closed
-          # roster of exactly named assets. The cost is that a Linux wheel
-          # needs the build runner's glibc or newer, which the release notes
-          # state.
+          # roster of exactly named assets. The canonical compiler still keeps
+          # the native code at the glibc 2.17 floor; this development wheel just
+          # does not advertise that compatibility contract.
           if [[ "${RUNNER_OS}" == Linux ]]; then
-            "${RUNNER_TEMP}/maturin/bin/maturin" build \
-              --release --locked --compatibility linux --out "${wheel_dir}"
+            "${GITHUB_WORKSPACE}/release/scripts/build-linux-python-client" \
+              --client evidence \
+              --target "${{ matrix.target }}" \
+              --compatibility linux \
+              --zig-python "${RUNNER_TEMP}/maturin/bin/python" \
+              --maturin "${RUNNER_TEMP}/maturin/bin/maturin" \
+              --out "${wheel_dir}" \
+              --profile release
           else
             "${RUNNER_TEMP}/maturin/bin/maturin" build \
               --release --locked --out "${wheel_dir}"

@@ -275,7 +275,7 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     ),
     (
         "Release Linux Node client proof job",
-        "release-linux-node-clients:\n    name: Release Linux Node clients",
+        "release-linux-node-clients:\n    name: Release Linux native clients",
     ),
     (
         "Release Linux Node client helper invocation",
@@ -351,6 +351,10 @@ REQUIRED_GATES: tuple[tuple[str, str], ...] = (
     (
         "Linux Node client release build helper tests",
         "run: python3 -m unittest release/scripts/test_build_linux_node_client.py",
+    ),
+    (
+        "Linux Python client release build helper tests",
+        "run: python3 -m unittest release/scripts/test_build_linux_python_client.py",
     ),
     (
         "Zig glibc compiler wrapper tests",
