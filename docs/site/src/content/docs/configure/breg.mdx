@@ -214,6 +214,57 @@ The compiler refuses field names that collide with Registry Record envelope memb
 
 {/* Evidence: products/breg/generated/authoring/registry-module.schema.json; crates/registry-breg/src/compiler.rs, reserved_logical_name(). */}
 
+## Encrypt restricted fields
+
+A field whose classification is `restricted` and whose type is one of `string`, `text`, `date`,
+`decimal`, or `structured` can declare `encrypted: true`. Base Registry Engine then stores every
+value of the field as an AES-256-GCM envelope in a dedicated `bytea` column and decrypts it only at
+the response edge, so a database reader of dumps, replicas, and backups sees no plaintext. What the
+key custody behind that promise requires, and what the blind index still reveals, is the model in
+[Field encryption for restricted fields](../../explanation/breg-field-encryption/); the deployment
+binding that carries the key is configured as [Deploy a registry](../../operate/breg/) describes.
+
+```yaml
+fields:
+  - id: national-identifier
+    type: string
+    required: true
+    maxLength: 32
+    classification: restricted
+    pattern: '^[0-9]{10}$'
+    encrypted: true
+    lookup:
+      normalization: [trim, remove-separators]
+      unique: true
+```
+
+`pattern` stays allowed on an encrypted field, and it keeps its meaning: the rule is enforced in
+Rust against the plaintext before the value is sealed, so a value the pattern refuses never reaches
+the database.
+
+The `lookup` block declares the blind index that equality lookups resolve through.
+`normalization` lists the transformations applied to the value in declared order, from a closed
+vocabulary: `trim`, `uppercase`, `lowercase`, `collapse-whitespace`, and `remove-separators`.
+`unique: true` adds a uniqueness rule over the normalized value. For a national identifier, prefer
+the narrow `trim` and `remove-separators` pair over Unicode case conversion, because case folding
+decides which values collide and a registry identifier rarely needs it.
+
+An encrypted field gives up the query shapes a sealed column cannot answer, and the compiler
+refuses them at authoring time with a message naming the field: filtering and sorting on the field,
+any comparison other than equality, a change request that targets it, derived SQL over it, and
+event projection of it. Declare a `lookup` block when the registry must find records by the field's
+exact value.
+
+{/* TODO[evidence]: the encrypted member, the allowed types and classification, the closed
+    normalization vocabulary in declared order, the unique index, the pre-seal pattern
+    enforcement, and the refusal summary are Phase 1 behavior of registry-stack issue #1108,
+    whose implementation is not yet in this tree, so no anchor resolves today. When the
+    field-encryption milestone lands, anchor this section against the field contract in
+    crates/registry-breg/src/contract.rs, the compiler refusals in
+    crates/registry-breg/src/compiler.rs, and the authoring schema under
+    products/breg/generated/authoring/. Until then the claims in this section are written at
+    the strength of the approved contract, not of code this checkout holds. */}
+
 ## Related records
 
 A `reference` field stores another record's identifier, and the server checks that the target exists and that the caller may read it.
@@ -435,6 +486,7 @@ Binding `record-receiver` to a receiver belongs to [Bind webhook receivers](../.
 | An error or finding names a path such as `entities[id=record].fields[id=label]`. | The path is a document path into `registry.yaml` or the module file the message names. Fix the member it points at. |
 | `check` reports `identifier.invalid`. | An id breaks the closed grammar: start with a lowercase letter and use only lowercase letters, digits, hyphens, and underscores, at most 64 bytes. |
 | A module digest does not match. | Run `project lock` after editing a module, then review the digest change together with the module diff. |
+| `check` refuses a filter, sort, comparison, change request, or projection that uses an encrypted field. | An encrypted field answers equality lookups only. Declare a `lookup` block for exact-value lookups, or move the comparison to a field that is not sealed; [Encrypt restricted fields](#encrypt-restricted-fields) lists what is refused. |
 | `check` refuses the manifest projection's singular `dataset` or `dataService`. | The retired shape is no longer read. Run `bregctl project migrate ./my-registry --write`, then review the rewritten `datasets[]` and `dataServices[]`. |
 
 ## Next

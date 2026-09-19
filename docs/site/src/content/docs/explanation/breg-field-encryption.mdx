@@ -1,0 +1,181 @@
+---
+title: Field encryption for restricted fields
+description: What encrypting a restricted field seals, what the blind index still reveals, how key loss fails closed, and what turning encryption on over existing plaintext costs.
+status: draft
+owner: registry-docs
+source_repos:
+  - registry-stack
+last_reviewed: unreviewed
+doc_type: explanation
+locale: en
+standards_referenced: []
+---
+
+If you model a registry that holds a national identifier, a professional licence number, or another
+value your classification rules call restricted, this page explains what Base Registry Engine (BReg)
+field encryption does with that value, which readers it defends against, and which readers it does
+not. The authoring members live in [Author a registry project](../../configure/breg/), the
+deployment binding lives in [Deploy a registry](../../operate/breg/), and the boundaries still open
+are collected in [Known limitations and non-guarantees](../known-limitations/).
+
+{/* TODO[evidence]: every section below states approved Phase 1 behavior of registry-stack
+     issue #1108 whose implementation is not yet in this tree, so no anchor resolves today.
+     When the field-encryption milestone lands, replace each TODO with an Evidence block:
+     sealing and AAD against the envelope seal/open path in crates/registry-breg/,
+     the blind index against its HMAC/normalization module, key custody against the DEK
+     provider and crates/registry-breg/src/runtime_config.rs, the refusal set against
+     crates/registry-breg/src/compiler.rs, the 503 problem against the read path and
+     crates/registry-breg/src/api/mod.rs, and the migration lifecycle against the migration
+     module. Claims stay demoted until those anchors exist. */}
+
+## What a project declares
+
+A field opts in. Setting `encrypted: true` on a field whose classification is `restricted` and whose
+type is one of `string`, `text`, `date`, `decimal`, or `structured` seals every stored value of that
+field; nothing else in the model changes meaning. An optional `lookup` block declares a blind index
+over the field, built from a normalization list applied in the declared order and, when
+`unique: true`, enforced as unique.
+
+Encryption is an authoring decision recorded in the project, so it is reviewed, packaged, signed,
+and activated exactly like the rest of the model. It is not a deployment toggle: the runtime file
+binds key custody (see [Deploy a registry](../../operate/breg/)), but the project decides which
+fields are sealed.
+
+## What sealing does
+
+Every value of an encrypted field is stored as an envelope: the value is sealed with AES-256-GCM
+under a per-value key derived from the registry's data-encryption key (DEK) with HKDF-SHA-256, and
+the envelope's additional authenticated data binds the registry, entity, field, and record
+identifiers together with the key version, so bytes cannot be moved between columns or records and
+still open. Envelopes live in dedicated `bytea` columns beside the rest of the row, and reads
+decrypt them at their response edges: a record read, a history read, and a revision read each
+decrypt on the way out, so no caller-facing surface ever returns envelope bytes.
+
+The `pattern` member stays allowed on an encrypted field and keeps its meaning. The rule is enforced
+in Rust against the plaintext before the value is sealed, so a value that the pattern refuses never
+reaches the database.
+
+## Where the key lives
+
+The DEK is generated per registry database and is wrapped by HashiCorp Vault or OpenBao Transit
+through its datakey endpoint, reached over a workload-local Unix-socket proxy; the wrapped key is
+stored in `registry_internal.registry_field_encryption_keys`. A base64 local-file DEK also exists
+for local assurance, and `bregctl check --production` refuses it: a production candidate must name
+a Transit binding.
+
+Losing the wrapping key loses the data. There is no recovery path inside Base Registry Engine, and
+key escrow before enabling is an operator duty, not a compiler check. Key custody belongs on the
+[hardening checklist](../../security/hardening-checklist/).
+
+## What the blind index reveals
+
+Encrypted fields cannot be filtered or sorted by value, so a registry that must answer "find the
+record with this national identifier" declares a `lookup` block. The lookup stores a blind index:
+an HMAC-SHA-256 over the normalized value, under a key that never leaves the process. An equality
+lookup resolves through that index.
+
+The index is one-way, and it still does not hide everything. Equality, presence, and cardinality
+leak to a database reader by design: a reader with only the database sees which index values
+repeat, which rows hold one, and when two rows share a normalized value, without learning the value
+itself. Treat any column you blind-index as public within the database for those three questions,
+and keep the normalization narrow so the index answers exactly the equality the registry needs.
+
+Prefer a narrow ASCII and digit normalization grammar over Unicode case conversion when the field
+holds a national identifier: `trim` and `remove-separators` answer the equality a registry actually
+faces, while `uppercase` and `lowercase` invite Unicode case-folding surprises that change which
+values collide.
+
+{/* TODO[evidence]: the normalization vocabulary above is the closed set the lookup compiler
+     accepts, in declared order: trim, uppercase, lowercase, collapse-whitespace,
+     remove-separators. Anchor it, and the leakage statement, against the blind-index module
+     when it lands. */}
+
+## What the compiler refuses
+
+The compiler refuses the queries a sealed column cannot answer, at authoring time, with a document
+path naming the field. In summary: no filtering or sorting on an encrypted field, no comparison
+other than equality, no change-request flow that targets the field, no derived SQL over it, and no
+event projection of it. A registry whose process needs reviewed change requests on a restricted
+field cannot encrypt that field in Phase 1: the compiler refuses the combination at authoring time
+rather than at the first reviewed change.
+
+{/* TODO[evidence]: anchor each refusal to its compiler error when the milestone lands, and
+     check the summary against the full refusal list in the compiler. */}
+
+## Key loss fails closed
+
+When the registry cannot reach Transit, or cannot unwrap the DEK, the failure is per entity: reads
+and writes on an entity with encrypted fields answer with an HTTP `503` problem
+`runtime.field_encryption.unavailable`, and entities without encrypted fields keep serving. The
+registry does not fall back to plaintext, does not cache an unsealed copy, and does not fail the
+whole deployment for one entity's missing key.
+
+{/* TODO[evidence]: anchor the problem code and the per-entity scope against the read and write
+     paths when the milestone lands. */}
+
+## Turning encryption on over existing plaintext
+
+A registry that already holds plaintext for a field must decide what happens to that plaintext
+before the field can be sealed. Encrypting an existing field is a migration that must account for
+the plaintext history the database already retains, and the project authors that choice explicitly.
+The compiler refuses the flip-on migration unless the project declares exactly one of two `history`
+values, with no implicit default; tooling may recommend, but only the authored choice enables the
+migration.
+
+- `history: erase-and-rebaseline` erases the retained history and rebaselines the registry on the
+  encrypted present. It is the only choice that satisfies the database-read guarantee, and it can
+  destroy record history beyond the encrypted field, because rebaselining cuts the revision chain
+  the erased history anchored. The preflight report names the affected record and revision counts
+  before anything asks for confirmation, so the choice is made against numbers, not a description.
+- `history: retain-plaintext-history` encrypts going forward and leaves pre-flip revision snapshots
+  as plaintext. It is an explicit risk acceptance: those snapshots stay readable to any database
+  reader the feature exists to defend against, so it does not satisfy the database-read guarantee.
+
+{/* TODO[evidence]: anchor the two history values, the no-default refusal, and the preflight
+     report fields against the migration module when it lands. Command examples wait for the
+     milestone that fixes the CLI shape. */}
+
+## Retained plaintext backups
+
+The threat model covers what the database holds, and a backup taken before the flip holds
+plaintext. Retiring or encrypting pre-flip backups is a precondition of the migration, documented
+as such; Phase 1 ships no tooling for it, so the backup inventory is the operator's own procedure.
+Until the pre-flip backups are gone or re-encrypted, the guarantee an `erase-and-rebaseline`
+migration bought does not hold for the copies that remain.
+
+## Cryptography and FIPS posture
+
+The cryptography behind field encryption is the FIPS build of AWS-LC: `aws-lc-rs` built with its
+`fips` feature, linking `aws-lc-fips-sys`, which binds AWS-LC-FIPS 3.0.x. It is always on, and there
+is no non-FIPS fallback path. Runtime paths, including the ones the JWT library uses, select the
+FIPS backend through unified features, while the non-FIPS `aws-lc-sys` crate remains an
+unreferenced but supply-chain-relevant build dependency. Upstream documents that the bound module
+has completed FIPS validation testing by an accredited lab and directs consumers to NIST CMVP for
+certification status. Registry Stack does not claim certification of itself.
+
+{/* TODO[evidence]: anchor the fips feature selection against Cargo.toml and Cargo.lock once the
+     flip lands, and keep the upstream validation sentence cited to aws-lc-fips-sys's own
+     documentation rather than strengthened here. */}
+
+## Phase 1 boundaries
+
+Three boundaries are worth planning around now, and
+[Known limitations and non-guarantees](../known-limitations/) holds the full list:
+
+- Change-request flows cannot target encrypted fields, so a restricted field that must go through
+  review cannot be encrypted yet.
+- One key version is active at a time, and envelope key rotation is Phase 2. Plan escrow with that
+  in mind: the key you enable with is the key the data stays on.
+- The flip-on migration carries the history and backup consequences described on this page, and the
+  tooling that manages it is the operator's to drive.
+
+## Next
+
+- [Author a registry project](../../configure/breg/) for the `encrypted` and `lookup` members on a
+  field.
+- [Deploy a registry](../../operate/breg/) for the `fieldEncryption` deployment binding.
+- [Harden a production deployment](../../security/hardening-checklist/) for key custody and the
+  backup precondition.
+- [Threat model](../threat-model/) for where field encryption sits among the stack's trust
+  boundaries.
+- [Known limitations and non-guarantees](../known-limitations/) for the Phase 1 boundary list.
