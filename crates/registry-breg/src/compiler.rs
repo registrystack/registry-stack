@@ -45,10 +45,9 @@ use crate::model::{
     CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
     CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
     CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledSelectorProfile, CompiledSourceRelation,
-    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal,
-    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
+    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
+    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
