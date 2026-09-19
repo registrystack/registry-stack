@@ -18,7 +18,6 @@
 //! validator (`action_outcome`), so authorization, write ceilings, receipt
 //! semantics, and audit content are identical by construction.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::Instant;
 
@@ -232,7 +231,15 @@ impl WasmHandlerRuntime {
 /// before serving; an evaluation that arrives before any install is refused
 /// rather than silently served on default budgets.
 static RUNTIME: RwLock<Option<Arc<WasmHandlerRuntime>>> = RwLock::new(None);
-static RUNTIME_OWNED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum RuntimeOwnership {
+    Vacant,
+    Configured,
+    PersistentDefault,
+}
+
+static RUNTIME_OWNERSHIP: Mutex<RuntimeOwnership> = Mutex::new(RuntimeOwnership::Vacant);
 
 /// Ownership of one configured process runtime installation.
 ///
@@ -247,6 +254,9 @@ pub(crate) struct ConfiguredWasmRuntime {
 #[cfg(feature = "runtime")]
 impl Drop for ConfiguredWasmRuntime {
     fn drop(&mut self) {
+        let mut ownership = RUNTIME_OWNERSHIP
+            .lock()
+            .expect("wasm runtime ownership lock");
         let mut installed = RUNTIME.write().expect("wasm runtime lock");
         let owns_installed = self
             .runtime
@@ -256,7 +266,7 @@ impl Drop for ConfiguredWasmRuntime {
         if owns_installed {
             drop(installed.take());
         }
-        RUNTIME_OWNED.store(false, Ordering::Release);
+        *ownership = RuntimeOwnership::Vacant;
     }
 }
 
@@ -286,17 +296,13 @@ pub(crate) fn install(
     backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    acquire_runtime_ownership()?;
-    let result = replace_runtime(budgets, backend, retained_modules).map(drop);
-    RUNTIME_OWNED.store(false, Ordering::Release);
-    result
-}
-
-fn acquire_runtime_ownership() -> Result<(), WasmRuntimeStartError> {
-    RUNTIME_OWNED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .map(|_| ())
-        .map_err(|_| WasmRuntimeStartError::LifecycleActive)
+    let ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    if *ownership != RuntimeOwnership::Vacant {
+        return Err(WasmRuntimeStartError::LifecycleActive);
+    }
+    replace_runtime(budgets, backend, retained_modules).map(drop)
 }
 
 fn replace_runtime(
@@ -319,18 +325,18 @@ fn replace_runtime(
 pub(crate) fn install_configured(
     config: crate::runtime_config::WasmExecutionConfig,
 ) -> Result<ConfiguredWasmRuntime, WasmRuntimeStartError> {
-    acquire_runtime_ownership()?;
-    let runtime = match replace_runtime(
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    if *ownership != RuntimeOwnership::Vacant {
+        return Err(WasmRuntimeStartError::LifecycleActive);
+    }
+    let runtime = replace_runtime(
         WasmExecutionBudgets::from(config),
         crate::wasm_handler::execution_backend(config.backend()),
         MAXIMUM_RETAINED_PREPARED_MODULES,
-    ) {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            RUNTIME_OWNED.store(false, Ordering::Release);
-            return Err(error);
-        }
-    };
+    )?;
+    *ownership = RuntimeOwnership::Configured;
     Ok(ConfiguredWasmRuntime { runtime })
 }
 
@@ -339,8 +345,11 @@ pub(crate) fn install_configured(
 /// [`ConfiguredWasmRuntime`] instead so ownership remains exclusive.
 #[cfg(test)]
 pub(crate) fn shutdown() {
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
     drop(RUNTIME.write().expect("wasm runtime lock").take());
-    RUNTIME_OWNED.store(false, Ordering::Release);
+    *ownership = RuntimeOwnership::Vacant;
 }
 
 fn install_persistent(
@@ -348,22 +357,25 @@ fn install_persistent(
     backend: Backend,
     retained_modules: usize,
 ) -> Result<(), WasmRuntimeStartError> {
-    acquire_runtime_ownership()?;
-    match replace_runtime(budgets, backend, retained_modules) {
-        Ok(_) => Ok(()),
-        Err(error) => {
-            RUNTIME_OWNED.store(false, Ordering::Release);
-            Err(error)
-        }
+    let mut ownership = RUNTIME_OWNERSHIP
+        .lock()
+        .expect("wasm runtime ownership lock");
+    match *ownership {
+        RuntimeOwnership::PersistentDefault => return Ok(()),
+        RuntimeOwnership::Configured => return Err(WasmRuntimeStartError::LifecycleActive),
+        RuntimeOwnership::Vacant => {}
     }
+    replace_runtime(budgets, backend, retained_modules)?;
+    *ownership = RuntimeOwnership::PersistentDefault;
+    Ok(())
 }
 
 /// Install the process runtime with the default execution budgets, default
 /// backend, and default cache bound. The server startup path installs the
 /// configured runtime itself; an embedder assembling the HTTP app without
-/// that path calls this once before serving. That executor owns the process
-/// runtime for the remainder of the process, and every evaluation before any
-/// install is refused.
+/// that path calls this before serving. Repeated default installation reuses
+/// the process-lifetime executor, and every evaluation before any install is
+/// refused.
 pub fn install_default() -> Result<(), WasmRuntimeStartError> {
     install_persistent(
         WasmExecutionBudgets::default(),

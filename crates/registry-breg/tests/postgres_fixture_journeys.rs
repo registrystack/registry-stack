@@ -90,9 +90,13 @@ const AUDIENCE: &str = "urn:breg:fixture-journeys";
 const QUICKSTART_COMPILER_SOURCE_REVISION: &str = "quickstart-source";
 const QUICKSTART_DATABASE_ID: &str = "generic-registry-local-db";
 const QUICKSTART_INSTANCE_ID: &str = "generic_registry_local";
+// Configured WASM runtimes are process-global, so their owning journeys must
+// not overlap within this integration-test process.
+static WASM_RUNTIME_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let database = TestDatabase::create(8).await;
     let (migration, migration_task) = database.connect_migration().await;
     let (compiled, project_source) = compiled_fixture();
@@ -189,6 +193,7 @@ async fn fixture_test_runs_strict_journeys_through_the_real_postgres_router() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn production_schema_test_setup_failures_identify_configuration_without_secret_values() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     use registry_breg::event_destination::EventDestinationActivationError;
 
     let (compiled, project_source) = compiled_fixture();
@@ -262,6 +267,7 @@ async fn production_schema_test_setup_failures_identify_configuration_without_se
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn production_schema_test_executor_uses_only_prepared_database_and_private_credentials() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source) = compiled_fixture();
     let schema_fingerprint = measure_compiled_schema_fingerprint(&compiled).await;
     let package = package_fixture(&project_source, &schema_fingerprint);
@@ -474,6 +480,7 @@ async fn production_schema_test_executor_uses_only_prepared_database_and_private
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn public_spatial_fixture_schema_test_runs_through_the_production_executor() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source) = compiled_spatial_fixture();
     let schema_fingerprint = measure_spatial_compiled_schema_fingerprint(&compiled).await;
     let package = spatial_package_fixture(&project_source, &schema_fingerprint);
@@ -521,6 +528,7 @@ async fn public_spatial_fixture_schema_test_runs_through_the_production_executor
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn entity_apply_result_captures_resolve_committed_records_through_the_production_executor() {
+    let _runtime_guard = WASM_RUNTIME_TEST_LOCK.lock().await;
     let (compiled, project_source, modules) = compiled_household_fixture();
     let suite = validate_fixture_journeys(HOUSEHOLD_JOURNEY_SOURCE, &compiled)
         .expect("household journey with entity apply result captures preflights");

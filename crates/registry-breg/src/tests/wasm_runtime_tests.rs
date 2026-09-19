@@ -19,8 +19,8 @@ use crate::contract::{parse_project_json, ModuleAssetSource};
 use crate::model::{CompiledAction, CompiledActionHandler, CompiledActionHandlerKind};
 use crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES;
 use crate::wasm_runtime::{
-    install, install_configured, installed, shutdown, WasmExecutionBudgets, WasmHandlerRuntime,
-    MAXIMUM_RETAINED_PREPARED_MODULES,
+    install, install_configured, install_default, installed, shutdown, WasmExecutionBudgets,
+    WasmHandlerRuntime, MAXIMUM_RETAINED_PREPARED_MODULES,
 };
 
 /// The process runtime is global; serialize every test that touches it.
@@ -579,4 +579,12 @@ fn configured_runtime_ownership_refuses_overlap_and_releases_after_drop() {
         !installed(),
         "the current lifecycle guard clears its runtime"
     );
+
+    install_default().expect("the persistent default runtime installs");
+    install_default().expect("repeated default installation is idempotent");
+    assert!(matches!(
+        install_configured(configured),
+        Err(crate::wasm_runtime::WasmRuntimeStartError::LifecycleActive)
+    ));
+    shutdown();
 }
