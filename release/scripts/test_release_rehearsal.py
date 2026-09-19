@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -205,7 +206,18 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIn("collect-rehearsal-advisory-evidence.py", collection["run"])
         self.assertIn("${{ github.sha }}", collection["env"]["REHEARSAL_REVISION"])
         self.assertNotIn("github.token", str(canonical))
-        self.assertNotIn("ghcr.io", str(canonical))
+        # The digest-pinned BuildKit executor may come from the
+        # digest-preserving registrystack mirror of the upstream image. Every
+        # other GHCR reference stays banned so the rehearsal cannot read
+        # published release artifacts or depend on org-owned packages.
+        canonical_without_mirror = re.sub(
+            r"ghcr\.io/registrystack/buildkit:"
+            r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+            r"@sha256:[0-9a-f]{64}",
+            "",
+            str(canonical),
+        )
+        self.assertNotIn("ghcr.io", canonical_without_mirror)
         binary_job = document["jobs"]["canonical-linux-binaries"]
         self.assertFalse(binary_job["strategy"]["fail-fast"])
         self.assertEqual(

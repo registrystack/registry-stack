@@ -151,10 +151,12 @@ capacity transaction, and every mutation carries a task grant matched against
 the offering's service, location, and action before that transaction opens,
 with the grant's expiry re-checked inside it immediately before the claim
 commits. Reminder delivery and retention are outbox work, never inline side
-effects, and the runtime has no scripting engine: the reserved hook ABI
-`registry.scheduling-hook/v1` exists on the authored form only. The
-source-neutral core and the client must not depend on the runtime or another
-product's protocol types.
+effects. Scheduling accepts the shared `registry-platform-hooks` declaration
+shape and `registry.hook-handler/v1` ABI for validation, but every non-empty
+hook list remains an explicit authoring refusal until the product has its own
+trigger, projection, disclosure, and execution contracts. The source-neutral
+core and the client must not depend on the runtime or another product's
+protocol types.
 
 For the MVP, no scheduling crate may reach a BReg, Casework, or Evidence crate
 in either direction, and the dependency-direction gate enforces that on the

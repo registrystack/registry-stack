@@ -14,6 +14,14 @@ name = "breg"
 path = "src/main.rs"
 required-features = ["runtime"]
 
+# Measures the binary, image, and dependency footprint of the platform WASM
+# executor. Nothing but an operator running the measurement ever runs it;
+# `required-features` keeps it out of builds that do not carry the `wasm`
+# feature it exists to weigh.
+[[example]]
+name = "wasm-footprint-probe"
+required-features = ["wasm"]
+
 [[test]]
 name = "postgres_kernel"
 path = "tests/postgres_kernel.rs"
@@ -72,6 +80,11 @@ required-features = ["postgres-test"]
 [[test]]
 name = "postgres_webhook_delivery"
 path = "tests/postgres_webhook_delivery.rs"
+required-features = ["postgres-test"]
+
+[[test]]
+name = "postgres_hook_proposals"
+path = "tests/postgres_hook_proposals.rs"
 required-features = ["postgres-test"]
 
 [[test]]
@@ -198,8 +211,9 @@ required-features = ["postgres-test", "tooling"]
 workspace = true
 
 [features]
-default = []
+default = ["wasm"]
 runtime = [
+    "dep:async-trait",
     "dep:axum",
     "dep:base64",
     "dep:clap",
@@ -217,6 +231,7 @@ runtime = [
     "dep:registry-platform-buildinfo",
     "dep:registry-platform-config",
     "dep:registry-platform-crypto",
+    "registry-platform-hooks/postgres",
     "dep:registry-platform-httpsec",
     "dep:registry-platform-httputil",
     "dep:registry-platform-oidc",
@@ -231,13 +246,15 @@ runtime = [
 ]
 postgres-test = ["runtime", "dep:tower", "registry-platform-httputil/test-support"]
 postgres-tls-test = ["runtime"]
-schema = ["dep:schemars"]
+schema = ["dep:schemars", "registry-platform-hooks/schema"]
 tooling = ["dep:tempfile", "dep:tower"]
+wasm = ["registry-platform-script/wasm"]
 
 [dependencies]
 chrono.workspace = true
 registry-evidence-client.workspace = true
 registry-evidence-verifier.workspace = true
+async-trait = { workspace = true, optional = true }
 axum = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 chacha20poly1305 = { workspace = true, optional = true }
@@ -257,9 +274,11 @@ registry-platform-authcommon = { workspace = true, optional = true }
 registry-platform-buildinfo = { workspace = true, optional = true }
 registry-platform-config = { workspace = true, optional = true }
 registry-platform-crypto = { workspace = true, optional = true }
+registry-platform-hooks.workspace = true
 registry-platform-httpsec = { workspace = true, features = ["server"], optional = true }
 registry-platform-httputil = { workspace = true, optional = true }
 registry-platform-oidc = { workspace = true, optional = true }
+registry-platform-script.workspace = true
 jsonschema.workspace = true
 pg_query.workspace = true
 rhai = { workspace = true, features = ["internals"] }
@@ -292,6 +311,12 @@ registry-platform-testing = { workspace = true, features = ["test-utils"] }
 registry-breg-client.workspace = true
 tokio-rustls.workspace = true
 tower.workspace = true
+wat = "1.259.0"
+
+[[test]]
+name = "wasm_handler_admission"
+path = "tests/wasm_handler_admission.rs"
+required-features = ["wasm"]
 
 [[test]]
 name = "postgres_immediate_action_requirements"
@@ -302,6 +327,11 @@ required-features = ["postgres-test"]
 name = "postgres_action_handlers"
 path = "tests/postgres_action_handlers.rs"
 required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_wasm_action_handlers"
+path = "tests/postgres_wasm_action_handlers.rs"
+required-features = ["postgres-test", "tooling", "wasm"]
 
 [[test]]
 name = "postgres_action_evidence"

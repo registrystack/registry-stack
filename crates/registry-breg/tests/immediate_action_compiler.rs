@@ -123,6 +123,108 @@ fn handler_response_schema_accepts_omitted_slots_across_overlapping_grant_result
     );
 }
 
+#[test]
+fn wasm_v2_handlers_are_refused_and_v1_needs_a_wasm_capable_build() {
+    use registry_breg::compiler::compile_project_with_assets;
+    use registry_breg::contract::{
+        parse_project_json, ModuleAssetSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2,
+    };
+    use serde_json::{json, Value};
+
+    let mut source: Value = serde_json::from_str(&household_contact_project("")).unwrap();
+    let effects = source["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("effects")
+        .unwrap();
+    let writes = effects
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|effect| {
+            json!({
+                "id": effect["id"], "target": effect["target"], "operation": effect["operation"],
+                "fields": effect["set"].as_object().unwrap().keys().collect::<Vec<_>>()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let mut compile_with_handler_kind = |kind: &str, abi: &str| {
+        // The declared backend names its own source reference: a Rhai handler
+        // its script, a WASM handler its module. Only the Rhai lane owns a
+        // supplied asset, so only it is given one.
+        let (handler, assets) = if kind == "wasm" {
+            (
+                json!({"kind": kind, "module": "modules/handler.wasm", "abi": abi, "writes": writes}),
+                Vec::new(),
+            )
+        } else {
+            (
+                json!({"kind": kind, "script": "scripts/handler.rhai", "abi": abi, "writes": writes}),
+                vec![ModuleAssetSource {
+                    module: None,
+                    path: "scripts/handler.rhai".to_owned(),
+                    bytes: br#"fn handle(ctx) { #{effects:[]} }"#.to_vec(),
+                }],
+            )
+        };
+        source["actions"][0]["handler"] = handler;
+        let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
+        compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)
+    };
+
+    // A build without the `wasm` feature carries no WASM compiler support, so
+    // an input-only WASM handler is refused with a diagnostic that names the
+    // build, not the authored project. A build with the `wasm` feature admits
+    // the backend and looks the declared module up instead (the admission
+    // suite covers that lane).
+    let v1 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V1);
+    #[cfg(not(feature = "wasm"))]
+    {
+        let not_admitted = v1
+            .expect_err("a WASM v1 handler is refused without WASM support in the build")
+            .diagnostics()
+            .to_vec()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "action.handler.wasm_build_unsupported")
+            .expect("input-only WASM handlers name the missing build capability");
+        assert_eq!(
+            not_admitted.path,
+            "actions[register-household-contact].handler.kind"
+        );
+    }
+    #[cfg(feature = "wasm")]
+    {
+        let missing_asset = v1
+            .expect_err("a WASM handler whose module is not supplied is refused")
+            .diagnostics()
+            .to_vec()
+            .into_iter()
+            .find(|diagnostic| diagnostic.code == "action.handler.module_asset_missing")
+            .expect("an admitted WASM backend looks the declared module up");
+        assert_eq!(
+            missing_asset.path,
+            "actions[register-household-contact].handler.module"
+        );
+    }
+
+    let v2 = compile_with_handler_kind("wasm", ACTION_HANDLER_ABI_V2)
+        .expect_err("a WASM v2 handler kind is refused by this compiler")
+        .diagnostics()
+        .to_vec();
+    let unsupported_abi = v2
+        .iter()
+        .find(|diagnostic| diagnostic.code == "action.handler.wasm_abi_unsupported")
+        .expect("Evidence-enabled WASM handlers are refused with their own diagnostic");
+    assert_eq!(
+        unsupported_abi.path,
+        "actions[register-household-contact].handler.kind"
+    );
+
+    compile_with_handler_kind("rhai", ACTION_HANDLER_ABI_V1)
+        .expect("a Rhai handler with the same shape still compiles");
+}
+
 fn household_contact_project(extra: &str) -> String {
     r#"{
           "apiVersion":"registry.registrystack.org/v1alpha1",

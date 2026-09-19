@@ -593,29 +593,33 @@ want the published description of a refusal you have not seen before.
 
 ## Events and webhooks
 
-An event is declared on an entity or a module extension and delivered to a webhook destination
-bound in the runtime configuration. Field paths in the next table are relative to one event
-under `entities[].events[]`; types, defaults, and descriptions come from the generated module
+An event is declared as a hook on an entity or a module extension. A `url` handler delivers to a
+webhook destination bound in the runtime configuration; a `rhai` or `wasm` handler runs its
+reviewed program in the post-commit worker. Field paths in the next table are relative to one
+hook under `entities[].hooks[]`; types, defaults, and descriptions come from the generated module
 schema, and compiler rules follow the table.
 
 <ConfigurationReference contracts={eventConfiguration(configuration)} prefix="breg-events" compact />
 
 Compiler rules:
 
-- Event IDs are unique across the registry.
+- Hook IDs are unique across the registry.
 - A projection names at least one declared field.
-- Production compilation requires a webhook destination.
+- An entity hook declares `phase: after`; the compiler refuses any other phase. `handler.kind` is
+  `url`, `rhai`, or `wasm`; a local handler names its reviewed `script` or `module` path.
+- Production compilation requires every hook to declare a handler, either a bound destination or a
+  reviewed local program.
 - Conditions and projections use authored field IDs, not the record API's `apiName` spellings.
 - The event's classification is the highest classification of every projected or condition field,
   and a lifecycle event is at least as classified as its request entity.
 
 Destination URLs, keys, network policy, and ceilings live in runtime `eventDestinations`, keyed by
-`webhook.destinationId`. The runtime binds the exact compiled destination set, and each
+`handler.destinationId`. The runtime binds the exact compiled destination set, and each
 destination's `classificationCeiling` must cover the event classification; runtime configuration
 cannot add projected fields.
 
-{/* Evidence: crates/registry-breg/src/contract.rs, EventSource and WebhookSource;
-    crates/registry-breg/src/compiler.rs, validate_events() and compile_event_delivery_inventory();
+{/* Evidence: crates/registry-breg/src/contract.rs, HookSource and HookHandlerSource;
+    crates/registry-breg/src/compiler.rs, validate_hooks() and compile_event_delivery_inventory();
     crates/registry-breg/src/event_destination.rs, EventDestinationConfig.
     Configuration fields selected by docs/site/src/lib/breg-event-reference.mjs, eventConfiguration(),
     from products/breg/generated/authoring/registry-module.schema.json through
@@ -653,8 +657,17 @@ The package carries each event schema at
 `generated/event-schemas/<entity-id>.<event-id>.schema.json`. Record identifiers appear in the
 body, never in CloudEvents headers.
 
-The six common payload members are required, and a lifecycle event also requires `request`.
-Other top-level members and unprojected values are absent.
+The body is one shared hook envelope, the same envelope every Registry Stack product delivers.
+Its eight members are required and nothing else appears beside them. The envelope restates the
+event identity the CloudEvents headers carry, so a receiver that reads only the body still knows
+which event it holds; a body and its headers can never describe two different events. Delivery
+attributes stay on the transport: attempt, generation, delivery time, idempotency key, and
+signature are headers, never envelope members.
+
+<EventReferenceTable id="envelope" />
+
+`data` carries the captured event data. The six common members are required, and a lifecycle
+event also requires `request`. Other members and unprojected values are absent.
 
 <EventReferenceTable id="payload" />
 
@@ -665,19 +678,31 @@ operator replay. Receiving a lifecycle event grants no authority to approve or a
 
 ```json
 {
-  "entity": "record",
-  "recordId": "<record-uuid>",
-  "revision": 2,
-  "trigger": "patched",
-  "packageRevision": "sha256:<package-digest>",
-  "values": {"code": "EX-003", "label": "Updated label"}
+  "causation": {"hop": 0, "root": "<event-uuid>"},
+  "data": {
+    "entity": "record",
+    "packageRevision": "sha256:<package-digest>",
+    "recordId": "<record-uuid>",
+    "revision": 2,
+    "trigger": "patched",
+    "values": {"code": "EX-003", "label": "Updated label"}
+  },
+  "dataschema": "urn:breg:event-schema:<registry-id>:record:record-patched-v1:sha256:<digest>",
+  "id": "<event-uuid>",
+  "source": "urn:registrystack:registry:<registry-id>:instance:<instance-id>",
+  "subject": {"recordReference": "hmac-sha256:<64-hex>", "recordRevision": 2},
+  "time": "2026-01-01T00:00:00.123Z",
+  "type": "record-patched-v1"
 }
 ```
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, reload_and_send();
+Members appear in canonical JSON order, the order the bytes on the wire use.
+
+{/* Evidence: crates/registry-platform-hooks/src/envelope.rs, HookEnvelope, EventSubject, and Causation;
+    crates/registry-platform-hooks/src/delivery/service.rs, reload_and_send() and accept_stored_envelope();
     crates/registry-breg/src/artifacts.rs, event_data_schema_binding();
     crates/registry-platform-httputil/src/destination.rs, EventDestinationRequestTemplate;
-    crates/registry-breg/src/outbox.rs, insert_configured_events();
+    crates/registry-breg/src/outbox.rs, insert_configured_events() and capture_envelope();
     crates/registry-breg/src/request_events.rs, insert_request_lifecycle_events();
     crates/registry-breg/tests/postgres_webhook_delivery.rs, assert_exact_request(). */}
 
@@ -719,7 +744,7 @@ A receiver compares the signature in constant time, validates the expected sourc
 and payload, bounds the skew of `X-Registry-Delivery-Time` (not `ce-time`), and deduplicates
 before it acts. The accepted skew is receiver policy, not a BReg limit.
 
-{/* Evidence: crates/registry-platform-crypto/src/breg_webhook.rs, SignatureFields, sign_v1(),
+{/* Evidence: crates/registry-platform-crypto/src/delivery_signature.rs, SignatureFields, sign_v1(),
     and v1_binds_every_field_and_exact_body();
     crates/registry-breg/src/event_destination.rs, MIN_HMAC_SHA256_KEY_BYTES;
     crates/registry-platform-config/src/secrets.rs, resolve_reference() and read_secret_file();
@@ -744,7 +769,8 @@ event identity, `ce-source` plus `ce-id`, or on a business key.
 An empty `webhook list` result is neither a delivery history nor proof of receiver acceptance,
 and an expired payload cannot be replayed.
 
-{/* Evidence: crates/registry-breg/src/webhook.rs, claim(), finalize(), replay(), webhook_idempotency_key(), verify_retained_bindings(), WebhookDeliveryService, and WebhookDeliveryStatusKind;
+{/* Evidence: crates/registry-platform-hooks/src/delivery/service.rs, claim(), finalize(), replay(), delivery_idempotency_key(), and verify_retained_bindings();
+    crates/registry-breg/src/webhook.rs, WebhookDeliveryService and WebhookDeliveryStatusKind;
     crates/registry-breg/src/compiler.rs, compile_event_delivery_inventory() and MAX_WEBHOOK_PAYLOAD_BYTES;
     crates/registry-breg/src/runtime_config.rs, default_webhook_payload_retention_days();
     crates/registry-breg/src/event_destination.rs, EventDestinationDeliveryCeilings;

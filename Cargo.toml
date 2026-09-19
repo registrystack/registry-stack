@@ -8,6 +8,7 @@ members = [
     "crates/registry-casework-breg",
     "crates/registry-casework-core",
     "crates/registry-cli-docs",
+    "crates/registry-cli-reference",
     "crates/registry-discovery",
     "crates/registry-discovery-client",
     "crates/registry-discovery-client-node",
@@ -29,9 +30,11 @@ members = [
     "crates/registry-platform-canonical-json",
     "crates/registry-platform-config",
     "crates/registry-platform-crypto",
+    "crates/registry-platform-hooks",
     "crates/registry-platform-httpsec",
     "crates/registry-platform-httputil",
     "crates/registry-platform-oidc",
+    "crates/registry-platform-script",
     "crates/registry-platform-sdjwt",
     "crates/registry-platform-sqlite",
     "crates/registry-platform-testing",
@@ -39,6 +42,7 @@ members = [
     "crates/registry-manifest-core",
     "crates/registry-manifest-cli",
     "crates/registry-record",
+    "crates/registry-render",
     "crates/registry-breg-client",
     "crates/registry-breg-client-node",
     "crates/registry-breg-client-py",
@@ -59,6 +63,7 @@ members = [
     "crates/registry-scheduling-client",
 ]
 exclude = [
+    "products/breg/wasm-handler-sdk",
     "products/platform/fuzz",
     "products/manifest/fuzz",
 ]
@@ -102,6 +107,7 @@ registry-language-server = { path = "crates/registry-language-server", version =
 registry-linkml = { path = "crates/registry-linkml", version = "0.32.0" }
 registry-manifest-core = { path = "crates/registry-manifest-core", version = "0.32.0" }
 registry-record = { path = "crates/registry-record", version = "0.32.0" }
+registry-render = { path = "crates/registry-render", version = "0.32.0" }
 registry-breg-client = { path = "crates/registry-breg-client", version = "0.32.0" }
 registry-breg-client-node = { path = "crates/registry-breg-client-node", version = "0.32.0" }
 registry-breg-client-py = { path = "crates/registry-breg-client-py", version = "0.32.0" }
@@ -122,12 +128,15 @@ registry-platform-audit = { path = "crates/registry-platform-audit", version = "
 registry-platform-authcommon = { path = "crates/registry-platform-authcommon", version = "0.32.0" }
 registry-platform-buildinfo = { path = "crates/registry-platform-buildinfo", version = "0.32.0" }
 registry-platform-calendar = { path = "crates/registry-platform-calendar", version = "0.32.0" }
+registry-cli-reference = { path = "crates/registry-cli-reference", version = "0.32.0" }
 registry-platform-canonical-json = { path = "crates/registry-platform-canonical-json", version = "0.32.0" }
 registry-platform-config = { path = "crates/registry-platform-config", version = "0.32.0" }
 registry-platform-crypto = { path = "crates/registry-platform-crypto", version = "0.32.0" }
+registry-platform-hooks = { path = "crates/registry-platform-hooks", version = "0.32.0" }
 registry-platform-httpsec = { path = "crates/registry-platform-httpsec", version = "0.32.0", default-features = false }
 registry-platform-httputil = { path = "crates/registry-platform-httputil", version = "0.32.0" }
 registry-platform-oidc = { path = "crates/registry-platform-oidc", version = "0.32.0" }
+registry-platform-script = { path = "crates/registry-platform-script", version = "0.32.0" }
 registry-platform-sdjwt = { path = "crates/registry-platform-sdjwt", version = "0.32.0" }
 registry-platform-sqlite = { path = "crates/registry-platform-sqlite", version = "0.32.0" }
 registry-platform-testing = { path = "crates/registry-platform-testing", version = "0.32.0" }
@@ -213,6 +222,13 @@ tree-sitter-yaml = { version = "0.7.2" }
 tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
+# Typst library-mode rendering. Pinned minor: output bytes and world semantics
+# move with every typst release, so upgrades are reviewed golden-hash diffs.
+typst = { version = "0.15.1" }
+typst-pdf = { version = "0.15.1" }
+typst-assets = { version = "0.15.1", features = ["fonts"] }
+comemo = { version = "0.5" }
+ttf-parser = { version = "0.25" }
 ulid = { version = "1" }
 ureq = { version = "2" }
 url = { version = "2" }

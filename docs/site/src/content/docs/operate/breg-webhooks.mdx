@@ -127,7 +127,7 @@ ce-specversion: 1.0
 ce-time: 2026-01-01T00:00:00Z
 ce-type: record-created-v1
 
-{"entity":"record","packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","revision":1,"trigger":"created","values":{"code":"x","status":"draft"}}
+{"causation":{"hop":0,"root":"00000000-0000-4000-8000-000000000001"},"data":{"entity":"record","packageRevision":"sha256:0000000000000000000000000000000000000000000000000000000000000000","recordId":"00000000-0000-4000-8000-000000000002","revision":1,"trigger":"created","values":{"code":"x","status":"draft"}},"dataschema":"urn:breg:event-schema:generic-registry:record:record-created-v1:sha256:411f35fcbaa498497ac172fdb725d2f583d761a73d903c1647b34dc4af703855","id":"00000000-0000-4000-8000-000000000001","source":"urn:registrystack:registry:generic-registry:instance:<configured-instance>","subject":{"recordReference":"hmac-sha256:0000000000000000000000000000000000000000000000000000000000000002","recordRevision":1},"time":"2026-01-01T00:00:00Z","type":"record-created-v1"}
 ```
 
 That sample carries `generic-registry`, the registry id `bregctl init` writes into `registry.yaml`;

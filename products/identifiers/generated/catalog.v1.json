@@ -2550,11 +2550,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
+        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "42c60f19644ce2ac01a8daf33c38f575926fe7104d45c6cee07fb85d98a436cf",
+        "sha256": "02aa4b7ac4e4fa005ca351342f06199923601631c6cfbf8a9d5aa72e85d1de2b",
         "mediaType": "application/schema+json"
       }
     },
@@ -2568,11 +2568,11 @@
       "description": "Base Registry Engine project authoring JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
+        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "2cea7342c7a18c0991db2241acb7ecd61a2bc99da4828ab93002317bf4ed17fa",
+        "sha256": "cd44eacd2bf2255f29415272fea4db5a97c2b7ef786199f55673cb5ec5532f62",
         "mediaType": "application/schema+json"
       }
     },
@@ -2586,11 +2586,11 @@
       "description": "Base Registry Engine runtime configuration JSON Schema.",
       "source": {
         "path": "crates/registry-breg/src/schema.rs",
-        "sha256": "939e9481234fd0a6c5aff9d4194319ab15d102d008574b01079cddc374ca78f9"
+        "sha256": "da421a45c81d34a937235fa085261c51554e14302362c9a9ed9dd025329b40f7"
       },
       "artifact": {
         "path": "products/breg/generated/runtime/runtime.schema.json",
-        "sha256": "c8dea520a3fba1ff24ce82e08f94d525e43ffb87f7e8bfd8494cc2fbac03ba2c",
+        "sha256": "9876f5c713d89ec271bc9efc763dc0208736c73394d6dd0b5c01da32509c8504",
         "mediaType": "application/schema+json"
       }
     },

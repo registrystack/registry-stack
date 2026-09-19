@@ -532,16 +532,16 @@ fn compiled_registry(tombstone: bool) -> registry_breg::CompiledRegistry {
     };
     let events = if tombstone {
         r#",
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
-              {"id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]},
+              {"phase":"after","id":"widget-tombstoned","trigger":"tombstoned","projection":["label","quantity"]}
             ]"#
     } else {
         r#",
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]"#
     };
     let project = parse_project_json(
@@ -933,7 +933,7 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
         .admin
         .query_one(
             "SELECT event_id::text, event_type, trigger, entity_id, record_revision,
-                    package_revision, schema_fingerprint, payload
+                    package_revision, schema_fingerprint, payload, record_reference
              FROM registry_internal.registry_outbox
              WHERE event_type = 'widget-tombstoned'",
             &[],
@@ -948,21 +948,36 @@ async fn assert_tombstone_event_is_canonical(database: &TestDatabase, record_id:
     assert_eq!(row.get::<_, i64>(4), 3);
     assert_eq!(row.get::<_, String>(5), "package-tombstone-2");
     assert!(row.get::<_, String>(6).starts_with("sha256:"));
-    let expected_payload = canonicalize_json(&json!({
-        "entity": "widget",
-        "recordId": record_id,
-        "revision": 3,
-        "trigger": "tombstoned",
-        "packageRevision": "package-tombstone-2",
-        "values": {
-            "label": "patched-label",
-            "quantity": 7,
-        },
-    }))
-    .expect("expected tombstone event canonicalizes");
-    assert!(
-        row.get::<_, Vec<u8>>(7) == expected_payload.as_slice(),
+    let payload: Vec<u8> = row.get(7);
+    let envelope: Value =
+        serde_json::from_slice(&payload).expect("captured event body is strict JSON");
+    assert_eq!(
+        envelope.get("data"),
+        Some(&json!({
+            "entity": "widget",
+            "recordId": record_id,
+            "revision": 3,
+            "trigger": "tombstoned",
+            "packageRevision": "package-tombstone-2",
+            "values": {
+                "label": "patched-label",
+                "quantity": 7,
+            },
+        })),
         "canonical tombstone outbox projection did not match expected bytes"
+    );
+    assert_eq!(
+        envelope.get("subject"),
+        Some(&json!({
+            "recordReference": row.get::<_, String>(8),
+            "recordRevision": 3,
+        })),
+        "the envelope subject restates the captured record reference"
+    );
+    assert_eq!(
+        payload,
+        canonicalize_json(&envelope).expect("stored envelope canonicalizes"),
+        "the stored envelope is canonical"
     );
 }
 

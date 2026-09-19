@@ -2,18 +2,16 @@
 //! Input-only immediate action evaluation inside the shared bounded Rhai kernel.
 
 use crate::{
-    contract::{FieldTypeSource, Operation, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
+    contract::{FieldTypeSource, ACTION_HANDLER_ABI_V1, ACTION_HANDLER_ABI_V2},
     data::{validate_field_value, FieldValue},
     model::*,
-    rhai_planner::{
-        self, CandidateChangeRequestMutation, CandidateChangeRequestValue,
-        ChangeRequestPlannerError,
-    },
+    rhai_planner::{self, ChangeRequestPlannerError},
 };
 #[cfg(feature = "postgres-test")]
 use std::collections::BTreeMap;
 
-use rhai::{Array, CallFnOptions, Dynamic, Map, Scope, AST};
+use registry_platform_script::rhai as platform;
+use rhai::{Dynamic, Map, AST};
 use serde_json::{Map as JsonMap, Value};
 use std::{collections::BTreeSet, time::Instant};
 
@@ -91,7 +89,7 @@ pub struct ActionHandlerDiagnostic {
 }
 
 impl ActionHandlerDiagnostic {
-    fn new(kind: ActionHandlerError, message: &'static str) -> Self {
+    pub(crate) fn new(kind: ActionHandlerError, message: &'static str) -> Self {
         Self {
             kind,
             evidence_capability: None,
@@ -101,7 +99,7 @@ impl ActionHandlerDiagnostic {
         }
     }
 
-    fn at_slot(mut self, slot: &CompiledActionHandlerWrite) -> Self {
+    pub(crate) fn at_slot(mut self, slot: &CompiledActionHandlerWrite) -> Self {
         self.slot = Some(slot.id.clone());
         self
     }
@@ -327,6 +325,10 @@ pub fn evaluate_action_with_evidence(
     )
 }
 
+#[cfg(test)]
+#[path = "tests/action_handler_benchmark_tests.rs"]
+mod action_handler_benchmark_tests;
+
 pub(crate) fn evaluate_with_engine(
     action: &CompiledAction,
     inputs: &JsonMap<String, Value>,
@@ -334,6 +336,36 @@ pub(crate) fn evaluate_with_engine(
     resolver: Option<EvidenceResolver>,
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
+    // A WASM handler never reaches the Rhai compile path; its module runs
+    // through the platform executor in builds that carry the `wasm`
+    // feature (a build without it refuses the handler at admission above).
+    #[cfg(feature = "wasm")]
+    if handler.kind == crate::model::CompiledActionHandlerKind::Wasm {
+        return crate::wasm_runtime::evaluate_wasm_handler(action, handler, inputs, deadline);
+    }
+    let source =
+        std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
+    let ast = compile_source_for_abi(source, &handler.abi)?;
+    execute_compiled_handler(
+        action,
+        handler,
+        &ast,
+        inputs,
+        deadline,
+        resolver,
+        cancellation,
+    )
+}
+
+/// Admission shared by every evaluation entry: the call deadline, the input
+/// snapshot ceiling, and the handler ABI/resolver rule.
+fn admit_handler<'a>(
+    action: &'a CompiledAction,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<&EvidenceResolver>,
+) -> Result<&'a CompiledActionHandler, ActionHandlerDiagnostic> {
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
@@ -350,14 +382,46 @@ pub(crate) fn evaluate_with_engine(
             "Evaluate a declared handler; fixed actions use their compiled effects directly.",
         ));
     };
-    if handler.abi != ACTION_HANDLER_ABI_V1
-        && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
-    {
-        return Err(ActionHandlerError::Source.into());
+    match handler.kind {
+        crate::model::CompiledActionHandlerKind::Rhai => {
+            if handler.abi != ACTION_HANDLER_ABI_V1
+                && !(handler.abi == ACTION_HANDLER_ABI_V2 && resolver.is_some())
+            {
+                return Err(ActionHandlerError::Source.into());
+            }
+        }
+        // A build with the `wasm` feature executes the input-only
+        // v1 ABI for WASM handlers. The Evidence-enabled v2 ABI stays
+        // Rhai-only in this release, and a resolver never reaches a WASM
+        // handler.
+        #[cfg(feature = "wasm")]
+        crate::model::CompiledActionHandlerKind::Wasm
+            if handler.abi == ACTION_HANDLER_ABI_V1 && resolver.is_none() => {}
+        _ => {
+            // A handler tagged with a backend this runtime does not execute
+            // is never interpreted as another backend's source.
+            return Err(ActionHandlerDiagnostic::new(
+                ActionHandlerError::Source,
+                "Evaluate a compiled Rhai handler; this runtime does not execute the declared handler backend.",
+            ));
+        }
     }
-    let source =
-        std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
-    let ast = compile_source_for_abi(source, &handler.abi)?;
+    Ok(handler)
+}
+
+/// Execute an admitted handler program: context construction, the per-call
+/// engine with its resolver registration shape, the bounded call, and result
+/// decoding. Shared by the fresh-compile path and the cached-program
+/// benchmark variant.
+fn execute_compiled_handler(
+    action: &CompiledAction,
+    handler: &CompiledActionHandler,
+    ast: &AST,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<EvidenceResolver>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
     let mut ctx = Map::new();
     ctx.insert(
         "inputs".into(),
@@ -471,14 +535,7 @@ pub(crate) fn evaluate_with_engine(
             (Instant::now() >= deadline).then_some(Dynamic::UNIT)
         });
     }
-    let result = engine
-        .call_fn_with_options::<Dynamic>(
-            CallFnOptions::new().eval_ast(false),
-            &mut Scope::new(),
-            &ast,
-            "handle",
-            (Dynamic::from(ctx),),
-        )
+    let result = platform::call_with_fresh_scope(&engine, ast, "handle", (Dynamic::from(ctx),))
         .map_err(|error| {
             let kind = if Instant::now() >= deadline
                 || cancellation
@@ -488,12 +545,9 @@ pub(crate) fn evaluate_with_engine(
                 ActionHandlerError::Deadline
             } else if poisoned.load(std::sync::atomic::Ordering::Acquire) {
                 ActionHandlerError::Evidence
-            } else if matches!(
-                *error,
-                rhai::EvalAltResult::ErrorTooManyOperations(..)
-                    | rhai::EvalAltResult::ErrorStackOverflow(..)
-                    | rhai::EvalAltResult::ErrorDataTooLarge(..)
-            ) {
+            } else if platform::classify_failure(&error)
+                == platform::RhaiFailureCategory::ResourceExhausted
+            {
                 ActionHandlerError::Resource
             } else {
                 ActionHandlerError::Execution
@@ -516,343 +570,91 @@ pub(crate) fn evaluate_with_engine(
     {
         return Err(ActionHandlerError::Deadline.into());
     }
-    let mut remaining = action.maximum_snapshot_bytes as usize;
-    bound_result(&result, 0, &mut remaining)?;
-    let outcome = decode_result(action, handler, result)?;
+    // The decode recurses to build the document, so the result is bounded
+    // while it is still a Rhai value; the decoded document then passes the
+    // shared bound every backend's outcome passes.
+    crate::action_outcome::bound_rhai_result(&result, action.maximum_snapshot_bytes)?;
+    let document = crate::action_outcome::rhai_document(result);
+    crate::action_outcome::bound_document(&document, action.maximum_snapshot_bytes)?;
+    let proposed = crate::action_outcome::decode_document(document)?;
+    let outcome = crate::action_outcome::validate_proposed_outcome(action, handler, proposed)?;
     if Instant::now() >= deadline {
         return Err(ActionHandlerError::Deadline.into());
     }
     Ok(outcome)
 }
 
-fn bound_result(
-    value: &Dynamic,
-    depth: usize,
-    remaining: &mut usize,
-) -> Result<(), ActionHandlerError> {
-    if depth > rhai_planner::MAXIMUM_VALUE_DEPTH {
-        return Err(ActionHandlerError::Resource);
-    }
-    *remaining = remaining
-        .checked_sub(8)
-        .ok_or(ActionHandlerError::Resource)?;
-    if let Some(value) = value.read_lock::<rhai::ImmutableString>() {
-        *remaining = remaining
-            .checked_sub(value.len())
-            .ok_or(ActionHandlerError::Resource)?;
-    } else if let Some(values) = value.read_lock::<Array>() {
-        if values.len() > rhai_planner::MAXIMUM_ARRAY_ITEMS {
-            return Err(ActionHandlerError::Resource);
-        }
-        for value in values.iter() {
-            bound_result(value, depth + 1, remaining)?;
-        }
-    } else if let Some(values) = value.read_lock::<Map>() {
-        if values.len() > rhai_planner::MAXIMUM_MAP_ENTRIES {
-            return Err(ActionHandlerError::Resource);
-        }
-        for (key, value) in values.iter() {
-            *remaining = remaining
-                .checked_sub(key.len())
-                .ok_or(ActionHandlerError::Resource)?;
-            bound_result(value, depth + 1, remaining)?;
-        }
-    }
-    Ok(())
+/// A handler program compiled once for repeated evaluation.
+///
+/// Benchmark variant, test-only and crate-private on purpose: the supported
+/// evaluation path compiles the handler source on every call, and AST reuse
+/// is not public API. The type does not exist outside test builds. A program
+/// is constructed only from a compiled action's own validated `script_bytes`
+/// through `compile_source_for_abi`, and every evaluation re-checks the
+/// handler's ABI and source bytes before the AST is used, so a program cannot
+/// drift from the action it was compiled for and no unvalidated AST can be
+/// supplied from outside. The Rhai profile and limits applied at compilation
+/// are crate constants shared by both paths.
+#[cfg(test)]
+pub(crate) struct CachedActionHandlerProgram {
+    abi: String,
+    script_bytes: Vec<u8>,
+    ast: AST,
 }
 
-fn decode_result(
-    action: &CompiledAction,
-    handler: &CompiledActionHandler,
-    result: Dynamic,
-) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
-    let map = result.try_cast::<Map>().ok_or_else(|| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return a map containing either effects or refusal.",
-        )
-    })?;
-    if map.contains_key("effects") && map.contains_key("refusal") {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return either effects or refusal, never both.",
-        ));
-    }
-    if let Some(refusal) = map.get("refusal") {
-        rhai_planner::exact_keys(&map, &["refusal"], &[]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "A refusal outcome may contain only refusal.",
-            )
-        })?;
-        let refusal = refusal.read_lock::<Map>().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Return refusal as a map with code and an optional field.",
-            )
-        })?;
-        rhai_planner::exact_keys(&refusal, &["code"], &["field"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "A refusal requires code and may contain only an optional field; declare its label in the handler catalogue.",
-            )
-        })?;
-        let code = rhai_planner::dynamic_string(&refusal["code"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a string code from the handler's declared refusal catalogue.",
-            )
-        })?;
-        let label = handler.refusals.get(&code).cloned().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a code from the handler's declared refusal catalogue.",
-            )
-        })?;
-        let field = refusal
-            .get("field")
-            .map(rhai_planner::dynamic_string)
-            .transpose()
-            .map_err(|_| {
-                ActionHandlerDiagnostic::new(
-                    ActionHandlerError::Result,
-                    "Use a declared input ID as the refusal field, or omit field.",
-                )
-            })?;
-        if field
-            .as_ref()
-            .is_some_and(|field| !action.inputs.iter().any(|input| &input.id == field))
-        {
-            return Err(ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Use a declared input ID as the refusal field, or omit field.",
-            ));
-        }
-        return Ok(ActionHandlerOutcome::Refusal(ActionHandlerRefusal {
-            code,
-            label,
-            field,
-        }));
-    }
-    rhai_planner::exact_keys(&map, &["effects"], &[]).map_err(|_| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "An effects outcome must contain only effects.",
-        )
-    })?;
-    let results = map["effects"].read_lock::<Array>().ok_or_else(|| {
-        ActionHandlerDiagnostic::new(
-            ActionHandlerError::Result,
-            "Return effects as a non-empty list of declared write slots.",
-        )
-    })?;
-    if results.is_empty() {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit at least one declared write slot, or return a declared refusal.",
-        ));
-    }
-    if results.len() > usize::from(action.maximum_targets) {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit no more effects than the action's target bound.",
-        ));
-    }
-    let mut effects = Vec::new();
-    let mut selected = BTreeSet::new();
-    for result in results.iter() {
-        let effect = result.clone().try_cast::<Map>().ok_or_else(|| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Return each effect as a map with id and set or clear.",
-            )
-        })?;
-        let id = effect
-            .get("id")
-            .ok_or_else(|| {
-                ActionHandlerDiagnostic::new(
-                    ActionHandlerError::Result,
-                    "Give each effect an id from the handler's declared write slots.",
-                )
-            })
-            .and_then(|id| {
-                rhai_planner::dynamic_string(id).map_err(|_| {
-                    ActionHandlerDiagnostic::new(
-                        ActionHandlerError::Result,
-                        "Use a string id from the handler's declared write slots.",
-                    )
-                })
-            })?;
-        let slot =
-            handler
-                .writes
-                .iter()
-                .find(|slot| slot.id == id)
-                .ok_or(ActionHandlerDiagnostic {
-                    kind: ActionHandlerError::Ceiling,
-                    evidence_capability: None,
-                    slot: None,
-                    field: None,
-                    message: "Use an id from the handler's declared write slots.",
-                })?;
-        rhai_planner::exact_keys(&effect, &["id"], &["set", "clear"]).map_err(|_| {
-            ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "An effect may contain only id, set and clear; the declared slot fixes its target and operation.",
-            )
-            .at_slot(slot)
-        })?;
-        if !selected.insert(id.clone()) {
-            return Err(ActionHandlerDiagnostic::new(
-                ActionHandlerError::Result,
-                "Emit each declared write slot at most once.",
-            )
-            .at_slot(slot));
-        }
-        let mutations = rhai_planner::decode_write_mutations_detailed(&slot.ceiling, &effect)
-            .map_err(|diagnostic| ActionHandlerDiagnostic {
-                kind: diagnostic.kind.into(),
-                evidence_capability: None,
-                slot: Some(slot.id.clone()),
-                field: diagnostic.field,
-                message: diagnostic.message,
-            })?;
-        let depends_on = mutations
-            .iter()
-            .filter_map(|mutation| match mutation {
-                CandidateChangeRequestMutation::Set {
-                    value: CandidateChangeRequestValue::FromEffect { effect, .. },
-                    ..
-                } => Some(effect.clone()),
-                _ => None,
-            })
-            .collect();
-        let binding = match &slot.ceiling.target_from_field {
-            Some(from_field) => rhai_planner::CandidateChangeRequestTargetBinding::Existing {
-                from_field: from_field.clone(),
-            },
-            None => rhai_planner::CandidateChangeRequestTargetBinding::ReservedCreate {
-                effect: id.clone(),
-            },
+#[cfg(test)]
+impl CachedActionHandlerProgram {
+    /// Compile through the same validated path `evaluate_with_engine` uses.
+    pub(crate) fn compile(action: &CompiledAction) -> Result<Self, ActionHandlerError> {
+        let Some(handler) = &action.handler else {
+            return Err(ActionHandlerError::Source);
         };
-        effects.push(rhai_planner::CandidateChangeRequestEffect {
-            id,
-            target: rhai_planner::CandidateChangeRequestTarget {
-                entity_id: slot.ceiling.target_entity_id.clone(),
-                binding,
-            },
-            operation: slot.ceiling.operation,
-            mutations,
-            depends_on,
-        });
-    }
-    if effects
-        .iter()
-        .map(|effect| effect.mutations.len())
-        .sum::<usize>()
-        > usize::from(action.maximum_field_mutations)
-    {
-        return Err(ActionHandlerDiagnostic::new(
-            ActionHandlerError::Ceiling,
-            "Emit no more field mutations than the action's field-mutation bound.",
-        ));
-    }
-    for effect in &effects {
-        for mutation in &effect.mutations {
-            if let CandidateChangeRequestMutation::Set {
-                field,
-                value:
-                    CandidateChangeRequestValue::FromEffect {
-                        effect: id,
-                        target_entity_id,
-                    },
-            } = mutation
-            {
-                let diagnostic = |kind, message| ActionHandlerDiagnostic {
-                    kind,
-                    evidence_capability: None,
-                    slot: Some(effect.id.clone()),
-                    field: Some(field.clone()),
-                    message,
-                };
-                let source = effects
-                    .iter()
-                    .find(|effect| &effect.id == id)
-                    .ok_or_else(|| {
-                        diagnostic(
-                            ActionHandlerError::Result,
-                            "Emit the create slot named by fromEffect in the same outcome.",
-                        )
-                    })?;
-                if source.operation != Operation::Create
-                    || &source.target.entity_id != target_entity_id
-                {
-                    return Err(diagnostic(
-                        ActionHandlerError::Ceiling,
-                        "Use fromEffect only with an emitted create slot for the field's reference target.",
-                    ));
-                }
-            }
+        if handler.abi != ACTION_HANDLER_ABI_V1 && handler.abi != ACTION_HANDLER_ABI_V2 {
+            return Err(ActionHandlerError::Source);
         }
-    }
-    let effects = rhai_planner::order_candidates(effects)
-        .map_err(|kind| {
-            ActionHandlerDiagnostic::new(
-                kind.into(),
-                "Emit create references without a dependency cycle.",
-            )
-        })?
-        .into_iter()
-        .map(|effect| {
-            let slot = action
-                .effects
-                .iter()
-                .find(|slot| slot.id == effect.id)
-                .ok_or(ActionHandlerError::Ceiling)?;
-            let mutations = effect
-                .mutations
-                .into_iter()
-                .map(|mutation| match mutation {
-                    CandidateChangeRequestMutation::Clear { field } => {
-                        CompiledActionMutation::Clear { field }
-                    }
-                    CandidateChangeRequestMutation::Set { field, value } => {
-                        CompiledActionMutation::Set {
-                            field,
-                            value: match value {
-                                CandidateChangeRequestValue::Literal(value) => {
-                                    CompiledActionValue::Literal { value }
-                                }
-                                CandidateChangeRequestValue::FromRequestField { field: input } => {
-                                    CompiledActionValue::FromInput { input }
-                                }
-                                CandidateChangeRequestValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                } => CompiledActionValue::FromEffect {
-                                    effect,
-                                    target_entity_id,
-                                },
-                            },
-                        }
-                    }
-                })
-                .collect();
-            Ok(CompiledActionEffect {
-                id: effect.id,
-                target: slot.target.clone(),
-                operation: slot.operation,
-                mutations,
-                depends_on: effect.depends_on,
-            })
+        let source =
+            std::str::from_utf8(&handler.script_bytes).map_err(|_| ActionHandlerError::Source)?;
+        let ast = compile_source_for_abi(source, &handler.abi)?;
+        Ok(Self {
+            abi: handler.abi.clone(),
+            script_bytes: handler.script_bytes.clone(),
+            ast,
         })
-        .collect::<Result<Vec<_>, ActionHandlerError>>()?;
-    if serde_json::to_vec(&effects)
-        .map_err(|_| ActionHandlerError::Result)?
-        .len()
-        > action.maximum_snapshot_bytes as usize
-    {
-        return Err(ActionHandlerError::Resource.into());
     }
-    Ok(ActionHandlerOutcome::Effects(effects))
+
+    /// The compiled program for `handler`, or a source error when the
+    /// handler's ABI or source bytes no longer match the compiled program.
+    fn bound_ast(&self, handler: &CompiledActionHandler) -> Result<&AST, ActionHandlerError> {
+        if self.abi != handler.abi || self.script_bytes != handler.script_bytes {
+            return Err(ActionHandlerError::Source);
+        }
+        Ok(&self.ast)
+    }
+}
+
+/// Benchmark variant of `evaluate_with_engine` that reuses a program compiled
+/// through `CachedActionHandlerProgram::compile`. Admission, per-call engine
+/// construction, context shape, limits, resolver registration path, and
+/// result decoding are identical; only the per-call compilation is replaced
+/// by the bound-program check. Test-only, like the program type.
+#[cfg(test)]
+pub(crate) fn evaluate_with_cached_program(
+    action: &CompiledAction,
+    program: &CachedActionHandlerProgram,
+    inputs: &JsonMap<String, Value>,
+    deadline: Instant,
+    resolver: Option<EvidenceResolver>,
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> Result<ActionHandlerOutcome, ActionHandlerDiagnostic> {
+    let handler = admit_handler(action, inputs, deadline, resolver.as_ref())?;
+    let ast = program.bound_ast(handler)?;
+    execute_compiled_handler(
+        action,
+        handler,
+        ast,
+        inputs,
+        deadline,
+        resolver,
+        cancellation,
+    )
 }

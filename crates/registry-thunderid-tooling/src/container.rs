@@ -188,9 +188,11 @@ impl Session<'_> {
         )?;
         if !outcome.success {
             // Persist the failure shape rather than retrying destructively:
-            // the state file deliberately still says setup is incomplete.
+            // the state file deliberately still says setup is incomplete, so
+            // the next start of the same session resumes this one-time phase
+            // instead of reusing a half-bootstrapped issuer.
             return Err(ToolingError::CommandFailed {
-                step: "upstream setup did not complete; the partial state is retained for recovery",
+                step: "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) did not complete; the partial state is retained for recovery",
             });
         }
         let mut state = self.load_state().unwrap_or_default();
@@ -543,6 +545,7 @@ mod tests {
         commands: Vec<Vec<String>>,
         owned_id: Option<String>,
         fail_commands: bool,
+        fail_setup_sh: bool,
         timeouts: Vec<Duration>,
     }
 
@@ -555,7 +558,8 @@ mod tests {
         ) -> Result<CommandOutcome, ToolingError> {
             self.commands.push(args.to_vec());
             Ok(CommandOutcome {
-                success: !self.fail_commands,
+                success: !(self.fail_commands
+                    || self.fail_setup_sh && args.iter().any(|arg| arg == "./setup.sh")),
                 container_ids: if args.first().is_some_and(|arg| arg == "ps") {
                     self.owned_id
                         .as_ref()
@@ -617,6 +621,50 @@ mod tests {
         );
         assert_eq!(runner.timeouts, [IMAGE_DOWNLOAD_TIMEOUT]);
         assert!(runner.timeouts[0] > Duration::from_secs(120));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_failed_upstream_setup_names_the_service_and_phase_and_retains_state() {
+        let root = std::env::temp_dir().join(format!(
+            "thunderid-setup-failure-test-{}-{}",
+            std::process::id(),
+            random_urlsafe(8).unwrap()
+        ));
+        std::fs::create_dir(&root).unwrap();
+        let session = Session {
+            label: "owned-test",
+            id: "0197aaaa-0000-7000-8000-0000000000a1",
+            port: 18091,
+            state_root: &root,
+            image: "pinned-test-image",
+        };
+        session.save_state(&SessionState::default()).unwrap();
+        let mut runner = Runner {
+            fail_setup_sh: true,
+            ..Runner::default()
+        };
+
+        let error = session.prepare(&mut runner).unwrap_err();
+
+        // The refusal names the service and the one-time bootstrap phase that
+        // refused, because a caller reading only this sentence decides what
+        // to correct before retrying.
+        let reported = error.to_string();
+        assert!(reported.contains("ThunderID issuer"), "{reported}");
+        assert!(reported.contains("./setup.sh"), "{reported}");
+        assert!(reported.contains("retained for recovery"), "{reported}");
+        assert!(
+            runner
+                .commands
+                .last()
+                .is_some_and(|command| command.contains(&"./setup.sh".to_owned())),
+            "{:?}",
+            runner.commands
+        );
+        // Retention is unchanged: the completion marker still says setup is
+        // incomplete, so a retry of the same session resumes this phase.
+        assert!(!session.load_state().unwrap().setup_complete);
         std::fs::remove_dir_all(root).unwrap();
     }
 

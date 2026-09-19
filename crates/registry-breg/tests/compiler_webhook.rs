@@ -31,7 +31,8 @@ fn project_value() -> Value {
                 {"id": "region", "type": "string", "maxLength": 32, "classification": "internal"},
                 {"id": "secret", "type": "string", "maxLength": 64, "classification": "restricted"}
             ],
-            "events": [{
+            "hooks": [{
+                "phase": "after",
                 "id": "case-created",
                 "trigger": "created",
                 "projection": ["label", "region"],
@@ -39,10 +40,12 @@ fn project_value() -> Value {
                     "kind": "fields",
                     "afterEquals": {"region": "north"}
                 },
-                "webhook": {
+                "handler": {
+                    "kind": "url",
                     "destinationId": "case-operations"
                 }
             }, {
+                "phase": "after",
                 "id": "case-patched-outbox",
                 "trigger": "patched",
                 "projection": ["label"]
@@ -107,11 +110,12 @@ fn change_request_event_project() -> Value {
                 {"id":"proposed-site","type":"reference","target":"asset-site","required":true,"classification":"internal"},
                 {"id":"reason","type":"text","maxLength":1000,"required":true,"classification":"restricted"}
             ],
-            "events":[{
+            "hooks":[{
+                "phase": "after",
                 "id":"request-lifecycle",
                 "trigger":"request_lifecycle",
                 "projection":["proposed-site","reason"],
-                "webhook":{"destinationId":"review-operations"}
+                "handler":{"kind":"url","destinationId":"review-operations"}
             }],
             "changeRequest":{
                 "effects":[{
@@ -161,7 +165,7 @@ fn change_request_event_project() -> Value {
 }
 
 fn webhook_mut(value: &mut Value) -> &mut serde_json::Map<String, Value> {
-    value["entities"][0]["events"][0]["webhook"]
+    value["entities"][0]["hooks"][0]["handler"]
         .as_object_mut()
         .expect("webhook object")
 }
@@ -179,7 +183,7 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.id, "events.case.case-created.webhook");
     assert_eq!(delivery.entity_id, "case");
     assert_eq!(delivery.event_id, "case-created");
-    assert_eq!(delivery.destination_id, "case-operations");
+    assert_eq!(delivery.destination_id.as_deref(), Some("case-operations"));
     assert_eq!(delivery.projection_fields, ["label", "region"]);
     assert_eq!(delivery.classification_ceiling, Classification::Internal);
     assert!(delivery.when.is_some());
@@ -209,7 +213,9 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     assert_eq!(delivery.maximum_attempts, 5);
     assert_eq!(delivery.exponential_backoff_multiplier, 2);
     assert_eq!(delivery.retry_delays_ms, [1000, 2000, 4000, 8000]);
-    assert_eq!(delivery.maximum_payload_bytes, 2288);
+    // The data object's worst case plus the envelope wrapper this project's
+    // identifiers produce: 2288 + 644.
+    assert_eq!(delivery.maximum_payload_bytes, 2932);
     assert_eq!(delivery.dead_letter, WebhookDeadLetterMode::Required);
     assert!(delivery.operator_replay);
 
@@ -242,8 +248,8 @@ fn governed_webhook_compiles_to_deterministic_destination_neutral_inventory() {
     }
 
     let entity = &first.entities()["case"];
-    assert!(entity.events["case-created"].webhook.is_some());
-    assert!(entity.events["case-patched-outbox"].webhook.is_none());
+    assert!(entity.hooks["case-created"].handler.is_some());
+    assert!(entity.hooks["case-patched-outbox"].handler.is_none());
 }
 
 #[test]
@@ -252,7 +258,7 @@ fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_
     let request = &mut source["entities"][2];
     request["classification"] = json!("public");
     request["fields"][2]["classification"] = json!("public");
-    request["events"][0]["projection"] = json!(["reason"]);
+    request["hooks"][0]["projection"] = json!(["reason"]);
     for (condition, expected) in [
         (None, Classification::Internal),
         (
@@ -289,9 +295,9 @@ fn reviewer_reason_webhooks_require_internal_delivery_unless_conditions_exclude_
         ),
     ] {
         if let Some(condition) = condition {
-            source["entities"][2]["events"][0]["when"] = condition;
+            source["entities"][2]["hooks"][0]["when"] = condition;
         } else {
-            source["entities"][2]["events"][0]
+            source["entities"][2]["hooks"][0]
                 .as_object_mut()
                 .unwrap()
                 .remove("when");
@@ -467,7 +473,7 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
         json!({"kind":"request_lifecycle", "toStates":["approved"]}),
         json!({"kind":"request_lifecycle", "transitions":["approve"], "toStates":["approved"], "stages":["review"]}),
     ] {
-        source["entities"][2]["events"][0]["when"] = condition;
+        source["entities"][2]["hooks"][0]["when"] = condition;
         let schema = lifecycle_request_schema(&source);
         let validator = jsonschema::JSONSchema::options()
             .with_draft(jsonschema::Draft::Draft202012)
@@ -485,7 +491,7 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
             assert!(!validator.is_valid(&request));
         }
     }
-    source["entities"][2]["events"][0]["when"] = json!({
+    source["entities"][2]["hooks"][0]["when"] = json!({
         "kind":"request_lifecycle", "transitions":["reject","request_revision"],
         "toStates":["rejected","needs_changes"], "stages":["review"]
     });
@@ -512,19 +518,19 @@ fn lifecycle_event_schema_preserves_authored_filter_intersection() {
 #[test]
 fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     let mut non_request = project_value();
-    non_request["entities"][0]["events"][0]["trigger"] = json!("request_lifecycle");
+    non_request["entities"][0]["hooks"][0]["trigger"] = json!("request_lifecycle");
     assert_compile_code(
         &non_request,
         "event.trigger.request_lifecycle_requires_change_request",
     );
 
     let mut field_condition = change_request_event_project();
-    field_condition["entities"][2]["events"][0]["when"] =
+    field_condition["entities"][2]["hooks"][0]["when"] =
         json!({"kind":"fields","afterEquals":{"reason":"notify"}});
     assert_compile_code(&field_condition, "event.when.trigger_incompatible");
 
     let mut lifecycle_condition = change_request_event_project();
-    lifecycle_condition["entities"][2]["events"][0]["when"] = json!({
+    lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
         "kind":"request_lifecycle",
         "transitions":["approve"],
         "toStates":["approved"],
@@ -533,7 +539,7 @@ fn lifecycle_events_are_request_only_and_use_closed_lifecycle_conditions() {
     compile(&lifecycle_condition).expect("closed lifecycle condition compiles");
 
     let mut bad_transition = lifecycle_condition.clone();
-    bad_transition["entities"][2]["events"][0]["when"]["transitions"] = json!(["callback_granted"]);
+    bad_transition["entities"][2]["hooks"][0]["when"]["transitions"] = json!(["callback_granted"]);
     assert_compile_code(
         &bad_transition,
         "event.when.request_lifecycle_transition_unknown",
@@ -569,7 +575,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     );
 
     let mut lifecycle_condition = change_request_event_project();
-    lifecycle_condition["entities"][2]["events"][0]["when"] = json!({
+    lifecycle_condition["entities"][2]["hooks"][0]["when"] = json!({
         "kind":"request_lifecycle",
         "transitions":["approve"],
         "toStates":["approved"],
@@ -577,7 +583,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     });
 
     let mut bad_transition = lifecycle_condition.clone();
-    bad_transition["entities"][2]["events"][0]["when"]["transitions"] = json!(["callback_granted"]);
+    bad_transition["entities"][2]["hooks"][0]["when"]["transitions"] = json!(["callback_granted"]);
     let failure = compile(&bad_transition).expect_err("an unknown transition is refused");
     let diagnostic = failure
         .diagnostics()
@@ -596,7 +602,7 @@ fn unknown_lifecycle_predicates_list_the_closed_sets_the_runtime_accepts() {
     }
 
     let mut bad_state = lifecycle_condition;
-    bad_state["entities"][2]["events"][0]["when"]["toStates"] = json!(["escalated"]);
+    bad_state["entities"][2]["hooks"][0]["when"]["toStates"] = json!(["escalated"]);
     let failure = compile(&bad_state).expect_err("an unknown request state is refused");
     let diagnostic = failure
         .diagnostics()
@@ -657,7 +663,7 @@ fn destination_auth_delivery_and_deployed_members_are_closed_and_value_free() {
 #[test]
 fn webhook_projection_is_closed_and_classification_is_derived() {
     let mut missing = project_value();
-    missing["entities"][0]["events"][0]
+    missing["entities"][0]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("projection");
@@ -666,16 +672,16 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     assert_eq!(failure.diagnostics()[0].code, "source.shape.invalid");
 
     let mut empty = project_value();
-    empty["entities"][0]["events"][0]["projection"] = json!([]);
+    empty["entities"][0]["hooks"][0]["projection"] = json!([]);
     assert_compile_code(&empty, "event.projection.empty");
 
     let mut unknown = project_value();
-    unknown["entities"][0]["events"][0]["projection"] = json!(["unknown-field"]);
+    unknown["entities"][0]["hooks"][0]["projection"] = json!(["unknown-field"]);
     assert_compile_code(&unknown, "event.projection.field_unknown");
 
     let mut restricted = project_value();
-    restricted["entities"][0]["events"][0]["projection"] = json!(["secret"]);
-    restricted["entities"][0]["events"][0]
+    restricted["entities"][0]["hooks"][0]["projection"] = json!(["secret"]);
+    restricted["entities"][0]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -690,8 +696,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 
     let mut minimized = project_value();
     minimized["entities"][0]["classification"] = json!("restricted");
-    minimized["entities"][0]["events"][0]["projection"] = json!(["label"]);
-    minimized["entities"][0]["events"][0]
+    minimized["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
+    minimized["entities"][0]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -707,8 +713,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     );
 
     let mut condition_observes_restricted = project_value();
-    condition_observes_restricted["entities"][0]["events"][0]["projection"] = json!(["label"]);
-    condition_observes_restricted["entities"][0]["events"][0]["when"] = json!({
+    condition_observes_restricted["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
+    condition_observes_restricted["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "afterEquals": {"secret": "eligible"}
     });
@@ -730,7 +736,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
     exact_envelope_boundary["entities"][0]["fields"][0] = json!({
         "id": "label",
         "type": "structured",
-        "maxBytes": 1_046_878,
+        "maxBytes": 1_046_234,
         "schema": {
             "type": "object",
             "properties": {"value": {"type": "string"}},
@@ -739,8 +745,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "required": true,
         "classification": "public"
     });
-    exact_envelope_boundary["entities"][0]["events"][0]["projection"] = json!(["label"]);
-    exact_envelope_boundary["entities"][0]["events"][0]
+    exact_envelope_boundary["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
+    exact_envelope_boundary["entities"][0]["hooks"][0]
         .as_object_mut()
         .expect("event object")
         .remove("when");
@@ -752,7 +758,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
             .maximum_payload_bytes,
         1_048_576
     );
-    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_879);
+    exact_envelope_boundary["entities"][0]["fields"][0]["maxBytes"] = json!(1_046_235);
     assert_compile_code(
         &exact_envelope_boundary,
         "event.webhook.projection_too_large",
@@ -793,7 +799,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "scale": 0,
         "classification": "public"
     }]);
-    decimal_quote_boundary["entities"][0]["events"][0]["projection"] = json!(["amount", "label"]);
+    decimal_quote_boundary["entities"][0]["hooks"][0]["projection"] = json!(["amount", "label"]);
     assert_compile_code(
         &decimal_quote_boundary,
         "event.webhook.projection_too_large",
@@ -815,7 +821,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "required": true,
         "classification": "public"
     }]);
-    all_fractional_decimal_boundary["entities"][0]["events"][0]["projection"] =
+    all_fractional_decimal_boundary["entities"][0]["hooks"][0]["projection"] =
         json!(["a", "amount"]);
     assert_compile_code(
         &all_fractional_decimal_boundary,
@@ -837,7 +843,7 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
         "schema": {"type": "string"},
         "classification": "public"
     }]);
-    optional_null_boundary["entities"][0]["events"][0]["projection"] = json!(["a", "b"]);
+    optional_null_boundary["entities"][0]["hooks"][0]["projection"] = json!(["a", "b"]);
     assert_compile_code(
         &optional_null_boundary,
         "event.webhook.projection_too_large",
@@ -847,8 +853,8 @@ fn webhook_projection_is_closed_and_classification_is_derived() {
 #[test]
 fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     let mut patched = project_value();
-    patched["entities"][0]["events"][0]["trigger"] = json!("patched");
-    patched["entities"][0]["events"][0]["when"] = json!({
+    patched["entities"][0]["hooks"][0]["trigger"] = json!("patched");
+    patched["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "changed": ["region"],
         "beforeEquals": {"region": null},
@@ -857,19 +863,19 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
     compile(&patched).expect("patched events support all Version 1 field predicates");
 
     let mut empty = project_value();
-    empty["entities"][0]["events"][0]["when"] = json!({"kind": "fields"});
+    empty["entities"][0]["hooks"][0]["when"] = json!({"kind": "fields"});
     assert_compile_code(&empty, "event.when.empty");
 
     let mut incompatible_created = project_value();
-    incompatible_created["entities"][0]["events"][0]["when"] = json!({
+    incompatible_created["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "changed": ["region"]
     });
     assert_compile_code(&incompatible_created, "event.when.trigger_incompatible");
 
     let mut incompatible_tombstone = project_value();
-    incompatible_tombstone["entities"][0]["events"][0]["trigger"] = json!("tombstoned");
-    incompatible_tombstone["entities"][0]["events"][0]["when"] = json!({
+    incompatible_tombstone["entities"][0]["hooks"][0]["trigger"] = json!("tombstoned");
+    incompatible_tombstone["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "afterEquals": {"region": "north"}
     });
@@ -881,19 +887,19 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
         json!({"kind": "fields", "afterEquals": {"unknown": "value"}}),
     ] {
         let mut source = patched.clone();
-        source["entities"][0]["events"][0]["when"] = when;
+        source["entities"][0]["hooks"][0]["when"] = when;
         assert_compile_code(&source, "event.when.field_unknown");
     }
 
     let mut wrong_type = patched;
-    wrong_type["entities"][0]["events"][0]["when"] = json!({
+    wrong_type["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "afterEquals": {"region": 7}
     });
     assert_compile_code(&wrong_type, "event.when.value_invalid");
 
     let mut structured = project_value();
-    structured["entities"][0]["events"][0]["when"] = json!({
+    structured["entities"][0]["hooks"][0]["when"] = json!({
         "kind": "fields",
         "afterEquals": {"region": {"unexpected": true}}
     });
@@ -907,7 +913,7 @@ fn field_conditions_are_typed_nonempty_and_trigger_compatible() {
 #[test]
 fn additive_modules_add_nonconflicting_subscriptions_deterministically_and_refuse_conflicts() {
     let mut project_value = project_value();
-    project_value["entities"][0]["events"] = json!([]);
+    project_value["entities"][0]["hooks"] = json!([]);
     let mut project = parse_project(&project_value);
     let module_a = webhook_module("module-a", "created-a", "destination-a");
     let module_b = webhook_module("module-b", "created-b", "destination-b");
@@ -968,11 +974,12 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
             "fields": [
                 {"id": "label", "type": "string", "maxLength": 64, "classification": "public"}
             ],
-            "events": [{
+            "hooks": [{
+                "phase": "after",
                 "id": "case-created",
                 "trigger": "created",
                 "projection": ["label"],
-                "webhook": {"destinationId": "appeal-operations"}
+                "handler": {"kind":"url","destinationId": "appeal-operations"}
             }]
         }));
     assert_compile_code(&source, "event.id.registry_duplicate");
@@ -981,7 +988,8 @@ fn event_ids_are_unique_across_entities_for_unambiguous_external_types() {
 #[test]
 fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
     let mut source = project_value();
-    source["entities"][0]["events"] = json!([{
+    source["entities"][0]["hooks"] = json!([{
+        "phase": "after",
         "id": "case-created",
         "trigger": "created",
         "projection": ["label"]
@@ -993,8 +1001,8 @@ fn outbox_only_event_is_authoring_only_and_production_requires_delivery() {
         .get("compiled/event-deliveries.json")
         .expect("empty delivery inventory remains explicit");
     assert_eq!(artifact.bytes, br#"{"deliveries":[]}"#);
-    assert!(compiled.entities()["case"].events["case-created"]
-        .webhook
+    assert!(compiled.entities()["case"].hooks["case-created"]
+        .handler
         .is_none());
 
     let failure = compile_project(&parse_project(&source), &[], CompileProfile::Production)
@@ -1012,11 +1020,13 @@ fn webhook_module(id: &str, event_id: &str, destination_id: &str) -> RegistryMod
             "version": "1",
             "extendEntities": [{
                 "entity": "case",
-                "events": [{
+                "hooks": [{
+                    "phase": "after",
                     "id": event_id,
                     "trigger": "created",
                     "projection": ["label"],
-                    "webhook": {
+                    "handler": {
+                        "kind": "url",
                         "destinationId": destination_id
                     }
                 }]
@@ -1039,13 +1049,13 @@ fn module_lock(module: &RegistryModule) -> ModuleLockSource {
 fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
     let mut source = change_request_event_project();
     let request = &mut source["entities"][2];
-    request["events"][0]["projection"] = json!(["reason"]);
+    request["hooks"][0]["projection"] = json!(["reason"]);
     request["fields"][2]["maxLength"] = json!(173_000);
     for condition in [
         json!({"kind":"request_lifecycle", "transitions":["approve"]}),
         json!({"kind":"request_lifecycle", "toStates":["approved"]}),
     ] {
-        source["entities"][2]["events"][0]["when"] = condition;
+        source["entities"][2]["hooks"][0]["when"] = condition;
         let compiled = compile(&source).expect("approve-only payload fits the webhook limit");
         let delivery = compiled
             .event_deliveries()
@@ -1055,7 +1065,108 @@ fn approve_only_lifecycle_payload_bounds_exclude_impossible_reviewer_text() {
             .unwrap();
         assert!(delivery.maximum_payload_bytes < 1_048_576);
     }
-    source["entities"][2]["events"][0]["when"] =
+    source["entities"][2]["hooks"][0]["when"] =
         json!({"kind":"request_lifecycle", "transitions":["request_revision"]});
     assert_compile_code(&source, "event.webhook.projection_too_large");
+}
+
+/// The envelope wrapper one hook of `project_value` produces.
+///
+/// 584 bytes are fixed for every hook: the canonical object punctuation of the
+/// eight envelope members, the `causation` object with a parent, a quoted
+/// UUID `id`, the fixed parts of `dataschema` and `source` with their digests
+/// and a 64 byte instance id, the `subject` object, and the quoted UTC
+/// millisecond `time`. The rest scales with the identifiers this project
+/// declares: the registry id appears in both `dataschema` and `source`, the
+/// entity id once in `dataschema`, and the hook id in both `dataschema` and
+/// `type`.
+const ENVELOPE_WRAPPER_BYTES: u32 = 584
+    + 2 * "webhook-contract".len() as u32
+    + "case".len() as u32
+    + 2 * "case-created".len() as u32;
+
+/// The data object worst case that exactly fills the transport bound, so a
+/// project sized to it proves what the payload bound is measured over.
+const DATA_OBJECT_AT_THE_TRANSPORT_BOUND: u32 = 1_046_878;
+
+fn structured_label(maximum_bytes: u32) -> Value {
+    json!({
+        "id": "label",
+        "type": "structured",
+        "maxBytes": maximum_bytes,
+        "schema": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "additionalProperties": false
+        },
+        "required": true,
+        "classification": "public"
+    })
+}
+
+/// The compiled payload proof measures the canonical envelope the runtime
+/// stores and delivers, not the `data` object it carries.
+///
+/// Before the envelope commits the two measured different documents, so a
+/// project could compile and then have a capture refused inside the record
+/// transaction that produced it.
+#[test]
+fn the_compiled_payload_proof_measures_envelope_bytes_not_data_bytes() {
+    let mut data_object_at_the_bound = project_value();
+    data_object_at_the_bound["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND);
+    data_object_at_the_bound["entities"][0]["hooks"][0]["projection"] = json!(["label"]);
+    data_object_at_the_bound["entities"][0]["hooks"][0]
+        .as_object_mut()
+        .expect("event object")
+        .remove("when");
+    assert_compile_code(
+        &data_object_at_the_bound,
+        "event.webhook.projection_too_large",
+    );
+
+    let mut envelope_at_the_bound = data_object_at_the_bound.clone();
+    envelope_at_the_bound["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES);
+    assert_eq!(
+        compile(&envelope_at_the_bound)
+            .expect("an envelope at the transport bound compiles")
+            .event_deliveries()
+            .deliveries[0]
+            .maximum_payload_bytes,
+        1_048_576
+    );
+
+    let mut envelope_one_byte_over = envelope_at_the_bound;
+    envelope_one_byte_over["entities"][0]["fields"][0] =
+        structured_label(DATA_OBJECT_AT_THE_TRANSPORT_BOUND - ENVELOPE_WRAPPER_BYTES + 1);
+    assert_compile_code(
+        &envelope_one_byte_over,
+        "event.webhook.projection_too_large",
+    );
+}
+
+/// The request lifecycle trigger carries its own larger data object and the
+/// same envelope wrapper, so its proof grows by the wrapper too.
+#[test]
+fn the_request_lifecycle_payload_proof_carries_the_same_envelope_wrapper() {
+    let source = change_request_event_project();
+    let compiled = compile(&source).expect("the lifecycle acceptance project compiles");
+    let delivery = compiled
+        .event_deliveries()
+        .deliveries
+        .iter()
+        .find(|delivery| delivery.event_id == "request-lifecycle")
+        .expect("the lifecycle hook compiles a delivery");
+    // The lifecycle data object worst case, plus the wrapper this project's
+    // identifiers produce.
+    const LIFECYCLE_DATA_OBJECT_BYTES: u32 = 33_472;
+    const LIFECYCLE_WRAPPER_BYTES: u32 = 584
+        + 2 * "request-events".len() as u32
+        + "placement-correction-request".len() as u32
+        + 2 * "request-lifecycle".len() as u32;
+    assert_eq!(
+        delivery.maximum_payload_bytes,
+        LIFECYCLE_DATA_OBJECT_BYTES + LIFECYCLE_WRAPPER_BYTES
+    );
 }

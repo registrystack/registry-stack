@@ -31,8 +31,9 @@ only after an authorized mutation commits, with durable audit before egress.
 An event belongs to an entity and declares only what changes product meaning:
 
 ```yaml
-events:
+hooks:
   - id: case-approved-v1
+    phase: after
     trigger: patched
     projection: [status, programme]
     when:
@@ -40,12 +41,15 @@ events:
       changed: [status]
       beforeEquals: {status: pending}
       afterEquals: {status: approved}
-    webhook:
+    handler:
+      kind: url
       destinationId: eligibility-service
 ```
 
 - `id` is the stable external event contract. A breaking payload change uses a
   new versioned id.
+- `phase` is `after`: an entity hook runs after the triggering transaction
+  commits. The compiler refuses `before`, which the runtime cannot run here.
 - `trigger` is one of `created`, `patched`, `tombstoned`, or `request_lifecycle`.
   Only a change-request entity can declare `request_lifecycle`.
 - `projection` is the complete set of record values that may leave the
@@ -59,12 +63,17 @@ events:
 - Lifecycle events use `kind: request_lifecycle` with at least one nonempty
   `transitions`, `toStates`, or `stages` list. Each nonempty list must match;
   field predicates are not available for this trigger.
-- One event has at most one webhook destination. A project that needs fanout
-  uses an external event gateway until native fanout is justified.
-- Production compilation rejects an event without a delivery because Version
-  1 has no supported outbox consumer API.
+- `handler` declares either `kind: url` with the logical `destinationId`, or
+  one of the local kinds: `kind: rhai` with a reviewed `script` path, or
+  `kind: wasm` with a reviewed `module` path. A url handler delivers to a bound
+  destination; a local handler runs its program in the post-commit worker. The
+  delivery row records the settled answer's digest, and never the answer
+  bytes. One event has at most one handler. A project that needs fanout uses
+  an external event gateway until native fanout is justified.
+- Production compilation rejects an event without a handler because Version 1
+  has no supported outbox consumer API.
 
-Modules may add events to an existing entity using the normal deterministic
+Modules may add hooks to an existing entity using the normal deterministic
 entity-extension mechanism. They may not silently replace an event owned by
 another module.
 
@@ -106,6 +115,15 @@ destination, and delivery policy. A later package activation must not
 reinterpret it. Activation refuses a destination change that would strand a
 retained non-terminal delivery.
 
+The stored outbox payload is that envelope, byte for byte, and the delivery
+worker sends it unchanged. A row captured under the earlier bare-data body is
+not an envelope; the worker refuses it rather than reshaping it. That refusal
+is a failed attempt, not a terminal one, so the row retries on the captured
+schedule and dead-letters only once its attempt budget is exhausted. A
+deployment upgrading across this change should drain the outbox, or let it
+settle, before the upgrade: every delivery captured under the earlier body
+spends its whole retry budget on attempts that cannot succeed.
+
 This contract does not reinterpret delivery history created by the earlier
 experimental webhook shape. An empty pre-Version 1 internal schema upgrades
 automatically. A database containing pre-Version 1 webhook history requires an
@@ -125,12 +143,22 @@ Webhooks use CloudEvents 1.0 HTTP binary mode with canonical JSON data:
 - `ce-dataschema`: a URN containing the Registry id, event id, and generated
   event-schema fingerprint
 
-The body contains `entity`, `recordId`, `revision`, `trigger`,
+The body is one shared hook envelope, the envelope every Registry Stack product
+delivers: `id`, `type`, `source`, `time`, `subject`, `dataschema`, `data`, and
+`causation`, and nothing else. `id`, `type`, `source`, `time`, and `dataschema`
+repeat the CloudEvents attributes above, so a receiver reading only the body
+still knows which event it holds. `subject` carries the hashed record reference
+and the revision the change produced, never the raw record id. `causation`
+carries `root` and `hop`, plus `parent` once an event is caused by another; a
+captured registry mutation is a root event, so `root` equals `id` and `hop` is
+0. Delivery attributes stay on the transport and never enter the envelope.
+
+`data` contains `entity`, `recordId`, `revision`, `trigger`,
 `packageRevision`, and `values`. `values` contains exactly the declared
 projection. Record identifiers are deliberately kept out of CloudEvents
 headers because infrastructure commonly logs headers.
 
-Lifecycle bodies also require a `request` object containing `proposalVersion`,
+Lifecycle event data also requires a `request` object containing `proposalVersion`,
 `workflowRevision`, `transition`, `fromState`, `toState`, `stage`, `effectDigest`,
 `deduplicationKey`, and `reasonPresent`. `stage` and `effectDigest` may be null.
 For approve, reject, request-revision, and apply transitions, an explanation
@@ -176,12 +204,15 @@ audit and delivery-state transition commit together after the outcome. Audit
 failure prevents the send or terminal transition rather than creating an
 unaccounted delivery.
 
-The payload is erased immediately after successful delivery. Pending and
-dead-letter payloads have a deployment-selectable retention period capped at
-30 days. After expiry, replay is impossible. Digests and value-free operational
-metadata follow the normal audit retention policy. Audit and operational logs
-contain no projected values, raw record ids, destination URLs, or secrets.
-Payload erasure and its terminal audit record commit atomically.
+The payload and the raw handler answer bytes are erased immediately after
+successful delivery. The delivered row retains the answer's digest, its
+proposal disposition, and the bounded value-free summary, never the answer
+itself. Pending and dead-letter payloads have a deployment-selectable
+retention period capped at 30 days. After expiry, replay is impossible.
+Digests and value-free operational metadata follow the normal audit
+retention policy. Audit and operational logs contain no projected values,
+raw record ids, destination URLs, or secrets. Payload erasure and its
+terminal audit record commit atomically.
 
 The public record API exposes no outbox, payload, delivery, or replay route.
 
@@ -190,10 +221,13 @@ The public record API exposes no outbox, payload, delivery, or replay route.
 Reuse `registry-platform-httputil` for bounded destination and SSRF policy,
 `registry-platform-canonical-json` for exact bytes, and the existing platform
 audit, secret, configuration, and cryptographic primitives. Improve those
-crates when a missing primitive is genuinely cross-product. Base Registry Engine
-continues to own event meaning, capture, retry state, replay, retention, and
-the versioned signature contract. Do not add a new generic hook, CloudEvents,
-or Rhai platform crate for this slice.
+crates when a missing primitive is genuinely cross-product. The generic hook
+contract, the shared envelope, and the delivery worker's claim, retry,
+dead-letter, expiry, and replay mechanics live in `registry-platform-hooks`,
+and the versioned delivery signature lives in `registry-platform-crypto` as a
+product-neutral module. Base Registry Engine owns event meaning, capture, and
+retention policy, and supplies the product constants, destination bindings,
+and audit records those shared primitives run with.
 
 ## Developer and operator experience
 

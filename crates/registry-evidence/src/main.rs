@@ -261,11 +261,17 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             // is a fixed message that says a case failed but never which one or
             // why; `CliError` carries no dynamic payload and does not gain one
             // here. Attributing that message to the case that was still running
-            // is what joins the two without changing either.
-            if explain {
-                if let Err(error) = &summary {
-                    trace.fail(error.0);
+            // is what joins the two without changing either, and the structured
+            // stderr line below reads that attribution back for every failing
+            // run, explained or not: the case, the fixed cause, and the value
+            // classes each side of its comparison had reached, never a value.
+            if let Err(error) = &summary {
+                trace.fail(error.0);
+                for failure in trace.case_failures() {
+                    eprintln!("{}", failure.render_line());
                 }
+            }
+            if explain {
                 match explain_format.unwrap_or_default() {
                     ExplainFormat::Text => print!("{}", trace.render()),
                     // The JSON document is the whole of standard output, so the
@@ -330,10 +336,16 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
             )
             .await;
             validate_trace_canaries(&trace)?;
-            if explain {
-                if let Err(error) = &summary {
-                    trace.fail(error.0);
+            // The same attribution and structured failure line the deployment
+            // evaluation prints, read by the fixture driver that owns this
+            // seam: it parses the line rather than the trace.
+            if let Err(error) = &summary {
+                trace.fail(error.0);
+                for failure in trace.case_failures() {
+                    eprintln!("{}", failure.render_line());
                 }
+            }
+            if explain {
                 match explain_format.unwrap_or_default() {
                     ExplainFormat::Text => print!("{}", trace.render()),
                     ExplainFormat::Json => {
@@ -352,8 +364,7 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
         }
         Command::RenderDiscoveryDescription { config } => {
             let bytes = fs::read(config).map_err(|_| DISCOVERY_CONFIG_UNREADABLE)?;
-            let config =
-                EvidenceConfig::parse_yaml(&bytes).map_err(|_| DISCOVERY_CONFIG_INVALID)?;
+            let config = EvidenceConfig::parse_yaml(&bytes).map_err(discovery_config_invalid)?;
             // Configuration validation projects the publication before it
             // accepts the document, so every projection refusal is already
             // reported as an invalid configuration and this call cannot fail
@@ -428,9 +439,14 @@ async fn run(cli: Cli) -> Result<ExitCode, CommandError> {
 ///
 /// Each stage of the compilation reports its own class, so an adopter learns
 /// whether the configuration was unreadable, refused as Evidence
-/// configuration, or never reached standard output. Every class is fixed text:
-/// the configured path and the document's own keys and scalars stay out of it,
-/// exactly as they stay out of `check`.
+/// configuration, or never reached standard output. Every class is fixed
+/// text: the configured path and the document's own keys and scalars stay out
+/// of it, exactly as they stay out of `check`.
+///
+/// A parse refusal appends the parser's closed, value-free cause — the
+/// contract clause or bound that refused, plus the schema path and text
+/// location when the decoder knew them — so an operator learns which field
+/// failed without any configured value reaching the message.
 ///
 /// The projection has no class of its own because it has no refusal of its
 /// own. `EvidenceConfig::validate` renders the publication before it accepts
@@ -443,6 +459,19 @@ const DISCOVERY_CONFIG_INVALID: CliError =
     CliError("discovery description configuration is not valid Evidence configuration");
 const DISCOVERY_OUTPUT_UNWRITABLE: CliError =
     CliError("discovery description output could not be written");
+
+/// Report a refused discovery configuration with the cause the parser carried.
+///
+/// The class is the same fixed text as every other invalid configuration; the
+/// appended cause is the parser's own value-free diagnostic, which names the
+/// contract clause and, for a bound violation, the closed field label it
+/// applies to.
+fn discovery_config_invalid(error: ConfigError) -> CommandError {
+    CommandError::Deployment(
+        "discovery description configuration is not valid Evidence configuration",
+        ArtifactFault::new("evidence.yaml", error.fault()),
+    )
+}
 
 /// Report a startup failure with the artifact diagnostic it carries.
 ///
@@ -1123,7 +1152,9 @@ fn audit_verification_failure(error: EvidenceAuditError) -> (String, CliError) {
 /// Render one fixture run as the single JSON document the JSON form prints.
 ///
 /// The verdict comes from the run's own result rather than from the trace, so a
-/// document can never report a pass the command did not report.
+/// document can never report a pass the command did not report. The failing
+/// case is the one the run's message was attributed to after the canaries were
+/// checked, so a failed document names it and a passed one carries nothing.
 fn fixture_report_json(
     trace: &FixtureTrace,
     summary: Result<&FixtureSummary, &CliError>,
@@ -1134,6 +1165,9 @@ fn fixture_report_json(
             .ok()
             .map(|summary| summary.evaluated_cases)
             .or_else(|| (trace.case_count() > 0).then(|| trace.case_count())),
+        failing_case: (summary.is_err())
+            .then(|| trace.case_failures())
+            .and_then(|failures| failures.first().cloned()),
         trace,
     };
     serde_json::to_string_pretty(&report)
@@ -2016,6 +2050,20 @@ fn record_derivation(
                 declared_concept_lines(requirement),
             );
             Err(KernelError::Output)
+        }
+        Err(KernelError::UndeclaredOutputProperty(property)) => {
+            trace.record(
+                Stage::Derive,
+                StageStatus::Ok,
+                "the derivation script ran and returned values",
+            );
+            trace.record_with(
+                Stage::Validate,
+                StageStatus::Failed,
+                format!("the output gate rejected an undeclared structured key {property:?}"),
+                declared_concept_lines(requirement),
+            );
+            Err(KernelError::UndeclaredOutputProperty(property))
         }
         Err(error) => {
             trace.record(
@@ -4374,7 +4422,9 @@ fn classify_observed_result(
                     ReasonCode::SourceProtocolRefused,
                 ),
                 KernelError::Script => (ResultClass::ServiceUnavailable, ReasonCode::ScriptRefused),
-                KernelError::Output => (ResultClass::ServiceUnavailable, ReasonCode::OutputRefused),
+                KernelError::Output | KernelError::UndeclaredOutputProperty(_) => {
+                    (ResultClass::ServiceUnavailable, ReasonCode::OutputRefused)
+                }
                 KernelError::Bundle | KernelError::Artifact(_) => {
                     (ResultClass::ServiceUnavailable, ReasonCode::BundleRefused)
                 }
@@ -4570,6 +4620,7 @@ fn compare_case_outcome(
                 "service.unavailable",
                 Err(registry_evidence::kernel::KernelError::Script
                     | registry_evidence::kernel::KernelError::Output
+                    | registry_evidence::kernel::KernelError::UndeclaredOutputProperty(_)
                     | registry_evidence::kernel::KernelError::Bundle
                     | registry_evidence::kernel::KernelError::Artifact(_)
                     | registry_evidence::kernel::KernelError::Requirement
@@ -5194,12 +5245,33 @@ mod tests {
                 .await
                 .expect_err("a document that is not Evidence configuration is refused");
 
-            assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
+            let CommandError::Deployment(message, artifact) = &error else {
+                panic!("an invalid configuration reports its class: {error}");
+            };
+            assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
+            assert_eq!(artifact.artifact(), "evidence.yaml");
             let rendered = error.to_string();
             for content in [name, "unknownSetting", "parcel-owner-lookup"] {
                 assert!(!rendered.contains(content), "{rendered}");
             }
         }
+    }
+
+    /// A refused configuration carries the parser's closed, value-free cause,
+    /// so the operator learns which bound or field refused the document
+    /// without any configured value reaching the message.
+    #[test]
+    fn a_refused_discovery_configuration_carries_the_field_named_cause() {
+        let error = discovery_config_invalid(ConfigError::InvalidField(
+            "collection cardinality is outside Version 1 bounds",
+            "publication jurisdictions",
+        ));
+        assert_eq!(
+            error.to_string(),
+            "discovery description configuration is not valid Evidence configuration: \
+             artifact evidence.yaml: collection cardinality is outside Version 1 bounds \
+             (publication jurisdictions)"
+        );
     }
 
     /// Configuration validation refuses every scalar the shared public profile
@@ -5233,7 +5305,12 @@ mod tests {
             .await
             .expect_err("a publication the shared profile refuses is not compiled");
 
-        assert_eq!(error, CommandError::Cli(DISCOVERY_CONFIG_INVALID));
+        let CommandError::Deployment(message, artifact) = &error else {
+            panic!("an unprojectable publication reports its class: {error}");
+        };
+        assert_eq!(*message, DISCOVERY_CONFIG_INVALID.0);
+        assert_eq!(artifact.artifact(), "evidence.yaml");
+        assert_eq!(artifact.fault().cause(), "URI is invalid");
     }
 
     #[test]

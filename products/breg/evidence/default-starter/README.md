@@ -45,8 +45,11 @@ generated local caller authority:
 evidencectl fixtures run --project . --target ./targets/local --local
 ```
 
-Fixtures use recorded synthetic responses, so they need neither a running
-registry nor source credentials.
+Fixtures replay recorded synthetic responses once the reviewed source above is
+connected, so they need neither a running registry nor source credentials.
+Before that connection the copied questions name the `registry-status` source,
+which only `source add --apply` (or the hand `source import`) provides, so
+`check` reports it missing and the run refuses.
 
 The copied `targets/local/settings.yaml` is the explicit loopback teaching
 target for a candidate. Review its fixed authority and connection, then use

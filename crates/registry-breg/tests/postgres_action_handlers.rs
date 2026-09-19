@@ -1089,6 +1089,55 @@ async fn action_handler_faults_log_only_compiled_locations_and_static_causes() {
     database.cleanup().await;
 }
 
+/// A WASM handler declaration that reaches a build without the executor
+/// feature is refused by evaluation admission, typed and statelessly. The
+/// compiled model deserializes the backend tag, so the wire form a
+/// feature-built package produced is the honest way one can arrive here;
+/// authoring admission in this build already refuses to compile one.
+#[cfg(not(feature = "wasm"))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn wasm_handler_declaration_fails_typed_and_statelessly_without_the_executor() {
+    let _test_guard = HANDLER_TEST_LOCK.lock().await;
+    let (database, registry, identity) = setup().await;
+    let mut wire = serde_json::to_value(&*registry).unwrap();
+    let handler = &mut wire["actionInventory"]["actions"][0]["handler"];
+    assert_eq!(handler["kind"], "rhai");
+    handler["kind"] = json!("wasm");
+    handler["moduleSha256"] =
+        json!("sha256:0000000000000000000000000000000000000000000000000000000000000000");
+    let handler = handler.as_object_mut().unwrap();
+    handler.remove("rhaiVersion");
+    handler.remove("scriptSha256");
+    let wasm_registry: Arc<registry_breg::CompiledRegistry> =
+        Arc::new(serde_json::from_value(wire).unwrap());
+    let app = app(&database, wasm_registry.clone(), identity, None);
+    let before = counts(&database, &registry).await;
+    let mut canary = input("0123456789012");
+    canary["input"]["givenName"] = json!("private-input-canary");
+    let failed = send(
+        app,
+        "POST",
+        "/v1/actions/register-person",
+        "wasm-without-executor",
+        canary,
+        "person-registrar",
+    )
+    .await;
+    assert_eq!(failed.0, StatusCode::INTERNAL_SERVER_ERROR, "{}", failed.1);
+    assert_eq!(failed.1["code"], "action.handler_failed");
+    assert_eq!(
+        failed.1["detail"],
+        "The action handler could not produce an accepted result."
+    );
+    assert!(!failed.1.to_string().contains("private-input-canary"));
+    assert_eq!(before, counts(&database, &registry).await);
+    let audit_phases = database.admin.query_one(
+        "SELECT count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"attempt\"%'), count(*) FILTER (WHERE convert_from(envelope, 'UTF8') LIKE '%\"phase\":\"terminal\"%') FROM registry_internal.registry_audit", &[]).await.unwrap();
+    assert!(audit_phases.get::<_, i64>(0) >= 1);
+    assert_eq!(audit_phases.get::<_, i64>(1), 0);
+    database.cleanup().await;
+}
+
 fn app_with_fault(
     database: &TestDatabase,
     registry: Arc<registry_breg::CompiledRegistry>,

@@ -3,7 +3,9 @@
 //! One product-owned PostgreSQL transaction for a complete record mutation.
 
 mod action;
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) use action::erase_expired_action_evidence;
+pub(crate) use action::{HookProposalApplication, HookProposalOutcome};
 mod request;
 pub(crate) use request::{request_action_etag, RequestEvidencePreflight};
 
@@ -14,6 +16,7 @@ use std::time::Duration;
 use deadpool_postgres::Client;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::HookHandlerKind;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
@@ -44,8 +47,9 @@ use crate::history_commit::{
 use crate::history_context::{ChangeContext, CommitOrigin};
 use crate::idempotency::{
     insert_result, lock_and_load, resolve_action_binding, resolve_binding,
-    ActionIdempotencyBinding, HeldResponse, IdempotencyBinding, IdempotencyError,
-    PermittedResponseHeader, StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
+    resolve_hook_action_binding, resolve_hook_key_reference, ActionIdempotencyBinding,
+    HeldResponse, IdempotencyBinding, IdempotencyError, PermittedResponseHeader,
+    StoredResultMetadata, MAX_IMMEDIATE_ACTION_RESULTS,
 };
 use crate::model::{
     ActionRouteKind, CompiledAction, CompiledActionEffect, CompiledActionMutation,
@@ -53,7 +57,9 @@ use crate::model::{
     CompiledRegistry, CompiledRoute, CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile,
     HttpMethod,
 };
-use crate::outbox::{insert_configured_events, OutboxError, OutboxMutation};
+use crate::outbox::{
+    event_data_schemas, insert_configured_events, EnvelopeBinding, OutboxError, OutboxMutation,
+};
 use crate::postgres::{
     begin_action_transaction, begin_record_transaction, ActionClaimContext, ClaimContext,
     ExpectedRegistryIdentity, ImmediateActionLinkBinding, ImmediateActionLinkContext,
@@ -75,7 +81,7 @@ pub async fn install_mutation_schema(
     runtime_role: &SqlIdentifier,
 ) -> Result<(), MutationError> {
     migration
-        .batch_execute(&format!(
+        .batch_execute(
             "CREATE TABLE IF NOT EXISTS registry_internal.registry_revisions (
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_id uuid NOT NULL,
@@ -114,158 +120,17 @@ pub async fn install_mutation_schema(
                      (snapshot IS NULL) = (erased_at IS NOT NULL)
                  ),
                  ADD CONSTRAINT registry_revisions_mutation_kind_check
-                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'));
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_outbox (
-                 outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                 event_id uuid NOT NULL UNIQUE,
-                 event_type text NOT NULL CHECK (event_type <> ''),
-                 trigger text NOT NULL CHECK (trigger IN ('created', 'patched', 'tombstoned', 'request_lifecycle')),
-                 entity_id text NOT NULL CHECK (entity_id <> ''),
-                 record_reference text NOT NULL CHECK (record_reference <> ''),
-                 record_revision bigint NOT NULL CHECK (record_revision > 0),
-                 application_reference text CHECK (application_reference IS NULL OR application_reference <> ''),
-                 package_revision text NOT NULL CHECK (package_revision <> ''),
-                 schema_fingerprint text NOT NULL CHECK (schema_fingerprint <> ''),
-                 payload bytea
-                     CONSTRAINT registry_outbox_payload_bounds CHECK (
-                         payload IS NULL OR
-                         (octet_length(payload) > 0 AND octet_length(payload) <= 2097152)
-                     ),
-                 payload_expires_at timestamptz NOT NULL,
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 UNIQUE (event_id, package_revision, schema_fingerprint)
-             );
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_webhook_deliveries (
-                 event_id uuid NOT NULL,
-                 compiled_delivery_id text NOT NULL
-                     CHECK (compiled_delivery_id <> '' AND octet_length(compiled_delivery_id) <= 256),
-                 logical_destination_id text NOT NULL
-                     CHECK (logical_destination_id ~ '^[a-z][a-z0-9_-]{{0,63}}$'),
-                 destination_binding_digest text NOT NULL
-                     CHECK (destination_binding_digest ~ '^sha256:[0-9a-f]{{64}}$'),
-                 package_revision text NOT NULL
-                     CHECK (package_revision <> '' AND octet_length(package_revision) <= 256),
-                 schema_fingerprint text NOT NULL
-                     CHECK (schema_fingerprint <> '' AND octet_length(schema_fingerprint) <= 256),
-                 data_schema text NOT NULL
-                     CONSTRAINT registry_webhook_delivery_data_schema_bounds CHECK (
-                         data_schema <> '' AND octet_length(data_schema) <= 2048
-                     ),
-                 classification_ceiling text NOT NULL
-                     CHECK (classification_ceiling IN ('public', 'internal', 'restricted')),
-                 authentication_profile text NOT NULL
-                     CHECK (authentication_profile = 'hmac_sha256_v1'),
-                 delivery_mode text NOT NULL CHECK (delivery_mode = 'after_commit'),
-                 attempt_timeout_ms bigint NOT NULL
-                     CHECK (attempt_timeout_ms BETWEEN 100 AND 10000),
-                 initial_backoff_ms bigint NOT NULL
-                     CHECK (initial_backoff_ms BETWEEN 100 AND 3600000),
-                 maximum_backoff_ms bigint NOT NULL
-                     CHECK (maximum_backoff_ms BETWEEN initial_backoff_ms AND 3600000),
-                 exponential_backoff_multiplier smallint NOT NULL
-                     CHECK (exponential_backoff_multiplier = 2),
-                 maximum_attempts smallint NOT NULL
-                     CHECK (maximum_attempts BETWEEN 1 AND 20),
-                 retry_delays_ms bigint[] NOT NULL
-                     CHECK (
-                         cardinality(retry_delays_ms) = maximum_attempts - 1
-                         AND array_position(retry_delays_ms, NULL) IS NULL
-                         AND initial_backoff_ms <= ALL(retry_delays_ms)
-                         AND maximum_backoff_ms >= ALL(retry_delays_ms)
-                     ),
-                 maximum_payload_bytes bigint NOT NULL
-                     CHECK (maximum_payload_bytes BETWEEN 1 AND 1048576),
-                 payload_digest bytea NOT NULL CHECK (octet_length(payload_digest) = 32),
-                 deployed_attempt_timeout_ms bigint NOT NULL
-                     CHECK (deployed_attempt_timeout_ms BETWEEN 100 AND attempt_timeout_ms),
-                 deployed_maximum_attempts smallint NOT NULL
-                     CHECK (deployed_maximum_attempts BETWEEN 1 AND maximum_attempts),
-                 dead_letter text NOT NULL CHECK (dead_letter = 'required'),
-                 operator_replay boolean NOT NULL,
-                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (event_id, compiled_delivery_id),
-                 FOREIGN KEY (event_id, package_revision, schema_fingerprint)
-                     REFERENCES registry_internal.registry_outbox
-                         (event_id, package_revision, schema_fingerprint)
-                     ON DELETE RESTRICT
-             );
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_webhook_delivery_state (
-                 event_id uuid NOT NULL,
-                 compiled_delivery_id text NOT NULL
-                     CHECK (compiled_delivery_id <> '' AND octet_length(compiled_delivery_id) <= 256),
-                 generation bigint NOT NULL CHECK (generation > 0),
-                 state text NOT NULL
-                     CONSTRAINT registry_webhook_delivery_state_values CHECK (
-                         state IN ('pending', 'leased', 'delivered', 'dead_lettered', 'expired')
-                     ),
-                 attempt smallint NOT NULL CHECK (attempt BETWEEN 0 AND 20),
-                 next_attempt_at timestamptz,
-                 attempt_started_at timestamptz,
-                 lease_expires_at timestamptz,
-                 lease_token uuid,
-                 delivered_at timestamptz,
-                 dead_lettered_at timestamptz,
-                 expired_at timestamptz,
-                 updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
-                 PRIMARY KEY (event_id, compiled_delivery_id),
-                 FOREIGN KEY (event_id, compiled_delivery_id)
-                     REFERENCES registry_internal.registry_webhook_deliveries
-                         (event_id, compiled_delivery_id)
-                     ON DELETE RESTRICT,
-                 CONSTRAINT registry_webhook_delivery_state_shape CHECK (
-                     (state = 'pending'
-                         AND next_attempt_at IS NOT NULL
-                         AND attempt_started_at IS NULL
-                         AND lease_expires_at IS NULL
-                         AND lease_token IS NULL
-                         AND delivered_at IS NULL
-                         AND dead_lettered_at IS NULL
-                         AND expired_at IS NULL)
-                     OR (state = 'leased'
-                         AND attempt > 0
-                         AND next_attempt_at IS NULL
-                         AND attempt_started_at IS NOT NULL
-                         AND lease_expires_at > attempt_started_at
-                         AND lease_token IS NOT NULL
-                         AND delivered_at IS NULL
-                         AND dead_lettered_at IS NULL
-                         AND expired_at IS NULL)
-                     OR (state = 'delivered'
-                         AND attempt > 0
-                         AND next_attempt_at IS NULL
-                         AND attempt_started_at IS NULL
-                         AND lease_expires_at IS NULL
-                         AND lease_token IS NULL
-                         AND delivered_at IS NOT NULL
-                         AND dead_lettered_at IS NULL
-                         AND expired_at IS NULL)
-                     OR (state = 'dead_lettered'
-                         AND attempt > 0
-                         AND next_attempt_at IS NULL
-                         AND attempt_started_at IS NULL
-                         AND lease_expires_at IS NULL
-                         AND lease_token IS NULL
-                         AND delivered_at IS NULL
-                         AND dead_lettered_at IS NOT NULL)
-                     OR (state = 'expired'
-                         AND next_attempt_at IS NULL
-                         AND attempt_started_at IS NULL
-                         AND lease_expires_at IS NULL
-                         AND lease_token IS NULL
-                         AND delivered_at IS NULL
-                         AND dead_lettered_at IS NULL
-                         AND expired_at IS NOT NULL)
-                 )
-             );
-             CREATE INDEX IF NOT EXISTS registry_webhook_delivery_state_due_idx
-                 ON registry_internal.registry_webhook_delivery_state
-                     (next_attempt_at, event_id, compiled_delivery_id)
-                 WHERE state = 'pending';
-             CREATE INDEX IF NOT EXISTS registry_webhook_delivery_state_expired_idx
-                 ON registry_internal.registry_webhook_delivery_state
-                     (lease_expires_at, event_id, compiled_delivery_id)
-                 WHERE state = 'leased';
-             CREATE TABLE IF NOT EXISTS registry_internal.registry_audit (
+                 CHECK (mutation_kind IN ('create', 'patch', 'tombstone', 'migration'))",
+        )
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+    registry_platform_hooks::delivery_schema::install(migration, crate::webhook::DELIVERY_SCHEMA)
+        .await
+        .map_err(|_| MutationError::Unavailable)?;
+
+    migration
+        .batch_execute(&format!(
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_audit (
                  envelope_id text PRIMARY KEY CHECK (envelope_id <> ''),
                  record_hash bytea NOT NULL UNIQUE CHECK (octet_length(record_hash) = 32),
                  envelope bytea NOT NULL
@@ -341,6 +206,9 @@ pub async fn install_mutation_schema(
                      CHECK (action_contract_fingerprint ~ '^sha256:[0-9a-f]{{64}}$'),
                  package_revision text NOT NULL CHECK (package_revision <> ''),
                  principal_reference text NOT NULL CHECK (principal_reference <> ''),
+                 handler_answer_digest bytea
+                     CONSTRAINT registry_action_application_answer_digest_bounds
+                     CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32),
                  result_count smallint NOT NULL CHECK (result_count >= 0 AND result_count <= {MAX_IMMEDIATE_ACTION_RESULTS}),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
@@ -376,6 +244,21 @@ pub async fn install_mutation_schema(
                  ADD COLUMN IF NOT EXISTS proposal_version bigint CHECK (proposal_version > 0);
              ALTER TABLE registry_internal.registry_idempotency
                  ADD COLUMN IF NOT EXISTS erased_at timestamptz;
+             ALTER TABLE registry_internal.registry_immediate_action_applications
+                 ADD COLUMN IF NOT EXISTS handler_answer_digest bytea;
+             DO $registry_handler_answer_digest_upgrade$
+             BEGIN
+                 IF NOT EXISTS (
+                     SELECT 1 FROM pg_catalog.pg_constraint
+                      WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                        AND conname = 'registry_action_application_answer_digest_bounds'
+                 ) THEN
+                     ALTER TABLE registry_internal.registry_immediate_action_applications
+                         ADD CONSTRAINT registry_action_application_answer_digest_bounds
+                         CHECK (handler_answer_digest IS NULL OR octet_length(handler_answer_digest) = 32);
+                 END IF;
+             END
+             $registry_handler_answer_digest_upgrade$;
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_count_check;
              ALTER TABLE registry_internal.registry_idempotency
@@ -430,29 +313,11 @@ pub async fn install_mutation_schema(
         .await
         .map_err(|_| MutationError::Unavailable)?;
     // `CREATE TABLE IF NOT EXISTS` does not evolve databases activated by an
-    // earlier Base Registry Engine build. Legacy outbox rows receive the
-    // conservative seven-day default from their original capture time. A
-    // legacy webhook row has no V1 data-schema binding, so it cannot safely be
-    // reinterpreted as a V1 delivery and requires explicit operator migration.
-    // Keep this upgrade idempotent so package activation cannot leave the
-    // runtime expecting a column or nullability contract the durable outbox
-    // does not have.
+    // earlier Base Registry Engine build, so the idempotency result
+    // constraints are installed under explicit existence guards.
     migration
         .batch_execute(&format!(
-            "ALTER TABLE registry_internal.registry_outbox
-                 ADD COLUMN IF NOT EXISTS payload_expires_at timestamptz;
-             ALTER TABLE registry_internal.registry_outbox
-                 ADD COLUMN IF NOT EXISTS application_reference text
-                     CHECK (application_reference IS NULL OR application_reference <> '');
-             ALTER TABLE registry_internal.registry_outbox
-                 DROP CONSTRAINT IF EXISTS registry_outbox_trigger_check;
-             ALTER TABLE registry_internal.registry_outbox
-                 ADD CONSTRAINT registry_outbox_trigger_check
-                     CHECK (trigger IN ('created', 'patched', 'tombstoned', 'request_lifecycle'));
-             UPDATE registry_internal.registry_outbox
-                SET payload_expires_at = created_at + interval '7 days'
-              WHERE payload_expires_at IS NULL;
-             ALTER TABLE registry_internal.registry_idempotency
+            "ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_check;
              ALTER TABLE registry_internal.registry_idempotency
                  DROP CONSTRAINT IF EXISTS registry_idempotency_result_kind_values;
@@ -500,169 +365,7 @@ pub async fn install_mutation_schema(
                          );
                  END IF;
              END
-             $registry_idempotency_upgrade$;
-             DO $registry_outbox_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid = 'registry_internal.registry_outbox'::regclass
-                        AND attname = 'payload' AND attnotnull
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_outbox
-                         ALTER COLUMN payload DROP NOT NULL;
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_outbox'::regclass
-                        AND conname = 'registry_outbox_payload_check'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_outbox
-                         DROP CONSTRAINT registry_outbox_payload_check;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid = 'registry_internal.registry_outbox'::regclass
-                        AND conname = 'registry_outbox_payload_bounds'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_outbox
-                         ADD CONSTRAINT registry_outbox_payload_bounds CHECK (
-                             payload IS NULL OR
-                             (octet_length(payload) > 0 AND octet_length(payload) <= 2097152)
-                         );
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid = 'registry_internal.registry_outbox'::regclass
-                        AND attname = 'payload_expires_at' AND NOT attnotnull
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_outbox
-                         ALTER COLUMN payload_expires_at SET NOT NULL;
-                 END IF;
-             END
-             $registry_outbox_upgrade$;
-             ALTER TABLE registry_internal.registry_webhook_deliveries
-                 ADD COLUMN IF NOT EXISTS data_schema text;
-             DO $registry_webhook_delivery_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1
-                       FROM registry_internal.registry_webhook_deliveries
-                      WHERE data_schema IS NULL
-                 ) THEN
-                     RAISE EXCEPTION USING
-                         MESSAGE = 'pre-V1 webhook history requires explicit operator migration';
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_attribute
-                      WHERE attrelid =
-                            'registry_internal.registry_webhook_deliveries'::regclass
-                        AND attname = 'data_schema' AND NOT attnotnull
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_deliveries
-                         ALTER COLUMN data_schema SET NOT NULL;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            'registry_internal.registry_webhook_deliveries'::regclass
-                        AND conname = 'registry_webhook_delivery_data_schema_bounds'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_deliveries
-                         ADD CONSTRAINT registry_webhook_delivery_data_schema_bounds CHECK (
-                             data_schema <> '' AND octet_length(data_schema) <= 2048
-                         );
-                 END IF;
-             END
-             $registry_webhook_delivery_upgrade$;
-             ALTER TABLE registry_internal.registry_webhook_delivery_state
-                 ADD COLUMN IF NOT EXISTS expired_at timestamptz;
-             DO $registry_webhook_state_upgrade$
-             BEGIN
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            'registry_internal.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_state_check'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_delivery_state
-                         DROP CONSTRAINT registry_webhook_delivery_state_state_check;
-                 END IF;
-                 IF EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            'registry_internal.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_check'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_delivery_state
-                         DROP CONSTRAINT registry_webhook_delivery_state_check;
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            'registry_internal.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_values'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_values CHECK (
-                             state IN (
-                                 'pending', 'leased', 'delivered', 'dead_lettered', 'expired'
-                             )
-                         );
-                 END IF;
-                 IF NOT EXISTS (
-                     SELECT 1 FROM pg_catalog.pg_constraint
-                      WHERE conrelid =
-                            'registry_internal.registry_webhook_delivery_state'::regclass
-                        AND conname = 'registry_webhook_delivery_state_shape'
-                 ) THEN
-                     ALTER TABLE registry_internal.registry_webhook_delivery_state
-                         ADD CONSTRAINT registry_webhook_delivery_state_shape CHECK (
-                             (state = 'pending'
-                                 AND next_attempt_at IS NOT NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'leased'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NOT NULL
-                                 AND lease_expires_at > attempt_started_at
-                                 AND lease_token IS NOT NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'delivered'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NOT NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NULL)
-                             OR (state = 'dead_lettered'
-                                 AND attempt > 0
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NOT NULL)
-                             OR (state = 'expired'
-                                 AND next_attempt_at IS NULL
-                                 AND attempt_started_at IS NULL
-                                 AND lease_expires_at IS NULL
-                                 AND lease_token IS NULL
-                                 AND delivered_at IS NULL
-                                 AND dead_lettered_at IS NULL
-                                 AND expired_at IS NOT NULL)
-                         );
-                 END IF;
-             END
-             $registry_webhook_state_upgrade$;",
+             $registry_idempotency_upgrade$;",
         ))
         .await
         .map_err(|_| MutationError::Unavailable)?;
@@ -915,13 +618,19 @@ fn exact_entity_event_deliveries(
     let mut delivered_events = BTreeSet::new();
     for delivery in &deliveries {
         let event = entity
-            .events
+            .hooks
             .get(&delivery.event_id)
             .ok_or(MutationError::InvalidRequest)?;
-        let webhook = event
-            .webhook
-            .as_ref()
-            .ok_or(MutationError::InvalidRequest)?;
+        let (expected_destination_id, expected_handler_kind) = match event.handler.as_ref() {
+            Some(crate::contract::HookHandlerSource::Url { destination_id }) => {
+                (Some(destination_id.as_str()), HookHandlerKind::Url)
+            }
+            // A local kind carries a reviewed program instead of a bound
+            // destination, so the delivery row must carry the declared kind
+            // and no destination at all.
+            Some(handler) => (None, handler.kind()),
+            None => return Err(MutationError::InvalidRequest),
+        };
         let expected_projection = event.projection.iter().cloned().collect::<Vec<_>>();
         let classification_ceiling = event
             .projection
@@ -937,7 +646,8 @@ fn exact_entity_event_deliveries(
             || !delivered_events.insert(delivery.event_id.as_str())
             || delivery.id != format!("events.{}.{}.webhook", entity.id, event.id)
             || delivery.trigger != event.trigger
-            || delivery.destination_id != webhook.destination_id
+            || delivery.destination_id.as_deref() != expected_destination_id
+            || delivery.handler_kind() != expected_handler_kind
             || delivery.projection_fields != expected_projection
             || delivery.when != event.when
             || delivery.classification_ceiling != classification_ceiling
@@ -962,22 +672,22 @@ fn exact_entity_event_deliveries(
             || delivery.dead_letter != crate::contract::WebhookDeadLetterMode::Required
             || !delivery.operator_replay
             || Some(delivery.maximum_payload_bytes)
-                != expected_maximum_event_payload_bytes(entity, event)
+                != expected_maximum_event_payload_bytes(registry.registry_id(), entity, event)
         {
             return Err(MutationError::InvalidRequest);
         }
     }
     if entity
-        .events
+        .hooks
         .values()
-        .any(|event| event.webhook.is_some() && !delivered_events.contains(event.id.as_str()))
+        .any(|event| event.handler.is_some() && !delivered_events.contains(event.id.as_str()))
     {
         return Err(MutationError::InvalidRequest);
     }
     Ok(deliveries)
 }
 
-fn event_condition_fields(event: &crate::contract::EventSource) -> impl Iterator<Item = &String> {
+fn event_condition_fields(event: &crate::contract::HookSource) -> impl Iterator<Item = &String> {
     let mut fields = BTreeSet::new();
     if let Some(crate::contract::EventConditionSource::Fields {
         changed,
@@ -993,10 +703,11 @@ fn event_condition_fields(event: &crate::contract::EventSource) -> impl Iterator
 }
 
 fn expected_maximum_event_payload_bytes(
+    registry_id: &str,
     entity: &CompiledEntity,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Option<u32> {
-    crate::compiler::maximum_compiled_event_payload_bytes(entity, event)
+    crate::compiler::maximum_compiled_event_payload_bytes(registry_id, entity, event)
 }
 
 fn expected_retry_delays(initial_ms: u32, maximum_ms: u32, maximum_attempts: u8) -> Vec<u32> {
@@ -1090,6 +801,11 @@ pub struct MutationCoordinator {
 }
 
 impl MutationCoordinator {
+    /// The event source this deployment stamps on every captured envelope.
+    fn event_source(&self) -> String {
+        crate::webhook::delivery_source(&self.expected.package_id, &self.expected.instance_id)
+    }
+
     #[must_use]
     pub fn new(
         lock_key: RegistryLockKey,
@@ -1706,13 +1422,21 @@ impl MutationCoordinator {
         )
         .await?;
         fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+        let trigger = mutation_trigger(request.plan.route.operation);
+        let data_schemas = event_data_schemas(
+            &request.plan.registry_id,
+            &request.plan.entity,
+            trigger,
+            &request.plan.event_deliveries,
+        )?;
+        let event_source = self.event_source();
         insert_configured_events(
             transaction.transaction(),
-            &request.plan.entity.events,
+            &request.plan.entity.hooks,
             &request.plan.event_deliveries,
             self.event_destinations.as_deref(),
             OutboxMutation {
-                trigger: mutation_trigger(request.plan.route.operation),
+                trigger,
                 application_reference: None,
                 entity_id: &request.plan.entity.id,
                 record_id: &current.record_id,
@@ -1729,6 +1453,11 @@ impl MutationCoordinator {
                     .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                         destinations.payload_retention()
                     }),
+                envelope: EnvelopeBinding {
+                    source: &event_source,
+                    data_schemas: &data_schemas,
+                    causation: None,
+                },
             },
         )
         .await?;
@@ -1950,13 +1679,21 @@ impl MutationCoordinator {
                 request_receipt_links.push((current.record_uuid, version));
             }
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+            let trigger = mutation_trigger(item_plan.route.operation);
+            let data_schemas = event_data_schemas(
+                &item_plan.registry_id,
+                &item_plan.entity,
+                trigger,
+                &item_plan.event_deliveries,
+            )?;
+            let event_source = self.event_source();
             insert_configured_events(
                 transaction.transaction(),
-                &item_plan.entity.events,
+                &item_plan.entity.hooks,
                 &item_plan.event_deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {
-                    trigger: mutation_trigger(item_plan.route.operation),
+                    trigger,
                     application_reference: None,
                     entity_id: &item_plan.entity.id,
                     record_id: &current.record_id,
@@ -1972,6 +1709,11 @@ impl MutationCoordinator {
                         .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                             destinations.payload_retention()
                         }),
+                    envelope: EnvelopeBinding {
+                        source: &event_source,
+                        data_schemas: &data_schemas,
+                        causation: None,
+                    },
                 },
             )
             .await?;

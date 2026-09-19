@@ -778,6 +778,11 @@ class GateInventoryTest(unittest.TestCase):
                 "Base Registry Engine product contract gate",
             ),
             (
+                "breg-wasm:",
+                "breg-wasm-disabled:",
+                "Base Registry Engine WASM executor gate",
+            ),
+            (
                 "run: products/breg/scripts/check-contracts.sh",
                 "run: true # Base Registry Engine contracts disabled",
                 "Base Registry Engine contract consistency",
@@ -804,7 +809,10 @@ class GateInventoryTest(unittest.TestCase):
             ),
         ):
             with self.subTest(gate=gate):
-                text = self.workflow.replace(snippet, replacement, 1)
+                # Replace every occurrence: the PostGIS digest is pinned by
+                # both breg-contracts and breg-wasm, and the gate is missing
+                # only when no pin survives.
+                text = self.workflow.replace(snippet, replacement)
                 self.assertIn(gate, self.module.missing_gates(text))
 
     def test_missing_casework_workflow_gates_are_reported(self) -> None:

@@ -1136,7 +1136,7 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
         // A hook is the one authored shape that always fails the check: this
         // milestone has no engine, so accepting it would be a silent no-op.
         let hooked = format!(
-            "{POLICY}hooks:\n  - {{id: h, abi: registry.scheduling-hook/v1, because: test}}\n"
+            "{POLICY}hooks:\n  - id: appointment-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: []\n    handler:\n      kind: url\n      destinationId: appointment-events\n"
         );
         std::fs::write(package.join(AUTHORED_POLICY_FILE), hooked).unwrap();
         let operator = write_operator(

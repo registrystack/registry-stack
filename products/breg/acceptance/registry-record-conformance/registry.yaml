@@ -64,7 +64,7 @@ manifestProjection:
 modules:
   - id: registry-record-conformance-core
     version: 0.1.0
-    digest: sha256:394ffc4e9edf95cc4e70bba22701393d0667297283f56219512acd4ef4bfc71d
+    digest: "sha256:d5e21bd9cdbfcf9ac76fbb8278030c1cafac8f8f412d1a49cc9d480007a85d4c"
 accessProfiles:
   - id: public-reader
     default: true

@@ -46,7 +46,7 @@ Accepted values list the union across variants; constraints separated by `or` ar
 A schema default applies only where that variant declares it. `Not specified` does not mean
 that every value is accepted.
 
-For example, `events[].when.afterEquals.*` holds a comparison value for a field you name.
+For example, `hooks[].when.afterEquals.*` holds a comparison value for a field you name.
 The schema permits a scalar or null; the compiler also checks that the value matches the
 declared field type and that the condition is valid for the event trigger.
 

@@ -228,11 +228,16 @@ mod tests {
         let assets: Vec<_> = project
             .actions
             .iter()
-            .filter_map(|action| action.handler.as_ref())
-            .map(|handler| ModuleAssetSource {
+            .filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .and_then(|handler| handler.script().map(str::to_owned))
+            })
+            .map(|script| ModuleAssetSource {
                 module: None,
-                path: handler.script.clone(),
-                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+                bytes: std::fs::read(root.join(&script)).unwrap(),
+                path: script,
             })
             .collect();
         let compiled =
@@ -352,11 +357,16 @@ mod tests {
         let mut assets: Vec<_> = project
             .actions
             .iter()
-            .filter_map(|action| action.handler.as_ref())
-            .map(|handler| ModuleAssetSource {
+            .filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .and_then(|handler| handler.script().map(str::to_owned))
+            })
+            .map(|script| ModuleAssetSource {
                 module: None,
-                path: handler.script.clone(),
-                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+                bytes: std::fs::read(root.join(&script)).unwrap(),
+                path: script,
             })
             .collect();
         assets.push(ModuleAssetSource {

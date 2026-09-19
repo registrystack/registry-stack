@@ -251,7 +251,7 @@ class CiChangesTest(unittest.TestCase):
             "discovery-contracts",
             "relay-v2-contracts",
             "breg-contracts",
-            "scheduling-contracts",
+            "breg-wasm",
             "evidence-tutorials",
             "docs",
             "client-bindings",
@@ -275,6 +275,9 @@ class CiChangesTest(unittest.TestCase):
             "casework-postgres": "needs.changes.outputs.casework_postgres == 'true'",
             "scheduling-postgres": (
                 "needs.changes.outputs.scheduling_postgres == 'true'"
+            ),
+            "scheduling-contracts": (
+                "needs.changes.outputs.scheduling_contracts == 'true'"
             ),
             "platform-fuzz": "needs.changes.outputs.platform == 'true'",
             "platform-coverage": "needs.changes.outputs.platform == 'true'",
@@ -337,6 +340,7 @@ class CiChangesTest(unittest.TestCase):
             "relay-v2-contracts",
             "relay-client-contracts",
             "breg-contracts",
+            "breg-wasm",
             "identifiers",
             "rust-result",
             "casework-postgres",
@@ -372,6 +376,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-v2-contracts",
                 "relay-client-contracts",
                 "breg-contracts",
+                "breg-wasm",
                 "identifiers",
                 "casework-postgres",
                 "scheduling-postgres",
@@ -396,6 +401,7 @@ class CiChangesTest(unittest.TestCase):
                 "relay-v2-contracts",
                 "relay-client-contracts",
                 "breg-contracts",
+                "breg-wasm",
                 "identifiers",
                 "casework-postgres",
                 "scheduling-postgres",
@@ -455,7 +461,7 @@ class CiChangesTest(unittest.TestCase):
             final_needs,
             previous_final_needs.difference({"rust-result"}).union(rust_needs),
         )
-        self.assertEqual(30, len(final_needs))
+        self.assertEqual(31, len(final_needs))
 
         def embedded_python(job: dict[str, Any]) -> str:
             run = job["steps"][0]["run"]

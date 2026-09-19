@@ -1479,11 +1479,16 @@ fn fixture_tooling_handler_refusals_and_negative_inputs_use_the_compiled_contrac
     let assets = project
         .actions
         .iter()
-        .filter_map(|action| action.handler.as_ref())
-        .map(|handler| registry_breg::contract::ModuleAssetSource {
-            module: None,
-            path: handler.script.clone(),
-            bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+        .filter_map(|action| {
+            action
+                .handler
+                .as_ref()
+                .and_then(|handler| handler.script().map(str::to_owned))
+                .map(|script| registry_breg::contract::ModuleAssetSource {
+                    module: None,
+                    path: script.clone(),
+                    bytes: std::fs::read(root.join(&script)).unwrap(),
+                })
         })
         .collect::<Vec<_>>();
     let registry = registry_breg::compiler::compile_project_with_assets(

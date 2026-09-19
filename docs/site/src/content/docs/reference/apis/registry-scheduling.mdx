@@ -144,10 +144,11 @@ Every Scheduling problem response carries one `code` from this closed catalogue,
 the HTTP status listed beside it.
 
 Two codes are reserved: `eligibility.unavailable` and `hook.unavailable` are defined, titled, and
-status-pinned because the reserved lifecycle-hook ABI `registry.scheduling-hook/v1` will produce them,
-and no path in this milestone answers them yet.
+status-pinned for future synchronous decision paths, and no path in this milestone answers them yet.
+The authored policy accepts the shared `registry-platform-hooks` declaration shape for validation,
+but a non-empty hook list is refused because Scheduling has no hook execution contract in this milestone.
 
-{/* Evidence: crates/registry-scheduling-core/src/problem.rs, ProblemCode;
+{/* Evidence: crates/registry-scheduling-core/src/{policy,problem}.rs, SchedulingPolicy::check() and ProblemCode;
     products/scheduling/generated/registry-scheduling.openapi.json,
     x-registry-scheduling-reserved-problems. */}
 

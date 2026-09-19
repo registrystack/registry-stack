@@ -186,11 +186,15 @@ enum ArtifactCommand {
 #[derive(Debug)]
 struct SafeCliFailure {
     operational: bool,
-    code: &'static str,
+    code: String,
     artifact: String,
     path: String,
     message: String,
     suggested_action: String,
+    /// The operational failure chain, carried in both formats so a machine
+    /// reader learns the same cause the human renderer prints. Authored-value
+    /// refusals keep `None`: their detail is not reviewed for disclosure.
+    cause: Option<String>,
 }
 
 impl std::fmt::Display for SafeCliFailure {
@@ -218,6 +222,10 @@ pub fn command() -> clap::Command {
 pub fn main_entry() -> ExitCode {
     let arguments = normalized_process_args();
     let requested_format = requested_output_format(&arguments);
+    if requested_format == OutputFormat::Json && help_requested(&arguments) {
+        write_json_help();
+        return ExitCode::SUCCESS;
+    }
     let cli = match Cli::try_parse_from(arguments) {
         Ok(cli) => cli,
         Err(error)
@@ -309,9 +317,9 @@ pub fn main_entry() -> ExitCode {
             )
         }
         Command::Client(command) => client::run(command),
-        Command::Access(command) => access::run(command),
-        Command::Keygen(command) => keygen::run(command),
-        Command::Jwks(args) => jwks::run(args),
+        Command::Access(command) => access::run(command, format),
+        Command::Keygen(command) => keygen::run(command, format),
+        Command::Jwks(args) => jwks::run(args, format),
         Command::New(args) => scaffold::run_with_format(args, format),
         Command::Build(args) => build::run_with_format(args, format),
         Command::Fixtures(fixtures::FixturesCommand::Run(mut args)) => {
@@ -338,8 +346,8 @@ pub fn main_entry() -> ExitCode {
         Command::Dev(args) => safe_dev_command(dev::run_with_format(args, format)),
         Command::Request(command) => request::run(command),
         Command::Verify(args) => verify::run(args),
-        Command::Audit(command) => audit_view::run(command),
-        Command::Tooling(command) => tooling::run(command),
+        Command::Audit(command) => audit_view::run(command, format),
+        Command::Tooling(command) => tooling::run(command, format),
         Command::DevSupervisor(args) => dev::run_supervisor(args),
     };
     match result {
@@ -348,6 +356,10 @@ pub fn main_entry() -> ExitCode {
             if let Some(failure) = error.downcast_ref::<SafeCliFailure>() {
                 write_safe_failure(failure, format);
                 return ExitCode::from(if failure.operational { 3 } else { 1 });
+            }
+            if let Some(unknown) = error.downcast_ref::<suggest::UnknownSelectionPointer>() {
+                write_unknown_selection_failure(unknown, format);
+                return ExitCode::from(1);
             }
             let operational = error
                 .chain()
@@ -375,6 +387,7 @@ pub fn main_entry() -> ExitCode {
                             "artifact": "evidencectl",
                             "path": "$",
                             "message": safe_message,
+                            "cause": detail,
                             "suggestedAction": "Correct the reported problem and retry the command."
                         }]
                     })
@@ -383,6 +396,54 @@ pub fn main_entry() -> ExitCode {
             ExitCode::from(exit)
         }
     }
+}
+
+/// Whether the operator asked for the command tree rather than an operation.
+/// `--help` and `-h` are recognized in any position, matching clap's own
+/// help flags. A bare `help` token only counts in the subcommand position,
+/// reached by skipping past the global `--format` flag when it comes first,
+/// so `help --format json` and `--format json help` render the catalog while
+/// a value spelled "help" carried by a later argument, such as the client id
+/// in `access client revoke help`, is never mistaken for a help request.
+fn help_requested(arguments: &[OsString]) -> bool {
+    if arguments
+        .iter()
+        .skip(1)
+        .any(|argument| argument == "--help" || argument == "-h")
+    {
+        return true;
+    }
+    let mut index = 1;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--format" {
+            index += 2;
+            continue;
+        }
+        if argument
+            .to_str()
+            .is_some_and(|value| value.starts_with("--format="))
+        {
+            index += 1;
+            continue;
+        }
+        return argument == "help";
+    }
+    false
+}
+
+/// Render the machine-readable command tree `--format json` help publishes,
+/// using the same walker as the offline CLI reference catalog.
+fn write_json_help() {
+    let catalog = registry_cli_reference::binary_catalog(
+        command(),
+        registry_platform_buildinfo::DISPLAY_VERSION,
+        None,
+    );
+    println!(
+        "{}",
+        serde_json::to_string(&catalog).expect("the command catalog serializes")
+    );
 }
 
 fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
@@ -405,30 +466,30 @@ fn requested_output_format(arguments: &[OsString]) -> OutputFormat {
 fn unsupported_json_command(command: &Command) -> Option<&'static str> {
     match command {
         Command::Client(_) => Some("client"),
-        Command::Access(_) => Some("access"),
-        Command::Keygen(_) => Some("keygen"),
-        Command::Jwks(_) => Some("jwks"),
         Command::Source(
-            source_cli::SourceCommand::Suggest(_)
-            | source_cli::SourceCommand::Mock(_)
-            | source_cli::SourceCommand::Detach(_),
+            source_cli::SourceCommand::Mock(_) | source_cli::SourceCommand::Detach(_),
         ) => Some("source"),
         Command::Target(target::TargetCommand::New(_)) => Some("target new"),
         Command::Request(_) => Some("request"),
         Command::Verify(_) => Some("verify"),
-        Command::Audit(_) => Some("audit"),
-        Command::Tooling(_) => Some("tooling"),
+        Command::Tooling(tooling::ToolingCommand::LanguageServer) => {
+            Some("tooling language-server")
+        }
         Command::DevSupervisor(_) => Some("__dev-supervisor"),
         Command::Init(_)
         | Command::Check(_)
         | Command::Explain(_)
         | Command::Test(_)
         | Command::Package(_)
+        | Command::Access(_)
+        | Command::Keygen(_)
+        | Command::Jwks(_)
         | Command::New(_)
         | Command::Build(_)
         | Command::Fixtures(_)
         | Command::Source(
             source_cli::SourceCommand::Add(_)
+            | source_cli::SourceCommand::Suggest(_)
             | source_cli::SourceCommand::Diff(_)
             | source_cli::SourceCommand::Import(_)
             | source_cli::SourceCommand::Update(_),
@@ -436,7 +497,9 @@ fn unsupported_json_command(command: &Command) -> Option<&'static str> {
         | Command::Target(target::TargetCommand::Explain(_))
         | Command::Doctor(_)
         | Command::Artifact(_)
-        | Command::Dev(_) => None,
+        | Command::Dev(_)
+        | Command::Audit(_)
+        | Command::Tooling(tooling::ToolingCommand::Editor(_)) => None,
     }
 }
 
@@ -509,11 +572,12 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.to_owned(),
                 artifact: "deployment_target".to_owned(),
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.to_owned(),
                 suggested_action: suggested_action.to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -523,11 +587,12 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.clone(),
                 artifact,
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
                 suggested_action: suggested_action.to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -537,11 +602,12 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: false,
-                code: diagnostic.code,
+                code: diagnostic.code.to_owned(),
                 artifact: diagnostic.artifact.clone(),
                 path: diagnostic.path.clone(),
                 message: diagnostic.message.clone(),
                 suggested_action: diagnostic.suggested_action.clone(),
+                cause: None,
             }
             .into();
         }
@@ -551,7 +617,7 @@ fn safe_command(
         {
             return SafeCliFailure {
                 operational: true,
-                code: "evidence.doctor.runtime-check-unavailable",
+                code: "evidence.doctor.runtime-check-unavailable".to_owned(),
                 artifact: diagnostic.artifact.clone(),
                 path: "$".to_owned(),
                 message: "The delegated Evidence runtime check did not complete within its execution bounds."
@@ -559,6 +625,7 @@ fn safe_command(
                 suggested_action:
                     "Confirm the matching Evidence runtime can finish its check without exceeding the time or output limit, then rerun doctor."
                         .to_owned(),
+                cause: None,
             }
             .into();
         }
@@ -567,7 +634,7 @@ fn safe_command(
             .any(|cause| cause.downcast_ref::<std::io::Error>().is_some());
         SafeCliFailure {
             operational,
-            code,
+            code: code.to_owned(),
             artifact,
             path: "$".to_owned(),
             message: message.to_owned(),
@@ -576,6 +643,7 @@ fn safe_command(
             } else {
                 suggested_action.to_owned()
             },
+            cause: operational.then(|| format!("{error:#}")),
         }
         .into()
     })
@@ -584,14 +652,29 @@ fn safe_command(
 fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode> {
     match result {
         Err(error) => {
+            if let Some(refusal) = error.downcast_ref::<dev::DevRefusal>() {
+                return Err(SafeCliFailure {
+                    operational: refusal.operational,
+                    code: refusal.code.to_owned(),
+                    artifact: "local development project".to_owned(),
+                    path: refusal.path.clone(),
+                    message: refusal.message.clone(),
+                    suggested_action: refusal.suggested_action.clone(),
+                    // The typed message is the cause; there is no separate
+                    // failure chain to disclose.
+                    cause: None,
+                }
+                .into());
+            }
             if let Some(failure) = error.downcast_ref::<dev::DevStartFailure>() {
                 return Err(SafeCliFailure {
                     operational: true,
-                    code: "evidence.dev.start-failed",
+                    code: "evidence.dev.start-failed".to_owned(),
                     artifact: "local development session".to_owned(),
                     path: "logs".to_owned(),
                     message: "The local Evidence services failed before reaching readiness."
                         .to_owned(),
+                    cause: None,
                     suggested_action: format!(
                         "Inspect the preserved startup logs at {}, correct the failed dependency, and retry dev start.",
                         failure.logs.display()
@@ -602,13 +685,14 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             if let Some(conflict) = error.downcast_ref::<dev::PortConflict>() {
                 return Err(SafeCliFailure {
                     operational: true,
-                    code: "evidence.dev.port-unavailable",
+                    code: "evidence.dev.port-unavailable".to_owned(),
                     artifact: format!("127.0.0.1:{}", conflict.port),
                     path: "$".to_owned(),
                     message: format!(
                         "Local port {} is already in use, so the local {} cannot start.",
                         conflict.port, conflict.service
                     ),
+                    cause: None,
                     suggested_action: format!(
                         "Free 127.0.0.1:{}, or rerun dev start with {} <port>.",
                         conflict.port, conflict.flag
@@ -622,10 +706,11 @@ fn safe_dev_command(result: anyhow::Result<ExitCode>) -> anyhow::Result<ExitCode
             {
                 return Err(SafeCliFailure {
                     operational: false,
-                    code: "evidence.dev.mint-retired",
+                    code: "evidence.dev.mint-retired".to_owned(),
                     artifact: "local development command".to_owned(),
                     path: "$".to_owned(),
                     message: "Registry Mint development flags were removed.".to_owned(),
+                    cause: None,
                     suggested_action: "Stop any retained Mint session with its matching older evidencectl, then start a fresh session with --issuer-port and the pinned local issuer.".to_owned(),
                 }
                 .into());
@@ -649,24 +734,81 @@ fn write_safe_failure(failure: &SafeCliFailure, format: OutputFormat) {
     }
 }
 
+/// Render one refusal for an unknown `source suggest --select` pointer. The
+/// human listing stays the plain refusal it has always been; the JSON
+/// diagnostic carries the valid pointers as a machine-readable sibling.
+fn write_unknown_selection_failure(
+    unknown: &suggest::UnknownSelectionPointer,
+    format: OutputFormat,
+) {
+    match format {
+        OutputFormat::Human => eprintln!("evidencectl: {unknown}"),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({
+                "status": "domain-refusal",
+                "diagnostics": [{
+                    "severity": "error",
+                    "code": "evidencectl.source.select-unknown",
+                    "artifact": "source suggest",
+                    "path": "$.select",
+                    "message": format!("`--select {}` names nothing in this response schema.", unknown.pointer()),
+                    "suggestedAction": "Rerun with one of the pointers in availablePointers, or pass --list-pointers to print them.",
+                    "availablePointers": unknown.available_pointers(),
+                }]
+            })
+        ),
+    }
+}
+
+/// The envelope every successful `--format json` command report shares, with
+/// the command's own members merged in.
+pub(crate) fn command_report(command: &str, members: serde_json::Value) -> serde_json::Value {
+    let mut report = serde_json::json!({
+        "command": command,
+        "ok": true,
+        "status": "complete",
+    });
+    if let (Some(envelope), Some(extra)) = (report.as_object_mut(), members.as_object()) {
+        for (key, value) in extra {
+            envelope.insert(key.clone(), value.clone());
+        }
+    }
+    report
+}
+
 fn safe_failure_human(failure: &SafeCliFailure) -> String {
+    let cause = failure
+        .cause
+        .as_deref()
+        .map(|cause| format!("\n  cause: {cause}"))
+        .unwrap_or_default();
     format!(
-        "error[{}] {} {}: {}\n  next: {}\n",
-        failure.code, failure.artifact, failure.path, failure.message, failure.suggested_action
+        "error[{}] {} {}: {}\n  next: {}{}\n",
+        failure.code,
+        failure.artifact,
+        failure.path,
+        failure.message,
+        failure.suggested_action,
+        cause
     )
 }
 
 fn safe_failure_json(failure: &SafeCliFailure) -> serde_json::Value {
+    let mut diagnostic = serde_json::json!({
+        "severity": "error",
+        "code": failure.code,
+        "artifact": failure.artifact,
+        "path": failure.path,
+        "message": failure.message,
+        "suggestedAction": failure.suggested_action,
+    });
+    if let Some(cause) = &failure.cause {
+        diagnostic["cause"] = serde_json::Value::String(cause.clone());
+    }
     serde_json::json!({
         "status": if failure.operational { "operational-failure" } else { "domain-refusal" },
-        "diagnostics": [{
-            "severity": "error",
-            "code": failure.code,
-            "artifact": failure.artifact,
-            "path": failure.path,
-            "message": failure.message,
-            "suggestedAction": failure.suggested_action,
-        }]
+        "diagnostics": [diagnostic],
     })
 }
 
@@ -721,6 +863,7 @@ fn run_check_command(args: CheckArgs, format: OutputFormat) -> anyhow::Result<Ex
             Ok(denied) => {
                 let report = serde_json::json!({
                     "command": "check",
+                    "ok": false,
                     "status": "refused",
                     "proof": "none",
                     "project": project,
@@ -745,6 +888,7 @@ fn run_explain_command(args: ExplainArgs, format: OutputFormat) -> anyhow::Resul
             Ok(denied) => {
                 let report = serde_json::json!({
                     "command": "explain",
+                    "ok": false,
                     "status": "refused",
                     "proof": "none",
                     "project": project,
@@ -808,9 +952,22 @@ mod tests {
             Cli::try_parse_from(["evidencectl", "dev", "stop", "--project", "project",]).is_ok()
         );
 
+        // The bare-form compatibility flags stay parseable beside an action
+        // subcommand so `run_with_format` can refuse them while naming both
+        // the flags and the spelling that owns them; a parse-level conflict
+        // would collapse into the generic usage failure that names neither.
         let mixed_mode = Cli::try_parse_from(["evidencectl", "dev", "--detach", "stop"])
-            .expect_err("start options must not combine with a lifecycle subcommand");
-        assert_eq!(mixed_mode.kind(), ErrorKind::ArgumentConflict);
+            .expect("the mixed spelling parses so its refusal can name the flags");
+        let Command::Dev(args) = mixed_mode.command else {
+            panic!("the dev command must parse");
+        };
+        let error = dev::run_with_format(args, OutputFormat::Human)
+            .expect_err("the compatibility flags are refused with their cause");
+        let refusal = error
+            .downcast_ref::<dev::DevRefusal>()
+            .expect("the refusal is typed so both output formats keep its cause");
+        assert_eq!(refusal.code, "evidence.dev.compat-flags-refused");
+        assert!(refusal.message.contains("--detach or --project"));
     }
 
     #[test]
@@ -1000,6 +1157,37 @@ mod tests {
             assert!(human.contains(expected));
             assert!(json.contains(expected));
         }
+    }
+
+    #[test]
+    fn an_operational_failure_carries_its_cause_in_both_formats() {
+        let io_failure = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "No such file or directory (os error 2)",
+        ))
+        .context("inspecting target parent");
+        let error = safe_command(
+            Err(io_failure),
+            "evidence.check.failed",
+            "project".to_owned(),
+            "Evidence could not inspect the selected authoring project.",
+            "Correct the selected project or target artifact and rerun check.",
+        )
+        .expect_err("operational refusal");
+        let failure = error
+            .downcast_ref::<SafeCliFailure>()
+            .expect("safe failure");
+        assert!(failure.operational);
+        let human = safe_failure_human(failure);
+        let json = safe_failure_json(failure).to_string();
+        for report in [&human, &json] {
+            assert!(report.contains("inspecting target parent"), "{report}");
+        }
+        let diagnostic = safe_failure_json(failure)["diagnostics"][0].clone();
+        assert_eq!(
+            diagnostic["cause"].as_str(),
+            Some("inspecting target parent: No such file or directory (os error 2)")
+        );
     }
 
     #[test]
@@ -1629,6 +1817,41 @@ mod tests {
             assert!(
                 Cli::try_parse_from(&arguments).is_ok(),
                 "{arguments:?} must keep working"
+            );
+        }
+    }
+
+    #[test]
+    fn help_requested_matches_bare_help_only_in_the_subcommand_position() {
+        fn args(tokens: &[&str]) -> Vec<OsString> {
+            std::iter::once("evidencectl")
+                .chain(tokens.iter().copied())
+                .map(OsString::from)
+                .collect()
+        }
+
+        for tokens in [
+            &["help"][..],
+            &["help", "--format", "json"][..],
+            &["--format", "json", "help"][..],
+            &["--format", "json", "--help"][..],
+            &["--format", "json", "-h"][..],
+            &["--format", "json", "access", "--help"][..],
+        ] {
+            assert!(
+                help_requested(&args(tokens)),
+                "{tokens:?} must be recognized as a help request"
+            );
+        }
+
+        for tokens in [
+            &["--format", "json", "access", "client", "revoke", "help"][..],
+            &["--format", "json", "source", "add", "help"][..],
+            &["access", "client", "revoke", "help"][..],
+        ] {
+            assert!(
+                !help_requested(&args(tokens)),
+                "{tokens:?} carries `help` as a value, not the subcommand"
             );
         }
     }

@@ -160,10 +160,10 @@ manifestProjection:
 modules:
   - id: business-establishment-summary
     version: 0.1.0
-    digest: "sha256:fff64050110b870b6ecdda5ec48ec85d6950ca77f6e7fd6b50157da9ea92672c"
+    digest: "sha256:feb8187258832cf7eb0a825f01a51b9ce9e8900559e4f8441483d4cd4af146b3"
   - id: business-establishments-core
     version: 0.1.0
-    digest: sha256:105de8fd3754b8dbd79ec7fd0e896d9fb5231bfbfd4d3cdc3595eb626af524b6
+    digest: "sha256:3cca45c9bab9c39d4efcba5a065d4cb9097bd31194a75c0bd856c9f0ee53a3a8"
 
 accessProfiles:
   - id: business-operator

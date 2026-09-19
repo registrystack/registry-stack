@@ -17,9 +17,11 @@ use base64::Engine as _;
 use hmac::{Hmac, KeyInit, Mac};
 use postgres_harness::TestDatabase;
 use rcgen::{generate_simple_self_signed, CertifiedKey};
-use registry_breg::compiler::{compile_project, CompileProfile};
-use registry_breg::contract::parse_project_json;
+use registry_breg::compiler::{compile_project, compile_project_with_assets, CompileProfile};
+use registry_breg::contract::{parse_project_json, ModuleAssetSource};
 use registry_breg::event_destination::ActivatedEventDestinationRegistry;
+use registry_breg::hook_handler::HookHandlerRegistry;
+use registry_breg::model::CompiledRegistry;
 use registry_breg::mutation::{MutationBody, MutationCoordinator, MutationPlan, MutationRequest};
 use registry_breg::postgres::{
     initialize_compiled_registry_state_for_test, install_compiled_schema, ClaimContext,
@@ -31,6 +33,7 @@ use registry_breg::webhook::{
 };
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::MAX_OUTPUT_BYTES;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -48,6 +51,8 @@ const SUCCESSOR_PACKAGE_REVISION: &str =
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const SUCCESSOR_SCHEMA_FINGERPRINT: &str =
     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+const EVENT_SOURCE: &str =
+    "urn:registrystack:registry:webhook-delivery-registry:instance:webhook-delivery-instance";
 const DESTINATION_ID: &str = "case-operations";
 const DELIVERY_PATH: &str = "/registry-events";
 const HMAC_KEY: &[u8] = b"webhook-delivery-signing-key-0123456789abcdef";
@@ -57,6 +62,13 @@ const CA_REF_CANARY: &str = "webhook-ca-bundle-canary";
 const SIGNATURE_DOMAIN: &[u8] = b"breg-webhook-signature-v1";
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// The local hook handlers the running package holds. A package whose hooks
+/// are all `url` yields an empty registry, and every delivery it claims takes
+/// the destination path.
+fn hook_handlers(compiled: &CompiledRegistry, package_revision: &str) -> Arc<HookHandlerRegistry> {
+    Arc::new(HookHandlerRegistry::new(compiled, package_revision))
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 6)]
 async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_bound_audited_and_confined(
@@ -108,6 +120,8 @@ async fn real_postgres_webhook_delivery_retry_dead_letter_replay_is_package_boun
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
         identity.clone(),
         lock_key,
         Duration::from_secs(2),
@@ -903,6 +917,8 @@ async fn real_postgres_webhook_delivery_finishes_prior_package_work_after_compat
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
+        hook_handlers(&compiled, &successor_identity.package_revision),
+        Arc::new(compiled.clone()),
         successor_identity,
         lock_key,
         Duration::from_secs(2),
@@ -1010,6 +1026,8 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     let service = WebhookDeliveryService::new(
         pool.clone(),
         Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
         identity,
         lock_key,
         Duration::from_secs(2),
@@ -1139,6 +1157,377 @@ async fn real_postgres_webhook_delivery_reap_refuses_an_out_of_bounds_captured_a
     database.cleanup().await;
 }
 
+/// The reviewed program the local hook runs. It reads the envelope it is
+/// handed and answers with a refusal, which is the answer shape that carries
+/// handler-chosen content and so proves the recorded message is the program's
+/// own and not a constant.
+const LOCAL_HOOK_SCRIPT: &[u8] = br#"fn handle(ctx) {
+    if ctx["data"]["values"]["label"] != "local-handler" { return (); }
+    #{"answer": "refusal", "code": "case-observed", "summary": "the hook read the change"}
+}"#;
+
+/// The canonical message bytes the script above answers with. The worker
+/// records the digest of these bytes, so the test states them rather than
+/// deriving them from the same code path under test.
+const LOCAL_HOOK_ANSWER: &[u8] =
+    br#"{"answer":"refusal","code":"case-observed","summary":"the hook read the change"}"#;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answer() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(6).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = local_hook_compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs delivery state with the compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate_without_destinations(&compiled));
+    let compiled_delivery = compiled.event_deliveries().deliveries[0].clone();
+    let handler_digest = compiled_delivery
+        .handler_digest()
+        .expect("a local hook binds to its reviewed program")
+        .to_owned();
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5a; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationCoordinator::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        audit_profile.clone(),
+        Some(Arc::clone(&destinations)),
+    );
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit_profile.clone(),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "local-handler-delivery",
+        "local-handler",
+    )
+    .await;
+
+    let capture = database
+        .admin
+        .query_one(
+            "SELECT handler_kind, logical_destination_id, destination_binding_digest,
+                    deployed_attempt_timeout_ms, deployed_maximum_attempts
+             FROM registry_internal.registry_webhook_deliveries
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&event.event_id, &event.compiled_delivery_id],
+        )
+        .await
+        .expect("the capture writes one local delivery row");
+    assert_eq!(capture.get::<_, String>(0), "rhai");
+    assert_eq!(
+        capture.get::<_, Option<String>>(1),
+        None,
+        "a local handler row carries no destination"
+    );
+    assert_eq!(
+        capture.get::<_, String>(2),
+        handler_digest,
+        "the identity digest column holds the reviewed program digest"
+    );
+    assert_eq!(capture.get::<_, i64>(3), 5_000);
+    assert_eq!(capture.get::<_, i16>(4), 5);
+
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the post-commit worker runs the local program and accepts its answer"
+    );
+    assert_eq!(
+        delivery_state(&database, &event).await,
+        (1, "delivered".to_owned(), 1)
+    );
+    let answer = database
+        .admin
+        .query_one(
+            "SELECT handler_message, handler_message_digest
+             FROM registry_internal.registry_webhook_delivery_state
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&event.event_id, &event.compiled_delivery_id],
+        )
+        .await
+        .expect("the delivered row carries its recorded answer");
+    assert_eq!(
+        answer.get::<_, Option<Vec<u8>>>(0),
+        None,
+        "the raw answer is erased at settlement"
+    );
+    assert_eq!(
+        answer.get::<_, Option<Vec<u8>>>(1),
+        Some(Sha256::digest(LOCAL_HOOK_ANSWER).to_vec()),
+        "the recorded digest covers the canonical answer the program returned"
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &event,
+        1,
+        1,
+        "terminal",
+        "delivered",
+    )
+    .await;
+    assert_eq!(
+        receiver.count().await,
+        0,
+        "a local handler sends nothing over the network"
+    );
+    assert_webhook_audits_are_closed_and_value_free(&database).await;
+
+    drop(mutation_client);
+    drop(service);
+    drop(pool);
+    receiver.stop().await;
+    database.cleanup().await;
+}
+
+/// The canonical message bytes a remote handler answers with. The worker
+/// records the digest of these bytes, so the test states them rather than
+/// deriving them from the same code path under test.
+const URL_ANSWER: &[u8] =
+    br#"{"answer":"refusal","code":"case-observed","summary":"the hook read the change"}"#;
+
+/// The `none` answer whose digest the worker records for a bodyless 2xx.
+const URL_NONE_ANSWER: &[u8] = br#"{"answer":"none"}"#;
+
+/// The answer path of the `url` kind: a 2xx body is the handler message, an
+/// empty body is the `none` answer, and a body over the handler output
+/// ceiling is a resource refusal that retries rather than a delivery.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over_the_ceiling() {
+    let receiver = HttpsReceiver::start().await;
+    let database = TestDatabase::create(6).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let compiled = compiled_registry();
+    install_compiled_schema(&migration, &compiled, &database.runtime_role)
+        .await
+        .expect("migration installs delivery state with the compiled schema");
+    let identity = initialize_compiled_registry_state_for_test(
+        &migration,
+        &database.runtime_role,
+        &compiled,
+        registry_state_test_identity(),
+    )
+    .await
+    .expect("migration initializes active package identity with empty history");
+    migration_task.abort();
+
+    let fixture = DestinationFixture::new(&receiver);
+    let destinations = Arc::new(fixture.activate(&compiled));
+    let pool = database
+        .runtime_config
+        .build_pool()
+        .expect("bounded runtime pool builds");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x5b; 32].into())
+        .expect("test owns a keyed audit profile");
+    let lock_key = RegistryLockKey::derive("webhook-delivery-registry")
+        .expect("test lock identity is bounded");
+    let coordinator = MutationCoordinator::new_with_event_destinations(
+        lock_key,
+        Duration::from_secs(2),
+        identity.clone(),
+        audit_profile.clone(),
+        Some(Arc::clone(&destinations)),
+    );
+    let service = WebhookDeliveryService::new(
+        pool.clone(),
+        Arc::clone(&destinations),
+        hook_handlers(&compiled, &identity.package_revision),
+        Arc::new(compiled.clone()),
+        identity.clone(),
+        lock_key,
+        Duration::from_secs(2),
+        audit_profile.clone(),
+    );
+    let plan = MutationPlan::from_compiled(&compiled, "records.case.create")
+        .expect("create plan retains the exact compiler delivery");
+    let claims = mutation_claims(&compiled);
+    let mut mutation_client = pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+
+    // A remote handler that answers with a message body.
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: URL_ANSWER.to_vec(),
+        })
+        .await;
+    let answered = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "url-answer-delivery",
+        "url-answered",
+    )
+    .await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the worker delivers a 2xx answer and accepts its message"
+    );
+    assert_eq!(
+        delivery_state(&database, &answered).await,
+        (1, "delivered".to_owned(), 1)
+    );
+    let recorded = recorded_answer(&database, &answered).await;
+    assert_eq!(
+        recorded.message, None,
+        "the raw answer is erased at settlement"
+    );
+    assert_eq!(
+        recorded.digest,
+        Some(Sha256::digest(URL_ANSWER).to_vec()),
+        "the recorded digest covers the canonical answer the remote handler returned"
+    );
+
+    // A remote handler that observes and proposes nothing: a 2xx with no body.
+    receiver.enqueue(ResponsePlan::Status(204)).await;
+    let silent = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "url-none-delivery",
+        "url-silent",
+    )
+    .await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::Delivered),
+        "the worker delivers a bodyless 2xx as the none answer"
+    );
+    assert_eq!(
+        delivery_state(&database, &silent).await,
+        (1, "delivered".to_owned(), 1)
+    );
+    let recorded = recorded_answer(&database, &silent).await;
+    assert_eq!(
+        recorded.message, None,
+        "the none answer's bytes are not retained either"
+    );
+    assert_eq!(
+        recorded.digest,
+        Some(Sha256::digest(URL_NONE_ANSWER).to_vec()),
+        "an empty body is recorded as the canonical none answer's digest"
+    );
+
+    // The answer ceiling, at the byte: a body one byte over it is a resource
+    // refusal, not a delivery, so the row retries on its captured schedule.
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: vec![b'x'; MAX_OUTPUT_BYTES + 1],
+        })
+        .await;
+    let oversized = create_event(
+        &database,
+        &coordinator,
+        &mut mutation_client,
+        &plan,
+        &claims,
+        "url-oversized-delivery",
+        "url-oversized",
+    )
+    .await;
+    assert_eq!(
+        service.deliver_once().await,
+        Ok(WebhookWorkOutcome::RetryScheduled),
+        "a 2xx body over the ceiling is refused and retried"
+    );
+    assert_eq!(
+        delivery_state(&database, &oversized).await,
+        (1, "pending".to_owned(), 1)
+    );
+    let recorded = recorded_answer(&database, &oversized).await;
+    assert_eq!(
+        (None, None),
+        (recorded.message.as_deref(), recorded.digest),
+        "a refused answer records no message"
+    );
+    assert_exact_audit_outcome(
+        &database,
+        &audit_profile,
+        &oversized,
+        1,
+        1,
+        "terminal",
+        "handler_resource",
+    )
+    .await;
+    assert_eq!(receiver.count().await, 3, "exactly one request per event");
+    assert_webhook_audits_are_closed_and_value_free(&database).await;
+
+    drop(mutation_client);
+    drop(service);
+    drop(pool);
+    receiver.stop().await;
+    database.cleanup().await;
+}
+
+/// The recorded answer columns of one delivery row.
+struct RecordedAnswer {
+    message: Option<Vec<u8>>,
+    digest: Option<Vec<u8>>,
+}
+
+async fn recorded_answer(database: &TestDatabase, event: &CapturedEvent) -> RecordedAnswer {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT handler_message, handler_message_digest
+             FROM registry_internal.registry_webhook_delivery_state
+             WHERE event_id = $1 AND compiled_delivery_id = $2",
+            &[&event.event_id, &event.compiled_delivery_id],
+        )
+        .await
+        .expect("the delivery state row is readable");
+    RecordedAnswer {
+        message: row.get(0),
+        digest: row.get(1),
+    }
+}
+
 #[derive(Clone)]
 struct CapturedEvent {
     event_id: Uuid,
@@ -1205,31 +1594,61 @@ async fn create_event(
         package_revision: row.get(4),
         created_at: row.get(5),
     };
-    let body: Value =
+    let envelope: Value =
         serde_json::from_slice(&captured.payload).expect("captured event body is strict JSON");
-    let record_id = body
-        .get("recordId")
+    let record_id = envelope
+        .pointer("/data/recordId")
         .and_then(Value::as_str)
         .expect("captured event contains a raw record id");
     Uuid::parse_str(record_id).expect("captured record id is a UUID");
+    let record_reference = envelope
+        .pointer("/subject/recordReference")
+        .and_then(Value::as_str)
+        .expect("captured envelope names the record reference");
+    let (algorithm, digest) = record_reference
+        .split_once(':')
+        .expect("the record reference names its hash algorithm");
+    assert_eq!(algorithm, "hmac-sha256");
+    assert_eq!(digest.len(), 64);
+    assert!(
+        digest
+            .chars()
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_uppercase()),
+        "the subject carries the hashed record reference"
+    );
+    assert!(
+        !record_reference.contains(record_id),
+        "the subject never restates the raw record id"
+    );
     assert_eq!(
-        body,
+        envelope,
         json!({
-            "entity": "case",
-            "recordId": record_id,
-            "revision": 1,
-            "trigger": "created",
-            "packageRevision": PACKAGE_REVISION,
-            "values": {
-                "label": label,
-                "restricted_note": RECORD_VALUE_CANARY,
+            "id": captured.event_id.to_string(),
+            "type": "case-created",
+            "source": EVENT_SOURCE,
+            "time": OffsetDateTime::from(captured.created_at)
+                .format(&Rfc3339)
+                .expect("captured event time formats"),
+            "subject": {"recordReference": record_reference, "recordRevision": 1},
+            "dataschema": captured.data_schema,
+            "causation": {"root": captured.event_id.to_string(), "hop": 0},
+            "data": {
+                "entity": "case",
+                "recordId": record_id,
+                "revision": 1,
+                "trigger": "created",
+                "packageRevision": PACKAGE_REVISION,
+                "values": {
+                    "label": label,
+                    "restricted_note": RECORD_VALUE_CANARY,
+                },
             },
         }),
-        "event body carries only the fixed envelope and declared projection"
+        "event body is one shared hook envelope over the declared projection"
     );
     assert_eq!(
         captured.payload,
-        canonicalize_json(&body).expect("captured body canonicalizes"),
+        canonicalize_json(&envelope).expect("captured body canonicalizes"),
         "durable and transmitted body bytes are canonical"
     );
     captured
@@ -1509,10 +1928,7 @@ async fn assert_exact_request(request: &ReceivedRequest, event: &CapturedEvent) 
     );
     assert_eq!(header(request, "ce-id"), event.event_id.to_string());
     assert_eq!(header(request, "ce-specversion"), "1.0");
-    assert_eq!(
-        header(request, "ce-source"),
-        "urn:registrystack:registry:webhook-delivery-registry:instance:webhook-delivery-instance"
-    );
+    assert_eq!(header(request, "ce-source"), EVENT_SOURCE);
     assert_eq!(header(request, "ce-type"), "case-created");
     assert_eq!(
         header(request, "ce-time"),
@@ -1596,9 +2012,11 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{
+            "hooks":[{
+              "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
-              "webhook":{
+              "handler":{
+                "kind": "url",
                 "destinationId":"case-operations"
               }
             }]
@@ -1618,6 +2036,57 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
     .expect("webhook delivery fixture parses");
     compile_project(&project, &[], CompileProfile::Authoring)
         .expect("webhook delivery fixture compiles")
+}
+
+/// The same registry as [`compiled_registry`], with its one hook bound to a
+/// reviewed local script instead of an operator destination.
+fn local_hook_compiled_registry() -> registry_breg::CompiledRegistry {
+    let project = parse_project_json(
+        br#"{
+          "apiVersion":"registry.registrystack.org/v1alpha1",
+          "kind":"RegistryProject",
+          "registry":{"id":"webhook-delivery-registry","version":"1","defaultLanguage":"en","canonicalBaseIri":"https://authoring.example.test"},
+          "entities":[{
+            "id":"case","primaryDataset":"test-dataset","route":"cases","mutationMode":"create_only","classification":"restricted",
+            "fields":[
+              {"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},
+              {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
+              {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
+            ],
+            "hooks":[{
+              "phase": "after",
+              "id":"case-created","trigger":"created","projection":["label","restricted_note"],
+              "handler":{
+                "kind": "rhai",
+                "script": "hooks/case-created.rhai",
+                "abi": "registry.hook-handler/v1"
+              }
+            }]
+          }],
+          "accessProfiles":[{
+            "id":"operator","default":true,"principalClaim":"registry_principal",
+            "requiredPurposes":["case-management"],
+            "permissions":[{
+              "entity":"case","operations":["create","get","list"],
+              "readableFields":["jurisdiction","label","restricted_note"],
+              "writableFields":["jurisdiction","label","restricted_note"],
+              "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
+            }]
+          }]
+        }"#,
+    )
+    .expect("local hook fixture parses");
+    compile_project_with_assets(
+        &project,
+        &[],
+        &[ModuleAssetSource {
+            module: None,
+            path: "hooks/case-created.rhai".to_owned(),
+            bytes: LOCAL_HOOK_SCRIPT.to_vec(),
+        }],
+        CompileProfile::Authoring,
+    )
+    .expect("local hook fixture compiles")
 }
 
 fn registry_state_test_identity() -> RegistryStateTestIdentity<'static> {
@@ -1691,7 +2160,47 @@ impl DestinationFixture {
         &self,
         compiled: &registry_breg::CompiledRegistry,
     ) -> ActivatedEventDestinationRegistry {
-        let raw = format!(
+        parse_runtime_config(&self.runtime_config(&format!(
+            r#"eventDestinations:
+  {DESTINATION_ID}:
+    origin: https://localhost:{}/
+    path: {DELIVERY_PATH}
+    networkProfile: pinnedLoopbackHttpsTest
+    dnsFamily: ipv4Only
+    allowedPrivateCidrs: []
+    hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
+    classificationCeiling: restricted
+    tls:
+      caBundleRef: secret:file/{CA_REF_CANARY}
+    deliveryCeilings:
+      # The captured attempt timeout is measured from the claim transaction, so
+      # it covers the claim commit and the reload transaction that precede
+      # egress as well as the request itself. Two seconds leaves room for those
+      # database round trips on a loaded host.
+      attemptTimeoutMilliseconds: 2000
+      maximumAttempts: 2
+"#,
+            self.receiver_port,
+        )))
+        .expect("strict pinned-loopback HTTPS config parses")
+        .activate_event_destinations(compiled)
+        .expect("exact destination inventory and TLS material activate")
+    }
+
+    /// The same deployment with no destination configured at all, for a
+    /// package whose only hook runs a local program.
+    fn activate_without_destinations(
+        &self,
+        compiled: &registry_breg::CompiledRegistry,
+    ) -> ActivatedEventDestinationRegistry {
+        parse_runtime_config(&self.runtime_config(""))
+            .expect("a deployment without destinations parses")
+            .activate_event_destinations(compiled)
+            .expect("an empty destination inventory matches a local-only package")
+    }
+
+    fn runtime_config(&self, event_destinations: &str) -> String {
+        format!(
             r#"apiVersion: registry.registrystack.org/breg-runtime/v1alpha1
 kind: BRegRuntimeConfig
 listener:
@@ -1748,25 +2257,7 @@ audit:
 cursor:
   secretRef: secret:file/cursor-key
   maxAgeSeconds: 300
-eventDestinations:
-  {DESTINATION_ID}:
-    origin: https://localhost:{}/
-    path: {DELIVERY_PATH}
-    networkProfile: pinnedLoopbackHttpsTest
-    dnsFamily: ipv4Only
-    allowedPrivateCidrs: []
-    hmacSha256KeyRef: secret:file/{KEY_REF_CANARY}
-    classificationCeiling: restricted
-    tls:
-      caBundleRef: secret:file/{CA_REF_CANARY}
-    deliveryCeilings:
-      # The captured attempt timeout is measured from the claim transaction, so
-      # it covers the claim commit and the reload transaction that precede
-      # egress as well as the request itself. Two seconds leaves room for those
-      # database round trips on a loaded host.
-      attemptTimeoutMilliseconds: 2000
-      maximumAttempts: 2
-operationalTimeouts:
+{event_destinations}operationalTimeouts:
   httpRequestMilliseconds: 10000
   shutdownGraceMilliseconds: 30000
   recordLockMilliseconds: 5000
@@ -1777,12 +2268,7 @@ operationalTimeouts:
             self.package_root.display(),
             self.trust_anchor.display(),
             PACKAGE_REVISION,
-            self.receiver_port,
-        );
-        parse_runtime_config(&raw)
-            .expect("strict pinned-loopback HTTPS config parses")
-            .activate_event_destinations(compiled)
-            .expect("exact destination inventory and TLS material activate")
+        )
     }
 }
 
@@ -1806,6 +2292,10 @@ fn write_secret(path: &std::path::Path, value: &[u8]) {
 enum ResponsePlan {
     Status(u16),
     Delay(Duration, u16),
+    /// A 2xx that answers with the exact body a remote hook handler returns.
+    Answer {
+        body: Vec<u8>,
+    },
     Break,
 }
 
@@ -1881,9 +2371,10 @@ impl HttpsReceiver {
                         .await
                         .pop_front()
                         .unwrap_or(ResponsePlan::Status(204));
-                    let (delay, status) = match plan {
-                        ResponsePlan::Status(status) => (Duration::ZERO, status),
-                        ResponsePlan::Delay(delay, status) => (delay, status),
+                    let (delay, status, body) = match plan {
+                        ResponsePlan::Status(status) => (Duration::ZERO, status, Vec::new()),
+                        ResponsePlan::Delay(delay, status) => (delay, status, Vec::new()),
+                        ResponsePlan::Answer { body } => (Duration::ZERO, 200, body),
                         ResponsePlan::Break => {
                             let _ = stream.shutdown().await;
                             return;
@@ -1892,15 +2383,19 @@ impl HttpsReceiver {
                     if !delay.is_zero() {
                         tokio::time::sleep(delay).await;
                     }
-                    let reason = if status == 204 {
-                        "No Content"
-                    } else {
-                        "Server Error"
+                    let reason = match status {
+                        200 => "OK",
+                        204 => "No Content",
+                        _ => "Server Error",
                     };
                     let response = format!(
-                        "HTTP/1.1 {status} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        "HTTP/1.1 {status} {reason}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
                     );
                     let _ = stream.write_all(response.as_bytes()).await;
+                    if !body.is_empty() {
+                        let _ = stream.write_all(&body).await;
+                    }
                     let _ = stream.shutdown().await;
                 });
             }

@@ -32,6 +32,7 @@ export const expectedBinaries = [
   'evidence',
   'evidence-oid4vci',
   'evidencectl',
+  'registry-render',
   'relay',
   'relayctl',
   'scheduling',
@@ -43,6 +44,7 @@ const generatedData = 'src/data/generated/cli-reference.json';
 const reviewMetadataFile = 'src/data/cli-reference.yaml';
 const hiddenCommands = new Set([
   '__dev-supervisor',
+  '__worker',
   'bundle-check',
   'bundle-evaluate',
   'prepare-local-relying-procedure',
@@ -55,6 +57,7 @@ const groups = [
   { title: 'Registry Relay', binaries: ['relay', 'relayctl'] },
   { title: 'Evidence Gateway', binaries: ['evidence', 'evidencectl'] },
   { title: 'Evidence credential delivery', binaries: ['evidence-oid4vci'] },
+  { title: 'Registry Render', binaries: ['registry-render'] },
 ];
 
 function exactKeys(value, expected, label) {

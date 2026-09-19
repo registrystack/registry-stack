@@ -204,14 +204,14 @@ async fn real_postgres_http_reviewer_reasons_are_bounded_replayed_and_read_by_pe
 
     let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
     assert_eq!(rows.len(), 2);
-    let returned_event: Value = serde_json::from_str(&rows[0].get::<_, String>(0)).unwrap();
+    let returned_event = event_data(&rows[0].get::<_, String>(0));
     assert_eq!(returned_event["request"]["reason"], reason);
     assert_eq!(returned_event["request"]["reasonPresent"], true);
     assert_eq!(
         returned_event["values"]["reason"], "two-stage correction",
         "authored proposal reason stays distinct from reviewer explanation"
     );
-    let rejected_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    let rejected_event = event_data(&rows[1].get::<_, String>(0));
     assert_eq!(
         rejected_event["request"]["reason"],
         "The proposed site remains incorrect."
@@ -319,7 +319,7 @@ async fn real_postgres_http_no_reason_review_remains_compatible_and_reasoned_dec
         "request_revision",
         None,
     );
-    let event: Value = serde_json::from_str(
+    let event = event_data(
         &database
             .admin
             .query_one(
@@ -329,8 +329,7 @@ async fn real_postgres_http_no_reason_review_remains_compatible_and_reasoned_dec
             .await
             .unwrap()
             .get::<_, String>(0),
-    )
-    .unwrap();
+    );
     assert_eq!(event["request"]["reasonPresent"], false);
     assert!(event["request"].get("reason").is_none());
     run_action(
@@ -405,10 +404,10 @@ async fn real_postgres_http_no_reason_review_remains_compatible_and_reasoned_dec
         json!({"proposalVersion":apply.proposal_version,"effectDigest":apply.effect_digest,"reason":"changed"})).await;
     assert_eq!(changed_apply.status, StatusCode::CONFLICT);
     let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
-    let approve_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    let approve_event = event_data(&rows[1].get::<_, String>(0));
     assert_eq!(approve_event["request"]["transition"], "approve");
     assert_eq!(approve_event["request"]["reason"], approval_note);
-    let apply_event: Value = serde_json::from_str(&rows[2].get::<_, String>(0)).unwrap();
+    let apply_event = event_data(&rows[2].get::<_, String>(0));
     assert_eq!(apply_event["request"]["transition"], "apply");
     assert_eq!(apply_event["request"]["reason"], apply_note);
     database.cleanup().await;
@@ -487,12 +486,12 @@ async fn real_postgres_http_reasoned_approval_before_the_last_stage_is_recorded_
 
     let rows = database.admin.query("SELECT convert_from(payload, 'UTF8') FROM registry_internal.registry_outbox WHERE trigger = 'request_lifecycle' ORDER BY record_revision", &[]).await.unwrap();
     assert_eq!(rows.len(), 2);
-    let stage_event: Value = serde_json::from_str(&rows[0].get::<_, String>(0)).unwrap();
+    let stage_event = event_data(&rows[0].get::<_, String>(0));
     assert_eq!(stage_event["request"]["transition"], "approve");
     assert_eq!(stage_event["request"]["toState"], "submitted");
     assert_eq!(stage_event["request"]["reasonPresent"], true);
     assert_eq!(stage_event["request"]["reason"], stage_note);
-    let final_event: Value = serde_json::from_str(&rows[1].get::<_, String>(0)).unwrap();
+    let final_event = event_data(&rows[1].get::<_, String>(0));
     assert_eq!(final_event["request"]["toState"], "approved");
     assert_eq!(final_event["request"]["reason"], final_note);
     database.cleanup().await;
@@ -569,6 +568,12 @@ async fn real_postgres_http_request_detail_erasure_keeps_reason_presence_without
     database.cleanup().await;
 }
 
+/// The event data one stored outbox envelope carries.
+fn event_data(payload: &str) -> Value {
+    let envelope: Value = serde_json::from_str(payload).expect("stored payload is JSON");
+    envelope["data"].clone()
+}
+
 fn assert_decision(decision: &Value, kind: &str, reason: Option<&str>) {
     assert_eq!(decision["stageId"], "review");
     assert_eq!(decision["kind"], kind);
@@ -618,10 +623,12 @@ fn compile_reason_registry(stages: usize, operator_erase: bool) -> registry_breg
     if operator_erase {
         request["changeRequest"]["retention"] = json!({"mode": "operator_erase"});
     }
-    request["events"] = json!([{
+    request["hooks"] = json!([{
+        "phase": "after",
         "id":"review-returned", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["reject","request_revision"], "toStates":["rejected","needs_changes"], "stages":["review"]}
     }, {
+        "phase": "after",
         "id":"review-decided", "trigger":"request_lifecycle", "projection":["reason"],
         "when":{"kind":"request_lifecycle", "transitions":["approve","apply"], "toStates":["submitted","approved","applied"]}
     }]);

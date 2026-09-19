@@ -517,3 +517,246 @@ fn assert_safe_usage_failure(output: &Output) {
         "error[evidencectl.usage] command line $: The Evidence command line is incomplete or contains conflicting or unsupported arguments.\n  next: Run evidencectl --help or the selected command with --help, then retry using the documented arguments.\n"
     );
 }
+
+/// `--list-pointers` prints exactly the set `--select` accepts for the
+/// selected operation and response, one pointer per line for a human and a
+/// machine-readable array for JSON, without drafting anything.
+#[test]
+fn list_pointers_prints_the_selectable_leaves_in_both_formats() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
+    const EXPECTED: [&str; 5] = [
+        "/records/*/recordedOn",
+        "/records/*/status",
+        "/records/*/tags/*",
+        "/records/*/trackingId",
+        "/total",
+    ];
+
+    let output = evidencectl(&[
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--list-pointers".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        stdout_of(&output),
+        EXPECTED
+            .iter()
+            .map(|pointer| format!("  {pointer}\n"))
+            .collect::<String>()
+    );
+
+    let output = evidencectl(&[
+        "--format".to_owned(),
+        "json".to_owned(),
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--list-pointers".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    assert!(stderr_of(&output).is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(
+        report,
+        serde_json::json!({
+            "command": "source suggest",
+            "ok": true,
+            "pointers": EXPECTED,
+        })
+    );
+
+    assert!(
+        !workspace.path().join("sources").exists(),
+        "a pointer listing drafts nothing"
+    );
+
+    // The leaves come from one chosen operation's response, so a listing
+    // without --operation is a usage error rather than an interactive prompt.
+    let output = evidencectl(&[
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--list-pointers".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(stdout_of(&output).is_empty());
+}
+
+/// An unknown `--select` pointer keeps its human listing on stderr and gains
+/// a machine-readable failure whose diagnostic names the pointer and carries
+/// the valid pointers as a sibling field.
+#[test]
+fn an_unknown_select_failure_lists_the_available_pointers_in_both_formats() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
+    let base = [
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--select".to_owned(),
+        "/not-a-leaf".to_owned(),
+    ];
+
+    let output = evidencectl(&{
+        let mut arguments = vec!["source".to_owned(), "suggest".to_owned()];
+        arguments.extend(base.iter().cloned());
+        arguments
+    });
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("`--select /not-a-leaf` names nothing in this response schema"),
+        "the refusal names the pointer: {stderr}"
+    );
+    assert!(
+        stderr.contains("\n  /total\n"),
+        "the human listing still names the valid pointers: {stderr}"
+    );
+
+    let output = evidencectl(&{
+        let mut arguments = vec![
+            "--format".to_owned(),
+            "json".to_owned(),
+            "source".to_owned(),
+            "suggest".to_owned(),
+        ];
+        arguments.extend(base.iter().cloned());
+        arguments
+    });
+    assert_eq!(output.status.code(), Some(1));
+    assert!(stderr_of(&output).is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON failure");
+    assert_eq!(report["status"], "domain-refusal");
+    let diagnostic = &report["diagnostics"][0];
+    assert_eq!(diagnostic["code"], "evidencectl.source.select-unknown");
+    assert_eq!(diagnostic["artifact"], "source suggest");
+    assert_eq!(diagnostic["path"], "$.select");
+    assert!(
+        diagnostic["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("/not-a-leaf")),
+        "the message names the unknown pointer: {diagnostic}"
+    );
+    assert_eq!(
+        diagnostic["availablePointers"],
+        serde_json::json!([
+            "/records/*/recordedOn",
+            "/records/*/status",
+            "/records/*/tags/*",
+            "/records/*/trackingId",
+            "/total",
+        ])
+    );
+}
+
+/// A flag-driven run answers one JSON object on stdout: the source id, the
+/// files it wrote, the human report, and the equivalent command. The draft
+/// blocks stay off stdout so the report is the only thing to parse.
+#[test]
+fn a_delivered_draft_reports_the_written_files_and_equivalent_command_in_json() {
+    let workspace = tempfile::tempdir().expect("tempdir");
+    let project = scaffold(workspace.path(), OPENAPI_DOCUMENT);
+
+    let arguments = vec![
+        "--format".to_owned(),
+        "json".to_owned(),
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--select".to_owned(),
+        "/total".to_owned(),
+        "--source-id".to_owned(),
+        "source-b".to_owned(),
+        "--project".to_owned(),
+        path_argument(&project),
+    ];
+    let output = evidencectl(&arguments);
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "stdout: {}\nstderr: {}",
+        stdout_of(&output),
+        stderr_of(&output)
+    );
+    // The pipeline still announces adopted bounds on stderr, as a human run
+    // does; what JSON mode owns is stdout, which carries only the report.
+    assert!(
+        stderr_of(&output).contains("evidencectl: "),
+        "the provenance announcements stay on stderr: {}",
+        stderr_of(&output)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(report["command"], "source suggest");
+    assert_eq!(report["ok"], Value::Bool(true));
+    assert_eq!(report["status"], "complete");
+    assert_eq!(report["sourceId"], "source-b");
+    let files = report["files"].as_array().expect("written files");
+    assert_eq!(files.len(), 6, "the source object plus five artifacts");
+    for relative in [
+        "sources/source-b.yaml",
+        "adapters/source-b-prepare.rhai",
+        "schemas/source-b-parameters.schema.yaml",
+        "schemas/source-b-response.schema.yaml",
+        "adapters/source-b-extract.rhai",
+        "schemas/source-b-facts.schema.yaml",
+    ] {
+        assert!(
+            files.contains(&serde_json::json!(project
+                .join(relative)
+                .display()
+                .to_string())),
+            "missing {relative}: {files:?}"
+        );
+    }
+    assert!(
+        report["report"]
+            .as_str()
+            .is_some_and(|report| report.contains("draft for source `source-b`")),
+        "the report carries what the human renderer prints: {}",
+        report["report"]
+    );
+    assert!(
+        report["equivalentCommand"]
+            .as_str()
+            .is_some_and(|command| command.starts_with("evidencectl source suggest --operation")),
+        "the equivalent command reproduces the run: {}",
+        report["equivalentCommand"]
+    );
+    assert!(
+        !stdout_of(&output).contains("--- schemas/source-b-response.schema.yaml ---"),
+        "the draft blocks stay off JSON stdout"
+    );
+
+    // A print-only run reports the same shape with nothing written.
+    let openapi = write(workspace.path(), "records.openapi.yaml", OPENAPI_DOCUMENT);
+    let output = evidencectl(&[
+        "--format".to_owned(),
+        "json".to_owned(),
+        "source".to_owned(),
+        "suggest".to_owned(),
+        "--openapi".to_owned(),
+        path_argument(&openapi),
+        "--operation".to_owned(),
+        "GET /records".to_owned(),
+        "--select".to_owned(),
+        "/total".to_owned(),
+        "--source-id".to_owned(),
+        "source-c".to_owned(),
+    ]);
+    assert_eq!(output.status.code(), Some(0));
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(report["sourceId"], "source-c");
+    assert_eq!(report["files"], serde_json::json!([]));
+}

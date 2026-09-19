@@ -909,3 +909,85 @@ fn secret_help_says_it_does_not_make_bearer_tokens() {
         "keygen secret's help never points at the token generator:\n{help}"
     );
 }
+
+/// Every keygen subcommand answers the shared JSON envelope, reports only the
+/// paths and kid of what it wrote, and never the material itself.
+#[test]
+fn keygen_commands_report_paths_and_kid_in_the_shared_json_envelope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let cases: &[(&[&str], &str, &str, &str)] = &[
+        (
+            &["keygen", "signing", "--output-dir", "secrets"],
+            "keygen signing",
+            "secrets/signing-p256-private-jwk",
+            "secrets/signing-p256-public.jwk.json",
+        ),
+        (
+            &["keygen", "holder", "--output-dir", "keys"],
+            "keygen holder",
+            "keys/holder-p256-private-jwk",
+            "keys/holder-p256-public.jwk.json",
+        ),
+        (
+            &["keygen", "client-assertion", "--output-dir", "assertions"],
+            "keygen client-assertion",
+            "assertions/client-assertion-p384-private-jwk",
+            "assertions/client-assertion-p384-public.jwk.json",
+        ),
+    ];
+    for (arguments, command, private_path, public_path) in cases {
+        let output = evidencectl()
+            .args(["--format", "json"])
+            .args(*arguments)
+            .current_dir(dir.path())
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+        assert!(output.stderr.is_empty());
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("one JSON report");
+        assert_eq!(report["command"], *command, "{command}");
+        assert_eq!(report["ok"], serde_json::Value::Bool(true));
+        assert_eq!(report["status"], "complete");
+        assert_eq!(
+            report["files"],
+            serde_json::json!([private_path, public_path]),
+            "{command}"
+        );
+        let kid = report["kid"].as_str().expect("kid");
+        let public: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(dir.path().join(public_path)).expect("public JWK"),
+        )
+        .expect("public JWK JSON");
+        assert_eq!(public["kid"], serde_json::Value::String(kid.to_owned()));
+    }
+
+    for (arguments, command) in [
+        (
+            &["keygen", "secret", "--output", "audit-hmac-key"][..],
+            "keygen secret",
+        ),
+        (
+            &["keygen", "token", "--output", "source-token"][..],
+            "keygen token",
+        ),
+    ] {
+        let output = evidencectl()
+            .args(["--format", "json"])
+            .args(arguments)
+            .current_dir(dir.path())
+            .output()
+            .expect("run evidencectl");
+        assert!(output.status.success(), "{}", stderr_of(&output));
+        let report: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("one JSON report");
+        assert_eq!(report["command"], *command);
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["files"], serde_json::json!([arguments[3]]));
+        assert!(
+            report.get("kid").is_none(),
+            "no key is generated, so no kid is reported"
+        );
+    }
+}

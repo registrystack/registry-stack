@@ -211,6 +211,17 @@ fn compile_planner(
             "the planner ABI is not supported",
         ));
     }
+    if source.kind == crate::contract::ChangeRequestPlannerKindSource::Wasm {
+        // Refuse the declared backend explicitly before any Rhai-shaped
+        // validation could misreport the script: WASM planners are out of
+        // scope for this release and have no compiled representation.
+        errors.push(Diagnostic::error(
+            "change_request.planner.kind_unsupported",
+            format!("{planner_path}.kind"),
+            "WASM change-request planners are not supported in this release",
+        ));
+        return None;
+    }
     if !valid_planner_path(&source.script) {
         errors.push(Diagnostic::error(
             "change_request.planner.source_invalid",
@@ -536,14 +547,14 @@ fn compile_planner(
 
 pub(crate) fn compile_change_requests(
     project: &RegistryProject,
-    action_scripts: &BTreeSet<(Option<String>, String)>,
+    owned_scripts: &BTreeSet<(Option<String>, String)>,
     sources: &BTreeMap<String, EntitySource>,
     origins: &BTreeMap<String, Option<String>>,
     assets: &[ModuleAssetSource],
     entities: &mut BTreeMap<String, CompiledEntity>,
 ) -> Result<(), Vec<Diagnostic>> {
     let mut errors = Vec::new();
-    validate_planner_assets(sources, origins, assets, action_scripts, &mut errors);
+    validate_planner_assets(sources, origins, assets, owned_scripts, &mut errors);
     validate_change_controlled_direct_writes(entities, &mut errors);
     let request_entity_ids = sources
         .iter()
@@ -653,11 +664,19 @@ pub(crate) fn compile_change_requests(
     Ok(())
 }
 
+/// Refuse a Rhai asset no reviewed declaration at its own ownership origin
+/// claims.
+///
+/// `owned_scripts` carries the scripts declared outside a change-request
+/// planner: action handlers and local hook handlers. Both are reviewed
+/// declarations that name their own asset, so an asset either belongs to one of
+/// them or to a planner, and anything else is an unreviewed script sitting in a
+/// module's asset namespace.
 fn validate_planner_assets(
     sources: &BTreeMap<String, EntitySource>,
     origins: &BTreeMap<String, Option<String>>,
     assets: &[ModuleAssetSource],
-    action_scripts: &BTreeSet<(Option<String>, String)>,
+    owned_scripts: &BTreeSet<(Option<String>, String)>,
     errors: &mut Vec<Diagnostic>,
 ) {
     let declared = sources
@@ -675,7 +694,7 @@ fn validate_planner_assets(
                     )
                 })
         })
-        .chain(action_scripts.iter().cloned())
+        .chain(owned_scripts.iter().cloned())
         .collect::<BTreeSet<_>>();
     let supplied = assets
         .iter()
@@ -686,7 +705,7 @@ fn validate_planner_assets(
         errors.push(Diagnostic::error(
             "change_request.planner.asset_undeclared",
             "modules[].assets[]",
-            "a Rhai asset is not declared by a change-request planner or action handler at the same ownership origin",
+            "a Rhai asset is not declared by a change-request planner, action handler, or hook handler at the same ownership origin",
         ));
     }
 }

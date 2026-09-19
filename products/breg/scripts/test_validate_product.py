@@ -71,7 +71,7 @@ class BRegProductCatalogTests(unittest.TestCase):
         )
         extension_rows = matrix["invariants"][24:]
         self.assertEqual(
-            [f"BREG-NEG-{index:02d}" for index in range(25, 66)],
+            [f"BREG-NEG-{index:02d}" for index in range(25, 70)],
             [invariant["negativeId"] for invariant in extension_rows],
         )
         for invariant in extension_rows:
@@ -103,9 +103,10 @@ class BRegProductCatalogTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual([], breg["features"]["default"])
+        self.assertEqual(["wasm"], breg["features"]["default"])
         self.assertEqual(
             {
+                "dep:async-trait",
                 "dep:axum",
                 "dep:base64",
                 "dep:clap",
@@ -123,6 +124,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 "dep:registry-platform-buildinfo",
                 "dep:registry-platform-config",
                 "dep:registry-platform-crypto",
+                "registry-platform-hooks/postgres",
                 "dep:registry-platform-httpsec",
                 "dep:registry-platform-httputil",
                 "dep:registry-platform-oidc",

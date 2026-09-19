@@ -18,7 +18,7 @@ pub fn project() -> Value {
                 {"id": "parent", "type": "reference", "target": "parent", "required": true, "classification": "restricted"},
                 {"id": "label", "type": "string", "maxLength": 32, "required": true, "classification": "restricted"}
              ],
-             "events": [{"id": "child-created", "trigger": "created", "projection": ["label"]}]}
+             "hooks": [{"phase":"after","id": "child-created", "trigger": "created", "projection": ["label"]}]}
         ],
         "actions": [{"id": "register-child",
             "inputs": [

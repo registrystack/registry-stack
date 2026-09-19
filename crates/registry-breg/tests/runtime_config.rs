@@ -202,9 +202,11 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
             |(index, (destination_id, _timeout_ms, _maximum_attempts))| {
                 let mut event = json!({
                     "id": format!("case-event-{index}"),
+                    "phase": "after",
                     "trigger": if index == 0 { "created" } else { "patched" },
                     "projection": ["label"],
-                    "webhook": {
+                    "handler": {
+                        "kind": "url",
                         "destinationId": destination_id
                     }
                 });
@@ -233,7 +235,7 @@ fn compiled_webhooks(destinations: &[(&str, u32, u8)]) -> registry_breg::Compile
                 {"id": "label", "type": "string", "maxLength": 64, "classification": "internal"},
                 {"id": "eligibility", "type": "string", "maxLength": 32, "classification": "restricted"}
             ],
-            "events": events
+            "hooks": events
         }]
     });
     let parsed = parse_project_json(&serde_json::to_vec(&project).expect("project serializes"))
@@ -642,6 +644,129 @@ fn webhook_payload_retention_is_deployment_selected_and_capped_at_thirty_days() 
             Some(RuntimeConfigError::InvalidBounds)
         );
     }
+}
+
+#[test]
+fn wasm_execution_budgets_default_below_the_structural_module_ceiling() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config =
+        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    // The default module ceiling is the authored admission default, so a
+    // module an ordinary build admitted always fits execution defaults; the
+    // structural ceiling stays strictly above it and is operator-reachable,
+    // never bypassed.
+    assert_eq!(config.wasm_execution().max_module_bytes(), 2 * 1024 * 1024);
+    assert_eq!(
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+        5 * 1024 * 1024
+    );
+    assert_eq!(
+        config.wasm_execution().max_guest_memory_bytes(),
+        32 * 1024 * 1024
+    );
+
+    let configured = format!(
+        "{base}wasmExecution:\n  maxModuleBytes: {}\n  maxGuestMemoryBytes: 536870912\n",
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
+    );
+    let config =
+        parse_runtime_config(&configured).expect("the structural ceiling itself configures");
+    assert_eq!(
+        config.wasm_execution().max_module_bytes(),
+        registry_breg::wasm_handler::MAXIMUM_WASM_MODULE_BYTES as u64
+    );
+    assert_eq!(
+        config.wasm_execution().max_guest_memory_bytes(),
+        536_870_912
+    );
+}
+
+#[test]
+fn wasm_execution_budgets_refuse_out_of_range_values() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for (module_bytes, memory_bytes) in [
+        (0_u64, 32 * 1024 * 1024_u64),
+        (1023, 32 * 1024 * 1024),
+        (5 * 1024 * 1024 + 1, 32 * 1024 * 1024),
+        (2 * 1024 * 1024, 0),
+        (2 * 1024 * 1024, 1024 * 1024 - 1),
+        (2 * 1024 * 1024, 1024 * 1024 * 1024 + 1),
+    ] {
+        let configured = format!(
+            "{base}wasmExecution:\n  maxModuleBytes: {module_bytes}\n  maxGuestMemoryBytes: {memory_bytes}\n"
+        );
+        let metadata = parse_runtime_config(&configured)
+            .expect_err("out-of-range WASM execution budget is refused")
+            .metadata();
+        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
+        assert_eq!(metadata.path(), "/wasmExecution");
+    }
+}
+
+#[test]
+fn wasm_execution_backend_defaults_to_pulley_and_accepts_native() {
+    use registry_breg::wasm_handler::WasmExecutionBackend;
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let config =
+        parse_runtime_config(&base).expect("the WASM execution section is optional in every build");
+    assert_eq!(
+        config.wasm_execution().backend(),
+        WasmExecutionBackend::Pulley
+    );
+    let configured = format!("{base}wasmExecution:\n  backend: native\n");
+    let config = parse_runtime_config(&configured).expect("native is an operator choice");
+    assert_eq!(
+        config.wasm_execution().backend(),
+        WasmExecutionBackend::Native
+    );
+}
+
+#[test]
+fn wasm_execution_backend_refuses_unknown_values() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    for backend in ["warp", "Pulley", ""] {
+        let configured = format!("{base}wasmExecution:\n  backend: {backend}\n");
+        let metadata = parse_runtime_config(&configured)
+            .expect_err("an unknown WASM execution backend is refused")
+            .metadata();
+        assert_eq!(metadata.code(), "runtime_config.invalid_wasm_execution");
+        assert_eq!(metadata.path(), "/wasmExecution");
+    }
+}
+
+#[test]
+fn wasm_execution_section_refuses_unknown_members() {
+    let fixture = RuntimeFixture::new();
+    let base = valid_runtime(
+        &fixture.secret_root,
+        &fixture.package_root,
+        &fixture.trust_anchor,
+    );
+    let configured = format!("{base}wasmExecution:\n  maxModuleBytes: 2097152\n  engine: native\n");
+    assert_eq!(
+        parse_runtime_config(&configured).expect_err("unknown WASM execution member is refused"),
+        RuntimeConfigError::Document
+    );
 }
 
 #[test]
@@ -1917,7 +2042,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
         &fixture.trust_anchor,
     );
     let bindings = r#"evidenceProviders:
-  events:
+  hooks:
     baseUrl: https://evidence-endpoint-canary.example
     trustBindingId: evidence-trust-canary
     tokenRef: secret:file/evidence-token-canary
@@ -1938,12 +2063,12 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
     // malformed binding values and missing members.
     for raw in [
         valid.replace("    tokenRef:", "    fields: []\n    tokenRef:"),
-        valid.replace("    tokenRef:", "    events: []\n    tokenRef:"),
+        valid.replace("    tokenRef:", "    hooks: []\n    tokenRef:"),
         valid.replace(
             "    tokenRef:",
             "    token: inline-secret-canary\n    tokenRef:",
         ),
-        format!("{base}evidenceProviders:\n  events: []\n"),
+        format!("{base}evidenceProviders:\n  hooks: []\n"),
         format!("{base}evidenceProviders:\n  entities: {{}}\n"),
     ] {
         let error = parse_runtime_config_with_env(&raw, env_lookup)
@@ -1951,7 +2076,7 @@ fn evidence_provider_logical_ids_are_not_governed_fields_and_bindings_stay_close
         assert_eq!(error, RuntimeConfigError::Document);
         assert!(!format!("{error:?}: {error}").contains("canary"));
     }
-    for member in ["events", "entities"] {
+    for member in ["hooks", "entities"] {
         let raw = format!("{valid}{member}: []\n");
         assert_eq!(
             parse_runtime_config_with_env(&raw, env_lookup)

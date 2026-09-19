@@ -603,9 +603,9 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"secret","type":"string","maxLength":128,"classification":"restricted"},
               {"id":"quantity","type":"int64","required":true,"classification":"public"}
             ],
-            "events":[
-              {"id":"widget-created","trigger":"created","projection":["label"]},
-              {"id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
+            "hooks":[
+              {"phase":"after","id":"widget-created","trigger":"created","projection":["label"]},
+              {"phase":"after","id":"widget-patched","trigger":"patched","projection":["label","quantity"]}
             ]
           }],
           "accessProfiles":[{

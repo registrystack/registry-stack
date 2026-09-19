@@ -1261,8 +1261,8 @@ fn compare_entities(
         );
         compare_map(
             entity_id,
-            &previous_entity.events,
-            &candidate_entity.events,
+            &previous_entity.hooks,
+            &candidate_entity.hooks,
             CompiledRegistryChangeTargetKind::Event,
             CompiledRegistryChangeCode::EventAdded,
             CompiledRegistryChangeCode::EventRemoved,
@@ -2666,6 +2666,24 @@ fn package_compiler_assets(
     Ok(assets)
 }
 
+/// The owned asset path a handler declares: its script for Rhai, its module
+/// for WASM. None means the handler declares no owned asset, a kind the
+/// compiler refuses before this package is rederived.
+fn handler_source_path(handler: &crate::contract::ActionHandlerSource) -> Option<&str> {
+    handler.script().or_else(|| handler.module())
+}
+
+/// The owned asset path a local hook handler declares: its script for `rhai`,
+/// its module for `wasm`. A `url` handler holds no program and so owns no
+/// asset.
+fn hook_handler_source_path(hook: &crate::contract::HookSource) -> Option<&str> {
+    match hook.handler.as_ref()? {
+        registry_platform_hooks::HookHandlerSource::Rhai { script, .. } => Some(script.as_str()),
+        registry_platform_hooks::HookHandlerSource::Wasm { module, .. } => Some(module.as_str()),
+        registry_platform_hooks::HookHandlerSource::Url { .. } => None,
+    }
+}
+
 fn validate_declared_package_assets(
     project: &RegistryProject,
     modules: &[RegistryModule],
@@ -2682,17 +2700,24 @@ fn validate_declared_package_assets(
                 .and_then(|request| request.planner.as_ref())
                 .map(|planner| planner.script.as_str())
         })
-        .chain(project.actions.iter().filter_map(|action| {
-            action
-                .handler
-                .as_ref()
-                .map(|handler| handler.script.as_str())
-        }))
+        .chain(
+            project
+                .actions
+                .iter()
+                .filter_map(|action| action.handler.as_ref().and_then(handler_source_path)),
+        )
         .chain(
             project
                 .evidence_providers
                 .iter()
                 .map(|provider| provider.contracts.as_str()),
+        )
+        .chain(
+            project
+                .entities
+                .iter()
+                .flat_map(|entity| entity.hooks.iter())
+                .filter_map(hook_handler_source_path),
         )
         .collect::<BTreeSet<_>>();
     let supplied_project = project_assets
@@ -2714,15 +2739,11 @@ fn validate_declared_package_assets(
         let mut declared = module
             .actions
             .iter()
-            .filter_map(|action| {
-                action
-                    .handler
-                    .as_ref()
-                    .map(|handler| handler.script.as_str())
-            })
+            .filter_map(|action| action.handler.as_ref().and_then(handler_source_path))
             .collect::<BTreeSet<_>>();
         for entity in &module.entities {
             declared.extend(entity.derived.iter().map(|derived| derived.sql.as_str()));
+            declared.extend(entity.hooks.iter().filter_map(hook_handler_source_path));
             if let Some(script) = entity
                 .change_request
                 .as_ref()
@@ -2734,6 +2755,7 @@ fn validate_declared_package_assets(
         }
         for extension in &module.extend_entities {
             declared.extend(extension.derived.iter().map(|derived| derived.sql.as_str()));
+            declared.extend(extension.hooks.iter().filter_map(hook_handler_source_path));
             if let Some(script) = extension
                 .change_request
                 .as_ref()
@@ -2768,6 +2790,9 @@ fn validate_project_asset(path: &str, bytes: &[u8]) -> Result<()> {
         }
         return Err(PackageError::Derivation);
     }
+    if path.ends_with(".wasm") {
+        return validate_wasm_asset(path, bytes);
+    }
     validate_planner_asset(path, bytes)
 }
 
@@ -2778,6 +2803,19 @@ fn validate_planner_asset(path: &str, bytes: &[u8]) -> Result<()> {
         || path == "registry.yaml"
         || bytes.is_empty()
         || bytes.len() as u64 > MAX_RHAI_PLANNER_SOURCE_BYTES
+    {
+        return Err(PackageError::Derivation);
+    }
+    Ok(())
+}
+
+fn validate_wasm_asset(path: &str, bytes: &[u8]) -> Result<()> {
+    validate_relative(path)?;
+    if path.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_PATH_BYTES
+        || !path.ends_with(".wasm")
+        || path == "registry.yaml"
+        || bytes.is_empty()
+        || bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES
     {
         return Err(PackageError::Derivation);
     }
@@ -2802,6 +2840,12 @@ fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
         {
             validate_planner_asset(path, bytes)
         }
+        Some("wasm")
+            if path != "module.yaml"
+                && bytes.len() <= crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES =>
+        {
+            validate_wasm_asset(path, bytes)
+        }
         _ => Err(PackageError::Derivation),
     }
 }
@@ -2809,6 +2853,7 @@ fn validate_module_asset(path: &str, bytes: &[u8]) -> Result<()> {
 fn package_project_asset_path(asset_path: &str) -> Result<String> {
     validate_relative(asset_path)?;
     if (!asset_path.ends_with(".rhai")
+        && !asset_path.ends_with(".wasm")
         && !crate::action_evidence_contracts::valid_contract_path(asset_path))
         || asset_path == "registry.yaml"
     {
@@ -2833,7 +2878,9 @@ fn project_asset_source_path(package_path: &str) -> Result<&str> {
 fn package_module_asset_path(module_id: &str, asset_path: &str) -> Result<String> {
     validate_relative(module_id)?;
     validate_relative(asset_path)?;
-    if (!asset_path.ends_with(".sql") && !asset_path.ends_with(".rhai"))
+    if (!asset_path.ends_with(".sql")
+        && !asset_path.ends_with(".rhai")
+        && !asset_path.ends_with(".wasm"))
         || asset_path == "module.yaml"
     {
         return Err(PackageError::Derivation);
@@ -2848,6 +2895,10 @@ fn package_module_asset_role(asset_path: &str) -> Result<PackageFileRole> {
         Ok(PackageFileRole::SourceModuleAsset)
     } else if asset_path.ends_with(".rhai") {
         Ok(PackageFileRole::SourceModulePlannerScript)
+    } else if asset_path.ends_with(".wasm") {
+        // A module-owned WASM handler binary rides the generic module asset
+        // role; only the project-level handler source keeps its own role.
+        Ok(PackageFileRole::SourceModuleAsset)
     } else {
         Err(PackageError::Derivation)
     }
@@ -3004,8 +3055,19 @@ fn package_role_for_path(path: &str) -> Result<PackageFileRole> {
         path if path.starts_with("source/project/") && path.ends_with(".rhai") => {
             PackageFileRole::SourceProjectPlannerScript
         }
+        // Project-owned WASM handler modules travel as project handler
+        // source; no separate role exists for the binary form.
+        path if path.starts_with("source/project/") && path.ends_with(".wasm") => {
+            PackageFileRole::SourceProjectPlannerScript
+        }
         path if path.starts_with("source/modules/")
             && path.ends_with(".sql")
+            && !path.ends_with("/module.yaml") =>
+        {
+            PackageFileRole::SourceModuleAsset
+        }
+        path if path.starts_with("source/modules/")
+            && path.ends_with(".wasm")
             && !path.ends_with("/module.yaml") =>
         {
             PackageFileRole::SourceModuleAsset
@@ -3088,9 +3150,11 @@ fn validate_build_identity(request: &PackageBuildRequest) -> Result<()> {
     validate_signature_policy(&request.environment, &request.signature_policy)
 }
 
-fn valid_build_id(value: &str) -> bool {
+/// The closed grammar the envelope wrapper proof budgets: no byte serde_json
+/// escapes, at most `compiler::MAX_BUILD_ID_BYTES` of them.
+pub(crate) fn valid_build_id(value: &str) -> bool {
     !value.is_empty()
-        && value.len() <= 64
+        && value.len() <= crate::compiler::MAX_BUILD_ID_BYTES as usize
         && value
             .bytes()
             .next()

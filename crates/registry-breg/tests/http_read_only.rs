@@ -243,11 +243,13 @@ entities:
       scopeFields: [classified-status]
     constraints:
       - {kind: temporal-non-overlap, scopeFields: [classified-status], startField: valid-from, endField: valid-to}
-    events:
+    hooks:
       - id: classified-created-event
+        phase: after
         trigger: created
         projection: [classified-status, valid-from]
-        webhook:
+        handler:
+          kind: url
           destinationId: classified-operations-destination
 accessProfiles:
   - id: public
@@ -2920,11 +2922,13 @@ async fn caller_filtered_discovery_conceals_counts_vocabularies_events_queries_a
         }
         _ => panic!("protected vocabulary field retains its closed type"),
     }
-    assert!(protected.events.contains_key("classified-created-event"));
+    assert!(protected.hooks.contains_key("classified-created-event"));
     assert_eq!(registry.event_deliveries().deliveries.len(), 1);
     assert_eq!(
-        registry.event_deliveries().deliveries[0].destination_id,
-        "classified-operations-destination"
+        registry.event_deliveries().deliveries[0]
+            .destination_id
+            .as_deref(),
+        Some("classified-operations-destination")
     );
     assert_eq!(
         registry

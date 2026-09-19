@@ -44,13 +44,6 @@ fn global_json_refuses_every_legacy_human_renderer_before_dispatch() {
             ],
             "client",
         ),
-        (&["access", "policy", "list"], "access"),
-        (&["keygen", "secret", "--output", "secret"], "keygen"),
-        (&["jwks", "--output", "jwks.json", "public.jwk"], "jwks"),
-        (
-            &["source", "suggest", "--openapi", "source.openapi.yaml"],
-            "source",
-        ),
         (&["source", "mock", "check"], "source"),
         (&["source", "detach", "records"], "source"),
         (&["target", "new", "target", "--local"], "target new"),
@@ -69,9 +62,7 @@ fn global_json_refuses_every_legacy_human_renderer_before_dispatch() {
             ],
             "verify",
         ),
-        (&["audit", "show", "--last-operation"], "audit"),
-        (&["tooling", "editor"], "tooling"),
-        (&["tooling", "language-server"], "tooling"),
+        (&["tooling", "language-server"], "tooling language-server"),
         (
             &[
                 "__dev-supervisor",
@@ -91,6 +82,101 @@ fn global_json_refuses_every_legacy_human_renderer_before_dispatch() {
     for (arguments, command) in cases {
         assert_json_format_refusal(arguments, command);
     }
+}
+
+/// The commands whose JSON reports this crate migrated answer the shared
+/// success envelope — one JSON object on stdout — and, when their inputs are
+/// missing, fail with the standard JSON failure document instead of the
+/// `evidencectl.format.unsupported` refusal or human prose.
+#[test]
+fn migrated_json_commands_answer_one_json_document() {
+    let cases: &[&[&str]] = &[
+        &[
+            "access",
+            "policy",
+            "add",
+            "policy",
+            "--question",
+            "question",
+        ],
+        &["access", "policy", "list"],
+        &[
+            "access",
+            "client",
+            "add",
+            "client",
+            "--policy",
+            "policy",
+            "--generate-local-key",
+        ],
+        &["access", "client", "list"],
+        &["access", "client", "revoke", "client"],
+        &["keygen", "secret", "--output", "secret"],
+        &["jwks", "--output", "jwks.json", "public.jwk"],
+        &["source", "suggest", "--openapi", "source.openapi.yaml"],
+    ];
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    for arguments in cases {
+        let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+            .args(["--format", "json"])
+            .args(*arguments)
+            .current_dir(directory.path())
+            .output()
+            .expect("run evidencectl");
+        assert_ne!(output.status.code(), Some(2), "arguments: {arguments:?}");
+        assert!(
+            output.stderr.is_empty(),
+            "JSON mode wrote human diagnostics for {arguments:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let report: Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("invalid JSON for {arguments:?}: {error}"));
+        if output.status.success() {
+            for key in ["command", "ok", "status"] {
+                assert!(report.get(key).is_some(), "{arguments:?} lacks {key}");
+            }
+            assert_eq!(report["ok"], Value::Bool(true), "arguments: {arguments:?}");
+            assert_eq!(report["status"], "complete", "arguments: {arguments:?}");
+        } else {
+            assert!(
+                report["diagnostics"][0]["code"]
+                    .as_str()
+                    .is_some_and(|code| code != "evidencectl.format.unsupported"),
+                "{arguments:?} is still refused: {report}"
+            );
+        }
+    }
+}
+
+/// A `help`-spelled positional value is not the subcommand token, so it must
+/// reach the command instead of being mistaken for `--format json help`.
+#[test]
+fn a_help_spelled_value_is_not_mistaken_for_the_help_catalog() {
+    let directory = tempfile::tempdir().expect("temporary working directory");
+    let output = Command::new(env!("CARGO_BIN_EXE_evidencectl"))
+        .args([
+            "--format",
+            "json",
+            "access",
+            "client",
+            "revoke",
+            "help",
+            "--project",
+        ])
+        .arg(directory.path())
+        .output()
+        .expect("run evidencectl");
+
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a client named `help` cannot be revoked in an empty project, so this must not succeed"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("schema_version"),
+        "the `help` value hijacked the command into printing the CLI reference catalog: {stdout}"
+    );
 }
 
 #[test]

@@ -54,8 +54,12 @@ pub enum PolicyCheckReason {
     /// Two declarations draw on the same supply without an attributable
     /// partition of it.
     SharedSupplyUnpartitioned,
-    /// A hook declares an ABI other than the one reserved scheduling ABI.
+    /// A local hook omits or changes the shared handler ABI.
     UnsupportedHookAbi,
+    /// A hook phase and handler kind cannot run together.
+    UnsupportedHookPhase,
+    /// A shared hook declaration violates a rule unknown to this product.
+    InvalidHookDeclaration,
     /// This version has no hook engine, so a declared hook can never run.
     HooksUnsupported,
     /// This version reads no leftover policy, so a declared one never
@@ -87,6 +91,8 @@ impl PolicyCheckReason {
             Self::SubquotaOverdrawn => "subquota-overdrawn",
             Self::SharedSupplyUnpartitioned => "shared-supply-unpartitioned",
             Self::UnsupportedHookAbi => "unsupported-hook-abi",
+            Self::UnsupportedHookPhase => "unsupported-hook-phase",
+            Self::InvalidHookDeclaration => "invalid-hook-declaration",
             Self::HooksUnsupported => "hooks-unsupported",
             Self::LeftoverUnsupported => "leftover-unsupported",
         }

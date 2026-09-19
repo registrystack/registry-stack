@@ -145,6 +145,20 @@ fn a_fresh_init_project_starts_without_edits() {
 }
 
 #[test]
+fn the_generated_clients_header_names_the_teaching_bindings_section() {
+    // The header explains the one binding it generates and points at the
+    // section that documents the explicit binding it does not generate, so a
+    // reader who needs `testBindings` finds it without reading the source.
+    let header = String::from_utf8_lossy(crate::INIT_DEV_CLIENTS).into_owned();
+    for fact in ["testBindings", "'Explicit teaching clients'", "DEV.md"] {
+        assert!(
+            header.contains(fact),
+            "dev-clients.yaml header omits {fact}"
+        );
+    }
+}
+
+#[test]
 fn a_journey_profile_without_a_client_is_refused_before_any_service_starts() {
     let (_temporary, project) = write_init_project();
     let client_bytes = br#"version: 1
@@ -983,7 +997,33 @@ fn occupied_and_ambiguous_ports_are_refused() {
     assert!(ports(1, 1, 2).is_err());
     assert!(ports(0, 2, 3).is_err());
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
-    assert!(probe(listener.local_addr().unwrap().port()).is_err());
+    let occupied = listener.local_addr().unwrap().port();
+    for (role, flag) in [
+        (PortRole::Breg, Some("--breg-port")),
+        (PortRole::Issuer, Some("--issuer-port")),
+        (PortRole::Database, Some("--database-port")),
+        (PortRole::Receiver, None),
+    ] {
+        let refusal = format!("{:#}", probe(occupied, role).unwrap_err());
+        assert!(refusal.contains(&occupied.to_string()), "{refusal}");
+        assert!(refusal.contains(role.name()), "{refusal}");
+        assert!(refusal.contains("127.0.0.1"), "{refusal}");
+        match flag {
+            // A flag-selected port names the flag that chooses it on a first
+            // start, so an author can act on the refusal without re-reading
+            // the command's own options.
+            Some(flag) => assert!(refusal.contains(flag), "{refusal}"),
+            // The receiver's port is retained with the session; its refusal
+            // must not point at a flag that does not exist.
+            None => assert!(!refusal.contains("--"), "{refusal}"),
+        }
+        assert!(!refusal.contains(".breg"), "{refusal}");
+    }
+    // A port nothing holds stays usable, so only a real occupant refuses.
+    let holder = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let free = holder.local_addr().unwrap().port();
+    drop(holder);
+    assert!(probe(free, PortRole::Breg).is_ok());
 }
 
 fn script(path: &Path, body: &str) {
@@ -1225,6 +1265,41 @@ fn the_documented_image_and_deadlines_are_the_supervisors_own() {
     }
 }
 
+/// The start help and the owning document agree on the recovery facts an
+/// operator needs after a deadline or an outside kill: the document keeps
+/// the fact, the help points at the document's own section names.
+#[test]
+fn dev_start_help_carries_the_outside_kill_fact_and_the_document_sections() {
+    let document = fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/DEV.md"),
+    )
+    .expect("the owning lifecycle document");
+    assert!(
+        document.contains("require inspection of surviving service owners before restart"),
+        "products/breg/DEV.md omits the outside-kill fact"
+    );
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let dev = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("bregctl publishes dev");
+    let help = dev
+        .get_subcommands()
+        .find(|command| command.get_name() == "start")
+        .and_then(|command| command.get_long_about())
+        .expect("dev start describes its own supervision")
+        .to_string();
+    for fact in [
+        "uncatchable",
+        "surviving service owners",
+        "products/breg/DEV.md",
+        "'Native local BReg lifecycle'",
+        "'Retained state and recovery'",
+    ] {
+        assert!(help.contains(fact), "bregctl dev start help omits {fact}");
+    }
+}
+
 #[test]
 fn every_database_url_names_the_published_loopback_literal() {
     let (_temp, state, clients, files) = fixture();
@@ -1450,6 +1525,80 @@ fn a_supervisor_refusal_reaches_the_owner_who_asked_for_the_start() {
     )
     .unwrap();
     assert_eq!(read_state(&root).unwrap().failure, None);
+}
+
+#[test]
+fn a_failed_issuer_setup_names_the_phase_logs_and_both_recoveries() {
+    let (_temporary, state, _clients, _files) = fixture();
+    let root = state.root();
+    // The cause the supervisor records for a refused one-time issuer setup:
+    // the shared tooling names the service and the bootstrap phase.
+    let cause = format!(
+        "{}{}",
+        "a command this session owns did not succeed: ",
+        "the local ThunderID issuer's one-time upstream setup (its ./setup.sh bootstrap) \
+         did not complete; the partial state is retained for recovery"
+    );
+    for failure in [
+        start_failure(Some(&cause), &root),
+        start_failure(None, &root),
+    ] {
+        let reported = format!("{failure:#}");
+        assert!(reported.contains("local start failed"), "{reported}");
+        // The one private path the refusal may name is the retained logs
+        // directory DEV.md documents; every other `.breg/dev` path stays out.
+        let logs = root.join("logs").display().to_string();
+        assert!(reported.contains(&logs), "{reported}");
+        let mut rest = reported.as_str();
+        while let Some(index) = rest.find(".breg/dev") {
+            assert!(rest[index..].starts_with(".breg/dev/logs"), "{reported}");
+            rest = &rest[index + 1..];
+        }
+        // Retention is the recovery: retry keeps the records, and exactly one
+        // named command discards them.
+        assert!(reported.contains("Retry the same command"), "{reported}");
+        assert!(reported.contains("bregctl dev stop --remove"), "{reported}");
+    }
+    // The recorded issuer cause reaches the terminal with the service, the
+    // phase and the retention statement intact.
+    let reported = format!("{:#}", start_failure(Some(&cause), &root));
+    for fact in ["ThunderID issuer", "./setup.sh", "retained for recovery"] {
+        assert!(reported.contains(fact), "{reported}");
+    }
+    // The bounded refusal the supervisor can carry still holds every fact.
+    let bounded: String = cause.chars().take(MAX_REFUSAL).collect();
+    assert!(bounded.contains("ThunderID issuer"), "{bounded}");
+    assert!(bounded.contains("./setup.sh"), "{bounded}");
+}
+
+#[test]
+fn the_changed_inputs_refusal_and_stop_help_name_the_same_two_options() {
+    // The refusal for edited inputs on a retained session offers both record
+    // outcomes, and `dev stop --help` documents the same pair, so neither
+    // surface invents an option the other omits.
+    for fact in [
+        "bregctl dev stop --remove",
+        "copy the authored files to a new project directory",
+    ] {
+        assert!(CHANGED_INPUTS.contains(fact), "{CHANGED_INPUTS}");
+    }
+    let cli = <crate::Cli as clap::CommandFactory>::command();
+    let dev = cli
+        .get_subcommands()
+        .find(|command| command.get_name() == "dev")
+        .expect("bregctl publishes dev");
+    let stop = dev
+        .get_subcommands()
+        .find(|command| command.get_name() == "stop")
+        .and_then(|command| command.get_long_about())
+        .expect("dev stop describes its own records")
+        .to_string();
+    assert!(stop.contains("--remove"), "{stop}");
+    assert!(
+        stop.contains("copy the authored files to a new project directory"),
+        "{stop}"
+    );
+    assert!(stop.contains("'Retained state and recovery'"), "{stop}");
 }
 
 #[test]
@@ -2126,10 +2275,10 @@ fn declared_events_receive_exact_private_bindings_in_rehearsal_and_runtime() {
         .iter_mut()
         .find(|entity| entity["id"] == "record")
         .unwrap();
-    entity["events"] = json!([
-        {"id":"record-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"local-hook"}},
-        {"id":"record-patched-v1","trigger":"patched","projection":["label"],"webhook":{"destinationId":"local-hook"}},
-        {"id":"record-second-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"second-hook"}}
+    entity["hooks"] = json!([
+        {"phase":"after","id":"record-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-patched-v1","trigger":"patched","projection":["label"],"handler":{"kind":"url","destinationId":"local-hook"}},
+        {"phase":"after","id":"record-second-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"second-hook"}}
     ]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();
@@ -2230,9 +2379,10 @@ fn explicit_local_event_destinations_bind_exact_compiled_inventory() {
         .iter_mut()
         .find(|entity| entity["id"] == "record")
         .unwrap();
-    entity["events"] = json!([{
+    entity["hooks"] = json!([{
+        "phase": "after",
         "id":"record-created-v1","trigger":"created","projection":["code"],
-        "webhook":{"destinationId":"openfn"}
+        "handler":{"kind":"url","destinationId":"openfn"}
     }]);
     fs::write(&module, serde_norway::to_string(&source).unwrap()).unwrap();
     let bytes = fs::read(project.join("dev-clients.yaml")).unwrap();

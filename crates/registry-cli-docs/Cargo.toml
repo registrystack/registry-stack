@@ -13,10 +13,12 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+registry-cli-reference.workspace = true
 registry-evidence.workspace = true
 registry-evidence-oid4vci.workspace = true
 registry-evidencectl.workspace = true
 registry-relay-v2.workspace = true
+registry-render.workspace = true
 registry-relayctl.workspace = true
 registry-breg = { workspace = true, features = ["runtime"] }
 registry-bregctl.workspace = true

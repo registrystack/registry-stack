@@ -2,12 +2,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use registry_platform_hooks::HookHandlerKind;
 use serde::{Deserialize, Serialize};
 
 use crate::artifacts::GeneratedArtifacts;
 use crate::contract::{
     AccessProfileSource, BatchSource, Classification, ConstraintSource, EventConditionSource,
-    EventSource, FieldTypeSource, ManifestProjectionCatalogSource,
+    FieldTypeSource, HookSource, ManifestProjectionCatalogSource,
     ManifestProjectionDataServiceSource, ManifestProjectionDatasetSource,
     ManifestProjectionDistributionSource, ManifestProjectionEntitySource,
     ManifestProjectionPublicServiceSource, ManifestProjectionVocabularySource, MutationMode,
@@ -544,19 +545,39 @@ pub struct CompiledActionRequirement {
     pub equals_input: Option<String>,
 }
 
+/// The compiled action-handler backend tag, owned by the handler alone. A
+/// build with the `wasm` feature can compile WASM handlers; the
+/// runtime still refuses to execute them.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledActionHandlerKind {
+    Rhai,
+    Wasm,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct CompiledActionHandler {
-    pub kind: CompiledChangeRequestPlannerKind,
+    pub kind: CompiledActionHandlerKind,
     pub source_module: Option<String>,
     #[serde(skip)]
     pub script_path: String,
+    /// The WASM module path, project-local. Carried for wasm handlers only.
+    #[serde(skip)]
+    pub module_path: String,
     pub abi: String,
-    pub rhai_version: String,
-    pub script_sha256: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rhai_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub script_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_sha256: Option<String>,
     #[serde(skip)]
     pub script_bytes: Vec<u8>,
-    pub limits: CompiledChangeRequestPlannerLimits,
+    #[serde(skip)]
+    pub module_bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limits: Option<CompiledChangeRequestPlannerLimits>,
     pub writes: Vec<CompiledActionHandlerWrite>,
     pub refusals: BTreeMap<String, String>,
 }
@@ -754,7 +775,7 @@ pub struct CompiledEntity {
     pub access_profiles: BTreeMap<String, AccessProfileSource>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub membership_boundaries: BTreeMap<String, Vec<CompiledMembershipBoundary>>,
-    pub events: BTreeMap<String, EventSource>,
+    pub hooks: BTreeMap<String, HookSource>,
 }
 
 /// Governed catalogue projection with every resource reference resolved once.
@@ -893,10 +914,23 @@ pub struct CompiledEventDelivery {
     pub entity_id: String,
     pub event_id: String,
     pub trigger: crate::contract::EventTrigger,
-    pub destination_id: String,
+    /// The bound destination this delivery is sent to. Present for the `url`
+    /// handler kind and absent for a local kind, which is sent nowhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_id: Option<String>,
+    /// The reviewed program this delivery runs in the post-commit worker.
+    /// Present for the `rhai` and `wasm` handler kinds and absent for `url`,
+    /// which holds no program. Exactly one of this and `destination_id` is
+    /// present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handler: Option<CompiledHookHandler>,
     pub projection_fields: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub when: Option<EventConditionSource>,
+    /// The access profile a proposal from this hook is applied under, carried
+    /// opaquely from the declaration. Absent for a non-proposing hook.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
     pub classification_ceiling: Classification,
     pub data_schema: String,
     pub data_schema_fingerprint: String,
@@ -916,6 +950,69 @@ pub struct CompiledEventDelivery {
     pub maximum_payload_bytes: u32,
     pub dead_letter: WebhookDeadLetterMode,
     pub operator_replay: bool,
+}
+
+impl CompiledEventDelivery {
+    /// The handler kind this delivery binds, read from the one of the two
+    /// bindings it carries.
+    #[must_use]
+    pub fn handler_kind(&self) -> HookHandlerKind {
+        self.handler
+            .as_ref()
+            .map_or(HookHandlerKind::Url, |handler| handler.kind.shared())
+    }
+
+    /// The delivery row's handler identity digest: the destination binding
+    /// digest for the `url` kind, and the reviewed program's digest for a
+    /// local kind.
+    #[must_use]
+    pub fn handler_digest(&self) -> Option<&str> {
+        self.handler.as_ref().map(|handler| handler.digest.as_str())
+    }
+}
+
+/// The compiled backend tag of a local hook handler. The engine holds the
+/// reviewed program and runs it in the post-commit worker, so a local kind
+/// binds no destination and sends nothing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompiledHookHandlerKind {
+    Rhai,
+    Wasm,
+}
+
+impl CompiledHookHandlerKind {
+    /// The shared handler-kind spelling the delivery row stores.
+    #[must_use]
+    pub const fn shared(self) -> HookHandlerKind {
+        match self {
+            Self::Rhai => HookHandlerKind::Rhai,
+            Self::Wasm => HookHandlerKind::Wasm,
+        }
+    }
+}
+
+/// The reviewed local program one hook delivery runs.
+///
+/// `digest` is the delivery row's handler identity. A retained delivery runs
+/// exactly the program it was captured under, or it is refused: the worker
+/// compares this value against the digest the row recorded, the way it
+/// compares a destination's binding digest for the `url` kind.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CompiledHookHandler {
+    pub kind: CompiledHookHandlerKind,
+    pub abi: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_module: Option<String>,
+    /// The script or module path, project-local.
+    #[serde(skip)]
+    pub source_path: String,
+    /// `sha256:<hex>` over the reviewed bytes.
+    pub digest: String,
+    /// The reviewed bytes, rederived when the package is loaded.
+    #[serde(skip)]
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

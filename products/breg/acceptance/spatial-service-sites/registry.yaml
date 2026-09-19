@@ -57,7 +57,7 @@ manifestProjection:
 modules:
   - id: "spatial-service-sites-core"
     version: "0.1.0"
-    digest: "sha256:2ac0445c7f15c1c6bbdf6fd30ecf71552171d99b74201ab95362f4b83b0ecd53"
+    digest: "sha256:d463d2d2789c99330c6329109282807565a09a602d6711d57dc5a7643e507b51"
 
 entities:
   - id: service-site

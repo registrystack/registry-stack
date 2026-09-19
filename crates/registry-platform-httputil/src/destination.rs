@@ -3419,6 +3419,21 @@ impl<S: DestinationSlot> BoundedDestinationBody<S> {
     }
 }
 
+impl BoundedDestinationBody<EventDestination> {
+    /// Take the bounded event-delivery response bytes.
+    ///
+    /// The event slot is the one slot whose response body is a declared part
+    /// of the protocol: a hook handler reached over HTTP answers in its
+    /// response body, and the delivery worker reads that answer under the
+    /// handler output ceiling the caller already passed to `read_bounded`.
+    /// The data and credential slots stay opaque, so this is not a general
+    /// response-body extraction API.
+    #[must_use]
+    pub fn to_event_answer(&self) -> Vec<u8> {
+        self.bytes.to_vec()
+    }
+}
+
 #[cfg(feature = "test-support")]
 impl BoundedDestinationBody<DataDestination> {
     /// Construct opaque data-destination bytes for cross-crate contract tests.

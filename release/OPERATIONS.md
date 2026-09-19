@@ -24,6 +24,9 @@ Start release preparation when:
   workflow write access.
 - The `npm`, `pypi`, and `pypi-evidence` GitHub environments exist with the
   intended release approvers.
+- Every dependency pinned to a long-term-support line has been checked for
+  remaining upstream support: more than six months must remain, or the
+  next-LTS migration is already promoted to a release blocker for this cut.
 
 The scheduled release canary is useful maintenance telemetry, but it is not a
 Beta release prerequisite.
@@ -162,6 +165,38 @@ this runbook has not seen. When a receipt names an undeletable version, the
 version stays in the package and every applied run reports it again. GitHub
 documents one route for this limit, a GitHub Support request, so removing
 the version is a decision to file one, not a tooling change.
+
+### Mirror the pinned BuildKit image
+
+CI builders and release image recipes pin the BuildKit executor image by
+digest. The pin resolves to `ghcr.io/registrystack/buildkit`, a public mirror
+of the upstream `moby/buildkit` image, so builds never depend on Docker Hub
+authentication availability. The mirror is digest-preserving: the mirrored tag
+must resolve to exactly the upstream digest, and the builder recipes verify
+that property themselves.
+
+When a pin bump changes the BuildKit version or digest in the workflows or
+the release scripts, mirror the new digest before landing
+the bump, then confirm the package stays public:
+
+```sh
+gh api --method POST repos/registrystack/registry-stack/dispatches \
+  -f event_type=mirror-buildkit \
+  -F 'client_payload[tag]=v0.31.2' \
+  -F 'client_payload[digest]=sha256:<the-new-pinned-digest>'
+```
+
+The mirror run refuses to copy when the upstream tag no longer resolves to the
+requested digest, and fails when the mirrored digest differs or the package
+visibility is not public. Provision the `buildkit` package identity once with
+the classic-PAT bootstrap above, then change it to public in the organization
+package settings and grant `registrystack/registry-stack` Actions access.
+
+The rehearsal canonical job permits exactly one GHCR reference: the
+digest-pinned `ghcr.io/registrystack/buildkit` mirror. It preserves the
+upstream manifest digest byte for byte, so it adds no org-controlled build
+input; every other GHCR reference stays banned so the rehearsal cannot read
+published release artifacts.
 
 ### Provision client registries
 

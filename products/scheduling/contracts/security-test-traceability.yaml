@@ -119,7 +119,8 @@ entries:
       - {path: crates/registry-scheduling-core/src/model.rs, name: ledger_and_request_shapes_refuse_unknown_fields}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: unknown_policy_fields_are_refused}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: collection_bounds_are_enforced}
-      - {path: crates/registry-scheduling-core/src/policy.rs, name: declared_hooks_are_refused_because_nothing_can_run_them}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: shared_hook_declarations_are_validated_and_refused_until_runtime_exists}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: legacy_duplicate_and_mismatched_hook_members_are_refused_by_the_shared_shape}
       - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: invalid_client_input_never_reaches_the_wire}
   - id: SCHEDULING-SEC-18
     tests:

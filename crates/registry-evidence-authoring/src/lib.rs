@@ -45,5 +45,5 @@ pub use model::{
 };
 pub use validate::{
     collection_pointers, question_subjects, valid_field_name, valid_local_identifier,
-    validate_access_policy, validate_answer, validate_question,
+    validate_access_policy, validate_answer, validate_answer_schema_document, validate_question,
 };

@@ -3590,7 +3590,7 @@ fn module_bytes(plan: PlanChoice) -> Vec<u8> {
         plan,
         PlanChoice::WebhookSchema | PlanChoice::WebhookSecondTable
     ) {
-        r#","events":[{"id":"neutral-created-v1","trigger":"created","projection":["code"],"webhook":{"destinationId":"neutral-events"}}]"#
+        r#","hooks":[{"phase":"after","id":"neutral-created-v1","trigger":"created","projection":["code"],"handler":{"kind":"url","destinationId":"neutral-events"}}]"#
     } else {
         ""
     };
@@ -3851,14 +3851,14 @@ async fn insert_upgrade_webhook_delivery(
         .admin
         .execute(
             "INSERT INTO registry_internal.registry_webhook_deliveries
-                 (event_id, compiled_delivery_id, logical_destination_id,
+                 (event_id, compiled_delivery_id, handler_kind, logical_destination_id,
                   destination_binding_digest, package_revision, schema_fingerprint,
                   data_schema, classification_ceiling, authentication_profile, delivery_mode,
                   attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
                   exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
                   maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
                   deployed_maximum_attempts, dead_letter, operator_replay)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, 'internal', 'hmac_sha256_v1',
+             VALUES ($1, $2, 'url', $3, $4, $5, $6, $7, 'internal', 'hmac_sha256_v1',
                      'after_commit', 5000, 1000, 8000, 2, 5, $8, 1024, $9,
                      4000, 4, 'required', true)",
             &[

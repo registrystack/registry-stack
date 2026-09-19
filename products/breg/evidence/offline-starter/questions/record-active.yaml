@@ -1,0 +1,47 @@
+# A question: one fixed request a caller may make, and the one answer it may
+# get back. Everything a caller can ask of this deployment is a question file.
+
+# The identifier a caller names in a request, the sentence the question
+# answers, and the purpose the request must declare to be admitted.
+id: record-active
+question: Is the registered record active?
+purpose: record-verification
+
+# The subject: which selector role and profile identify what is being asked
+# about, and which field of that profile carries the record code.
+subject:
+  role: subject
+  selector: code
+  profile: record-by-code-v1
+
+# The source this question reads. It reads that one and no other.
+source:
+  ref: record-status
+
+# The answers the assertion may carry, each with the concept it is stated in
+# and the type it must have. The derivation may produce these and nothing else.
+answers:
+  - concept: active
+    id: urn:example:concept:record-active:active
+    type: boolean
+
+# The bounded script that turns the extracted facts into those answers.
+derivation: derivations/record-active.rhai
+
+# Minimum disclosure: what may leave this deployment. An answer that is not
+# allowed here is withheld even when the derivation produced it.
+disclosure:
+  allow: [active]
+
+# Governance: what the assertion claims to be, how long it stays valid, the
+# timezone its observation is read in, the fixtures that prove it, and the
+# disclosure family it is counted against for anti-reconstruction.
+governance:
+  requirement: urn:example:requirement:record-active:v1
+  kind: criterion
+  referenceFrameworks: [urn:example:framework:record-state:v1]
+  evidenceType: urn:example:evidence:record-active
+  validitySeconds: 300
+  observationTimezone: UTC
+  fixtures: fixtures/record-active.yaml
+  disclosureFamilies: [urn:example:disclosure-family:record-active]

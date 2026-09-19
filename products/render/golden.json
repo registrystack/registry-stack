@@ -1,0 +1,49 @@
+{
+  "issuedAt": "2026-09-16T10:32:00Z",
+  "typstPin": "0.15.1",
+  "documents": {
+    "receipt": {
+      "document": "receipt v3",
+      "pdfSha256": "3f31d7fdc1492471259754a9acc9435c6c6475c9aa08f30a9ddcb04c8cab1519",
+      "dataSha256": "8ab91deaf04f2ab9634da9fe45e63615f285c936659f8d839f413f647641b33a",
+      "warnings": [],
+      "bundleHash": "96d199d20c94b39d4947168a84337277db1f01e86bb8907d0614d211855b0e26",
+      "deps": [
+        "@preview/zebra:0.1.0/src/generic.typ",
+        "@preview/zebra:0.1.0/src/lib.typ",
+        "@preview/zebra:0.1.0/src/zebra.wasm",
+        "@preview/zebra:0.1.0/typst.toml",
+        "templates/receipt.typ"
+      ]
+    },
+    "certificate": {
+      "document": "certificate v1",
+      "pdfSha256": "252d40678919cb8496950101efa7fa4984ccd6825655679cca6dead05c7696c0",
+      "dataSha256": "cccb32e6fdcf4db99a556ede3abedcc4f46b94575b20a4b5ce361edfd1ac555a",
+      "warnings": [],
+      "bundleHash": "3bb68569252cd621f0b6992b329de04524c29d02995c14056892f177ac9e6dff",
+      "deps": [
+        "@preview/zebra:0.1.0/src/generic.typ",
+        "@preview/zebra:0.1.0/src/lib.typ",
+        "@preview/zebra:0.1.0/src/zebra.wasm",
+        "@preview/zebra:0.1.0/typst.toml",
+        "templates/certificate.typ"
+      ]
+    },
+    "card": {
+      "document": "beneficiary-card v1",
+      "pdfSha256": "cf607a3b82a2027abfb4345377b1b84cd2e616da7376e18f29355ca790c3da2f",
+      "dataSha256": "c595a3670a9b83327a8e16ef403b8253039d6d548b3388875930850d0f41fa18",
+      "warnings": [],
+      "bundleHash": "4dd435c0bed4c80f4408dc87173b0f72887071ca78f734441bed979cabfe7d88",
+      "deps": [
+        "@preview/zebra:0.1.0/src/generic.typ",
+        "@preview/zebra:0.1.0/src/lib.typ",
+        "@preview/zebra:0.1.0/src/zebra.wasm",
+        "@preview/zebra:0.1.0/typst.toml",
+        "assets/photo",
+        "templates/card.typ"
+      ]
+    }
+  }
+}

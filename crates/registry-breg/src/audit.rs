@@ -167,6 +167,19 @@ pub(crate) enum WebhookAuditOutcome {
     DestinationTransportUnavailable,
     DestinationPolicyRefused,
     DestinationBindingRefused,
+    /// The delivery row named a local handler the running package does not
+    /// hold, or holds under a different identity digest or budget.
+    HandlerBindingRefused,
+    /// The handler ran out of its attempt budget.
+    HandlerDeadline,
+    /// The handler exceeded a fuel, memory, or input or output ceiling.
+    HandlerResource,
+    /// The handler trapped, or its script failed.
+    HandlerExecution,
+    /// The handler program or its answer was refused as unusable.
+    HandlerSource,
+    /// The handler could not be reached.
+    HandlerUnavailable,
     PayloadRefused,
     PayloadExpired,
     WorkerInterrupted,
@@ -621,6 +634,14 @@ pub(crate) async fn append_webhook_audit(
             WebhookAuditOutcome::Delivered,
             WebhookAuditDisposition::Delivered,
         )
+        // A delivered answer whose proposal dead-lettered: the egress attempt
+        // succeeded, and the deterministic proposal refusal is what made the
+        // row terminal.
+        | (
+            WebhookAuditPhase::Terminal,
+            WebhookAuditOutcome::Delivered,
+            WebhookAuditDisposition::DeadLettered,
+        )
         | (
             WebhookAuditPhase::Terminal,
             WebhookAuditOutcome::HttpNonSuccess
@@ -629,6 +650,12 @@ pub(crate) async fn append_webhook_audit(
             | WebhookAuditOutcome::DestinationTransportUnavailable
             | WebhookAuditOutcome::DestinationPolicyRefused
             | WebhookAuditOutcome::DestinationBindingRefused
+            | WebhookAuditOutcome::HandlerBindingRefused
+            | WebhookAuditOutcome::HandlerDeadline
+            | WebhookAuditOutcome::HandlerResource
+            | WebhookAuditOutcome::HandlerExecution
+            | WebhookAuditOutcome::HandlerSource
+            | WebhookAuditOutcome::HandlerUnavailable
             | WebhookAuditOutcome::PayloadRefused
             | WebhookAuditOutcome::WorkerInterrupted,
             WebhookAuditDisposition::RetryPending | WebhookAuditDisposition::DeadLettered,
@@ -705,6 +732,12 @@ fn webhook_outcome_name(outcome: WebhookAuditOutcome) -> &'static str {
         WebhookAuditOutcome::DestinationTransportUnavailable => "destination_transport_unavailable",
         WebhookAuditOutcome::DestinationPolicyRefused => "destination_policy_refused",
         WebhookAuditOutcome::DestinationBindingRefused => "destination_binding_refused",
+        WebhookAuditOutcome::HandlerBindingRefused => "handler_binding_refused",
+        WebhookAuditOutcome::HandlerDeadline => "handler_deadline",
+        WebhookAuditOutcome::HandlerResource => "handler_resource",
+        WebhookAuditOutcome::HandlerExecution => "handler_execution",
+        WebhookAuditOutcome::HandlerSource => "handler_source",
+        WebhookAuditOutcome::HandlerUnavailable => "handler_unavailable",
         WebhookAuditOutcome::PayloadRefused => "payload_refused",
         WebhookAuditOutcome::PayloadExpired => "payload_expired",
         WebhookAuditOutcome::WorkerInterrupted => "worker_interrupted",

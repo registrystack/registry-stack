@@ -1713,6 +1713,7 @@ class RegistryReleaseTest(TestCase):
                 "evidence-contracts",
                 "identifiers",
                 "breg-contracts",
+                "breg-wasm",
                 "relay-client-contracts",
                 "relay-v2-contracts",
                 "casework-postgres",

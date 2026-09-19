@@ -568,7 +568,10 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
     );
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
-        "evidence: reference fixture source projection failed\n"
+        concat!(
+            "case positive: reference fixture source projection failed\n",
+            "evidence: reference fixture source projection failed\n",
+        )
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
@@ -585,6 +588,170 @@ fn a_reference_case_whose_response_is_refused_records_a_failed_acquisition() {
         .find(|stage| stage["stage"] == json!("acquire"))
         .expect("a case refused at its source records its acquisition");
     assert_eq!(acquire["status"], json!("failed"));
+}
+
+/// A reference case whose scalar expectation misses by class says so, and the
+/// run names the case in both output forms without ever naming the value.
+///
+/// The fixed message on its own says only that a scalar did not match; the
+/// structured line beside it carries the case identifier and the two value
+/// classes, which is what a reader needs to find the case and see the shape of
+/// the mistake. The mistyped expectation itself reaches neither form.
+#[test]
+fn a_reference_scalar_mismatch_names_the_case_and_the_value_classes() {
+    let project = ReferenceProject::stage();
+    project.replace(
+        "bundle/fixtures/adult-status-cases.yaml",
+        "      value: true\n",
+        "      value: definitely-not-a-boolean\n",
+    );
+    let unexplained = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &["evaluate", "--fixture", "fixtures/adult-status-cases.yaml"],
+        )
+    });
+    let explained = project.sealed(|runtime| {
+        invoke(
+            runtime,
+            &[
+                "evaluate",
+                "--fixture",
+                "fixtures/adult-status-cases.yaml",
+                "--explain",
+                "--explain-format",
+                "json",
+            ],
+        )
+    });
+
+    for output in [&unexplained, &explained] {
+        assert!(!output.status.success(), "the mistyped expectation passed");
+        let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+        assert_eq!(
+            stderr,
+            concat!(
+                "case positive: reference scalar value did not match ",
+                "(expected class string, observed class boolean-true)\n",
+                "evidence: reference scalar value did not match\n",
+            ),
+            "the failure must name the case and the classes, never the value"
+        );
+    }
+
+    let stdout = std::str::from_utf8(&explained.stdout).expect("stdout is UTF-8");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["passed"], json!(false));
+    assert_eq!(
+        report["failingCase"],
+        json!({
+            "id": "positive",
+            "cause": "reference scalar value did not match",
+            "expectedClass": "string",
+            "observedClass": "boolean-true",
+        }),
+        "the document must carry the same named case the line printed"
+    );
+    for surface in [
+        stdout,
+        std::str::from_utf8(&explained.stderr).expect("stderr is UTF-8"),
+        std::str::from_utf8(&unexplained.stderr).expect("stderr is UTF-8"),
+    ] {
+        assert!(
+            !surface.contains("definitely-not-a-boolean"),
+            "a diagnostic reprinted the authored expectation: {surface}"
+        );
+    }
+}
+
+/// A derivation that returns a structured key its reviewed schema never
+/// declared fails the fixture evaluation, and the diagnostic names the key.
+///
+/// The output gate closes the declared property set itself, so the refusal
+/// says which key was undeclared instead of only that a shape was wrong. The
+/// value the derivation put under that key reaches no diagnostic.
+#[test]
+fn a_structured_value_naming_an_undeclared_key_fails_the_fixture_and_names_the_key() {
+    let deployment = Deployment::stage("adult-status");
+    deployment.replace(
+        "bundle/evidence.yaml",
+        "concepts: [{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}]",
+        concat!(
+            "concepts: [",
+            "{handle: is_adult, id: urn:example:fixture:concept:adult-status, form: boolean, required: true, constraints: {}}, ",
+            "{handle: record_note, id: urn:example:fixture:concept:record-note, form: reviewed-structured-value, required: false, constraints: {schema: urn:example:fixture:schema:record-note:v1, maximumSerializedBytes: 512}}]",
+        ),
+    );
+    deployment.write(
+        "bundle/schemas/record-note.schema.yaml",
+        concat!(
+            "$schema: https://json-schema.org/draft/2020-12/schema\n",
+            "$id: urn:example:fixture:schema:record-note:v1\n",
+            "type: object\n",
+            "additionalProperties: false\n",
+            "required: [note]\n",
+            "properties:\n",
+            "  note: {type: string, maxLength: 64}\n",
+        ),
+    );
+    deployment.replace(
+        "bundle/derivations/adult-status.rhai",
+        "        value: compare_dates(evaluation_context.legal_local_date, threshold) >= 0\n    }]",
+        concat!(
+            "        value: compare_dates(evaluation_context.legal_local_date, threshold) >= 0\n",
+            "    }, #{\n",
+            "        concept_id: \"urn:example:fixture:concept:record-note\",\n",
+            "        value: #{\n",
+            "            form: \"reviewed-structured-value\",\n",
+            "            schema: \"urn:example:fixture:schema:record-note:v1\",\n",
+            "            fields: #{\n",
+            "                note: \"computed\",\n",
+            "                undeclared_key: \"CANARY\"\n",
+            "            }\n",
+            "        }\n",
+            "    }]",
+        )
+        .replace("CANARY", CANARY)
+        .as_str(),
+    );
+    let output = deployment.evaluate(&["--explain", "--explain-format", "json"]);
+
+    assert!(
+        !output.status.success(),
+        "an undeclared structured key passed the output gate"
+    );
+    let stderr = std::str::from_utf8(&output.stderr).expect("stderr is UTF-8");
+    assert_eq!(
+        stderr,
+        concat!(
+            "case positive: fixture evaluation failed unexpectedly ",
+            "(expected class boolean-true, observed absent)\n",
+            "evidence: fixture evaluation failed unexpectedly\n",
+        )
+    );
+    assert!(!stderr.contains(CANARY), "the diagnostic reprinted a value");
+
+    let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
+    assert!(!stdout.contains(CANARY), "the trace reprinted a value");
+    let report: Value = serde_json::from_str(stdout).expect("stdout is one JSON document");
+    assert_eq!(report["failingCase"]["id"], json!("positive"));
+    let failed = report["cases"]
+        .as_array()
+        .expect("cases is an array")
+        .iter()
+        .find(|case| case.get("failure").is_some())
+        .expect("the document names the case that failed");
+    let validate = failed["stages"]
+        .as_array()
+        .expect("stages is an array")
+        .iter()
+        .find(|stage| stage["stage"] == json!("validate"))
+        .expect("the failed case records its output gate");
+    assert_eq!(validate["status"], json!("failed"));
+    assert_eq!(
+        validate["note"],
+        json!("the output gate rejected an undeclared structured key \"undeclared_key\"")
+    );
 }
 
 /// A chained acquisition is traced stage by stage, not as one acquisition.
@@ -717,8 +884,14 @@ fn stage_names(case: &Value) -> Vec<&str> {
 const UNEXPLAINED_SUCCESS: &str = "Evidence fixture passed (13 evaluated cases)\n";
 
 /// The message the mutated acceptance fixture fails with, trace or no trace.
-const MUTATED_FIXTURE_FAILURE: &str =
-    "evidence: fixture kernel failure did not match its public problem\n";
+///
+/// The structured line beside it names the case the fixed message belongs to.
+/// This mutation fails at the expectation comparison before any value class was
+/// reached on either side, so the line carries the case and the cause alone.
+const MUTATED_FIXTURE_FAILURE: &str = concat!(
+    "case no-match: fixture kernel failure did not match its public problem\n",
+    "evidence: fixture kernel failure did not match its public problem\n",
+);
 
 /// Turn one acceptance case into a case whose stated outcome cannot happen.
 ///
@@ -858,7 +1031,11 @@ fn a_case_identifier_carrying_a_control_character_is_refused() {
     );
     assert_eq!(
         std::str::from_utf8(&output.stderr).expect("stderr is UTF-8"),
-        "evidence: fixture case identifier is invalid\n"
+        concat!(
+            "case (fixture): fixture case identifier is invalid\n",
+            "evidence: fixture case identifier is invalid\n",
+        ),
+        "a failure no case was running for is attributed to the fixture scope"
     );
     let stdout = std::str::from_utf8(&output.stdout).expect("stdout is UTF-8");
     assert!(
@@ -1010,6 +1187,17 @@ fn explaining_a_failing_fixture_as_json_keeps_its_exit_code_and_keeps_its_messag
     assert_eq!(
         failed["failure"],
         json!("fixture kernel failure did not match its public problem")
+    );
+    // The document names the failing case beside the trace, with the fixed
+    // cause and whatever classes its comparison reached. This mutation stopped
+    // at the expectation, so neither side reached a value class.
+    assert_eq!(
+        report["failingCase"],
+        json!({
+            "id": "no-match",
+            "cause": "fixture kernel failure did not match its public problem"
+        }),
+        "a failed document must name its failing case value-free"
     );
     let extract = failed["stages"]
         .as_array()

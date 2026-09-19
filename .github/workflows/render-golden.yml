@@ -1,0 +1,86 @@
+name: Registry Render golden gate
+
+# The Render byte-stability gate: the three coequal example bundles must
+# produce the exact golden hashes pinned in products/render/golden.json on
+# BOTH operating systems. Any difference — Typst pin, lockfile (including
+# the deflate stack, see products/render/EVIDENCE.md), bundle content, or
+# platform-dependent layout — fails here and must be reviewed, never
+# silenced. Invariant: cross-machine byte stability as promised by the
+# product. Owner: the Render product. Removal condition: only if the
+# Render Definition of Done deliberately narrows the byte-stability
+# promise to same-machine reproducibility.
+
+on:
+  pull_request:
+    paths:
+      - "crates/registry-render/**"
+      # The platform crates render links against: a change there can move
+      # bytes without touching any path above (path deps do not surface in
+      # Cargo.lock), so the cross-OS proof must run for them too.
+      - "crates/registry-platform-audit/**"
+      - "crates/registry-platform-authcommon/**"
+      - "crates/registry-platform-buildinfo/**"
+      - "crates/registry-platform-canonical-json/**"
+      - "crates/registry-platform-config/**"
+      - "crates/registry-platform-crypto/**"
+      - "crates/registry-platform-httpsec/**"
+      - "crates/registry-platform-testing/**"
+      - "products/render/**"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - ".github/workflows/render-golden.yml"
+  merge_group:
+    types:
+      - checks_requested
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: render-golden-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUSTUP_TOOLCHAIN: "1.95.0"
+
+jobs:
+  golden:
+    name: Golden hashes (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Both OSes must report independently: one failing must not cancel
+      # the other's signal.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.95.0 --profile minimal
+
+      - name: Cache Cargo registry and build artifacts
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          key: render-golden-${{ matrix.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Golden and determinism tests
+        run: cargo test --locked -p registry-render --test golden
+
+      - name: Serve end-to-end tests
+        run: cargo test --locked -p registry-render --test serve
+
+      - name: Scaffold and CLI tests
+        run: cargo test --locked -p registry-render --test scaffold

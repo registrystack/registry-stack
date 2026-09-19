@@ -18,6 +18,7 @@ pub mod action_evidence_contracts;
 pub mod action_evidence_maintenance;
 pub mod action_evidence_validation;
 pub mod action_handler;
+pub(crate) mod action_outcome;
 #[cfg(feature = "runtime")]
 pub mod api;
 pub mod artifacts;
@@ -73,6 +74,8 @@ pub mod history_schema;
 #[cfg(feature = "runtime")]
 pub(crate) mod history_store;
 #[cfg(feature = "runtime")]
+pub mod hook_handler;
+#[cfg(feature = "runtime")]
 pub mod idempotency;
 pub mod immediate_actions;
 pub mod logical_names;
@@ -125,6 +128,9 @@ pub(crate) mod stored_bytes;
 pub mod task_grant;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod tooling;
+pub mod wasm_handler;
+#[cfg(feature = "wasm")]
+pub mod wasm_runtime;
 #[cfg(feature = "runtime")]
 pub mod webhook;
 

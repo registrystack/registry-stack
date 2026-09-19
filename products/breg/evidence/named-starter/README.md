@@ -37,7 +37,10 @@ activate it.
 
 Copy `questions/`, `derivations/`, and `fixtures/` into the Evidence project,
 then run `evidencectl fixtures run --project . --target ./targets/local --local`
-to rehearse generated local caller authority with the source connection.
+to rehearse generated local caller authority with the source connection. That
+connection is the prerequisite: these files name the `registry-name` source,
+so before `--apply` above (or the hand `source import` below) `check` reports
+the source missing and the fixture run refuses.
 Restart BReg and use `evidencectl dev --target ./targets/local --detach` to
 serve the local rehearsal. An operated candidate needs a separate reviewed
 deployment target.

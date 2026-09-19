@@ -728,7 +728,7 @@ mod tests {
             indexes: BTreeMap::new(),
             access_profiles: BTreeMap::new(),
             membership_boundaries: BTreeMap::new(),
-            events: BTreeMap::new(),
+            hooks: BTreeMap::new(),
         }
     }
 
@@ -1157,7 +1157,7 @@ mod tests {
             "rowBoundaries",
             "operations",
             "constraints",
-            "events",
+            "hooks",
             "derivedFields",
             "derivedRelations",
             "physicalName",

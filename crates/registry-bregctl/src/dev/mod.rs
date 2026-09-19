@@ -51,6 +51,11 @@ const LABEL: &str = "org.registrystack.bregctl.dev-owner";
 /// Refusal for a project that never started. Reporting a stopped session
 /// would claim owned services were stopped when none were ever created.
 const MISSING_SESSION: &str = "no local development session exists in this project; nothing was stopped. Check the project path, or start one with bregctl dev";
+/// Refusal for changed inputs while the retained session still holds records.
+/// Both record options are named so the refusal and `dev stop --help` agree:
+/// discard with the removing stop, or keep the records by moving the authored
+/// files to a new project directory.
+const CHANGED_INPUTS: &str = "authored package, clients, ports or issuer image differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade";
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 /// Longest one supervised prerequisite command may run before the supervisor
 /// stops it and fails the start.
@@ -83,8 +88,20 @@ enum DevAction {
     /// started service have 45 seconds to answer as ready. A start that passes
     /// a deadline fails, stops what it acquired, and keeps its owner-only
     /// diagnostics in the project's private .breg/dev/logs directory.
+    /// Catchable termination signals trigger owned cleanup, but an uncatchable
+    /// outside kill can leave surviving service owners that need inspection
+    /// before restart. products/breg/DEV.md documents this lifecycle in
+    /// 'Native local BReg lifecycle' and its recovery in 'Retained state and
+    /// recovery'.
     Start(StartArgs),
-    /// Stop only this project's supervised services, preserving its database.
+    /// Stop only this project's supervised services, preserving its database,
+    /// records, audit history, keys and built package.
+    ///
+    /// Add --remove to also remove the owned container and its data volume,
+    /// discarding records so the next start can take edited inputs; to change
+    /// inputs while keeping the records, copy the authored files to a new
+    /// project directory instead. products/breg/DEV.md documents the full stop
+    /// and recovery behavior in 'Retained state and recovery'.
     Stop(StopArgs),
     /// Show received local webhook deliveries, hiding projected values by default.
     Events(EventsArgs),
@@ -169,7 +186,9 @@ struct StopArgs {
     /// Registry project whose owned services should stop while preserving records.
     #[arg(value_name = "PROJECT", default_value = ".")]
     project: PathBuf,
-    /// Also remove the owned container and its data volume, discarding records.
+    /// Also remove the owned container and its data volume, discarding records,
+    /// audit history, event receipts and seed checkpoints; the next start can
+    /// then take edited inputs.
     #[arg(long)]
     remove: bool,
     #[arg(long, hide = true)]
@@ -551,10 +570,78 @@ fn ports(breg: u16, issuer: u16, database: u16) -> Result<()> {
     Ok(())
 }
 
-fn probe(port: u16) -> Result<()> {
-    TcpListener::bind(("127.0.0.1", port))
-        .map(drop)
-        .context("a requested local port is already occupied; stop its owner or choose other ports")
+/// The service role that needs one loopback port, carrying the name and the
+/// first-start flag an occupied-port refusal reports. The development
+/// receiver's port is kernel-selected with the session and retained, so that
+/// role has no flag to name.
+#[derive(Clone, Copy)]
+enum PortRole {
+    Breg,
+    Issuer,
+    Database,
+    Receiver,
+}
+
+impl PortRole {
+    fn name(self) -> &'static str {
+        match self {
+            PortRole::Breg => "BReg registry",
+            PortRole::Issuer => "issuer",
+            PortRole::Database => "PostgreSQL database",
+            PortRole::Receiver => "webhook receiver",
+        }
+    }
+    fn flag(self) -> Option<&'static str> {
+        match self {
+            PortRole::Breg => Some("--breg-port"),
+            PortRole::Issuer => Some("--issuer-port"),
+            PortRole::Database => Some("--database-port"),
+            PortRole::Receiver => None,
+        }
+    }
+}
+
+/// The occupied-port refusal for one role: the port, the role that needs it,
+/// and the flag that selects it on a first start. A role whose port is
+/// retained with the session instead names that no flag changes it.
+fn port_refusal(port: u16, role: PortRole) -> String {
+    match role.flag() {
+        Some(flag) => format!(
+            "local port {port} is already occupied, and the local {} needs it; \
+             stop the owner of 127.0.0.1:{port}, or choose another port with \
+             {flag} <port> on a first start",
+            role.name()
+        ),
+        None => format!(
+            "local port {port} is already occupied, and the local {} needs it; \
+             stop the owner of 127.0.0.1:{port} before starting again, because \
+             its port is chosen with the session and retained, and no flag \
+             changes it",
+            role.name()
+        ),
+    }
+}
+
+/// Refuse a start or stop whose needed loopback port is already held, naming
+/// the port, the role that needs it and the flag that selects it. Binding
+/// first asks the question where the answer can still be acted on; later the
+/// same occupant would surface only as an unrelated readiness timeout.
+fn probe(port: u16, role: PortRole) -> Result<()> {
+    match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => drop(listener),
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            bail!(port_refusal(port, role))
+        }
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "checking whether the local {} can bind 127.0.0.1:{port}",
+                    role.name()
+                )
+            })
+        }
+    }
+    Ok(())
 }
 
 fn receiver_port(state: &State) -> Result<u16> {
@@ -853,7 +940,7 @@ fn start(args: StartArgs) -> Result<Value> {
                 || args.database_port.is_some_and(|p| p != state.database_port) =>
         {
             if state.container_id.is_some() {
-                bail!("authored package, clients, ports or issuer image differ from the retained development session, which still holds records; run bregctl dev stop --remove to discard them and start again from the edited inputs, or copy the authored files to a new project directory to keep the records. Use the normal reviewed package lifecycle for an operated upgrade");
+                bail!("{CHANGED_INPUTS}");
             }
             let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
             // A removed BREG database does not imply its separately owned
@@ -947,11 +1034,14 @@ fn start(args: StartArgs) -> Result<Value> {
             failure: None,
         };
         ports(state.breg_port, state.issuer_port, state.database_port)?;
-        for port in [state.breg_port, state.database_port] {
-            probe(port)?;
+        for (port, role) in [
+            (state.breg_port, PortRole::Breg),
+            (state.database_port, PortRole::Database),
+        ] {
+            probe(port, role)?;
         }
         if state.issuer_project.is_none() {
-            probe(state.issuer_port)?;
+            probe(state.issuer_port, PortRole::Issuer)?;
         }
         if !compiled.event_deliveries().deliveries.is_empty()
             && clients.event_destinations.is_empty()
@@ -982,12 +1072,12 @@ fn start(args: StartArgs) -> Result<Value> {
     // only this session's issuer before testing whether its port is free.
     stop_issuer(&docker, &state)?;
     borrowed_owner(&state)?;
-    probe(state.breg_port)?;
+    probe(state.breg_port, PortRole::Breg)?;
     if state.issuer_project.is_none() {
-        probe(state.issuer_port)?;
+        probe(state.issuer_port, PortRole::Issuer)?;
     }
     if let Some(port) = state.webhook_port {
-        probe(port)?;
+        probe(port, PortRole::Receiver)?;
     }
     // Verify the container before accepting a retained database port.
     if let Some(container) = inspect(&docker, &state)? {
@@ -1008,7 +1098,7 @@ fn start(args: StartArgs) -> Result<Value> {
             )?;
         }
     }
-    probe(state.database_port)?;
+    probe(state.database_port, PortRole::Database)?;
     remove_socket(&root)?;
     state.status = Status::Starting;
     state.failure = None;
@@ -1176,9 +1266,9 @@ fn stop(project_path: &Path, remove: bool, docker_bin: Option<&Path>) -> Result<
     let _supervisor_lock = completed_supervisor_lock(&root, &state.status)?;
     let docker = executable("docker", docker_bin)?;
     stop_issuer(&docker, &state)?;
-    probe(state.breg_port)?;
+    probe(state.breg_port, PortRole::Breg)?;
     if state.issuer_project.is_none() {
-        probe(state.issuer_port)?;
+        probe(state.issuer_port, PortRole::Issuer)?;
     }
     // Remove mode tolerates a container already taken by hand: reclaim verifies
     // ownership of whatever is still there and forgets the rest, so skip the
@@ -1890,7 +1980,9 @@ fn command(
 }
 
 /// The refusal a failed start reports, naming the supervisor's own cause when
-/// it recorded one.
+/// it recorded one. Retention is the recovery: completed phases are skipped on
+/// a retry of the same command, while `dev stop --remove` is the one command
+/// that discards the retained records and allows a fresh start.
 fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
     let logs = root.join("logs");
     let logs = logs.display().to_string();
@@ -1898,13 +1990,13 @@ fn start_failure(cause: Option<&str>, root: &Path) -> anyhow::Error {
         // A cause carried out of a named check already points at the retained
         // log directory, and reading the same path twice teaches nothing.
         Some(cause) if cause.contains(&logs) => anyhow::anyhow!(
-            "local start failed: {cause}. Retry the same command after correcting the cause; retained data is preserved"
+            "local start failed: {cause}. Retry the same command after correcting the cause to keep the retained records, or discard them with bregctl dev stop --remove"
         ),
         Some(cause) => anyhow::anyhow!(
-            "local start failed: {cause}. Private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
+            "local start failed: {cause}. Private diagnostics are in {logs}. Retry the same command after correcting the cause to keep the retained records, or discard them with bregctl dev stop --remove"
         ),
         None => anyhow::anyhow!(
-            "local start failed; private diagnostics are in {logs}. Retry the same command after correcting the cause; retained data is preserved"
+            "local start failed; private diagnostics are in {logs}. Retry the same command after correcting the cause to keep the retained records, or discard them with bregctl dev stop --remove"
         ),
     }
 }

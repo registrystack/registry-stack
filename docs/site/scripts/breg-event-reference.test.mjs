@@ -19,12 +19,12 @@ test('event fields reuse the complete module schema selection without changing d
   const before = structuredClone(configuration);
   const [event] = eventConfiguration(configuration);
   const module = configuration.contracts.find((contract) => contract.id === 'module');
-  const source = module.fields.filter((field) => field.key_path.startsWith('entities[].events[].'));
+  const source = module.fields.filter((field) => field.key_path.startsWith('entities[].hooks[].'));
   assert.equal(event.field_count, source.length);
   assert.ok(event.field_count > 0);
   assert.equal(event.file, module.file);
   assert.deepEqual(event.fields, source.map((field) => ({
-    ...field, key_path: field.key_path.slice('entities[].events[].'.length),
+    ...field, key_path: field.key_path.slice('entities[].hooks[].'.length),
   })));
   assert.deepEqual(configuration, before);
   assert.throws(() => eventConfiguration({ contracts: [] }), /missing/);

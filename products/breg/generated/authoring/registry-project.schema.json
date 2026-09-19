@@ -155,6 +155,14 @@
       ],
       "type": "object"
     },
+    "ActionHandlerKindSource": {
+      "description": "The authored action-handler backend. The wasm backend is admitted when\nthis build of the compiler carries the `wasm` cargo feature, which\nvalidates a declared WASM handler module against the platform guest\nABI at compile time; without that feature a declared WASM handler is\nrefused with the pinned `action.handler.wasm_build_unsupported`\ndiagnostic.",
+      "enum": [
+        "rhai",
+        "wasm"
+      ],
+      "type": "string"
+    },
     "ActionHandlerRefusalSource": {
       "additionalProperties": false,
       "properties": {
@@ -173,6 +181,7 @@
     },
     "ActionHandlerSource": {
       "additionalProperties": false,
+      "description": "The authored action handler: the shared hook handler declaration, with the\nauthorization members a governed action adds.\n\n`handler` is [`HookHandlerSource`], the same declaration an entity hook\ncarries, so this product spells a handler one way. It is flattened, so the\nauthored member set stays `kind`, the source reference the kind names,\n`abi`, `writes`, and `refusals`. `writes` and `refusals` are this\nproduct's own: they bound what the handler may write and the refusals it\nmay return, and no hook declares them.\n\nTwo rules narrow the shared declaration to what this path runs. `abi` is\noptional there and required here, refused at deserialization, because\nevery backend an action may declare speaks one. The `url` kind is refused\nby the compiler at `actions[].handler.kind`, because an action handler\nruns inside the triggering transaction and cannot be remote.",
       "properties": {
         "abi": {
           "enum": [
@@ -182,7 +191,14 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/RhaiScriptKindSource"
+          "$ref": "#/$defs/ActionHandlerKindSource"
+        },
+        "module": {
+          "description": "The WASM handler module path, project-local. Declared for wasm\nhandlers only; the compiler enforces the pairing with the declared\nbackend.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "refusals": {
           "default": [],
@@ -192,7 +208,11 @@
           "type": "array"
         },
         "script": {
-          "type": "string"
+          "description": "The Rhai handler script path. Declared for rhai handlers only; the\ncompiler enforces the pairing with the declared backend.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "writes": {
           "items": {
@@ -203,7 +223,6 @@
       },
       "required": [
         "kind",
-        "script",
         "abi",
         "writes"
       ],
@@ -980,6 +999,14 @@
       ],
       "type": "object"
     },
+    "ChangeRequestPlannerKindSource": {
+      "description": "The authored change-request planner backend. The wasm backend is\nexpressible so a declared WASM planner is refused by the compiler with a\npinned diagnostic; WASM planners stay unsupported. Retained Rust name for\nthe reviewed change-request authoring contract.",
+      "enum": [
+        "rhai",
+        "wasm"
+      ],
+      "type": "string"
+    },
     "ChangeRequestPlannerSource": {
       "additionalProperties": false,
       "properties": {
@@ -987,7 +1014,7 @@
           "type": "string"
         },
         "kind": {
-          "$ref": "#/$defs/RhaiScriptKindSource"
+          "$ref": "#/$defs/ChangeRequestPlannerKindSource"
         },
         "requestFields": {
           "default": [],
@@ -2245,13 +2272,6 @@
           },
           "type": "array"
         },
-        "events": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/EventSource"
-          },
-          "type": "array"
-        },
         "fields": {
           "default": [],
           "items": {
@@ -2268,6 +2288,13 @@
               "type": "null"
             }
           ]
+        },
+        "hooks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HookSource"
+          },
+          "type": "array"
         },
         "id": {
           "type": "string"
@@ -2421,55 +2448,6 @@
       ],
       "description": "A comparison literal in the closed field-condition language.\n\nObjects and arrays are refused during source parsing. The compiler then\nvalidates each scalar against the declared Registry field type."
     },
-    "EventSource": {
-      "additionalProperties": false,
-      "properties": {
-        "id": {
-          "description": "Stable event contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
-          "type": "string"
-        },
-        "projection": {
-          "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array",
-          "uniqueItems": true
-        },
-        "trigger": {
-          "$ref": "#/$defs/EventTrigger",
-          "description": "Committed record change that can produce this event."
-        },
-        "webhook": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WebhookSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Logical delivery destination. Production compilation requires a webhook."
-        },
-        "when": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/EventConditionSource"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Optional field tests, combined with AND. Omit to emit on every matching trigger."
-        }
-      },
-      "required": [
-        "id",
-        "trigger",
-        "projection"
-      ],
-      "type": "object"
-    },
     "EventTrigger": {
       "enum": [
         "created",
@@ -2566,6 +2544,159 @@
       },
       "required": [
         "geometryField"
+      ],
+      "type": "object"
+    },
+    "HookHandlerSource": {
+      "description": "Where a hook's handler runs.\n\nThe pairing rule: `rhai` requires `script`, `wasm` requires `module`,\n`url` requires `destinationId`, and each\nkind requires exactly its own fields and nothing else. `abi` is required on\n`rhai` and `wasm` and forbidden on `url`; its value is closed and checked at\ncompile time in [`crate::validate_hooks`].",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "A reviewed Rhai script in the project.",
+          "properties": {
+            "abi": {
+              "description": "The handler ABI the script speaks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "rhai",
+              "type": "string"
+            },
+            "script": {
+              "description": "Script path in the project.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "script"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A reviewed WASM module in the project.",
+          "properties": {
+            "abi": {
+              "description": "The handler ABI the module speaks.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "wasm",
+              "type": "string"
+            },
+            "module": {
+              "description": "Module path in the project.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "module"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A logical destination bound to a URL and a secret at runtime. The\nruntime names the binding it looks the key up in; the project carries\nno URL or secret.",
+          "properties": {
+            "destinationId": {
+              "description": "Key in the runtime destination binding.",
+              "type": "string"
+            },
+            "kind": {
+              "const": "url",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "destinationId"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HookPhase": {
+      "description": "When the hook runs relative to the triggering transaction.",
+      "oneOf": [
+        {
+          "const": "before",
+          "description": "Runs inside the triggering transaction and may refuse or shape the\nchange. Local handler kinds only.",
+          "type": "string"
+        },
+        {
+          "const": "after",
+          "description": "Runs after commit in the post-commit worker and cannot affect the\ntriggering transaction.",
+          "type": "string"
+        }
+      ]
+    },
+    "HookSource": {
+      "additionalProperties": false,
+      "description": "One declared hook on an entity.\n\nThe shape is [`registry_platform_hooks::HookDeclaration`] with `trigger`\nand `when` closed to the vocabulary this compiler validates, and with\n`handler` optional. A hook that declares no handler is still recorded in\nthe outbox and delivered nowhere; production compilation refuses that.\n\nEntity hooks run after the triggering transaction commits, so `phase` is\nwritten and the compiler refuses any value it cannot run.",
+      "properties": {
+        "handler": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HookHandlerSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Governed, destination-neutral delivery. `destinationId` is a key in\nruntime `eventDestinations`; the project carries no URL or secret, and\ndeployment configuration may tighten the bounds it binds but cannot\nsupply or widen this authority. Production compilation requires it."
+        },
+        "id": {
+          "description": "Stable hook contract identifier, sent as `ce-type`. Use a new identifier for a breaking payload change.",
+          "type": "string"
+        },
+        "phase": {
+          "$ref": "#/$defs/HookPhase",
+          "description": "When the hook runs relative to the triggering transaction."
+        },
+        "principal": {
+          "description": "The access profile a proposal from this hook is applied under.\nOptional: a hook that declares none is a non-proposing hook, and a\nproposal from one is refused and dead-lettered at delivery time.\nDeclaring none is not an authoring error.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "projection": {
+          "description": "Declared field identifiers to include in `values`. System event metadata is included separately.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "uniqueItems": true
+        },
+        "trigger": {
+          "$ref": "#/$defs/EventTrigger",
+          "description": "Committed record change that can produce this hook."
+        },
+        "when": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EventConditionSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional field tests, combined with AND. Omit to run on every matching trigger."
+        }
+      },
+      "required": [
+        "id",
+        "phase",
+        "trigger",
+        "projection"
       ],
       "type": "object"
     },
@@ -3697,12 +3828,6 @@
       ],
       "type": "object"
     },
-    "RhaiScriptKindSource": {
-      "enum": [
-        "rhai"
-      ],
-      "type": "string"
-    },
     "RowBoundarySource": {
       "additionalProperties": false,
       "properties": {
@@ -4241,20 +4366,6 @@
       "required": [
         "id",
         "values"
-      ],
-      "type": "object"
-    },
-    "WebhookSource": {
-      "additionalProperties": false,
-      "description": "Governed, destination-neutral webhook subscription.\n\nDeployment configuration may bind `destination_id` to transport details\nand tighten these bounds, but cannot supply or widen this authority.",
-      "properties": {
-        "destinationId": {
-          "description": "Key in runtime `eventDestinations`; the project carries no URL or secret.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "destinationId"
       ],
       "type": "object"
     }

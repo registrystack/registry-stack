@@ -396,7 +396,7 @@ fn explain_refuses_unknown_source_members_without_disclosing_values() {
         .unwrap()
         .iter()
         .any(|finding| {
-            finding["code"] == "source-member-unknown"
+            finding["code"] == "evidence.source.member-unknown"
                 && finding["path"] == "sources/people.yaml:/unknownSourceMember"
         }));
 }
@@ -480,7 +480,7 @@ fn explicit_evidence_grade_target_applies_its_own_strict_source_rules() {
         .iter()
         .any(|finding| {
             finding["severity"] == "error"
-                && finding["code"] == "source-production-channel"
+                && finding["code"] == "evidence.source.production-channel"
                 && finding["path"] == "sources/people.yaml:/baseUrl"
         }));
 }

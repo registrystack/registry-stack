@@ -706,8 +706,8 @@ jobs:
 
   scheduling-contracts:
     name: Scheduling product contracts
-    needs: changes
-    if: needs.changes.outputs.scheduling_contracts == 'true'
+    needs: [changes, rust-policy]
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.scheduling_contracts == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -901,6 +901,66 @@ jobs:
         if: matrix.lane == 'contracts'
         run: products/breg/quickstart/run.sh --spatial --smoke
 
+  breg-wasm:
+    # The WASM action-handler executor runs under the `wasm` feature, which
+    # registry-breg and registry-bregctl carry by default. This lane runs
+    # what the ordinary Rust shards do not: the platform executor's wat
+    # suite (both execution backends), the admission, runtime, and parity
+    # suites in one explicit place, the PostgreSQL handler journeys against
+    # a disposable PostGIS database, and the no-default refusal suite that
+    # keeps `action.handler.wasm_build_unsupported` proven.
+    name: Base Registry Engine WASM executor
+    needs: changes
+    if: needs.changes.outputs.breg_contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        # PostgreSQL 17 / PostGIS 3.5.2, verified 2026-08-31. Fresh test databases
+        # remain extension-free unless a spatial test explicitly installs it.
+        image: postgis/postgis@sha256:01a6a70e41e6c4467c8f55f6063555ed72db2d6662cd0d571040d42eadaeb6f6
+        env:
+          POSTGRES_DB: breg
+          POSTGRES_PASSWORD: breg_test
+          POSTGRES_USER: breg
+        options: >-
+          --health-cmd "pg_isready -U breg -d breg"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432/tcp
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Cache Cargo registry
+        uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
+        with:
+          shared-key: workspace-registry
+          cache-targets: false
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Platform WASM executor wat suite
+        run: cargo test --locked --profile ci -p registry-platform-script --features wasm --test wasm_executor_wat
+
+      - name: Base Registry Engine WASM admission, runtime, and parity suites
+        run: cargo test --locked --profile ci -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
+
+      - name: Base Registry Engine WASM refusal suite
+        run: cargo test --locked --profile ci -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
+
+      - name: Base Registry Engine tooling WASM suites
+        run: cargo test --locked --profile ci -p registry-bregctl --features wasm
+
+      - name: Base Registry Engine WASM handler PostgreSQL journeys
+        env:
+          BREG_TEST_DATABASE_URL: postgresql://breg:breg_test@localhost:${{ job.services.postgres.ports['5432'] }}/breg
+        run: cargo test --locked --profile ci -p registry-breg --features postgres-test,tooling,wasm --test postgres_wasm_action_handlers
+
   identifiers:
     name: Public identifier catalog
     needs:
@@ -942,6 +1002,7 @@ jobs:
       - relay-v2-contracts
       - relay-client-contracts
       - breg-contracts
+      - breg-wasm
       - identifiers
       - casework-postgres
       - scheduling-postgres
@@ -1071,7 +1132,7 @@ jobs:
         uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c
         with:
           version: v0.33.0
-          driver-opts: image=moby/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
+          driver-opts: image=ghcr.io/registrystack/buildkit:v0.31.2@sha256:2f5adac4ecd194d9f8c10b7b5d7bceb5186853db1b26e5abd3a657af0b7e26ec
 
       - name: Smoke release image OCI labels
         run: release/scripts/smoke-release-image-oci-labels.sh
@@ -1897,6 +1958,7 @@ jobs:
       - relay-v2-contracts
       - relay-client-contracts
       - breg-contracts
+      - breg-wasm
       - identifiers
       - casework-postgres
       - scheduling-postgres

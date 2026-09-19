@@ -137,7 +137,7 @@ row boundary; the bearer token carries that claim only once.
 
 ## Committed events and external work
 
-The module declares three versioned events: facility registration, initial
+The module declares three versioned hooks: facility registration, initial
 assignment and owner change. Their projections contain only the declared
 fields; ownership change emits the facility code without exposing owner
 principals. Capture commits with records, revisions and the action application.

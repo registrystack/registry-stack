@@ -247,3 +247,28 @@ fn refuses_overwrite_without_force_then_succeeds_with_force() {
     let document: serde_json::Value = serde_json::from_str(&contents).expect("valid json");
     assert_eq!(document["keys"].as_array().expect("keys array").len(), 2);
 }
+
+#[test]
+fn jwks_reports_the_written_document_in_the_shared_json_envelope() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let public = generate_public_jwk(dir.path(), "first");
+    let out = dir.path().join("jwks.json");
+
+    let output = evidencectl()
+        .args(["--format", "json", "jwks", "--output"])
+        .arg(&out)
+        .arg(&public)
+        .output()
+        .expect("run evidencectl jwks");
+    assert!(output.status.success(), "{}", stderr_of(&output));
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(report["command"], "jwks");
+    assert_eq!(report["ok"], serde_json::Value::Bool(true));
+    assert_eq!(report["status"], "complete");
+    assert_eq!(
+        report["files"],
+        serde_json::json!([out.display().to_string()])
+    );
+}

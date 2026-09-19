@@ -620,7 +620,19 @@ impl Fixture {
     }
 
     fn show(&self) -> Output {
-        command()
+        self.show_in_format(None)
+    }
+
+    fn show_json(&self) -> Output {
+        self.show_in_format(Some("json"))
+    }
+
+    fn show_in_format(&self, format: Option<&str>) -> Output {
+        let mut command = command();
+        if let Some(format) = format {
+            command.args(["--format", format]);
+        }
+        command
             .current_dir(&self.root)
             .args([
                 "audit",
@@ -672,5 +684,59 @@ fn assert_closed_failure(output: &Output, label: &str) {
             !String::from_utf8_lossy(&output.stderr).contains(protected),
             "{label} leaked {protected}"
         );
+    }
+}
+
+/// JSON mode keeps the two disciplines the human view carries: the core
+/// document is embedded whole only after it validates, and a failure says
+/// nothing beyond the value-free refusal.
+#[test]
+fn json_mode_embeds_the_validated_core_view_and_keeps_failures_value_free() {
+    let fixture = Fixture::new();
+    fixture.write_core_json(&successful_view());
+    let output = fixture.show_json();
+    assert_success(&output);
+    assert!(output.stderr.is_empty());
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON report");
+    assert_eq!(report["command"], "audit show");
+    assert_eq!(report["ok"], Value::Bool(true));
+    assert_eq!(report["status"], "complete");
+    assert_eq!(
+        report["operation"]["schema"],
+        "registry.evidence.local-audit-operation/v1"
+    );
+    assert_eq!(
+        report["operation"]["events"].as_array().map(Vec::len),
+        Some(2)
+    );
+    assert_eq!(
+        report["rendered"],
+        json!([
+            format!("ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}"),
+            "DISCLOSURE RELEASED is_adult",
+        ])
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&fixture.show().stdout),
+        format!(
+            "ACCESS AUTHORIZED adult-status age-check requester={PSEUDONYM}\n\
+             DISCLOSURE RELEASED is_adult\n"
+        ),
+        "the human renderer is unchanged"
+    );
+
+    fixture.write_core_bytes(b"{malformed person-123 token-canary");
+    let output = fixture.show_json();
+    assert!(!output.status.success());
+    assert!(
+        output.stderr.is_empty(),
+        "a JSON failure wrote human diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("one JSON failure document");
+    assert_eq!(report["status"], "domain-refusal");
+    let rendered = report.to_string();
+    for protected in ["person-123", "token-canary"] {
+        assert!(!rendered.contains(protected), "leaked {protected}");
     }
 }

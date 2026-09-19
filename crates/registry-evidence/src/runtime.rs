@@ -3840,7 +3840,7 @@ fn kernel_failure_category(error: &KernelError) -> &'static str {
         KernelError::DerivationInput => "derivation-input",
         KernelError::SourceProtocol => "source-protocol",
         KernelError::Script => "script-failure",
-        KernelError::Output => "output-gate",
+        KernelError::Output | KernelError::UndeclaredOutputProperty(_) => "output-gate",
         KernelError::Bundle
         | KernelError::Artifact(_)
         | KernelError::Requirement
@@ -3859,6 +3859,7 @@ fn kernel_failure_problem(error: &KernelError) -> ProblemCode {
         KernelError::SourceProtocol => ProblemCode::DependencyUnavailable,
         KernelError::Script
         | KernelError::Output
+        | KernelError::UndeclaredOutputProperty(_)
         | KernelError::Bundle
         | KernelError::Artifact(_)
         | KernelError::Requirement

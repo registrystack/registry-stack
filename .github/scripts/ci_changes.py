@@ -28,9 +28,11 @@ SHARDS = {
         "registry-platform-canonical-json",
         "registry-platform-config",
         "registry-platform-crypto",
+        "registry-platform-hooks",
         "registry-platform-httpsec",
         "registry-platform-httputil",
         "registry-platform-oidc",
+        "registry-platform-script",
         "registry-platform-sdjwt",
         "registry-platform-sqlite",
         "registry-platform-testing",
@@ -83,8 +85,10 @@ SHARDS = {
     "developer-tools": (
         "registry-thunderid-tooling",
         "registry-cli-docs",
+        "registry-cli-reference",
         "registry-language-server",
     ),
+    "render": ("registry-render",),
 }
 
 EVIDENCE_PACKAGES = frozenset(SHARDS["evidence"])
@@ -440,6 +444,7 @@ ROOT_RUST_INPUTS = {
 # table, so a new privileged workflow cannot silently bypass the policy gate.
 SECURITY_WORKFLOW_GATES: dict[str, frozenset[str]] = {
     ".github/workflows/codeql.yml": frozenset({"release_tool"}),
+    ".github/workflows/mirror-buildkit.yml": frozenset({"release_tool"}),
     ".github/workflows/docs-pages.yml": frozenset(
         {"docs", "release_source_proof", "release_tool"}
     ),

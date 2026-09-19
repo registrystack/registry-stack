@@ -115,14 +115,16 @@ WEBHOOK_EVENT_ID = "usual-resident-created-v1"
 WEBHOOK_MODULE_ID = "publicschema-household-demographics"
 WEBHOOK_MODULE_LOCK = "  - id: publicschema-household-demographics\n    version: 0.1.0\n"
 WEBHOOK_ENTITY_INSERTION = "  - entity: household\n"
-WEBHOOK_MODULE_SOURCE = """    events:
+WEBHOOK_MODULE_SOURCE = """    hooks:
       - id: usual-resident-created-v1
+        phase: after
         trigger: created
         projection: [person-code, residency-status]
         when:
           kind: fields
           afterEquals: {residency-status: usual-resident}
-        webhook:
+        handler:
+          kind: url
           destinationId: household-event-receiver
 """
 WEBHOOK_SIGNATURE_DOMAIN = b"breg-webhook-signature-v1"
@@ -166,15 +168,17 @@ FIXTURE_CONFIGS: dict[str, dict[str, Any]] = {
             "module_id": "business-establishment-summary",
             "module_lock": "  - id: business-establishment-summary\n    version: 0.1.0\n",
             "entity_insertion": "  - entity: business\n",
-            "module_source": """    events:
+            "module_source": """    hooks:
       - id: operating-created-v1
+        phase: after
         trigger: created
         projection: [establishment-code, operating-status]
         when:
           kind: fields
           afterEquals:
             operating-status: operating
-        webhook:
+        handler:
+          kind: url
           destinationId: business-event-receiver
 """,
             "entity": "establishment",
@@ -451,7 +455,7 @@ def _local_project(
         module_path = target / f"modules/{hook['module_id']}/module.yaml"
         module_source = module_path.read_text(encoding="utf-8")
         if (
-            "    events:\n" in module_source
+            "    hooks:\n" in module_source
             or module_source.count(hook["entity_insertion"]) != 1
             or not module_source.endswith("\n")
         ):
@@ -861,6 +865,41 @@ def _verify_webhook_request(
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8")
     if canonical != body or not isinstance(document, dict):
         raise DemoError("the receiver refused a non-canonical webhook body")
+    if set(document) != {
+        "id",
+        "type",
+        "source",
+        "time",
+        "subject",
+        "dataschema",
+        "data",
+        "causation",
+    }:
+        raise DemoError("the receiver refused the webhook envelope shape")
+    if (
+        document["id"] != headers["ce-id"]
+        or document["type"] != headers["ce-type"]
+        or document["source"] != headers["ce-source"]
+        or document["dataschema"] != headers["ce-dataschema"]
+        or document["time"] != headers["ce-time"]
+    ):
+        raise DemoError("the receiver refused an envelope that contradicts its headers")
+    subject = document["subject"]
+    causation = document["causation"]
+    if (
+        not isinstance(subject, dict)
+        or set(subject) != {"recordReference", "recordRevision"}
+        or not isinstance(subject["recordReference"], str)
+        or not subject["recordReference"]
+        or not isinstance(subject["recordRevision"], int)
+        or subject["recordRevision"] < 1
+        or not isinstance(causation, dict)
+        or set(causation) - {"root", "parent", "hop"}
+        or causation["root"] != document["id"]
+        or causation["hop"] != 0
+    ):
+        raise DemoError("the receiver refused the envelope subject or causation")
+    document = document["data"]
     if set(document) != {"entity", "recordId", "revision", "trigger", "packageRevision", "values"}:
         raise DemoError("the receiver refused the webhook body shape")
     if (

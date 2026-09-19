@@ -2,11 +2,57 @@
 
 use super::*;
 
+use registry_platform_hooks::{
+    Causation, EnvelopeLimits, HandlerOutputLimits, HookEnvelope, HookMessage,
+};
+
 use crate::action_evidence::FrozenEvidenceEvaluation;
 use crate::action_handler::{evaluate_admitted_action_detailed, ActionHandlerOutcome};
+use crate::action_outcome::{
+    bound_document, decode_document, json_document, validate_proposed_outcome,
+};
 use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionInput};
 
 type ActionInputs = Map<String, Value>;
+
+/// The budget one hook-proposal application runs under. The delivery-scoped
+/// advisory lock keeps an expired-lease retry serialized even if finalization
+/// does not complete inside the original lease.
+const HOOK_PROPOSAL_APPLY_BUDGET: Duration = Duration::from_secs(5);
+
+/// One accepted hook proposal the delivery worker settled, ready for the
+/// same mutation path an action handler's outcome takes. Every field is
+/// identity and the exact bytes the delivery row records.
+pub(crate) struct HookProposalApplication<'a> {
+    pub(crate) event_id: Uuid,
+    pub(crate) compiled_delivery_id: &'a str,
+    pub(crate) generation: i64,
+    pub(crate) attempt: i16,
+    pub(crate) lease_token: Uuid,
+    pub(crate) package_revision: &'a str,
+    pub(crate) envelope: &'a [u8],
+    pub(crate) answer: &'a [u8],
+    pub(crate) answer_digest: &'a [u8; 32],
+}
+
+/// What became of one hook proposal the mutation path was asked to apply.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum HookProposalOutcome {
+    /// The proposal applied; the revision the applied mutation produced.
+    Applied(i64),
+    /// Deterministically refused: retrying the same answer cannot apply it,
+    /// and the delivery row still completes as delivered.
+    Refused { code: &'static str, summary: String },
+    /// The proposal can never be applied under this deployment; the delivery
+    /// row dead-letters with this reason.
+    DeadLettered { code: &'static str, summary: String },
+}
+
+/// The apply may or may not have committed. The caller fails closed: the
+/// delivery row keeps its lease and expiry recovery retries, and the
+/// idempotent replay of the same application resolves it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct UncertainApply;
 
 struct ActionEffectResult {
     effect_id: String,
@@ -18,7 +64,92 @@ struct ActionEffectResult {
     operation: Operation,
 }
 
+struct HookProposalReceipt {
+    answer_digest: Option<[u8; 32]>,
+    resulting_revision: i64,
+}
+
 impl MutationCoordinator {
+    /// Acquire the session lock that serializes every classification for one
+    /// hook delivery. The immediate-action transaction takes the same lock at
+    /// transaction scope, so a recovery cannot observe the receipt until an
+    /// in-flight application has committed or rolled back.
+    ///
+    /// The caller must release the lock before returning the pooled
+    /// connection. If its future is cancelled while holding the lock, it must
+    /// discard the connection so PostgreSQL closes the session and releases
+    /// the lock.
+    pub(crate) fn hook_proposal_key_reference(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+    ) -> Result<String, UncertainApply> {
+        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+        resolve_hook_key_reference(&self.audit_profile, &idempotency_key)
+            .map_err(|_| UncertainApply)
+    }
+
+    pub(crate) async fn acquire_hook_proposal_lock(
+        &self,
+        client: &Client,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        tokio::time::timeout(
+            self.lock_timeout,
+            client.query_one(
+                "SELECT pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            ),
+        )
+        .await
+        .map_err(|_| UncertainApply)?
+        .map_err(|_| UncertainApply)?;
+        Ok(())
+    }
+
+    /// Acquire the delivery-scoped proposal lock on a transaction the caller
+    /// already owns. The transaction-scoped form lets lease reaping serialize
+    /// with an in-flight application without checking out a second pooled
+    /// connection while its delivery row is locked.
+    pub(crate) async fn acquire_hook_proposal_transaction_lock(
+        &self,
+        transaction: &Transaction<'_>,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        tokio::time::timeout(
+            self.lock_timeout,
+            transaction.query_one(
+                "SELECT pg_advisory_xact_lock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            ),
+        )
+        .await
+        .map_err(|_| UncertainApply)?
+        .map_err(|_| UncertainApply)?;
+        Ok(())
+    }
+
+    /// Release a lock acquired by [`Self::acquire_hook_proposal_lock`].
+    pub(crate) async fn release_hook_proposal_lock(
+        &self,
+        client: &Client,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        let released = client
+            .query_one(
+                "SELECT pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .get::<_, bool>(0);
+        if released {
+            Ok(())
+        } else {
+            Err(UncertainApply)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_immediate_action(
         &self,
@@ -63,6 +194,7 @@ impl MutationCoordinator {
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),
+                answer_digest: None,
                 canonical_request_digest: request_digest,
             },
         )?;
@@ -89,6 +221,7 @@ impl MutationCoordinator {
                     deadline,
                     &mut candidate,
                     None,
+                    None,
                 )
                 .await;
             if matches!(attempt, Err(MutationError::RetryableConflict))
@@ -114,6 +247,582 @@ impl MutationCoordinator {
             MutationError::RetryableConflict => MutationError::Unavailable,
             other => other,
         })
+    }
+
+    /// Apply one settled hook proposal through the immediate-action path.
+    ///
+    /// The proposal runs the same validation, authorization, and mutation
+    /// machinery an action handler's outcome runs: the proposed outcome is
+    /// decoded and validated through [`validate_proposed_outcome`], the
+    /// declared principal selects the action grant the proposal is applied
+    /// under, and the mutation itself commits in this method's own fresh
+    /// transactions, never inside the delivery worker's claim, material, or
+    /// finalize transactions.
+    ///
+    /// The applied mutation's own events are children of the delivered
+    /// event: the child causation is computed before any transaction opens,
+    /// and a chain whose next hop would exceed the platform causation
+    /// ceiling is refused here, before anything is enqueued, so the refusal
+    /// is a dead letter the row keeps its payload for.
+    ///
+    /// Idempotency is the immediate-action receipt under a key derived from
+    /// the hook delivery identity (event id and compiled delivery id,
+    /// domain-separated). The key is stable across attempts, replay
+    /// generations, and answer changes, so one delivery is one application;
+    /// the digest of exactly the answer bytes rides in the binding reference
+    /// instead, so a redelivered answer resolves through receipt recovery as
+    /// a replay of the same application, while a changed answer after the
+    /// commit surfaces as a stable dead-letter conflict.
+    pub(crate) async fn apply_hook_proposal(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        application: &HookProposalApplication<'_>,
+    ) -> Result<HookProposalOutcome, UncertainApply> {
+        let idempotency_key =
+            hook_proposal_idempotency_key(application.event_id, application.compiled_delivery_id);
+        let receipt = self
+            .hook_proposal_receipt(&***client, &idempotency_key)
+            .await?;
+        if let Some(receipt) = &receipt {
+            if let Some(answer_digest) = receipt.answer_digest {
+                return if answer_digest == *application.answer_digest {
+                    Ok(HookProposalOutcome::Applied(receipt.resulting_revision))
+                } else {
+                    conflicting_hook_answer()
+                };
+            }
+        }
+        if receipt.is_none()
+            && !self
+                .hook_proposal_still_owns_delivery(&***client, application)
+                .await?
+        {
+            return Err(UncertainApply);
+        }
+        let outcome = self
+            .apply_hook_proposal_inner(client, registry, application, &idempotency_key)
+            .await;
+        if receipt.is_some()
+            && matches!(
+                &outcome,
+                Ok(HookProposalOutcome::Refused { .. } | HookProposalOutcome::DeadLettered { .. })
+            )
+        {
+            return conflicting_hook_answer();
+        }
+        outcome
+    }
+
+    /// Confirm that the worker still owns the delivery lease before a new
+    /// proposal mutation starts. Receipt replays do not need a live lease:
+    /// they return an already committed result and cannot create new state.
+    async fn hook_proposal_still_owns_delivery(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        application: &HookProposalApplication<'_>,
+    ) -> Result<bool, UncertainApply> {
+        client
+            .query_one(
+                "SELECT EXISTS (
+                     SELECT 1
+                       FROM registry_internal.registry_webhook_delivery_state
+                      WHERE event_id = $1
+                        AND compiled_delivery_id = $2
+                        AND generation = $3
+                        AND attempt = $4
+                        AND lease_token = $5
+                        AND state = 'leased'
+                 )",
+                &[
+                    &application.event_id,
+                    &application.compiled_delivery_id,
+                    &application.generation,
+                    &application.attempt,
+                    &application.lease_token,
+                ],
+            )
+            .await
+            .map_err(|_| UncertainApply)
+            .map(|row| row.get(0))
+    }
+
+    /// Recover a proposal receipt when a later accepted answer proposes
+    /// nothing. A receipt under the delivery-scoped key proves the earlier
+    /// proposal committed, so the changed answer becomes the same stable
+    /// conflict as a changed proposal instead of overwriting the row's
+    /// disposition with `none`.
+    pub(crate) async fn recover_hook_proposal_receipt(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+    ) -> Result<Option<HookProposalOutcome>, UncertainApply> {
+        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+        if self
+            .hook_proposal_receipt(client, &idempotency_key)
+            .await?
+            .is_some()
+        {
+            conflicting_hook_answer().map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn hook_proposal_receipt(
+        &self,
+        client: &(impl tokio_postgres::GenericClient + Sync),
+        idempotency_key: &str,
+    ) -> Result<Option<HookProposalReceipt>, UncertainApply> {
+        let key_reference = resolve_hook_key_reference(&self.audit_profile, idempotency_key)
+            .map_err(|_| UncertainApply)?;
+        client
+            .query_opt(
+                "SELECT application.handler_answer_digest,
+                        (SELECT result.target_record_revision
+                           FROM registry_internal.registry_immediate_action_results AS result
+                          WHERE result.key_reference = application.key_reference
+                          ORDER BY result.effect_id
+                          LIMIT 1)
+                   FROM registry_internal.registry_immediate_action_applications AS application
+                  WHERE application.key_reference = $1",
+                &[&key_reference],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .map(|row| -> Result<HookProposalReceipt, UncertainApply> {
+                let answer_digest = row
+                    .get::<_, Option<Vec<u8>>>(0)
+                    .map(|digest| digest.try_into().map_err(|_| UncertainApply))
+                    .transpose()?;
+                let resulting_revision = row
+                    .get::<_, Option<i64>>(1)
+                    .filter(|revision| *revision > 0)
+                    .ok_or(UncertainApply)?;
+                Ok(HookProposalReceipt {
+                    answer_digest,
+                    resulting_revision,
+                })
+            })
+            .transpose()
+    }
+
+    async fn apply_hook_proposal_inner(
+        &self,
+        client: &mut Client,
+        registry: &CompiledRegistry,
+        application: &HookProposalApplication<'_>,
+        idempotency_key: &str,
+    ) -> Result<HookProposalOutcome, UncertainApply> {
+        // The envelope the worker delivered, re-read from the exact stored
+        // bytes so the chain position comes from what was delivered, not
+        // from anything reconstructed.
+        let Ok(envelope) =
+            HookEnvelope::from_canonical_bytes(application.envelope, &EnvelopeLimits::default())
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.envelope_refused",
+                "The delivered envelope bytes could not be re-read as an envelope.",
+            );
+        };
+        let Ok(message) =
+            HookMessage::from_canonical_json(application.answer, &HandlerOutputLimits::default())
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.answer_refused",
+                "The settled answer bytes could not be re-read as a handler message.",
+            );
+        };
+        let HookMessage::Proposal { document } = message else {
+            return dead_lettered_proposal(
+                "hook.proposal.answer_refused",
+                "The settled answer does not carry a proposal.",
+            );
+        };
+
+        // The proposal document: exact members, with the action, the input
+        // values, the proposed outcome, and optional existing-target
+        // preconditions.
+        let Value::Object(members) = &document.0 else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Return the proposal document as a JSON object.",
+            );
+        };
+        if members.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "action" | "input" | "outcome" | "preconditions"
+            )
+        }) {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "The proposal document may contain only action, input, outcome, and preconditions.",
+            );
+        }
+        let Some(action_id) = members
+            .get("action")
+            .and_then(Value::as_str)
+            .filter(|action_id| !action_id.is_empty())
+        else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Name the proposed action as a non-empty string.",
+            );
+        };
+        let Some(input_values) = members.get("input").and_then(Value::as_object) else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Carry the proposal input as a JSON object.",
+            );
+        };
+        let input_values = input_values.clone();
+        let Some(outcome_value) = members.get("outcome") else {
+            return refused_proposal(
+                "hook.proposal.document_refused",
+                "Carry the proposed outcome under outcome.",
+            );
+        };
+        let mut preconditions = BTreeMap::<String, String>::new();
+        match members.get("preconditions") {
+            None | Some(Value::Null) => {}
+            Some(Value::Object(entries)) => {
+                for (input_id, value) in entries {
+                    let Some(record_id) = value.as_str().filter(|id| !id.is_empty()) else {
+                        return refused_proposal(
+                            "hook.proposal.document_refused",
+                            "Carry each precondition as the target record id string.",
+                        );
+                    };
+                    preconditions.insert(input_id.clone(), record_id.to_owned());
+                }
+            }
+            Some(_) => {
+                return refused_proposal(
+                    "hook.proposal.document_refused",
+                    "Carry the proposal preconditions as a JSON object.",
+                );
+            }
+        }
+
+        // The compiled delivery the proposal arrived under, and the package
+        // revision it must still match.
+        if application.package_revision != self.expected.package_revision {
+            return dead_lettered_proposal(
+                "hook.proposal.package_unavailable",
+                "The delivery row was captured under a package this deployment no longer holds.",
+            );
+        }
+        let Some(delivery) = registry
+            .event_deliveries()
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.id == application.compiled_delivery_id)
+        else {
+            return dead_lettered_proposal(
+                "hook.proposal.package_unavailable",
+                "The compiled package declares no delivery under this binding.",
+            );
+        };
+
+        // The principal a proposal from this hook is applied under. A hook
+        // that declared none is a deployment defect a proposal exposes: the
+        // proposal can never name an authority, so it dead-letters.
+        let Some(principal) = delivery.principal.as_deref() else {
+            return dead_lettered_proposal(
+                "hook.proposal.no_principal",
+                "The hook declares no principal, so its proposal names no authority to apply under.",
+            );
+        };
+
+        let Some(action) = registry
+            .actions()
+            .actions
+            .iter()
+            .find(|action| action.id == action_id)
+        else {
+            return refused_proposal(
+                "hook.proposal.action_not_found",
+                "The proposal names an action the compiled package does not declare.",
+            );
+        };
+        let Some(handler) = action.handler.as_ref() else {
+            return refused_proposal(
+                "hook.proposal.action_without_handler",
+                "The proposal names an action that declares no reviewed handler.",
+            );
+        };
+        let Some(grant) = action
+            .permissions
+            .iter()
+            .find(|grant| grant.profile_id == principal)
+        else {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal holds no permission on the proposed action.",
+            );
+        };
+        if !grant.operations.contains(&Operation::Invoke) {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal may not invoke the proposed action.",
+            );
+        }
+        if grant.results.is_empty() {
+            return refused_proposal(
+                "hook.proposal.no_visible_results",
+                "The declared principal's grant declares no result effects, so nothing could be recorded.",
+            );
+        }
+        let Ok(claims) = ActionClaimContext::new(
+            action.id.clone(),
+            format!("hook:{principal}"),
+            principal.to_owned(),
+            None,
+            grant.results.clone(),
+        ) else {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal does not form a bounded authority context.",
+            );
+        };
+        // A hook holds no claims, so a grant that row-boundaries its targets
+        // can never be satisfied by this path and is refused outright.
+        let mut target_authority = BTreeMap::<String, Vec<RowBoundaryContext>>::new();
+        for target in &grant.targets {
+            if target.row_boundaries.is_empty() {
+                target_authority.insert(target.entity_id.clone(), Vec::new());
+            } else {
+                return refused_proposal(
+                    "hook.proposal.boundaries_unsatisfiable",
+                    "The declared principal's grant carries row boundaries a hook holds no claims to satisfy.",
+                );
+            }
+        }
+        if validate_action_claims(action, &claims, Operation::Invoke).is_err() {
+            return refused_proposal(
+                "hook.proposal.unauthorized",
+                "The declared principal's grant does not authorize this invocation.",
+            );
+        }
+        let Ok(normalized_input) = validate_action_input(action, input_values) else {
+            return refused_proposal(
+                "hook.proposal.input_refused",
+                "The proposal input does not satisfy the action's declared inputs.",
+            );
+        };
+        if validate_precondition_set(action, &preconditions).is_err() {
+            return refused_proposal(
+                "hook.proposal.precondition_refused",
+                "The proposal preconditions do not match the action's existing-target inputs.",
+            );
+        }
+
+        // The proposed outcome runs the exact validation an action handler's
+        // returned outcome runs, against the same declared write slots.
+        let outcome_document = json_document(outcome_value.clone());
+        if bound_document(&outcome_document, action.maximum_snapshot_bytes).is_err() {
+            return refused_proposal(
+                "hook.proposal.outcome_refused",
+                "The proposed outcome exceeds the action's snapshot bound.",
+            );
+        }
+        let proposed = match decode_document(outcome_document) {
+            Ok(proposed) => proposed,
+            Err(_) => {
+                return refused_proposal(
+                    "hook.proposal.outcome_refused",
+                    "The proposed outcome is not a valid effects or refusal document.",
+                );
+            }
+        };
+        let outcome_effects = match validate_proposed_outcome(action, handler, proposed) {
+            Ok(ActionHandlerOutcome::Effects(effects)) => effects,
+            Ok(ActionHandlerOutcome::Refusal(refusal)) => {
+                return refused_proposal(
+                    "hook.proposal.handler_refusal",
+                    format!(
+                        "The proposed outcome refused the action with the declared refusal {}.",
+                        refusal.code
+                    ),
+                );
+            }
+            Err(diagnostic) => {
+                return refused_proposal("hook.proposal.outcome_refused", diagnostic.message);
+            }
+        };
+
+        // The child causation is computed before any transaction opens, so a
+        // refused chain never enqueues anything and the dead letter keeps
+        // its payload.
+        let causation = match envelope.causation.child(&envelope.id) {
+            Ok(causation) => causation,
+            Err(error) => {
+                return dead_lettered_proposal(
+                    "hook.causation.hop_beyond_ceiling",
+                    error.to_string(),
+                );
+            }
+        };
+
+        let Ok(request_digest) =
+            canonical_action_request_digest(action, &normalized_input, &preconditions)
+        else {
+            return refused_proposal(
+                "hook.proposal.input_refused",
+                "The proposal input could not be canonicalized for idempotency.",
+            );
+        };
+        let binding = match resolve_hook_action_binding(
+            &self.audit_profile,
+            &ActionIdempotencyBinding {
+                key: idempotency_key,
+                context: &claims,
+                method: HttpMethod::Post,
+                route: &action.route,
+                package_revision: &self.expected.package_revision,
+                action_contract_fingerprint: &action.contract_fingerprint,
+                target_authority: &target_authority,
+                result_effects: claims.result_effects(),
+                answer_digest: Some(application.answer_digest),
+                canonical_request_digest: request_digest,
+            },
+        ) {
+            Ok(binding) => binding,
+            Err(_) => {
+                return dead_lettered_proposal(
+                    "hook.proposal.binding_refused",
+                    "The proposal's idempotency binding could not be resolved.",
+                );
+            }
+        };
+        let Ok(reserved_creates) = reserve_action_create_ids(action) else {
+            return Err(UncertainApply);
+        };
+        let Some(route_id) = registry
+            .actions()
+            .routes
+            .iter()
+            .find(|route| route.action_id == action.id && route.kind == ActionRouteKind::Invoke)
+            .map(|route| route.id.clone())
+        else {
+            return refused_proposal(
+                "hook.proposal.action_not_found",
+                "The proposed action declares no invoke route.",
+            );
+        };
+        let application_id = Uuid::new_v4();
+        let correlation = RequestCorrelation::breg_created();
+        self.record_action_boundary_audit(
+            client,
+            &claims,
+            &route_id,
+            &correlation,
+            PreIoAuditKind::Attempt,
+        )
+        .await
+        .map_err(|_| UncertainApply)?;
+
+        let deadline = tokio::time::Instant::now() + HOOK_PROPOSAL_APPLY_BUDGET;
+        let fault = FaultControl::Disabled;
+        let mut candidate = Some(outcome_effects);
+        let mut retryable_attempts = 0;
+        let result = loop {
+            let attempt = self
+                .execute_immediate_action_after_attempt(
+                    client,
+                    registry,
+                    action,
+                    &claims,
+                    &target_authority,
+                    &normalized_input,
+                    &preconditions,
+                    &binding,
+                    &reserved_creates,
+                    application_id,
+                    &route_id,
+                    &correlation,
+                    fault,
+                    deadline,
+                    &mut candidate,
+                    None,
+                    Some(&causation),
+                )
+                .await;
+            if matches!(attempt, Err(MutationError::RetryableConflict))
+                && retryable_attempts < 2
+                && !fault.is_enabled()
+            {
+                retryable_attempts += 1;
+                continue;
+            }
+            break attempt;
+        };
+        if result.is_err() && !fault.is_enabled() {
+            self.record_action_boundary_audit(
+                client,
+                &claims,
+                &route_id,
+                &correlation,
+                PreIoAuditKind::Refusal,
+            )
+            .await
+            .map_err(|_| UncertainApply)?;
+        }
+        match result {
+            Ok(_) => {}
+            Err(
+                MutationError::ActionRefusal(_)
+                | MutationError::ActionHandlerFailure(_)
+                | MutationError::ActionEvidenceFailure { .. },
+            ) => {
+                return refused_proposal(
+                    "hook.proposal.handler_refusal",
+                    "The proposed outcome was refused by the action's handler contract.",
+                );
+            }
+            Err(MutationError::IdempotencyConflict) => {
+                // The key is the delivery, so a conflict means this delivery
+                // already settled a different answer: the first application
+                // stands and the changed one can never apply.
+                return conflicting_hook_answer();
+            }
+            Err(MutationError::PreconditionFailed) => {
+                return refused_proposal(
+                    "hook.proposal.precondition_failed",
+                    "The proposed mutation found its target in an unexpected state.",
+                );
+            }
+            Err(MutationError::InvalidRequest) => {
+                return refused_proposal(
+                    "hook.proposal.mutation_refused",
+                    "The proposed mutation was refused by the mutation contract.",
+                );
+            }
+            Err(_) => return Err(UncertainApply),
+        }
+
+        // The committed revision comes from the applied result records,
+        // which hold every effect the mutation produced. The response the
+        // grant returns is disclosure-filtered, so a grant whose result set
+        // hides every applied effect would leave the row forever uncertain
+        // if completion were derived from it.
+        let resulting_revision = client
+            .query_opt(
+                "SELECT target_record_revision
+                   FROM registry_internal.registry_immediate_action_results
+                  WHERE key_reference = $1
+                  ORDER BY effect_id
+                  LIMIT 1",
+                &[&binding.key_reference],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .map(|row| row.get::<_, i64>(0))
+            .filter(|revision| *revision > 0)
+            .ok_or(UncertainApply)?;
+        Ok(HookProposalOutcome::Applied(resulting_revision))
     }
 
     pub(crate) async fn action_target_conditions(
@@ -215,6 +924,7 @@ impl MutationCoordinator {
         deadline: tokio::time::Instant,
         candidate: &mut Option<Vec<CompiledActionEffect>>,
         frozen: Option<&FrozenEvidenceEvaluation>,
+        causation: Option<&Causation>,
     ) -> Result<MutationOutcome, MutationError> {
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -416,13 +1126,18 @@ impl MutationCoordinator {
                 .get(&effect.target.entity_id)
                 .ok_or(MutationError::InvalidRequest)?;
             fault.fail_at(MutationFaultPoint::BeforeOutbox)?;
+            let deliveries = exact_entity_event_deliveries(registry, entity)?;
+            let trigger = mutation_trigger(effect.operation);
+            let data_schemas =
+                event_data_schemas(registry.registry_id(), entity, trigger, &deliveries)?;
+            let event_source = self.event_source();
             insert_configured_events(
                 transaction.transaction(),
-                &entity.events,
-                &exact_entity_event_deliveries(registry, entity)?,
+                &entity.hooks,
+                &deliveries,
                 self.event_destinations.as_deref(),
                 OutboxMutation {
-                    trigger: mutation_trigger(effect.operation),
+                    trigger,
                     application_reference: Some(&application_reference),
                     entity_id: &entity.id,
                     record_id: &current.record_id,
@@ -438,6 +1153,11 @@ impl MutationCoordinator {
                         .map_or(Duration::from_secs(7 * 24 * 60 * 60), |destinations| {
                             destinations.payload_retention()
                         }),
+                    envelope: EnvelopeBinding {
+                        source: &event_source,
+                        data_schemas: &data_schemas,
+                        causation,
+                    },
                 },
             )
             .await?;
@@ -1205,6 +1925,49 @@ fn action_for_route<'a>(
         .ok_or(MutationError::InvalidRequest)
 }
 
+fn refused_proposal(
+    code: &'static str,
+    summary: impl Into<String>,
+) -> Result<HookProposalOutcome, UncertainApply> {
+    Ok(HookProposalOutcome::Refused {
+        code,
+        summary: summary.into(),
+    })
+}
+
+fn dead_lettered_proposal(
+    code: &'static str,
+    summary: impl Into<String>,
+) -> Result<HookProposalOutcome, UncertainApply> {
+    Ok(HookProposalOutcome::DeadLettered {
+        code,
+        summary: summary.into(),
+    })
+}
+
+fn conflicting_hook_answer() -> Result<HookProposalOutcome, UncertainApply> {
+    dead_lettered_proposal(
+        "hook.proposal.answer_conflict",
+        "This delivery already applied a different answer; the first application stands.",
+    )
+}
+
+fn hook_proposal_idempotency_key(event_id: Uuid, compiled_delivery_id: &str) -> String {
+    // The application identity is the hook delivery identity,
+    // domain-separated. No attempt, generation, or answer component enters
+    // the key; the answer digest belongs to the binding reference instead.
+    let mut input = Vec::new();
+    input.extend_from_slice(b"breg-hook-proposal-idempotency-v1");
+    append_proposal_idempotency_component(&mut input, event_id.to_string().as_bytes());
+    append_proposal_idempotency_component(&mut input, compiled_delivery_id.as_bytes());
+    format!("sha256:{}", hex::encode(Sha256::digest(input)))
+}
+
+fn append_proposal_idempotency_component(output: &mut Vec<u8>, value: &[u8]) {
+    output.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    output.extend_from_slice(value);
+}
+
 fn validate_action_claims(
     action: &CompiledAction,
     claims: &ActionClaimContext,
@@ -1807,12 +2570,17 @@ async fn insert_action_application(
     principal_reference: &str,
     result_count: u16,
 ) -> Result<(), MutationError> {
+    let handler_answer_digest = binding
+        .handler_answer_digest
+        .as_ref()
+        .map(<[u8; 32]>::as_slice);
     let changed = transaction
         .execute(
             "INSERT INTO registry_internal.registry_immediate_action_applications
                  (key_reference, binding_reference, application_id, action_id,
-                  action_contract_fingerprint, package_revision, principal_reference, result_count)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                  action_contract_fingerprint, package_revision, principal_reference,
+                  result_count, handler_answer_digest)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             &[
                 &binding.key_reference,
                 &binding.binding_reference,
@@ -1822,6 +2590,7 @@ async fn insert_action_application(
                 &package_revision,
                 &principal_reference,
                 &(i16::try_from(result_count).map_err(|_| MutationError::InvalidRequest)?),
+                &handler_answer_digest,
             ],
         )
         .await
@@ -1933,6 +2702,7 @@ impl MutationCoordinator {
                 action_contract_fingerprint: &action.contract_fingerprint,
                 target_authority,
                 result_effects: claims.result_effects(),
+                answer_digest: None,
                 canonical_request_digest: canonical_action_request_digest(
                     action,
                     &normalized,
@@ -2055,6 +2825,7 @@ impl MutationCoordinator {
                     deadline,
                     &mut candidate,
                     Some(frozen),
+                    None,
                 )
                 .await;
             if matches!(result, Err(MutationError::RetryableConflict))
@@ -2138,6 +2909,7 @@ async fn insert_action_evidence(
 /// This covers both immediate-action and reviewed-request application uses.
 /// Runtime roles have INSERT only; history erasure has a separate scope.
 /// A future cutoff cannot erase material whose retention has not expired.
+#[cfg(all(feature = "runtime", feature = "tooling"))]
 pub(crate) async fn erase_expired_action_evidence(
     client: &tokio_postgres::Transaction<'_>,
     before: chrono::DateTime<chrono::Utc>,
@@ -2166,6 +2938,101 @@ pub(crate) async fn erase_expired_action_evidence(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ordinary_action_binding_keeps_the_released_canonical_shape() {
+        let profile = AuditProfile::unkeyed_dev_only();
+        let result_effects = BTreeSet::from(["created".to_owned()]);
+        let claims = ActionClaimContext::new(
+            "register".to_owned(),
+            "principal".to_owned(),
+            "operator".to_owned(),
+            None,
+            result_effects.clone(),
+        )
+        .expect("action claims are valid");
+        let target_authority = BTreeMap::new();
+        let request_digest = [7_u8; 32];
+        let binding = resolve_action_binding(
+            &profile,
+            &ActionIdempotencyBinding {
+                key: "ordinary-action-key",
+                context: &claims,
+                method: HttpMethod::Post,
+                route: "/v1/actions/register",
+                package_revision: "package-revision",
+                action_contract_fingerprint: "sha256:contract",
+                target_authority: &target_authority,
+                result_effects: &result_effects,
+                canonical_request_digest: request_digest,
+                answer_digest: None,
+            },
+        )
+        .expect("ordinary action binding resolves");
+
+        let canonical_context =
+            crate::idempotency::canonical_action_context(&profile, &claims, "package-revision")
+                .expect("action context canonicalizes");
+        let legacy = canonicalize_json(&json!({
+            "context": canonical_context,
+            "method": "POST",
+            "route": "/v1/actions/register",
+            "packageRevision": "package-revision",
+            "actionContractFingerprint": "sha256:contract",
+            "targetAuthority": Vec::<Value>::new(),
+            "resultEffects": result_effects,
+            "canonicalRequestDigest": hex::encode(request_digest),
+        }))
+        .expect("legacy binding canonicalizes");
+        let legacy = std::str::from_utf8(&legacy).expect("canonical JSON is UTF-8");
+        let expected = profile
+            .key_hasher()
+            .audit_reference_hash(
+                "breg-action-idempotency-binding-v1",
+                "package-revision",
+                legacy,
+            )
+            .expect("legacy binding hashes");
+        assert_eq!(
+            binding.binding_reference, expected,
+            "an absent hook answer digest must not add a null member to released action receipts"
+        );
+
+        let answer_digest = [9_u8; 32];
+        let hook_binding = resolve_action_binding(
+            &profile,
+            &ActionIdempotencyBinding {
+                key: "ordinary-action-key",
+                context: &claims,
+                method: HttpMethod::Post,
+                route: "/v1/actions/register",
+                package_revision: "package-revision",
+                action_contract_fingerprint: "sha256:contract",
+                target_authority: &target_authority,
+                result_effects: claims.result_effects(),
+                canonical_request_digest: request_digest,
+                answer_digest: Some(&answer_digest),
+            },
+        )
+        .expect("hook action binding resolves");
+        assert_ne!(
+            hook_binding.binding_reference, expected,
+            "a hook answer digest still binds the exact accepted answer"
+        );
+    }
+
+    #[test]
+    fn hook_receipts_do_not_share_the_caller_key_namespace() {
+        let profile = AuditProfile::unkeyed_dev_only();
+        let key = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+        let caller_reference =
+            crate::idempotency::resolve_key_reference(&profile, key).expect("caller key resolves");
+        let hook_reference =
+            resolve_hook_key_reference(&profile, key).expect("hook receipt key resolves");
+
+        assert_ne!(caller_reference, hook_reference);
+    }
 
     #[test]
     fn fixed_optional_from_input_has_the_same_type_contract_at_admission_and_materialization() {
@@ -2212,11 +3079,16 @@ mod tests {
         let assets = project
             .actions
             .iter()
-            .filter_map(|action| action.handler.as_ref())
-            .map(|handler| crate::contract::ModuleAssetSource {
+            .filter_map(|action| {
+                action
+                    .handler
+                    .as_ref()
+                    .and_then(|handler| handler.script().map(str::to_owned))
+            })
+            .map(|script| crate::contract::ModuleAssetSource {
                 module: None,
-                path: handler.script.clone(),
-                bytes: std::fs::read(root.join(&handler.script)).unwrap(),
+                bytes: std::fs::read(root.join(&script)).unwrap(),
+                path: script,
             })
             .collect::<Vec<_>>();
         let registry = crate::compiler::compile_project_with_assets(

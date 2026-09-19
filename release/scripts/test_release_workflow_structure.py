@@ -1786,6 +1786,51 @@ class PublicationWorkflowStructureTest(unittest.TestCase):
         self.assertNotIn("PYPI_TOKEN", text)
 
 
+class MirrorBuildkitWorkflowStructureTest(unittest.TestCase):
+    def test_is_dispatch_only_with_narrow_scopes_and_a_single_mirror_job(self) -> None:
+        text, document = workflow("mirror-buildkit.yml")
+        trigger = text.split("permissions:", 1)[0]
+        self.assertIn("repository_dispatch:", trigger)
+        self.assertNotIn("workflow_dispatch:", trigger)
+        self.assertNotIn("push:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+        self.assertNotIn("schedule:", trigger)
+        self.assertEqual(document["permissions"], {"contents": "read"})
+        self.assertEqual(list(document["jobs"]), ["mirror"])
+        self.assertEqual(
+            document["jobs"]["mirror"]["permissions"],
+            {"contents": "read", "packages": "write"},
+        )
+        self.assertEqual(text.count("packages: write"), 1)
+
+    def test_mirrors_one_digest_preserving_copy_behind_input_validation(self) -> None:
+        text, document = workflow("mirror-buildkit.yml")
+        validation = step_run(document, "mirror", "Validate mirror request")
+        self.assertIn('"${GITHUB_REPOSITORY}" != "registrystack/registry-stack"', validation)
+        self.assertIn("client_payload.tag must be a canonical vMAJOR.MINOR.PATCH value", validation)
+        self.assertIn("client_payload.digest must be a lowercase sha256:<64 hex> value", validation)
+        mirror = step_run(document, "mirror", "Mirror the pinned image digest")
+        self.assertIn("crane copy", mirror)
+        self.assertIn("no longer resolves to", mirror)
+        self.assertIn("must preserve", mirror)
+        self.assertNotIn("--insecure", mirror)
+        install = step_run(document, "mirror", "Install pinned crane")
+        self.assertIn("sha256sum --check --strict", install)
+        visibility = step_run(
+            document, "mirror", "Require the mirror package to stay public"
+        )
+        self.assertIn("require-package-visibility", visibility)
+        self.assertIn("--visibility public", visibility)
+        self.assertIn('"${MIRROR_PACKAGE}"', visibility)
+        checkout = next(
+            step
+            for step in document["jobs"]["mirror"]["steps"]
+            if step.get("uses", "").startswith("actions/checkout@")
+        )
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+
+
 class SupportingWorkflowStructureTest(unittest.TestCase):
     def test_public_verification_selects_the_versioned_image_roster(self) -> None:
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")

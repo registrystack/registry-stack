@@ -4,7 +4,10 @@ This editable starter contains two questions and synthetic fixtures. Both questi
 reuse `registry-status` and permit either the code or registration-number selector.
 Their source, selectors, response schema, fixed fact schema and extraction adapter
 come from a reviewed `bregctl generate evidence-source` export. Import that export
-before running fixtures. There is no generated source copy to maintain here.
+before anything else runs: until it lands the questions name a source and selector
+profiles the project does not hold, so `check` reports them missing and
+`fixtures run` and `build` refuse. There is no generated source copy to maintain
+here.
 
 `record-active` returns one boolean. `record-status-pair` returns the complete pair
 of complementary booleans for the same two-state vocabulary. The pair demonstrates
@@ -61,8 +64,9 @@ This starts Evidence and a separate stock caller issuer using generated local au
 it reuses the target's source connections and outbound TLS settings. The target's
 caller authentication and service identity remain the explicit build settings.
 
-Fixtures and build use recorded synthetic responses and do not require BReg to be
-running or source credentials to be present. Serving the candidate requires the
-separate caller issuer, BReg endpoint, source credentials, signing key and audit
-storage named in the reviewed target. A production deployment needs its own
-reviewed HTTPS target and transit signer.
+Fixtures and build replay recorded synthetic responses once the reviewed export is
+imported, and then need neither a running BReg nor source credentials to be
+present; before that import they refuse on the missing `registry-status` source.
+Serving the candidate requires the separate caller issuer, BReg endpoint, source
+credentials, signing key and audit storage named in the reviewed target. A
+production deployment needs its own reviewed HTTPS target and transit signer.

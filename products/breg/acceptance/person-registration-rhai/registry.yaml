@@ -44,11 +44,12 @@ entities:
       - {id: display-name, apiName: displayName, type: string, required: true, minLength: 1, maxLength: 200, classification: internal}
     constraints:
       - {kind: unique, fields: [identifier]}
-    events:
+    hooks:
       - id: person-registered-v1
+        phase: after
         trigger: created
         projection: [identifier]
-        webhook: {destinationId: person-events}
+        handler: {kind: url, destinationId: person-events}
   - id: registration
     primaryDataset: person-registration-rhai
     route: registrations
@@ -59,11 +60,12 @@ entities:
       - {id: register, type: reference, target: register, required: true, classification: internal}
     constraints:
       - {kind: unique, fields: [registration-code]}
-    events:
+    hooks:
       - id: registration-recorded-v1
+        phase: after
         trigger: created
         projection: [registration-code]
-        webhook: {destinationId: person-events}
+        handler: {kind: url, destinationId: person-events}
   - id: register
     primaryDataset: person-registration-rhai
     route: registers

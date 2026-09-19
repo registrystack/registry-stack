@@ -43,6 +43,7 @@ class NightlyCoverageTests(unittest.TestCase):
             "stack-client": "stack-client",
             "evidence": "evidence",
             "developer-tools": "developer-tools",
+            "render": "render",
         }
         self.assertEqual({entry["name"]: entry["flag"] for entry in entries}, expected_flags)
         self.assertEqual([entry["name"] for entry in entries], list(SHARDS))

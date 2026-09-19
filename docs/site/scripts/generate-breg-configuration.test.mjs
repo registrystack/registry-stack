@@ -21,7 +21,7 @@ test('BReg covers every committed authoring and runtime schema', async () => {
   }
 });
 
-test('BReg reference includes module extensions, event conditions, and runtime delivery limits', async () => {
+test('BReg reference includes module extensions, hook conditions, and runtime delivery limits', async () => {
   const document = await buildBRegConfiguration();
   const fields = (id) => new Map(document.contracts.find((contract) => contract.id === id)
     .fields.map((field) => [field.key_path, field]));
@@ -29,12 +29,14 @@ test('BReg reference includes module extensions, event conditions, and runtime d
   const module = fields('module');
   const runtime = fields('runtime');
   assert.ok(project.has('accessProfiles[].permissions[].entity'));
-  assert.deepEqual(module.get('extendEntities[].events[].trigger').values, ['created', 'patched', 'request_lifecycle', 'tombstoned']);
+  assert.deepEqual(module.get('extendEntities[].hooks[].trigger').values, ['created', 'patched', 'request_lifecycle', 'tombstoned']);
+  assert.deepEqual(module.get('extendEntities[].hooks[].phase').values, ['after', 'before']);
   for (const path of ['changed[]', 'beforeEquals.*', 'afterEquals.*']) {
-    assert.ok(module.has(`extendEntities[].events[].when.${path}`), path);
+    assert.ok(module.has(`extendEntities[].hooks[].when.${path}`), path);
   }
-  assert.ok(module.has('extendEntities[].events[].webhook.destinationId'));
-  assert.ok(!module.has('extendEntities[].events[].webhook.origin'));
+  assert.deepEqual(module.get('extendEntities[].hooks[].handler.kind').values, ['rhai', 'url', 'wasm']);
+  assert.ok(module.has('extendEntities[].hooks[].handler.destinationId'));
+  assert.ok(!module.has('extendEntities[].hooks[].handler.origin'));
   assert.ok(runtime.has('eventDestinations.*.hmacSha256KeyRef'));
   assert.ok(runtime.has('eventDestinations.*.tls.clientIdentityRef'));
   assert.ok(runtime.has('eventDestinations.*.deliveryCeilings.maximumAttempts'));

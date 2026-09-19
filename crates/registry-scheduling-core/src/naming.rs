@@ -33,10 +33,6 @@ pub const SCHEDULING_RUNTIME_SCHEMA_ID: &str =
 pub const SCHEDULING_PROBLEM_TYPE_BASE: &str =
     "https://id.registrystack.org/problems/registry-scheduling/";
 
-/// The one reserved hook ABI value. This milestone has no hook engine: the
-/// value may appear on the hook policy type, and nowhere else.
-pub const SCHEDULING_HOOK_ABI: &str = "registry.scheduling-hook/v1";
-
 /// apiVersion of an offline replay fixture.
 pub const SCHEDULING_FIXTURE_API_VERSION: &str =
     "registry.registrystack.org/scheduling-fixture/v1alpha1";
@@ -116,7 +112,6 @@ mod tests {
             SCHEDULING_PROBLEM_TYPE_BASE,
             "https://id.registrystack.org/problems/registry-scheduling/"
         );
-        assert_eq!(SCHEDULING_HOOK_ABI, "registry.scheduling-hook/v1");
         assert_eq!(
             SCHEDULING_FIXTURE_API_VERSION,
             "registry.registrystack.org/scheduling-fixture/v1alpha1"

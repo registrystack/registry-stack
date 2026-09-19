@@ -283,14 +283,15 @@ mod tests {
         }
         let mut extension = serde_json::json!({
             "id": "notifications", "version": "1.0.0",
-            "extendEntities": [{"entity": "record", "events": [{
+            "extendEntities": [{"entity": "record", "hooks": [{
+                "phase": "after",
                 "id": "record-labelled-v1", "trigger": "patched", "projection": ["label"],
                 "when": {"kind": "fields", "changed": ["label"]},
-                "webhook": {"destinationId": "receiver"}
+                "handler": {"kind":"url","destinationId": "receiver"}
             }]}]
         });
         assert!(schema.is_valid(&extension));
-        extension["extendEntities"][0]["events"][0]["webhook"]["url"] =
+        extension["extendEntities"][0]["hooks"][0]["handler"]["url"] =
             Value::String("https://example.com/events".into());
         assert!(!schema.is_valid(&extension));
 
@@ -513,7 +514,8 @@ mod tests {
     fn schema_accepts_the_minimal_tagged_event_and_webhook_shape() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["events"] = serde_json::json!([{
+        instance["entities"][0]["hooks"] = serde_json::json!([{
+            "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",
             "projection": ["asset-code", "label"],
@@ -521,7 +523,7 @@ mod tests {
                 "kind": "fields",
                 "afterEquals": {"asset-class": "equipment"}
             },
-            "webhook": {"destinationId": "asset-operations"}
+            "handler": {"kind":"url","destinationId": "asset-operations"}
         }]);
 
         assert!(schema.is_valid(&instance));
@@ -531,11 +533,13 @@ mod tests {
     fn schema_rejects_per_event_delivery_policy() {
         let schema = compile(&schema_document());
         let mut instance = fixture("asset-site-placement");
-        instance["entities"][0]["events"] = serde_json::json!([{
+        instance["entities"][0]["hooks"] = serde_json::json!([{
+            "phase": "after",
             "id": "asset-created-v1",
             "trigger": "created",
             "projection": ["asset-code"],
-            "webhook": {
+            "handler": {
+                "kind": "url",
                 "destinationId": "asset-operations",
                 "authenticationProfile": "hmac_sha256_v1"
             }

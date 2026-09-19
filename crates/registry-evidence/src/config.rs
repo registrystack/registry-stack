@@ -42,6 +42,11 @@ pub enum ConfigError {
     TooLarge,
     #[error("configuration violates the Evidence Version 1 contract: {0}")]
     Invalid(&'static str),
+    /// A contract violation a validator can attribute to one closed field
+    /// label. The label is the validator's own static name for the field, so
+    /// the diagnostic stays value-free while naming where to look.
+    #[error("configuration violates the Evidence Version 1 contract: {0} ({1})")]
+    InvalidField(&'static str, &'static str),
 }
 
 impl ConfigError {
@@ -54,6 +59,7 @@ impl ConfigError {
             Self::InvalidYaml(fault) => fault.clone(),
             Self::TooLarge => SchemaFault::because("document exceeds the Version 1 size limit"),
             Self::Invalid(cause) => SchemaFault::because(cause),
+            Self::InvalidField(cause, field) => SchemaFault::because_in_field(cause, field),
         }
     }
 }
@@ -77,12 +83,14 @@ impl fmt::Display for TextLocation {
 /// sequence indices, a text location, and one static cause. The decoder's own
 /// message is classified and then discarded, because it quotes scalars, and a
 /// deployment scalar can be a selector value, a secret reference, or a source
-/// identifier.
+/// identifier. The optional field label is the static name a validator holds
+/// for the field it bound, which is structure, not content.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SchemaFault {
     location: Option<TextLocation>,
     path: Option<String>,
     cause: &'static str,
+    field: Option<&'static str>,
 }
 
 /// The longest schema path a diagnostic will carry.
@@ -131,6 +139,19 @@ impl SchemaFault {
             location: None,
             path: None,
             cause,
+            field: None,
+        }
+    }
+
+    /// A fault that also names the closed field label its cause applies to.
+    ///
+    /// The label is the static name a validator holds for the collection or
+    /// value it bound (for example `publication jurisdictions`), so the fault
+    /// stays value-free while telling an operator which field refused.
+    pub fn because_in_field(cause: &'static str, field: &'static str) -> Self {
+        Self {
+            field: Some(field),
+            ..Self::because(cause)
         }
     }
 
@@ -145,6 +166,12 @@ impl SchemaFault {
 
     pub fn cause(&self) -> &'static str {
         self.cause
+    }
+
+    /// The closed field label this fault applies to, when the refusing
+    /// validator named one.
+    pub fn field(&self) -> Option<&'static str> {
+        self.field
     }
 
     pub fn path(&self) -> Option<&str> {
@@ -166,6 +193,7 @@ impl SchemaFault {
             }),
             path,
             cause: classify_decode_cause(message, fallback),
+            field: None,
         }
     }
 }
@@ -173,6 +201,9 @@ impl SchemaFault {
 impl fmt::Display for SchemaFault {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.cause)?;
+        if let Some(field) = self.field {
+            write!(formatter, " ({field})")?;
+        }
         if let Some(path) = &self.path {
             write!(formatter, " at {path}")?;
         }
@@ -5644,12 +5675,15 @@ fn validate_len(
     length: usize,
     minimum: usize,
     maximum: usize,
-    _field: &'static str,
+    field: &'static str,
 ) -> Result<(), ConfigError> {
     if (minimum..=maximum).contains(&length) {
         Ok(())
     } else {
-        invalid("collection cardinality is outside Version 1 bounds")
+        Err(ConfigError::InvalidField(
+            "collection cardinality is outside Version 1 bounds",
+            field,
+        ))
     }
 }
 
@@ -5657,12 +5691,15 @@ fn validate_range(
     value: u64,
     minimum: u64,
     maximum: u64,
-    _field: &'static str,
+    field: &'static str,
 ) -> Result<(), ConfigError> {
     if (minimum..=maximum).contains(&value) {
         Ok(())
     } else {
-        invalid("numeric value is outside Version 1 bounds")
+        Err(ConfigError::InvalidField(
+            "numeric value is outside Version 1 bounds",
+            field,
+        ))
     }
 }
 
@@ -6913,10 +6950,10 @@ mod tests {
     fn invalid_reason(document: &str) -> &'static str {
         let error =
             EvidenceConfig::parse_yaml(document.as_bytes()).expect_err("the document was accepted");
-        let ConfigError::Invalid(reason) = error else {
-            panic!("the document was not rejected by a validation rule: {error}");
-        };
-        reason
+        match error {
+            ConfigError::Invalid(reason) | ConfigError::InvalidField(reason, _) => reason,
+            _ => panic!("the document was not rejected by a validation rule: {error}"),
+        }
     }
 
     #[test]
@@ -8311,6 +8348,38 @@ mod tests {
         }
     }
 
+    /// A bound violation names the closed field label it applies to, so an
+    /// operator reading a deployment diagnostic learns which collection or
+    /// value refused without any configured value being carried.
+    #[test]
+    fn a_field_labelled_fault_names_its_field_and_nothing_else() {
+        let fault = SchemaFault::because_in_field(
+            "collection cardinality is outside Version 1 bounds",
+            "publication jurisdictions",
+        );
+        assert_eq!(
+            fault.to_string(),
+            "collection cardinality is outside Version 1 bounds (publication jurisdictions)"
+        );
+        assert_eq!(fault.field(), Some("publication jurisdictions"));
+        assert_eq!(
+            fault.cause(),
+            "collection cardinality is outside Version 1 bounds"
+        );
+        assert!(
+            SchemaFault::because("a cause").field().is_none(),
+            "an unlabelled fault stays unlabelled"
+        );
+        let labelled = ConfigError::InvalidField(
+            "numeric value is outside Version 1 bounds",
+            "OAuth assumed token lifetime",
+        );
+        assert_eq!(
+            labelled.fault().to_string(),
+            "numeric value is outside Version 1 bounds (OAuth assumed token lifetime)"
+        );
+    }
+
     /// The assumed lifetime is a governed positive duration, so a zero or
     /// oversized value is a configuration error rather than a silent clamp.
     #[test]
@@ -8323,16 +8392,18 @@ mod tests {
         for (assumed_lifetime_seconds, expected) in [
             (
                 Some(0),
-                Err(ConfigError::Invalid(
+                Err(ConfigError::InvalidField(
                     "numeric value is outside Version 1 bounds",
+                    "OAuth assumed token lifetime",
                 )),
             ),
             (Some(1), Ok(())),
             (Some(86_400), Ok(())),
             (
                 Some(86_401),
-                Err(ConfigError::Invalid(
+                Err(ConfigError::InvalidField(
                     "numeric value is outside Version 1 bounds",
+                    "OAuth assumed token lifetime",
                 )),
             ),
             (None, Ok(())),

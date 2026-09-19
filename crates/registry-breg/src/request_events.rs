@@ -5,16 +5,20 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use crate::contract::{EventConditionSource, EventSource, EventTrigger};
+use crate::contract::{EventConditionSource, EventTrigger, HookSource};
 use crate::event_destination::ActivatedEventDestinationRegistry;
 use crate::model::CompiledEventDelivery;
-use crate::outbox::{insert_webhook_delivery, OutboxError, WebhookCapture};
+use crate::outbox::{
+    activate_delivery, capture_envelope, capture_time, envelope_payload, insert_webhook_delivery,
+    CapturedEvent, EnvelopeBinding, OutboxError, WebhookCapture,
+};
 
 #[doc(hidden)]
 pub struct RequestLifecycleEvent<'a> {
@@ -34,12 +38,13 @@ pub struct RequestLifecycleEvent<'a> {
     pub schema_fingerprint: &'a str,
     pub request_values: &'a Map<String, Value>,
     pub payload_retention: Duration,
+    pub envelope: EnvelopeBinding<'a>,
 }
 
 #[doc(hidden)]
 pub async fn insert_request_lifecycle_events(
     transaction: &Transaction<'_>,
-    events: &BTreeMap<String, EventSource>,
+    events: &BTreeMap<String, HookSource>,
     deliveries: &[CompiledEventDelivery],
     destinations: Option<&ActivatedEventDestinationRegistry>,
     event: RequestLifecycleEvent<'_>,
@@ -71,6 +76,7 @@ pub async fn insert_request_lifecycle_events(
         return Err(OutboxError::InvalidProjection);
     }
 
+    let mut captured_at = None;
     for source in events
         .values()
         .filter(|source| source.trigger == EventTrigger::RequestLifecycle)
@@ -107,7 +113,7 @@ pub async fn insert_request_lifecycle_events(
         }
 
         let deduplication_key = lifecycle_deduplication_key(&source.id, &event);
-        let mut payload_value = json!({
+        let mut data = json!({
             "entity": event.request_entity_id,
             "recordId": event.request_id.to_string(),
             "revision": event.request_record_revision,
@@ -127,47 +133,53 @@ pub async fn insert_request_lifecycle_events(
             "values": values,
         });
         if let Some(reason) = event.reason {
-            payload_value["request"]["reason"] = json!(reason);
+            data["request"]["reason"] = json!(reason);
         }
-        let payload =
-            canonicalize_json(&payload_value).map_err(|_| OutboxError::InvalidProjection)?;
-        let activated = if let Some(delivery) = delivery {
-            if delivery.trigger != EventTrigger::RequestLifecycle {
-                return Err(OutboxError::InvalidProjection);
+        if delivery.is_some_and(|delivery| delivery.trigger != EventTrigger::RequestLifecycle) {
+            return Err(OutboxError::InvalidProjection);
+        }
+        let event_id = lifecycle_event_id(&source.id, &event);
+        let created_at = match captured_at {
+            Some(created_at) => created_at,
+            None => {
+                let created_at = capture_time(transaction).await?;
+                captured_at = Some(created_at);
+                created_at
             }
-            if payload.len()
-                > usize::try_from(delivery.maximum_payload_bytes)
-                    .map_err(|_| OutboxError::InvalidProjection)?
-            {
-                return Err(OutboxError::InvalidProjection);
-            }
-            let destination = destinations
-                .and_then(|destinations| destinations.lookup(&delivery.destination_id))
-                .ok_or(OutboxError::Unavailable)?;
-            let deployed_attempt_timeout = u32::try_from(destination.attempt_timeout().as_millis())
-                .map_err(|_| OutboxError::Unavailable)?;
-            if deployed_attempt_timeout > delivery.attempt_timeout_ms
-                || destination.maximum_attempts() > delivery.maximum_attempts
-            {
-                return Err(OutboxError::Unavailable);
-            }
-            Some((delivery, destination))
-        } else {
-            None
         };
+        let envelope = capture_envelope(
+            &event.envelope,
+            CapturedEvent {
+                event_id,
+                event_type: &source.id,
+                created_at: OffsetDateTime::from(created_at),
+                record_reference: event.request_record_reference,
+                record_revision: event.request_record_revision,
+                data,
+            },
+        )?;
+        let payload = envelope_payload(
+            &envelope,
+            delivery.map(|delivery| delivery.maximum_payload_bytes),
+        )?;
+        let activated = delivery
+            .map(|delivery| activate_delivery(delivery, destinations))
+            .transpose()?;
         let retention_milliseconds = i64::try_from(event.payload_retention.as_millis())
             .ok()
             .filter(|value| (86_400_000..=2_592_000_000).contains(value))
             .ok_or(OutboxError::Unavailable)?;
-        let event_id = lifecycle_event_id(&source.id, &event);
+        // Capture time is written explicitly rather than left to the column
+        // default, because the envelope spells the same instant and payload
+        // expiry is measured from it.
         let changed = transaction
             .execute(
                 "INSERT INTO registry_internal.registry_outbox
                      (event_id, event_type, trigger, entity_id, record_reference,
                       record_revision, package_revision, schema_fingerprint, payload,
-                      payload_expires_at)
-                 VALUES ($1, $2, 'request_lifecycle', $3, $4, $5, $6, $7, $8,
-                         transaction_timestamp() + $9::bigint * interval '1 millisecond')
+                      created_at, payload_expires_at)
+                 VALUES ($1, $2, 'request_lifecycle', $3, $4, $5, $6, $7, $8, $9,
+                         $9::timestamptz + $10::bigint * interval '1 millisecond')
                  ON CONFLICT (event_id) DO NOTHING",
                 &[
                     &event_id,
@@ -178,25 +190,23 @@ pub async fn insert_request_lifecycle_events(
                     &event.package_revision,
                     &event.schema_fingerprint,
                     &payload,
+                    &created_at,
                     &retention_milliseconds,
                 ],
             )
             .await
             .map_err(|_| OutboxError::Unavailable)?;
         if changed == 0 {
-            verify_existing_event(transaction, event_id, &source.id, &payload).await?;
+            verify_existing_event(transaction, event_id, &envelope).await?;
             continue;
         }
-        if let Some((delivery, destination)) = activated {
+        if let Some(activated) = activated {
             insert_webhook_delivery(
                 transaction,
                 event_id,
                 WebhookCapture {
-                    delivery,
+                    activated: &activated,
                     payload: &payload,
-                    destination_binding_digest: destination.binding_digest(),
-                    deployed_attempt_timeout: destination.attempt_timeout(),
-                    deployed_maximum_attempts: destination.maximum_attempts(),
                     package_revision: event.package_revision,
                     schema_fingerprint: event.schema_fingerprint,
                 },
@@ -234,11 +244,16 @@ fn lifecycle_condition_matches(
     Ok(true)
 }
 
+/// Prove that a lifecycle event already captured under this event id says what
+/// this capture would say.
+///
+/// A repeated capture lands in a later transaction, so the stored envelope's
+/// commit time is the one field that may differ. Every other field, `data`
+/// included, must repeat exactly.
 async fn verify_existing_event(
     transaction: &Transaction<'_>,
     event_id: Uuid,
-    event_type: &str,
-    payload: &[u8],
+    envelope: &HookEnvelope,
 ) -> Result<(), OutboxError> {
     let row = transaction
         .query_opt(
@@ -256,7 +271,11 @@ async fn verify_existing_event(
         .try_get::<_, Option<Vec<u8>>>(1)
         .map_err(|_| OutboxError::Unavailable)?
         .ok_or(OutboxError::Unavailable)?;
-    if existing_type == event_type && existing_payload == payload {
+    let mut existing =
+        HookEnvelope::from_canonical_bytes(&existing_payload, &EnvelopeLimits::default())
+            .map_err(|_| OutboxError::Unavailable)?;
+    existing.time = envelope.time;
+    if existing_type == envelope.event_type && &existing == envelope {
         Ok(())
     } else {
         Err(OutboxError::Unavailable)

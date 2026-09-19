@@ -2903,9 +2903,114 @@ fn explain_actions_reports_reference_acceptance_conditions() {
     assert_eq!(requirement["field"]["field"], "active");
     assert_eq!(requirement["equals"], true);
     assert_eq!(requirement["evaluated"], "before_effects_under_target_lock");
+    // A Rhai handler's server contract is the baseline: no compatibility
+    // member, which the WASM summary alone carries.
+    assert_eq!(action["handler"]["kind"], "rhai");
+    assert!(action["handler"]["compatibility"].is_null());
     assert!(!String::from_utf8(output.stdout)
         .expect("explanation is UTF-8")
         .contains("registry_data"));
+}
+
+/// The minimal conforming guest ABI, mirroring the wasm admission suite's
+/// fixture: the five required exports and nothing else.
+#[cfg(feature = "wasm")]
+const MINIMAL_ABI_WAT: &str = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "alloc") (param i32) (result i32) i32.const 0)
+      (func (export "handle") (param i32 i32) (result i32) i32.const 0)
+      (func (export "result_ptr") (result i32) i32.const 0)
+      (func (export "result_len") (result i32) i32.const 0)
+    )
+"#;
+
+#[cfg(feature = "wasm")]
+fn wasm_action_fixture() -> &'static [u8] {
+    br#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: wasm-explain-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://wasm-explain-fixture.example.test
+entities:
+  - id: person
+    primaryDataset: test-dataset
+    route: people
+    mutationMode: mutable
+    fields:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+actions:
+  - id: register-person
+    inputs:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+    handler:
+      kind: wasm
+      module: wasm/handler.wasm
+      abi: registry.action-handler/v1
+      writes:
+        - id: person
+          target: {entity: person}
+          operation: create
+          fields: [person-code, legal-name]
+accessProfiles:
+  - id: registrar
+    default: true
+    principalClaim: registry_principal
+    permissions:
+      - action: register-person
+        operations: [invoke]
+        targets:
+          - {entity: person, rowBoundaries: []}
+        results: [person]
+"#
+}
+
+/// A WASM handler summary carries its server-compatibility contract: the
+/// minimum server that runs it, and the two refusal shapes older or
+/// feature-off servers produce. Rhai handlers carry no such member; their
+/// server contract is the baseline.
+#[test]
+#[cfg(feature = "wasm")]
+fn explain_actions_reports_wasm_handler_server_compatibility() {
+    let project = TestProject::from_registry_source(wasm_action_fixture());
+    let module_directory = project.path().join("wasm");
+    fs::create_dir_all(&module_directory).expect("module directory is created");
+    let module = wat::parse_str(MINIMAL_ABI_WAT).expect("the wat fixture assembles");
+    fs::write(module_directory.join("handler.wasm"), module).expect("module file is written");
+
+    let output = bregctl(&[
+        "--format",
+        "json",
+        "explain",
+        "actions",
+        project.path().to_str().expect("path is UTF-8"),
+    ]);
+
+    assert!(output.status.success(), "{output:?}");
+    let report = json_stdout(&output);
+    let handler = &report["explanation"]["actions"][0]["handler"];
+    assert_eq!(handler["kind"], "wasm");
+    let compatibility = &handler["compatibility"];
+    assert_eq!(
+        compatibility["minimumServer"],
+        "registry-breg built with the wasm feature"
+    );
+    assert_eq!(
+        compatibility["serversBeforeWasmSupport"],
+        "refuse the package at load with a typed handler error and no state change"
+    );
+    assert_eq!(
+        compatibility["serversBuiltWithoutTheFeature"],
+        "load the package and fail each invocation with a typed handler failure"
+    );
+    assert_eq!(
+        compatibility["moduleSha256"], handler["moduleSha256"],
+        "the compatibility member names the exact module it describes"
+    );
 }
 
 #[test]
@@ -3228,8 +3333,9 @@ entities:
         type: string
         maxLength: 64
         classification: public
-    events:
+    hooks:
       - id: case-created
+        phase: after
         trigger: created
         projection: [label]
 "#,
@@ -3262,11 +3368,13 @@ entities:
         type: string
         maxLength: 64
         classification: public
-    events:
+    hooks:
       - id: case-created
+        phase: after
         trigger: created
         projection: [label]
-        webhook:
+        handler:
+          kind: url
           destinationId: case-operations
 "#,
     );

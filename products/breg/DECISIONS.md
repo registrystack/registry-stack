@@ -99,7 +99,7 @@
   operation the compiler did not admit. Declared refusal codes are the only
   way a script can decline a call before an effect commits.
 - A persisted `string` or `text` field may declare `pattern` using
-  PostgreSQL's native advanced regular-expression syntax, on PostgreSQL 15 or
+  PostgreSQL's native advanced regular-expression syntax, on PostgreSQL 17 or
   newer. There is no second regular-expression engine in BReg; the database
   itself enforces the pattern.
 - A read access profile may declare `membershipBoundaries`: a one-hop join

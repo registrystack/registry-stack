@@ -6,7 +6,8 @@ use registry_breg::action_handler::{
     ActionHandlerOutcome,
 };
 use registry_breg::model::{
-    CompiledActionEffect, CompiledActionMutation, CompiledActionTargetBinding, CompiledActionValue,
+    CompiledActionEffect, CompiledActionHandler, CompiledActionHandlerKind, CompiledActionMutation,
+    CompiledActionTargetBinding, CompiledActionValue,
 };
 
 pub(super) fn run(
@@ -27,6 +28,7 @@ pub(super) fn run(
         .handler
         .as_ref()
         .ok_or_else(|| failure("action", "select an action with a Rhai handler"))?;
+    let identity = handler_identity(handler)?;
     let path = args
         .input
         .as_ref()
@@ -194,11 +196,7 @@ pub(super) fn run(
         refusal,
         assertions_passed,
         planner: None,
-        handler: Some(PlannerTestIdentityReport {
-            kind: "rhai",
-            abi: handler.abi.clone(),
-            script_sha256: handler.script_sha256.clone(),
-        }),
+        handler: Some(identity),
         disposition: None,
         queue_reason: None,
         counts: PlannerTestCountReport {
@@ -207,6 +205,39 @@ pub(super) fn run(
             dependencies: effects.iter().map(|e| e.depends_on.len()).sum(),
         },
         effects: reports,
+    })
+}
+
+/// The compiled backend this command executes, and the source fingerprint the
+/// report names for it.
+///
+/// Only the Rhai backend runs here. A WASM handler compiles, is explained by
+/// `explain actions`, and executes on a `breg` server built with the `wasm`
+/// feature, but bregctl installs no WASM execution runtime, so its module has
+/// nothing to run in. Naming that here, before the synthetic fixture is read,
+/// keeps the refusal a statement about the command rather than an execution
+/// failure that reads like a fault in the authored handler.
+fn handler_identity(
+    handler: &CompiledActionHandler,
+) -> Result<PlannerTestIdentityReport, FailureReport> {
+    if handler.kind != CompiledActionHandlerKind::Rhai {
+        return Err(planner_test_failure(
+            "planner_test.handler.backend",
+            "action",
+            "the local handler test accepts only Rhai-backed actions; run WASM handler fixtures through the handler SDK's admission proof",
+        ));
+    }
+    let script_sha256 = handler.script_sha256.clone().ok_or_else(|| {
+        planner_test_failure(
+            "planner_test.handler.identity",
+            "action",
+            "the compiled Rhai handler carries no script hash",
+        )
+    })?;
+    Ok(PlannerTestIdentityReport {
+        kind: "rhai",
+        abi: handler.abi.clone(),
+        script_sha256,
     })
 }
 
@@ -398,6 +429,148 @@ mod tests {
             .join("../../products/breg/acceptance/person-registration-rhai")
             .canonicalize()
             .unwrap()
+    }
+
+    /// The minimal conforming guest ABI, mirroring the WASM admission suite's
+    /// fixture: the five required exports and nothing else. Compilation
+    /// validates the module structurally; the local handler test never runs it.
+    #[cfg(feature = "wasm")]
+    const MINIMAL_ABI_WAT: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (func (export "alloc") (param i32) (result i32) i32.const 0)
+          (func (export "handle") (param i32 i32) (result i32) i32.const 0)
+          (func (export "result_ptr") (result i32) i32.const 0)
+          (func (export "result_len") (result i32) i32.const 0)
+        )
+    "#;
+
+    /// A project whose one action declares a WASM handler over the module
+    /// written beside it.
+    #[cfg(feature = "wasm")]
+    const WASM_HANDLER_PROJECT: &str = r#"apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: wasm-planner-test-fixture
+  version: 1
+  defaultLanguage: en
+  canonicalBaseIri: https://wasm-planner-test-fixture.example.test
+entities:
+  - id: person
+    primaryDataset: test-dataset
+    route: people
+    mutationMode: mutable
+    fields:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+actions:
+  - id: register-person
+    inputs:
+      - {id: person-code, apiName: personCode, type: string, required: true, maxLength: 64, classification: restricted}
+      - {id: legal-name, apiName: legalName, type: string, required: true, maxLength: 160, classification: restricted}
+    handler:
+      kind: wasm
+      module: wasm/handler.wasm
+      abi: registry.action-handler/v1
+      writes:
+        - id: person
+          target: {entity: person}
+          operation: create
+          fields: [person-code, legal-name]
+accessProfiles:
+  - id: registrar
+    default: true
+    principalClaim: registry_principal
+    permissions:
+      - action: register-person
+        operations: [invoke]
+        targets:
+          - {entity: person, rowBoundaries: []}
+        results: [person]
+"#;
+
+    /// A WASM handler compiles and is explained by bregctl, but the local
+    /// handler test does not execute it: bregctl installs no WASM execution
+    /// runtime. The refusal names the backend the command accepts and arrives
+    /// before the synthetic fixture is read, instead of surfacing as an
+    /// execution failure that reads like a fault in the authored handler.
+    #[cfg(feature = "wasm")]
+    #[test]
+    fn wasm_backed_action_is_refused_with_the_accepted_backend_named() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        fs::write(root.join("registry.yaml"), WASM_HANDLER_PROJECT).unwrap();
+        fs::create_dir(root.join("wasm")).unwrap();
+        fs::write(
+            root.join("wasm/handler.wasm"),
+            wat::parse_str(MINIMAL_ABI_WAT).expect("the wat fixture assembles"),
+        )
+        .unwrap();
+        let compiled = compile(&root, ProfileArg::Authoring, "project planner-test")
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        let input = root.join("input.json");
+        fs::write(
+            &input,
+            br#"{"person-code":"private-code-canary","legal-name":"private-name-canary"}"#,
+        )
+        .unwrap();
+        let args = ProjectPlannerTestArgs {
+            project: root.clone(),
+            action: Some("register-person".into()),
+            input: Some(input),
+            expect: None,
+            entity: None,
+            request: None,
+        };
+        let failure = run(&args, &compiled).expect_err("a WASM handler is not executed locally");
+        let diagnostic = &failure.diagnostics[0];
+        assert_eq!(diagnostic.code, "planner_test.handler.backend");
+        assert_eq!(diagnostic.path, "action");
+        assert!(diagnostic.message.contains("Rhai"), "{diagnostic:?}");
+        let rendered = serde_json::to_string(&failure).unwrap();
+        for canary in ["private-code-canary", "private-name-canary"] {
+            assert!(!rendered.contains(canary));
+        }
+    }
+
+    /// The identity report names the one backend this command executes and the
+    /// hash that backend carries. Every other backend, and a Rhai handler
+    /// without the hash the compiler gives it, is a report the command refuses
+    /// to produce rather than a panic or a mislabelled digest.
+    #[test]
+    fn handler_identity_names_the_rhai_backend_and_refuses_every_other_one() {
+        let mut handler = CompiledActionHandler {
+            kind: CompiledActionHandlerKind::Rhai,
+            source_module: None,
+            script_path: "scripts/register-person.rhai".into(),
+            module_path: String::new(),
+            abi: "registry.action-handler/v1".into(),
+            rhai_version: None,
+            script_sha256: Some("sha256:script-digest".into()),
+            module_sha256: None,
+            script_bytes: Vec::new(),
+            module_bytes: Vec::new(),
+            limits: None,
+            writes: Vec::new(),
+            refusals: BTreeMap::new(),
+        };
+        let identity = handler_identity(&handler)
+            .unwrap_or_else(|failure| panic!("{}", serde_json::to_string(&failure).unwrap()));
+        assert_eq!(identity.kind, "rhai");
+        assert_eq!(identity.abi, "registry.action-handler/v1");
+        assert_eq!(identity.script_sha256, "sha256:script-digest");
+
+        handler.script_sha256 = None;
+        let failure = handler_identity(&handler).expect_err("a Rhai handler carries its hash");
+        assert_eq!(failure.diagnostics[0].code, "planner_test.handler.identity");
+
+        handler.kind = CompiledActionHandlerKind::Wasm;
+        handler.module_sha256 = Some("sha256:module-digest-canary".into());
+        let failure = handler_identity(&handler).expect_err("a WASM handler is not executed here");
+        assert_eq!(failure.diagnostics[0].code, "planner_test.handler.backend");
+        assert!(!serde_json::to_string(&failure)
+            .unwrap()
+            .contains("sha256:module-digest-canary"));
     }
 
     #[test]

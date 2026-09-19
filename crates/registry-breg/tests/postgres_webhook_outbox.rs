@@ -29,9 +29,10 @@ use registry_breg::postgres::{
 };
 use registry_breg::runtime_config::parse_runtime_config;
 use registry_platform_audit::AuditProfile;
-use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::{Causation, EnvelopeLimits, HookEnvelope};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use tokio_postgres::Row;
 use uuid::Uuid;
 
@@ -45,6 +46,11 @@ const PATH_CANARY: &str = "/webhook-path-canary";
 const SECRET_REF_CANARY: &str = "webhook-key-ref-canary";
 const SECRET_KEY_CANARY: &[u8] = b"webhook-key-material-canary-0123456789abcdef";
 const RESTRICTED_CANARY: &str = "restricted-projection-canary";
+
+/// `registry.id` of the project below joined with `identity.instanceId` of the
+/// runtime configuration below, in the shape `delivery_source` builds.
+const EXPECTED_EVENT_SOURCE: &str =
+    "urn:registrystack:registry:webhook-outbox-registry:instance:webhook-outbox-instance";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_deterministically_identified(
@@ -260,7 +266,7 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
         &binding_digest,
         &identity,
     );
-    assert_eq!(first_capture.payload, expected_payload(raw_record_id));
+    assert_payload_is_the_envelope(&first_capture, raw_record_id);
     assert!(first_capture.payload.len() <= compiled_delivery.maximum_payload_bytes as usize);
     assert_delivery_is_transport_and_value_free(&database, first_capture.event_id, raw_record_id)
         .await;
@@ -366,10 +372,13 @@ async fn real_postgres_webhook_outbox_capture_is_atomic_package_bound_and_determ
     assert_eq!(after_match.delivery, before_match.delivery + 1);
     assert_eq!(after_match.delivery_state, before_match.delivery_state + 1);
     let conditional_capture = capture(&database, 2).await;
-    let conditional_body: Value = serde_json::from_slice(&conditional_capture.payload)
-        .expect("conditional event body is JSON");
+    let conditional_envelope = HookEnvelope::from_canonical_bytes(
+        &conditional_capture.payload,
+        &EnvelopeLimits::default(),
+    )
+    .expect("the conditional capture stores a canonical hook envelope");
     assert_eq!(
-        conditional_body,
+        conditional_envelope.data,
         json!({
             "entity": "case",
             "recordId": raw_record_id,
@@ -425,9 +434,61 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
     install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("empty pre-V1 webhook schema upgrades");
+    let answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                AND conname = 'registry_action_application_answer_digest_bounds'",
+            &[],
+        )
+        .await
+        .expect("the answer digest constraint is installed")
+        .get::<_, i64>(0);
+    let delivery_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_webhook_delivery_state'::regclass
+                AND conname = 'registry_webhook_delivery_state_answer_digest_required'",
+            &[],
+        )
+        .await
+        .expect("the delivery answer constraint is installed")
+        .get::<_, i64>(0);
     install_mutation_schema(&migration, &database.runtime_role)
         .await
         .expect("the internal schema upgrade is idempotent");
+    let reinstalled_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_immediate_action_applications'::regclass
+                AND conname = 'registry_action_application_answer_digest_bounds'",
+            &[],
+        )
+        .await
+        .expect("the answer digest constraint remains installed")
+        .get::<_, i64>(0);
+    assert_eq!(
+        reinstalled_answer_constraint_oid, answer_constraint_oid,
+        "a repeated activation keeps the existing constraint instead of rebuilding it"
+    );
+    let reinstalled_delivery_answer_constraint_oid = migration
+        .query_one(
+            "SELECT oid::bigint
+               FROM pg_catalog.pg_constraint
+              WHERE conrelid = 'registry_internal.registry_webhook_delivery_state'::regclass
+                AND conname = 'registry_webhook_delivery_state_answer_digest_required'",
+            &[],
+        )
+        .await
+        .expect("the delivery answer constraint remains installed")
+        .get::<_, i64>(0);
+    assert_eq!(
+        reinstalled_delivery_answer_constraint_oid, delivery_answer_constraint_oid,
+        "a repeated activation keeps the delivery constraint instead of rebuilding it"
+    );
 
     let columns = migration
         .query(
@@ -437,9 +498,11 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
                 AND ((table_name = 'registry_outbox'
                       AND column_name = 'payload_expires_at')
                   OR (table_name = 'registry_webhook_deliveries'
-                      AND column_name = 'data_schema')
+                      AND column_name IN ('data_schema', 'handler_kind',
+                                          'logical_destination_id'))
                   OR (table_name = 'registry_webhook_delivery_state'
-                      AND column_name = 'expired_at'))
+                      AND column_name IN ('expired_at', 'handler_message',
+                                          'handler_message_digest')))
               ORDER BY table_name, column_name",
             &[],
         )
@@ -468,11 +531,143 @@ async fn real_postgres_empty_pre_v1_webhook_schema_upgrades_idempotently() {
                 "NO".to_owned(),
             ),
             (
+                "registry_webhook_deliveries".to_owned(),
+                "handler_kind".to_owned(),
+                "NO".to_owned(),
+            ),
+            (
+                "registry_webhook_deliveries".to_owned(),
+                "logical_destination_id".to_owned(),
+                "YES".to_owned(),
+            ),
+            (
                 "registry_webhook_delivery_state".to_owned(),
                 "expired_at".to_owned(),
                 "YES".to_owned(),
             ),
+            (
+                "registry_webhook_delivery_state".to_owned(),
+                "handler_message".to_owned(),
+                "YES".to_owned(),
+            ),
+            (
+                "registry_webhook_delivery_state".to_owned(),
+                "handler_message_digest".to_owned(),
+                "YES".to_owned(),
+            ),
         ]
+    );
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_answer_constraint_upgrade_erases_legacy_handler_message() {
+    let database = TestDatabase::create(4).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    install_pre_v1_webhook_schema(&migration).await;
+    migration
+        .batch_execute(
+            "ALTER TABLE registry_internal.registry_webhook_deliveries
+                 ADD COLUMN data_schema text NOT NULL;
+             ALTER TABLE registry_internal.registry_webhook_delivery_state
+                 ADD COLUMN expired_at timestamptz,
+                 ADD COLUMN handler_message bytea,
+                 ADD COLUMN handler_message_digest bytea,
+                 ADD CONSTRAINT registry_webhook_delivery_state_answer CHECK (
+                     (handler_message IS NULL AND handler_message_digest IS NULL)
+                     OR (state = 'delivered'
+                         AND handler_message IS NOT NULL
+                         AND octet_length(handler_message) BETWEEN 1 AND 1048576
+                         AND handler_message_digest IS NOT NULL
+                         AND octet_length(handler_message_digest) = 32)
+                 );",
+        )
+        .await
+        .expect("legacy answer columns and constraint install");
+    let event_id = Uuid::new_v4();
+    let payload = br#"{"label":"legacy-answer"}"#.to_vec();
+    let answer = br#"{"outcome":"accepted"}"#.to_vec();
+    let answer_digest = Sha256::digest(&answer).to_vec();
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_outbox
+                 (event_id, event_type, trigger, entity_id, record_reference,
+                  record_revision, package_revision, schema_fingerprint, payload)
+             VALUES ($1, 'case-created', 'created', 'case', 'legacy-reference',
+                     1, $2, $3, $4)",
+            &[&event_id, &PACKAGE_REVISION, &SCHEMA_FINGERPRINT, &payload],
+        )
+        .await
+        .expect("legacy outbox row installs");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_deliveries
+                 (event_id, compiled_delivery_id, logical_destination_id,
+                  destination_binding_digest, package_revision, schema_fingerprint,
+                  classification_ceiling, authentication_profile, delivery_mode,
+                  attempt_timeout_ms, initial_backoff_ms, maximum_backoff_ms,
+                  exponential_backoff_multiplier, maximum_attempts, retry_delays_ms,
+                  maximum_payload_bytes, payload_digest, deployed_attempt_timeout_ms,
+                  deployed_maximum_attempts, dead_letter, operator_replay, data_schema)
+             VALUES ($1, 'case-created:webhook', $2,
+                     'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+                     $3, $4, 'restricted', 'hmac_sha256_v1', 'after_commit',
+                     5000, 1000, 8000, 2, 5, ARRAY[1000,2000,4000,8000]::bigint[],
+                     1048576, $5, 5000, 5, 'required', true,
+                     'urn:registrystack:test:legacy-answer')",
+            &[
+                &event_id,
+                &DESTINATION_ID,
+                &PACKAGE_REVISION,
+                &SCHEMA_FINGERPRINT,
+                &Sha256::digest(&payload).to_vec(),
+            ],
+        )
+        .await
+        .expect("legacy delivery row installs");
+    migration
+        .execute(
+            "INSERT INTO registry_internal.registry_webhook_delivery_state
+                 (event_id, compiled_delivery_id, generation, state, attempt,
+                  delivered_at, handler_message, handler_message_digest)
+             VALUES ($1, 'case-created:webhook', 1, 'delivered', 1,
+                     transaction_timestamp(), $2, $3)",
+            &[&event_id, &answer, &answer_digest],
+        )
+        .await
+        .expect("legacy delivered answer installs");
+
+    install_mutation_schema(&migration, &database.runtime_role)
+        .await
+        .expect("legacy answer schema upgrades");
+
+    let row = migration
+        .query_one(
+            "SELECT handler_message, handler_message_digest
+               FROM registry_internal.registry_webhook_delivery_state
+              WHERE event_id = $1 AND compiled_delivery_id = 'case-created:webhook'",
+            &[&event_id],
+        )
+        .await
+        .expect("upgraded delivery state reads");
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(0), None);
+    assert_eq!(row.get::<_, Option<Vec<u8>>>(1), Some(answer_digest));
+    let raw_answer = migration
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET handler_message = $2
+              WHERE event_id = $1 AND compiled_delivery_id = 'case-created:webhook'",
+            &[&event_id, &answer],
+        )
+        .await
+        .expect_err("the upgraded constraint refuses every retained raw answer");
+    assert_eq!(
+        raw_answer
+            .as_db_error()
+            .and_then(|error| error.constraint()),
+        Some("registry_webhook_delivery_state_answer_digest_required")
     );
 
     migration_task.abort();
@@ -621,12 +816,15 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
               {"id":"label","type":"string","maxLength":64,"required":true,"classification":"internal"},
               {"id":"restricted_note","type":"string","maxLength":64,"required":true,"classification":"restricted"}
             ],
-            "events":[{
+            "hooks":[{
+              "phase": "after",
               "id":"case-created","trigger":"created","projection":["label","restricted_note"],
-              "webhook":{
+              "handler":{
+                "kind": "url",
                 "destinationId":"case-operations"
               }
             },{
+              "phase": "after",
               "id":"case-label-changed","trigger":"patched","projection":["label"],
               "when":{
                 "kind":"fields",
@@ -634,7 +832,7 @@ fn compiled_registry() -> registry_breg::CompiledRegistry {
                 "beforeEquals":{"label":"first"},
                 "afterEquals":{"restricted_note":"restricted-projection-canary"}
               },
-              "webhook":{"destinationId":"case-operations"}
+              "handler":{"kind":"url","destinationId":"case-operations"}
             }]
           }],
           "accessProfiles":[{
@@ -862,7 +1060,10 @@ fn assert_capture_matches(
     identity: &ExpectedRegistryIdentity,
 ) {
     assert_eq!(actual.compiled_delivery_id, compiled.id);
-    assert_eq!(actual.logical_destination_id, compiled.destination_id);
+    assert_eq!(
+        Some(actual.logical_destination_id.as_str()),
+        compiled.destination_id.as_deref()
+    );
     assert_eq!(actual.destination_binding_digest, binding_digest);
     assert_eq!(actual.package_revision, identity.package_revision);
     assert_eq!(actual.schema_fingerprint, identity.schema_fingerprint);
@@ -921,8 +1122,8 @@ fn assert_capture_matches(
     );
 }
 
-fn expected_payload(record_id: &str) -> Vec<u8> {
-    canonicalize_json(&json!({
+fn expected_event_data(record_id: &str) -> Value {
+    json!({
         "entity": "case",
         "recordId": record_id,
         "revision": 1,
@@ -932,8 +1133,60 @@ fn expected_payload(record_id: &str) -> Vec<u8> {
             "label": "first",
             "restricted_note": RESTRICTED_CANARY,
         },
-    }))
-    .expect("expected event body canonicalizes")
+    })
+}
+
+/// The stored body is the shared hook envelope, not the bare projection. This
+/// holds the envelope to the row that describes it, so a capture cannot store
+/// a body whose identity, schema, origin or time disagrees with its own
+/// delivery row, and pins the canonical byte form the worker will sign.
+fn assert_payload_is_the_envelope(capture: &CapturedDelivery, record_id: &str) {
+    let envelope = HookEnvelope::from_canonical_bytes(&capture.payload, &EnvelopeLimits::default())
+        .expect("the stored body is a canonical hook envelope");
+
+    assert_eq!(
+        envelope.data,
+        expected_event_data(record_id),
+        "the envelope carries exactly the declared projection"
+    );
+    assert_eq!(
+        envelope.id,
+        capture.event_id.to_string(),
+        "the envelope identity is the row's event id"
+    );
+    assert_eq!(
+        envelope.dataschema, capture.data_schema,
+        "the envelope data contract is the row's data schema"
+    );
+    assert_eq!(
+        envelope.source, EXPECTED_EVENT_SOURCE,
+        "the envelope names the deployed registry instance"
+    );
+    assert_eq!(
+        envelope.event_type, "case-created",
+        "the envelope carries the declared event type"
+    );
+    assert_eq!(
+        envelope.subject.record_revision, 1,
+        "the envelope subject carries the committed revision"
+    );
+    assert_eq!(
+        envelope.causation,
+        Causation::root(&envelope.id),
+        "a record-triggered capture starts a causation chain"
+    );
+    assert_eq!(
+        envelope.time,
+        OffsetDateTime::from(capture.created_at),
+        "the envelope time is the captured transaction time"
+    );
+    assert_eq!(
+        envelope
+            .to_canonical_bytes(&EnvelopeLimits::default())
+            .expect("the stored envelope re-serializes"),
+        capture.payload,
+        "the stored bytes are the canonical form, byte for byte"
+    );
 }
 
 async fn assert_delivery_is_transport_and_value_free(
@@ -982,6 +1235,7 @@ async fn assert_delivery_is_transport_and_value_free(
         [
             "event_id",
             "compiled_delivery_id",
+            "handler_kind",
             "logical_destination_id",
             "destination_binding_digest",
             "package_revision",

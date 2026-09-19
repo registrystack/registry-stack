@@ -8,10 +8,11 @@ pub use config::*;
 use async_trait::async_trait;
 use registry_breg_client::*;
 use registry_casework_core::*;
-use registry_platform_crypto::breg_webhook::{
+use registry_platform_crypto::delivery_signature::{
     verify_v1, SignatureFields, MIN_HMAC_SHA256_KEY_BYTES,
 };
 use registry_platform_crypto::domain_separated_sha256;
+use registry_platform_hooks::{EnvelopeLimits, HookEnvelope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -19,6 +20,7 @@ use std::{
     sync::{Mutex, PoisonError},
     time::{Duration, SystemTime},
 };
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
 /// One stage imported from the source's governed request description. It is
@@ -754,7 +756,27 @@ impl SourceAdapter for BregAdapter {
             Duration::from_secs(300),
         )
         .map_err(|_| SourceAdapterError::Invalid)?;
-        let body = decode_exact_json(&request.body).map_err(|_| SourceAdapterError::Invalid)?;
+        // The delivery body is one shared hook envelope. Its identity is read
+        // back from the bytes and held against the signed attributes the
+        // signature already covered, so a body and its headers can never
+        // describe two different events.
+        let envelope =
+            HookEnvelope::from_canonical_bytes(&request.body, &EnvelopeLimits::default())
+                .map_err(|_| SourceAdapterError::Invalid)?;
+        // The signed header spells the event time as RFC 3339 while the
+        // envelope member is the normalized UTC form, so the two are held
+        // against each other as instants rather than as strings.
+        let signed_time = OffsetDateTime::parse(h("ce-time")?, &Rfc3339)
+            .map_err(|_| SourceAdapterError::Invalid)?;
+        if envelope.id != h("ce-id")?
+            || envelope.event_type != h("ce-type")?
+            || envelope.source != h("ce-source")?
+            || envelope.dataschema != h("ce-dataschema")?
+            || envelope.time.unix_timestamp_nanos() != signed_time.unix_timestamp_nanos()
+        {
+            return Err(SourceAdapterError::Invalid);
+        }
+        let body = envelope.data;
         if body.get("trigger").and_then(Value::as_str) != Some("request_lifecycle")
             || body.get("entity").and_then(Value::as_str) != Some(self.config.entity.as_str())
         {

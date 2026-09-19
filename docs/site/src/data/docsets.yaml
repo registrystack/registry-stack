@@ -29,6 +29,9 @@ docsets:
       registry-scheduling:
         version: main source (unreleased)
         ref: HEAD
+      registry-render:
+        version: main source (unreleased)
+        ref: HEAD
   - id: v0.32.0
     label: v0.32.0
     path: /v/0.32.0/

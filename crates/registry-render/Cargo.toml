@@ -1,0 +1,52 @@
+[package]
+name = "registry-render"
+description = "Governed, byte-stable PDF documents from registry data, rendered with Typst."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+registry-platform-audit = { workspace = true }
+registry-platform-authcommon = { workspace = true }
+registry-platform-buildinfo = { workspace = true }
+registry-platform-canonical-json = { workspace = true }
+registry-platform-config = { workspace = true }
+registry-platform-crypto = { workspace = true }
+registry-platform-httpsec = { workspace = true, features = ["server"] }
+typst = { workspace = true }
+typst-pdf = { workspace = true }
+typst-assets = { workspace = true }
+comemo = { workspace = true }
+ttf-parser = { workspace = true }
+axum = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+jsonschema = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_norway = { workspace = true }
+sha2 = { workspace = true }
+rustix = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["process", "io-util"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+registry-platform-testing = { workspace = true }
+tempfile = { workspace = true }
+tower = { workspace = true }
+
+[[bin]]
+name = "registry-render"
+path = "src/main.rs"
+
+[lints]
+workspace = true

@@ -187,27 +187,65 @@ fn add_never_overwrites_existing_policy_or_client() {
 }
 
 #[test]
-fn revoke_updates_public_status_but_retains_private_key() {
+fn revoke_updates_public_status_and_removes_the_local_private_key() {
     let fixture = tempfile::tempdir().expect("tempdir");
     let project = fixture.path();
     write_question(project, "adult-status");
     success(&add_policy(project, "age-checks", &["adult-status"]));
     success(&add_client(project, "age-checker", &["age-checks"]));
-    let private_path = project.join(".evidence/clients/age-checker/private.jwk");
-    let private_before = fs::read(&private_path).expect("private key");
+    let private_directory = project.join(".evidence/clients/age-checker");
+    assert!(private_directory.join("private.jwk").is_file());
 
     let output = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
-    assert_eq!(success(&output), "Revoked client age-checker.\n");
     assert_eq!(
-        fs::read(&private_path).expect("retained private key"),
-        private_before
+        success(&output),
+        "Revoked client age-checker (removed local private key .evidence/clients/age-checker).\n"
     );
+    assert!(!private_directory.exists());
     let list = success(&evidencectl(project, &["access", "client", "list"]));
     assert!(list.contains("age-checker\trevoked\tage-checks"));
 
     let duplicate = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
     assert!(!duplicate.status.success());
     assert!(String::from_utf8_lossy(&duplicate.stderr).contains("already revoked"));
+}
+
+#[test]
+fn revoke_leaves_the_record_untouched_when_the_private_directory_cannot_be_removed() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fixture.path();
+    write_question(project, "adult-status");
+    success(&add_policy(project, "age-checks", &["adult-status"]));
+    success(&add_client(project, "age-checker", &["age-checks"]));
+    let private_directory = project.join(".evidence/clients/age-checker");
+    let private_directory_mode = mode(&private_directory);
+
+    // Read-only on the client directory itself (the parent of private.jwk)
+    // blocks unlinking the key file, not just removing the now-empty
+    // directory, so the removal fails before any private state is lost.
+    fs::set_permissions(&private_directory, fs::Permissions::from_mode(0o500))
+        .expect("read-only client directory");
+    let blocked = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
+    fs::set_permissions(
+        &private_directory,
+        fs::Permissions::from_mode(private_directory_mode),
+    )
+    .expect("restore client directory mode");
+
+    assert!(!blocked.status.success());
+    assert!(private_directory.join("private.jwk").is_file());
+    let document: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/age-checker.yaml")).expect("client document"),
+    )
+    .expect("yaml");
+    assert_eq!(document["status"], "active");
+
+    let retried = evidencectl(project, &["access", "client", "revoke", "age-checker"]);
+    assert_eq!(
+        success(&retried),
+        "Revoked client age-checker (removed local private key .evidence/clients/age-checker).\n"
+    );
+    assert!(!private_directory.exists());
 }
 
 #[test]
@@ -298,8 +336,7 @@ fn institutional_exchange_keeps_bootstrap_binding_explicit_and_preserves_it_on_r
         document["evidenceAudience"],
         "urn:registrystack:evidence:local:client:task-checker"
     );
-    let key_path = project.join(".evidence/clients/task-checker/private.jwk");
-    let key_before = fs::read(&key_path).expect("private key");
+    let key_directory = project.join(".evidence/clients/task-checker");
     success(&evidencectl(project, &["access", "client", "list"]));
     success(&evidencectl(
         project,
@@ -308,7 +345,10 @@ fn institutional_exchange_keeps_bootstrap_binding_explicit_and_preserves_it_on_r
     let revoked: Value = serde_norway::from_slice(&fs::read(path).expect("client")).expect("yaml");
     assert_eq!(revoked["status"], "revoked");
     assert_eq!(revoked["exchange"], document["exchange"]);
-    assert_eq!(fs::read(key_path).expect("retained key"), key_before);
+    assert!(
+        !key_directory.exists(),
+        "revocation removes the local private key state"
+    );
 
     success(&evidencectl(
         project,
@@ -443,4 +483,154 @@ fn invalid_or_ambiguous_exchange_binding_cannot_publish_a_client() {
             .status
             .success());
     }
+}
+
+#[test]
+fn access_commands_report_the_shared_json_envelope() {
+    let fixture = tempfile::tempdir().expect("tempdir");
+    let project = fs::canonicalize(fixture.path()).expect("canonical project");
+    let project = project.as_path();
+    write_question(project, "adult-status");
+
+    let policy = json_output(&evidencectl(
+        project,
+        &[
+            "--format",
+            "json",
+            "access",
+            "policy",
+            "add",
+            "age-checks",
+            "--question",
+            "adult-status",
+        ],
+    ));
+    assert_eq!(policy["command"], "access policy add");
+    assert_eq!(policy["ok"], Value::Bool(true));
+    assert_eq!(policy["status"], "complete");
+    assert_eq!(policy["policy"], "age-checks");
+    assert_eq!(policy["questions"], serde_json::json!(["adult-status"]));
+    assert_eq!(
+        policy["files"],
+        serde_json::json!([project
+            .join("access/policies/age-checks.yaml")
+            .display()
+            .to_string()])
+    );
+
+    let policies = json_output(&evidencectl(
+        project,
+        &["--format", "json", "access", "policy", "list"],
+    ));
+    assert_eq!(policies["command"], "access policy list");
+    assert_eq!(policies["status"], "complete");
+    assert_eq!(
+        policies["entries"],
+        serde_json::json!([{"id": "age-checks", "questions": ["adult-status"]}])
+    );
+
+    let client = json_output(&evidencectl(
+        project,
+        &[
+            "--format",
+            "json",
+            "access",
+            "client",
+            "add",
+            "age-checker",
+            "--policy",
+            "age-checks",
+            "--generate-local-key",
+        ],
+    ));
+    assert_eq!(client["command"], "access client add");
+    assert_eq!(client["client"], "age-checker");
+    assert_eq!(client["policies"], serde_json::json!(["age-checks"]));
+    let kid = client["kid"].as_str().expect("kid").to_owned();
+    assert_eq!(kid.len(), 43, "an ES256 thumbprint kid");
+    let files = client["files"].as_array().expect("files").clone();
+    assert!(files.contains(&serde_json::json!(project
+        .join(".evidence/clients/age-checker/private.jwk")
+        .display()
+        .to_string())));
+    assert!(files.contains(&serde_json::json!(project
+        .join("access/clients/age-checker.yaml")
+        .display()
+        .to_string())));
+    // The kid is the registered public key's thumbprint, and the private
+    // material itself never reaches the report.
+    let registered: Value = serde_norway::from_slice(
+        &fs::read(project.join("access/clients/age-checker.yaml")).expect("client"),
+    )
+    .expect("yaml");
+    assert_eq!(registered["keys"][0]["kid"], Value::String(kid));
+
+    let clients = json_output(&evidencectl(
+        project,
+        &["--format", "json", "access", "client", "list"],
+    ));
+    assert_eq!(
+        clients["entries"],
+        serde_json::json!([{"id": "age-checker", "status": "active", "policies": ["age-checks"]}])
+    );
+
+    let revoked = json_output(&evidencectl(
+        project,
+        &[
+            "--format",
+            "json",
+            "access",
+            "client",
+            "revoke",
+            "age-checker",
+        ],
+    ));
+    assert_eq!(revoked["command"], "access client revoke");
+    assert_eq!(revoked["client"], "age-checker");
+    assert_eq!(revoked["removed"], ".evidence/clients/age-checker");
+    assert!(!project.join(".evidence/clients/age-checker").exists());
+
+    // A public client with no local key revokes with an explicit null member.
+    success(&add_client(project, "governed-client", &["age-checks"]));
+    fs::remove_dir_all(project.join(".evidence/clients/governed-client")).expect("fresh clone");
+    let revoked = json_output(&evidencectl(
+        project,
+        &[
+            "--format",
+            "json",
+            "access",
+            "client",
+            "revoke",
+            "governed-client",
+        ],
+    ));
+    assert_eq!(revoked["removed"], Value::Null);
+
+    // The empty-project listings stay the same shape.
+    let empty = tempfile::tempdir().expect("empty project");
+    for command in [
+        vec!["access", "policy", "list"],
+        vec!["access", "client", "list"],
+    ] {
+        let mut arguments = vec!["--format", "json"];
+        arguments.extend(command);
+        let report = json_output(&evidencectl(empty.path(), &arguments));
+        assert_eq!(report["status"], "complete");
+        assert_eq!(report["entries"], serde_json::json!([]));
+    }
+}
+
+fn json_output(output: &Output) -> Value {
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "JSON mode wrote human diagnostics: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout)
+        .unwrap_or_else(|error| panic!("invalid JSON report: {error}"))
 }

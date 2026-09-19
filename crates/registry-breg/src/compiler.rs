@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_hooks::HOOK_HANDLER_ABI_V1;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -14,16 +15,16 @@ use crate::contract::{
     parsed_bbox, valid_decimal_bounds, valid_structured_schema, AccessProfileSource, ActionSource,
     Classification, ConstraintSource, DerivedExecutionSource, DerivedFieldSource,
     EntityExtensionSource, EntitySource, EventConditionSource, EventScalarValue, EventTrigger,
-    FieldSource, FieldTypeSource, GeoJsonSource, LookupValueOrigin, ManifestProjectionTextSource,
-    ModuleAssetSource, MutationMode, Operation, ReadPathPermissionSource, RegistryModule,
-    RegistryProject, SpatialBboxPermissionSource, SpatialQueryPermissionSource,
-    UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile, WebhookDeadLetterMode,
-    MAX_STRUCTURED_VALUE_BYTES,
+    FieldSource, FieldTypeSource, GeoJsonSource, HookHandlerSource, HookPhase, LookupValueOrigin,
+    ManifestProjectionTextSource, ModuleAssetSource, MutationMode, Operation,
+    ReadPathPermissionSource, RegistryModule, RegistryProject, SpatialBboxPermissionSource,
+    SpatialQueryPermissionSource, UniqueWhenPredicate, ValidTimeRole, WebhookAuthenticationProfile,
+    WebhookDeadLetterMode, MAX_STRUCTURED_VALUE_BYTES,
 };
 use crate::derived_sql::validate_derived_sql;
 use crate::diagnostics::{CompileFailure, Diagnostic};
 use crate::generated_ddl::generate_ddl_with_actions;
-use crate::immediate_actions::{compile_immediate_actions, CollectedActionSource};
+use crate::immediate_actions::{compile_immediate_actions, hex_lower, CollectedActionSource};
 use crate::logical_names::{
     default_api_name, default_sql_name, reserved_logical_name, valid_api_name,
 };
@@ -35,17 +36,18 @@ use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
     CompiledBboxQueryCapability, CompiledChangeControl, CompiledDerivedField,
     CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledGeoJsonBinding, CompiledLogicalField, CompiledManifestAuthority,
-    CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
-    CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
-    CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
-    CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
-    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
-    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
-    CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
-    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
-    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
-    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
+    CompiledField, CompiledGeoJsonBinding, CompiledHookHandler, CompiledHookHandlerKind,
+    CompiledLogicalField, CompiledManifestAuthority, CompiledManifestDataService,
+    CompiledManifestDataset, CompiledManifestDistribution, CompiledManifestProjection,
+    CompiledManifestPublicService, CompiledMetadataEntity, CompiledMetadataEntry,
+    CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryFilterField,
+    CompiledQueryFilterOperator, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
+    CompiledQuerySortDirection, CompiledQuerySortField, CompiledQueryTemporalBinding,
+    CompiledQueryTemporalSemantics, CompiledReadPath, CompiledRegistry, CompiledRevisionKind,
+    CompiledRoute, CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation,
+    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal,
+    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
+    MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -67,6 +69,9 @@ pub const WEBHOOK_MAXIMUM_ATTEMPTS: u8 = 5;
 pub const MAX_WEBHOOK_ATTEMPT_TIMEOUT_MS: u32 = WEBHOOK_ATTEMPT_TIMEOUT_MS;
 pub const MAX_WEBHOOK_ATTEMPTS: u8 = WEBHOOK_MAXIMUM_ATTEMPTS;
 pub const MAX_EVENT_PACKAGE_REVISION_BYTES: u32 = 256;
+/// The longest build identity value, shared by the environment, instance, and
+/// database identifiers a package build request carries.
+pub const MAX_BUILD_ID_BYTES: u32 = 64;
 /// Maximum canonical event body accepted by the governed webhook transport.
 ///
 /// This intentionally matches the platform event-destination body ceiling.
@@ -79,6 +84,7 @@ type CollectedEntities = (
     BTreeMap<String, EntitySource>,
     DerivedOriginMap,
     ChangeRequestOriginMap,
+    HookOriginMap,
     BTreeMap<String, CollectedActionSource>,
 );
 
@@ -129,13 +135,19 @@ pub fn compile_project_with_assets(
         &mut findings,
     );
     let (module_order, module_map) = order_modules(project, modules, &mut diagnostics);
-    let (mut sources, mut derived_origins, mut change_request_origins, mut action_sources) =
-        collect_entities(project, &module_order, &module_map, &mut diagnostics);
+    let (
+        mut sources,
+        mut derived_origins,
+        mut change_request_origins,
+        mut hook_origins,
+        mut action_sources,
+    ) = collect_entities(project, &module_order, &module_map, &mut diagnostics);
     apply_temporal_roles(&mut sources, &mut diagnostics);
     apply_extensions(
         &mut sources,
         &mut derived_origins,
         &mut change_request_origins,
+        &mut hook_origins,
         &module_order,
         &module_map,
         &mut diagnostics,
@@ -143,29 +155,33 @@ pub fn compile_project_with_assets(
     validate_project_entity_access_profiles(project, &mut diagnostics);
     expand_project_access(project, &mut sources, &mut diagnostics);
     resolve_vocabularies(project, &mut sources, &mut action_sources, &mut diagnostics);
-    validate_entities(&sources, profile, &mut diagnostics);
+    validate_entities(&project.registry.id, &sources, profile, &mut diagnostics);
     crate::access::validate_access_requirements(&sources, &mut diagnostics);
     crate::membership::validate(&sources, &mut diagnostics);
     findings.extend(crate::access::access_findings(&sources));
     validate_derived_assets(&sources, &derived_origins, assets, &mut diagnostics);
+    validate_hook_assets(&sources, &hook_origins, assets, &mut diagnostics);
     if !diagnostics.is_empty() {
         return Err(CompileFailure::from_errors(diagnostics));
     }
 
     let (mut entities, physical_names) = compile_entities(&sources, &derived_origins, assets)?;
     crate::membership::compile(&mut entities);
+    let owned_scripts = action_sources
+        .values()
+        .filter_map(|action| {
+            action
+                .source
+                .handler
+                .as_ref()
+                .and_then(|handler| handler.script().map(str::to_owned))
+                .map(|script| (action.source_module.clone(), script))
+        })
+        .chain(hook_handler_scripts(&sources, &hook_origins))
+        .collect();
     crate::change_request::compile_change_requests(
         project,
-        &action_sources
-            .values()
-            .filter_map(|action| {
-                action
-                    .source
-                    .handler
-                    .as_ref()
-                    .map(|handler| (action.source_module.clone(), handler.script.clone()))
-            })
-            .collect(),
+        &owned_scripts,
         &sources,
         &change_request_origins,
         assets,
@@ -192,7 +208,7 @@ pub fn compile_project_with_assets(
     .map_err(CompileFailure::from_one)?;
     let query_inventory = compile_query_inventory(&entities, &mut diagnostics);
     let event_delivery_inventory =
-        compile_event_delivery_inventory(&project.registry.id, &entities)
+        compile_event_delivery_inventory(&project.registry.id, &entities, &hook_origins, assets)
             .map_err(CompileFailure::from_one)?;
     validate_manifest_projection(project, &entities, &mut diagnostics);
     if !diagnostics.is_empty() {
@@ -1194,6 +1210,11 @@ pub fn module_digest_with_assets(module: &RegistryModule, assets: &[ModuleAssetS
 
 type DerivedOriginMap = BTreeMap<(String, String), Option<String>>;
 type ChangeRequestOriginMap = BTreeMap<String, Option<String>>;
+/// Which module contributed each hook, by `(entity id, hook id)`. A local
+/// handler names a script or module path inside its contributing module, so
+/// the delivery inventory resolves its bytes against the same asset namespace
+/// an action handler resolves against.
+type HookOriginMap = BTreeMap<(String, String), Option<String>>;
 
 fn collect_entities(
     project: &RegistryProject,
@@ -1204,12 +1225,14 @@ fn collect_entities(
     let mut entities = BTreeMap::new();
     let mut derived_origins = BTreeMap::new();
     let mut change_request_origins = BTreeMap::new();
+    let mut hook_origins = BTreeMap::new();
     let mut actions = BTreeMap::new();
     for entity in &project.entities {
         insert_entity(
             &mut entities,
             &mut derived_origins,
             &mut change_request_origins,
+            &mut hook_origins,
             entity,
             None,
             "project.entities[].id",
@@ -1226,6 +1249,7 @@ fn collect_entities(
                     &mut entities,
                     &mut derived_origins,
                     &mut change_request_origins,
+                    &mut hook_origins,
                     entity,
                     Some(module.id.clone()),
                     "modules[].entities[].id",
@@ -1243,13 +1267,21 @@ fn collect_entities(
             }
         }
     }
-    (entities, derived_origins, change_request_origins, actions)
+    (
+        entities,
+        derived_origins,
+        change_request_origins,
+        hook_origins,
+        actions,
+    )
 }
 
+#[allow(clippy::too_many_arguments)] // Keep each origin map and its owner explicit.
 fn insert_entity(
     entities: &mut BTreeMap<String, EntitySource>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     change_request_origins: &mut ChangeRequestOriginMap,
+    hook_origins: &mut HookOriginMap,
     entity: &EntitySource,
     module: Option<String>,
     path: &str,
@@ -1265,6 +1297,9 @@ fn insert_entity(
     }
     for derived in &entity.derived {
         derived_origins.insert((entity.id.clone(), derived.id.clone()), module.clone());
+    }
+    for hook in &entity.hooks {
+        hook_origins.insert((entity.id.clone(), hook.id.clone()), module.clone());
     }
     if entity.change_request.is_some() {
         change_request_origins.insert(entity.id.clone(), module);
@@ -1336,6 +1371,7 @@ fn apply_extensions(
     entities: &mut BTreeMap<String, EntitySource>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     change_request_origins: &mut ChangeRequestOriginMap,
+    hook_origins: &mut HookOriginMap,
     module_order: &[String],
     modules: &BTreeMap<String, RegistryModule>,
     errors: &mut Vec<Diagnostic>,
@@ -1361,6 +1397,7 @@ fn apply_extensions(
                 Some(module.id.clone()),
                 derived_origins,
                 change_request_origins,
+                hook_origins,
                 errors,
             );
         }
@@ -1373,6 +1410,7 @@ fn merge_extension(
     module: Option<String>,
     derived_origins: &mut BTreeMap<(String, String), Option<String>>,
     change_request_origins: &mut ChangeRequestOriginMap,
+    hook_origins: &mut HookOriginMap,
     errors: &mut Vec<Diagnostic>,
 ) {
     if let Some(geojson) = &extension.geojson {
@@ -1439,15 +1477,19 @@ fn merge_extension(
         "an access profile identifier is contributed more than once",
         errors,
     );
+    let existing_hooks = entity.hooks.len();
     merge_by_id(
-        &mut entity.events,
-        &extension.events,
+        &mut entity.hooks,
+        &extension.hooks,
         |value| value.id.as_str(),
         "extension.event.duplicate",
-        "modules[].extendEntities[].events[].id",
+        "modules[].extendEntities[].hooks[].id",
         "an event identifier is contributed more than once",
         errors,
     );
+    for hook in entity.hooks.iter().skip(existing_hooks) {
+        hook_origins.insert((entity.id.clone(), hook.id.clone()), module.clone());
+    }
     merge_by_id(
         &mut entity.selector_profiles,
         &extension.selector_profiles,
@@ -1835,6 +1877,7 @@ fn resolve_vocabularies(
 }
 
 fn validate_entities(
+    registry_id: &str,
     entities: &BTreeMap<String, EntitySource>,
     profile: CompileProfile,
     errors: &mut Vec<Diagnostic>,
@@ -1898,7 +1941,7 @@ fn validate_entities(
         validate_selector_profiles(entity, errors);
         validate_read_paths(entity, entities, errors);
         validate_profiles(entity, entities, errors);
-        validate_events(entity, profile, &mut event_ids, errors);
+        validate_hooks(registry_id, entity, profile, &mut event_ids, errors);
     }
     validate_read_path_cycles(entities, errors);
 }
@@ -3583,7 +3626,8 @@ fn validate_read_path_permission_fields(
     }
 }
 
-fn validate_events(
+fn validate_hooks(
+    registry_id: &str,
     entity: &EntitySource,
     profile: CompileProfile,
     registry_event_ids: &mut BTreeSet<String>,
@@ -3595,101 +3639,312 @@ fn validate_events(
         .map(|field| (field.id.as_str(), field))
         .collect();
     let mut ids = BTreeSet::new();
-    for event in &entity.events {
-        validate_id(&event.id, "entities[].events[].id", errors);
-        if !ids.insert(event.id.as_str()) {
+    for hook in &entity.hooks {
+        validate_id(&hook.id, "entities[].hooks[].id", errors);
+        if !ids.insert(hook.id.as_str()) {
             errors.push(Diagnostic::error(
                 "event.id.duplicate",
-                "entities[].events[].id",
+                "entities[].hooks[].id",
                 "an event identifier is duplicated",
             ));
-        } else if !registry_event_ids.insert(event.id.clone()) {
+        } else if !registry_event_ids.insert(hook.id.clone()) {
             errors.push(Diagnostic::error(
                 "event.id.registry_duplicate",
-                "entities[].events[].id",
+                "entities[].hooks[].id",
                 "an event identifier must be unique across the Registry",
             ));
         }
-        if event.projection.is_empty() {
+        if hook.phase != HookPhase::After {
+            errors.push(Diagnostic::error(
+                "hook.phase.unsupported",
+                "entities[].hooks[].phase",
+                "an entity hook runs after the triggering transaction commits; declare phase: after",
+            ));
+        }
+        if hook.projection.is_empty() {
             errors.push(Diagnostic::error(
                 "event.projection.empty",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "an event projection must contain at least one field",
             ));
         }
-        if event
+        if hook
             .projection
             .iter()
             .any(|field| !fields.contains_key(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "event.projection.field_unknown",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "an event projection refers to an unknown field",
             ));
         }
-        let maximum_payload_bytes = maximum_event_payload_bytes(&entity.id, event, |field| {
-            fields
-                .get(field)
-                .map(|field| (&field.field_type, field.required))
-        });
+        let maximum_payload_bytes =
+            maximum_event_payload_bytes(registry_id, &entity.id, hook, |field| {
+                fields
+                    .get(field)
+                    .map(|field| (&field.field_type, field.required))
+            });
         if matches!(
-            event.trigger,
+            hook.trigger,
             EventTrigger::Patched | EventTrigger::Tombstoned
         ) && entity.mutation_mode == MutationMode::CreateOnly
         {
             errors.push(Diagnostic::error(
                 "event.trigger.unavailable",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "an event trigger is unavailable for a create-only entity",
             ));
         }
-        if event.trigger == EventTrigger::Tombstoned && !entity.tombstone {
+        if hook.trigger == EventTrigger::Tombstoned && !entity.tombstone {
             errors.push(Diagnostic::error(
                 "event.trigger.unavailable",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "a tombstone event requires tombstone behavior",
             ));
         }
-        if event.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
+        if hook.trigger == EventTrigger::RequestLifecycle && entity.change_request.is_none() {
             errors.push(Diagnostic::error(
                 "event.trigger.request_lifecycle_requires_change_request",
-                "entities[].events[].trigger",
+                "entities[].hooks[].trigger",
                 "a request lifecycle event can be declared only on a change-request entity",
             ));
         }
-        validate_event_condition(event, &fields, errors);
-        let Some(webhook) = event.webhook.as_ref() else {
-            if profile == CompileProfile::Production {
+        validate_event_condition(hook, &fields, errors);
+        let destination_id = match hook.handler.as_ref() {
+            // A remote call inside the triggering transaction would hold row
+            // locks for the length of a network round trip, so the one
+            // combination version one refuses is `before` with `url`.
+            Some(HookHandlerSource::Url { .. }) if hook.phase != HookPhase::After => {
                 errors.push(Diagnostic::error(
-                    "event.delivery.required",
-                    "entities[].events[].webhook",
-                    "a production event requires a supported delivery",
+                    "hook.handler.kind.unsupported",
+                    "entities[].hooks[].handler.kind",
+                    "handler kind url cannot run in phase before; declare phase: after",
                 ));
+                continue;
             }
-            continue;
+            Some(HookHandlerSource::Url { destination_id }) => Some(destination_id),
+            // A local kind holds a reviewed program instead of a destination.
+            // Its script or module asset is resolved and checked against the
+            // supplied assets by `validate_hook_assets`.
+            Some(handler) => {
+                validate_hook_handler_abi(handler, errors);
+                None
+            }
+            None => {
+                if profile == CompileProfile::Production {
+                    errors.push(Diagnostic::error(
+                        "event.delivery.required",
+                        "entities[].hooks[].handler",
+                        "a production event requires a supported delivery",
+                    ));
+                }
+                continue;
+            }
         };
         if maximum_payload_bytes
             .is_some_and(|maximum| maximum > u64::from(MAX_WEBHOOK_PAYLOAD_BYTES))
         {
             errors.push(Diagnostic::error(
                 "event.webhook.projection_too_large",
-                "entities[].events[].projection",
+                "entities[].hooks[].projection",
                 "the webhook projection can exceed the governed transport body bound",
             ));
         }
-        if !valid_logical_destination_id(&webhook.destination_id) {
+        if destination_id.is_some_and(|value| !valid_logical_destination_id(value)) {
             errors.push(Diagnostic::error(
                 "event.webhook.destination.invalid",
-                "entities[].events[].webhook.destinationId",
+                "entities[].hooks[].handler.destinationId",
                 "a webhook destination must use the closed logical identifier grammar",
             ));
         }
     }
 }
 
+/// A local handler runs the one handler ABI version one defines, so a hook
+/// declaring any other spelling is refused rather than compiled into a
+/// program the worker would call with a contract it does not implement.
+fn validate_hook_handler_abi(handler: &HookHandlerSource, errors: &mut Vec<Diagnostic>) {
+    let abi = match handler {
+        HookHandlerSource::Rhai { abi, .. } | HookHandlerSource::Wasm { abi, .. } => abi.as_deref(),
+        HookHandlerSource::Url { .. } => return,
+    };
+    if abi != Some(HOOK_HANDLER_ABI_V1) {
+        errors.push(Diagnostic::error(
+            "hook.handler.abi.unsupported",
+            "entities[].hooks[].handler.abi",
+            &format!("a local hook handler requires abi {HOOK_HANDLER_ABI_V1}"),
+        ));
+    }
+}
+
+/// Resolve and check the reviewed program behind every local hook handler.
+///
+/// This mirrors the action handler's asset pass: the bytes must be present in
+/// the contributing module's asset namespace, within their fixed bound, and
+/// admissible under the executor that will run them.
+fn validate_hook_assets(
+    sources: &BTreeMap<String, EntitySource>,
+    hook_origins: &HookOriginMap,
+    assets: &[ModuleAssetSource],
+    errors: &mut Vec<Diagnostic>,
+) {
+    for entity in sources.values() {
+        for hook in &entity.hooks {
+            let Some(handler) = hook.handler.as_ref() else {
+                continue;
+            };
+            let (source_path, is_wasm) = match handler {
+                HookHandlerSource::Rhai { script, .. } => (script.as_str(), false),
+                HookHandlerSource::Wasm { module, .. } => (module.as_str(), true),
+                HookHandlerSource::Url { .. } => continue,
+            };
+            let module = hook_origins
+                .get(&(entity.id.clone(), hook.id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            let Some(asset) = assets
+                .iter()
+                .find(|asset| asset.module == module && asset.path == source_path)
+            else {
+                let (code, member) = if is_wasm {
+                    ("hook.handler.module_asset_missing", "module")
+                } else {
+                    ("hook.handler.source_missing", "script")
+                };
+                errors.push(Diagnostic::error(
+                    code,
+                    format!("entities[].hooks[].handler.{member}"),
+                    &format!("supply the hook's owned handler asset at {source_path}"),
+                ));
+                continue;
+            };
+            if is_wasm {
+                validate_hook_module_asset(&asset.bytes, errors);
+            } else {
+                validate_hook_script_asset(&asset.bytes, errors);
+            }
+        }
+    }
+}
+
+/// The Rhai scripts local hook handlers declare, paired with the module that
+/// owns each one.
+///
+/// A hook handler names its own reviewed asset the way an action handler does,
+/// so the change-request asset pass counts those declarations as well and does
+/// not read a hook's script as an unowned one.
+fn hook_handler_scripts(
+    sources: &BTreeMap<String, EntitySource>,
+    hook_origins: &HookOriginMap,
+) -> BTreeSet<(Option<String>, String)> {
+    let mut scripts = BTreeSet::new();
+    for entity in sources.values() {
+        for hook in &entity.hooks {
+            let Some(HookHandlerSource::Rhai { script, .. }) = hook.handler.as_ref() else {
+                continue;
+            };
+            let module = hook_origins
+                .get(&(entity.id.clone(), hook.id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            scripts.insert((module, script.clone()));
+        }
+    }
+    scripts
+}
+
+fn validate_hook_module_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
+    if bytes.is_empty() || bytes.len() > crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES {
+        errors.push(Diagnostic::error(
+            "hook.handler.module_bound",
+            "entities[].hooks[].handler.module",
+            &format!(
+                "the handler module must be non-empty and at most {} bytes; {} bytes supplied",
+                crate::wasm_handler::MAXIMUM_WASM_MODULE_BYTES,
+                bytes.len()
+            ),
+        ));
+        return;
+    }
+    if !crate::wasm_handler::is_wasm_binary(bytes) {
+        errors.push(Diagnostic::error(
+            "hook.handler.module_invalid",
+            "entities[].hooks[].handler.module",
+            "the handler module must be a WebAssembly binary, not WebAssembly text",
+        ));
+        return;
+    }
+    validate_hook_module_structure(bytes, errors);
+}
+
+/// Structural admission runs only where the wasm executor is linked in; a
+/// build without it still holds the bound and binary shape above.
+#[cfg(feature = "wasm")]
+fn validate_hook_module_structure(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
+    if let Some((_, message)) = crate::wasm_handler::structural_violation(bytes) {
+        errors.push(Diagnostic::error(
+            "hook.handler.module_invalid",
+            "entities[].hooks[].handler.module",
+            &message,
+        ));
+    }
+}
+
+#[cfg(not(feature = "wasm"))]
+fn validate_hook_module_structure(_bytes: &[u8], _errors: &mut Vec<Diagnostic>) {}
+
+fn validate_hook_script_asset(bytes: &[u8], errors: &mut Vec<Diagnostic>) {
+    if bytes.is_empty() || bytes.len() > crate::rhai_planner::MAXIMUM_SOURCE_BYTES {
+        errors.push(Diagnostic::error(
+            "hook.handler.source_bound",
+            "entities[].hooks[].handler.script",
+            "the handler source must be non-empty and within its fixed byte bound",
+        ));
+        return;
+    }
+    let Ok(script) = std::str::from_utf8(bytes) else {
+        errors.push(Diagnostic::error(
+            "hook.handler.source_encoding",
+            "entities[].hooks[].handler.script",
+            "the handler source must be UTF-8",
+        ));
+        return;
+    };
+    if let Err(error) = crate::rhai_planner::compile_entrypoint_detailed(script, "handle") {
+        use crate::rhai_planner::EntrypointCompileError;
+        let (code, message) = match error {
+            EntrypointCompileError::SourceBound => (
+                "hook.handler.source_bound",
+                "the handler source exceeds its fixed byte bound".to_owned(),
+            ),
+            EntrypointCompileError::Parse(position) => {
+                let location = match (position.line(), position.position()) {
+                    (Some(line), Some(column)) => format!(" at line {line}, column {column}"),
+                    (Some(line), None) => format!(" at line {line}"),
+                    _ => String::new(),
+                };
+                (
+                    "hook.handler.parse",
+                    format!("correct the Rhai syntax or unsupported construct{location}"),
+                )
+            }
+            EntrypointCompileError::Entrypoint => (
+                "hook.handler.entrypoint",
+                "declare exactly one public fn handle(ctx) entry point and do not overload functions"
+                    .to_owned(),
+            ),
+        };
+        errors.push(Diagnostic::error(
+            code,
+            "entities[].hooks[].handler.script",
+            &message,
+        ));
+    }
+}
+
 fn validate_event_condition(
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
     fields: &BTreeMap<&str, &FieldSource>,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -3702,7 +3957,7 @@ fn validate_event_condition(
             if changed.is_empty() && before_equals.is_empty() && after_equals.is_empty() {
                 errors.push(Diagnostic::error(
                     "event.when.empty",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "a field event condition requires at least one predicate",
                 ));
             }
@@ -3715,7 +3970,7 @@ fn validate_event_condition(
             if !compatible {
                 errors.push(Diagnostic::error(
                     "event.when.trigger_incompatible",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "field predicates are unavailable for this event trigger",
                 ));
             }
@@ -3723,14 +3978,14 @@ fn validate_event_condition(
                 if !fields.contains_key(field.as_str()) {
                     errors.push(Diagnostic::error(
                         "event.when.field_unknown",
-                        "entities[].events[].when.changed",
+                        "entities[].hooks[].when.changed",
                         "an event condition refers to an unknown field",
                     ));
                 }
             }
             for (path, predicates) in [
-                ("entities[].events[].when.beforeEquals", before_equals),
-                ("entities[].events[].when.afterEquals", after_equals),
+                ("entities[].hooks[].when.beforeEquals", before_equals),
+                ("entities[].hooks[].when.afterEquals", after_equals),
             ] {
                 for (field, value) in predicates {
                     let Some(source) = fields.get(field.as_str()) else {
@@ -3763,14 +4018,14 @@ fn validate_event_condition(
             if transitions.is_empty() && to_states.is_empty() && stages.is_empty() {
                 errors.push(Diagnostic::error(
                     "event.when.empty",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "a request lifecycle event condition requires at least one predicate",
                 ));
             }
             if event.trigger != EventTrigger::RequestLifecycle {
                 errors.push(Diagnostic::error(
                     "event.when.trigger_incompatible",
-                    "entities[].events[].when",
+                    "entities[].hooks[].when",
                     "request lifecycle predicates are available only for request lifecycle events",
                 ));
             }
@@ -3778,7 +4033,7 @@ fn validate_event_condition(
                 if !valid_request_lifecycle_transition(transition) {
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_transition_unknown",
-                        "entities[].events[].when.transitions",
+                        "entities[].hooks[].when.transitions",
                         &format!(
                             "a request lifecycle event condition refers to an unknown transition `{transition}`; the change request workflow performs {}",
                             quoted_list(&REQUEST_LIFECYCLE_TRANSITIONS)
@@ -3790,7 +4045,7 @@ fn validate_event_condition(
                 if !valid_request_lifecycle_state(state) {
                     errors.push(Diagnostic::error(
                         "event.when.request_lifecycle_state_unknown",
-                        "entities[].events[].when.toStates",
+                        "entities[].hooks[].when.toStates",
                         &format!(
                             "a request lifecycle event condition refers to an unknown request state `{state}`; a change request rests in {}",
                             quoted_list(&REQUEST_LIFECYCLE_STATES)
@@ -3799,7 +4054,7 @@ fn validate_event_condition(
                 }
             }
             for stage in stages {
-                validate_id(stage, "entities[].events[].when.stages", errors);
+                validate_id(stage, "entities[].hooks[].when.stages", errors);
             }
         }
         None => {}
@@ -3916,9 +4171,16 @@ fn valid_logical_destination_id(value: &str) -> bool {
         })
 }
 
+/// The worst-case canonical bytes of one captured event, envelope included.
+///
+/// The runtime stores and delivers the whole canonical envelope and measures
+/// it against the compiled bound, so the compile-time proof measures the same
+/// document: the `data` object below plus the envelope wrapper
+/// [`maximum_envelope_wrapper_bytes`] covers.
 fn maximum_event_payload_bytes<'a>(
+    registry_id: &str,
     entity_id: &str,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
     field: impl Fn(&str) -> Option<(&'a FieldTypeSource, bool)>,
 ) -> Option<u64> {
     let trigger = event.trigger;
@@ -4012,7 +4274,114 @@ fn maximum_event_payload_bytes<'a>(
             .checked_mul(6)?
             .checked_add(2)?,
     )?;
-    total.checked_add(values)
+    total = total.checked_add(values)?;
+    total.checked_add(maximum_envelope_wrapper_bytes(
+        registry_id,
+        entity_id,
+        &event.id,
+    )?)
+}
+
+/// The worst-case canonical bytes of the envelope members that carry the
+/// `data` object: `causation`, `dataschema`, `id`, `source`, `subject`,
+/// `time`, and `type`, plus the object punctuation of all eight members.
+///
+/// Every term is a length the compiler already knows or a bound the engine
+/// already enforces. The identifiers use the closed lowercase grammar
+/// [`validate_id`] holds, so none of them needs JSON string escaping.
+pub(crate) fn maximum_envelope_wrapper_bytes(
+    registry_id: &str,
+    entity_id: &str,
+    event_id: &str,
+) -> Option<u64> {
+    // Canonical envelope object braces, one comma between members, and fixed
+    // key encodings (two quotes plus a colon per key).
+    let envelope_keys = [
+        "causation",
+        "data",
+        "dataschema",
+        "id",
+        "source",
+        "subject",
+        "time",
+        "type",
+    ];
+    let mut total = 2_u64.checked_add(envelope_keys.len() as u64 - 1)?;
+    for key in envelope_keys {
+        total = total.checked_add(key.len() as u64 + 3)?;
+    }
+    // `causation` is `{"hop":N,"parent":"<uuid>","root":"<uuid>"}`. An event a
+    // hook caused carries a parent, so the worst case keeps it, and `hop` is a
+    // decimal the hook library refuses to raise past its own ceiling.
+    let causation_keys = ["hop", "parent", "root"];
+    let mut causation = 2_u64.checked_add(causation_keys.len() as u64 - 1)?;
+    for key in causation_keys {
+        causation = causation.checked_add(key.len() as u64 + 3)?;
+    }
+    causation = causation
+        .checked_add(decimal_digits(u64::from(
+            registry_platform_hooks::HOP_CEILING,
+        )))?
+        .checked_add(38)?
+        .checked_add(38)?;
+    total = total.checked_add(causation)?;
+    // `dataschema` is the quoted event schema URN the compiler builds: a fixed
+    // prefix, three identifiers with one separator each, and a `sha256:` hex
+    // digest of the data contract.
+    total = total.checked_add(
+        2 + "urn:breg:event-schema:".len() as u64
+            + registry_id.len() as u64
+            + 1
+            + entity_id.len() as u64
+            + 1
+            + event_id.len() as u64
+            + 1
+            + "sha256:".len() as u64
+            + 64,
+    )?;
+    // `id` is a quoted UUID.
+    total = total.checked_add(38)?;
+    // `source` is the quoted deployment URN `crate::webhook::delivery_source`
+    // builds. Its package id is this registry's id; its instance id is the
+    // package manifest's, which `valid_build_id` holds to a closed grammar
+    // within MAX_BUILD_ID_BYTES at package build, and startup holds the
+    // runtime deployment identity to exact equality with the manifest value,
+    // so no longer spelling reaches the envelope.
+    total = total.checked_add(
+        2 + "urn:registrystack:registry:".len() as u64
+            + registry_id.len() as u64
+            + ":instance:".len() as u64
+            + u64::from(MAX_BUILD_ID_BYTES),
+    )?;
+    // `subject` is `{"recordReference":"<reference>","recordRevision":N}`. The
+    // reference is the audit key hasher's longest prefix and its hex digest,
+    // and the revision is the largest positive i64, the same bound the data
+    // object's own `revision` carries.
+    let subject_keys = ["recordReference", "recordRevision"];
+    let mut subject = 2_u64.checked_add(subject_keys.len() as u64 - 1)?;
+    for key in subject_keys {
+        subject = subject.checked_add(key.len() as u64 + 3)?;
+    }
+    subject = subject
+        .checked_add(2 + "hmac-sha256:".len() as u64 + 64)?
+        .checked_add(19)?;
+    total = total.checked_add(subject)?;
+    // `time` is the quoted UTC millisecond RFC 3339 spelling the envelope
+    // normalizes every instant to: `YYYY-MM-DDThh:mm:ss.sssZ`.
+    total = total.checked_add(26)?;
+    // `type` is the quoted event identifier.
+    total.checked_add(event_id.len() as u64 + 2)
+}
+
+/// The decimal spelling width of `value`.
+fn decimal_digits(value: u64) -> u64 {
+    let mut digits = 1;
+    let mut remaining = value / 10;
+    while remaining > 0 {
+        digits += 1;
+        remaining /= 10;
+    }
+    digits
 }
 
 fn maximum_event_values_bytes<'a>(
@@ -4041,10 +4410,11 @@ fn maximum_event_values_bytes<'a>(
 }
 
 pub(crate) fn maximum_compiled_event_payload_bytes(
+    registry_id: &str,
     entity: &CompiledEntity,
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Option<u32> {
-    let maximum = maximum_event_payload_bytes(&entity.id, event, |field| {
+    let maximum = maximum_event_payload_bytes(registry_id, &entity.id, event, |field| {
         entity
             .fields
             .get(field)
@@ -4093,7 +4463,7 @@ fn maximum_field_json_bytes(field_type: &FieldTypeSource) -> Option<u64> {
 
 /// A lifecycle event can disclose reviewer text only on these two transitions.
 /// Empty condition sets are unrestricted, as in runtime condition evaluation.
-fn request_event_may_include_review_reason(event: &crate::contract::EventSource) -> bool {
+fn request_event_may_include_review_reason(event: &crate::contract::HookSource) -> bool {
     if event.trigger != EventTrigger::RequestLifecycle {
         return false;
     }
@@ -4119,18 +4489,22 @@ fn request_event_may_include_review_reason(event: &crate::contract::EventSource)
 fn compile_event_delivery_inventory(
     registry_id: &str,
     entities: &BTreeMap<String, CompiledEntity>,
+    hook_origins: &HookOriginMap,
+    assets: &[ModuleAssetSource],
 ) -> Result<CompiledEventDeliveryInventory, Diagnostic> {
     let mut deliveries = entities
         .values()
         .flat_map(|entity| {
-            entity.events.values().filter_map(move |event| {
+            entity.hooks.values().filter_map(move |event| {
                 event
-                    .webhook
+                    .handler
                     .as_ref()
-                    .map(|webhook| (entity, event, webhook))
+                    .map(|handler| (entity, event, handler))
             })
         })
-        .map(|(entity, event, webhook)| {
+        .map(|(entity, event, handler)| {
+            let (destination_id, handler) =
+                compile_hook_handler(entity, event, handler, hook_origins, assets)?;
             let binding = event_data_schema_binding(registry_id, entity, event)?;
             let mut classifications = event
                 .projection
@@ -4154,9 +4528,11 @@ fn compile_event_delivery_inventory(
                 entity_id: entity.id.clone(),
                 event_id: event.id.clone(),
                 trigger: event.trigger,
-                destination_id: webhook.destination_id.clone(),
+                destination_id,
+                handler,
                 projection_fields: event.projection.iter().cloned().collect(),
                 when: event.when.clone(),
+                principal: event.principal.clone(),
                 classification_ceiling,
                 data_schema: binding.data_schema,
                 data_schema_fingerprint: binding.fingerprint,
@@ -4174,8 +4550,12 @@ fn compile_event_delivery_inventory(
                     WEBHOOK_MAXIMUM_BACKOFF_MS,
                     WEBHOOK_MAXIMUM_ATTEMPTS,
                 ),
-                maximum_payload_bytes: maximum_compiled_event_payload_bytes(entity, event)
-                    .expect("validated webhook projection fields are bounded"),
+                maximum_payload_bytes: maximum_compiled_event_payload_bytes(
+                    registry_id,
+                    entity,
+                    event,
+                )
+                .expect("validated webhook projection fields are bounded"),
                 dead_letter: WebhookDeadLetterMode::Required,
                 operator_replay: true,
             })
@@ -4185,8 +4565,52 @@ fn compile_event_delivery_inventory(
     Ok(CompiledEventDeliveryInventory { deliveries })
 }
 
+/// Split a validated hook handler into the delivery row's two exclusive
+/// halves: the bound destination a `url` handler is sent to, or the reviewed
+/// program a local handler runs.
+fn compile_hook_handler(
+    entity: &CompiledEntity,
+    event: &crate::contract::HookSource,
+    handler: &HookHandlerSource,
+    hook_origins: &HookOriginMap,
+    assets: &[ModuleAssetSource],
+) -> Result<(Option<String>, Option<CompiledHookHandler>), Diagnostic> {
+    let (kind, source_path) = match handler {
+        HookHandlerSource::Url { destination_id } => {
+            return Ok((Some(destination_id.clone()), None));
+        }
+        HookHandlerSource::Rhai { script, .. } => (CompiledHookHandlerKind::Rhai, script.as_str()),
+        HookHandlerSource::Wasm { module, .. } => (CompiledHookHandlerKind::Wasm, module.as_str()),
+    };
+    let source_module = hook_origins
+        .get(&(entity.id.clone(), event.id.clone()))
+        .cloned()
+        .unwrap_or_default();
+    let asset = assets
+        .iter()
+        .find(|asset| asset.module == source_module && asset.path == source_path)
+        .ok_or_else(|| {
+            Diagnostic::error(
+                "hook.handler.source_missing",
+                "entities[].hooks[].handler",
+                &format!("supply the hook's owned handler asset at {source_path}"),
+            )
+        })?;
+    Ok((
+        None,
+        Some(CompiledHookHandler {
+            kind,
+            abi: HOOK_HANDLER_ABI_V1.to_owned(),
+            source_module,
+            source_path: source_path.to_owned(),
+            digest: format!("sha256:{}", hex_lower(&Sha256::digest(&asset.bytes))),
+            bytes: asset.bytes.clone(),
+        }),
+    ))
+}
+
 fn event_condition_fields(
-    event: &crate::contract::EventSource,
+    event: &crate::contract::HookSource,
 ) -> Box<dyn Iterator<Item = &String> + '_> {
     match event.when.as_ref() {
         Some(EventConditionSource::Fields {
@@ -4241,12 +4665,20 @@ fn asset_map<'a>(
 ) -> BTreeMap<(Option<String>, String), &'a [u8]> {
     let mut map = BTreeMap::new();
     for asset in assets {
+        // WASM handler modules are sized against their own budget at handler
+        // admission, which owns the diagnostic naming the action and the
+        // ceiling; every other asset family is bounded here.
+        let bytes_within_bound = if asset.path.ends_with(".wasm") {
+            true
+        } else {
+            asset.bytes.len() <= usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
+        };
         if asset.module.as_deref().is_some_and(str::is_empty)
             || !(valid_relative_asset_path(&asset.path)
                 || (asset.module.is_none()
                     && crate::action_evidence_contracts::valid_contract_path(&asset.path)))
             || asset.bytes.is_empty()
-            || asset.bytes.len() > usize::try_from(MAX_STRUCTURED_VALUE_BYTES).unwrap_or(usize::MAX)
+            || !bytes_within_bound
         {
             errors.push(Diagnostic::error(
                 "module.asset.invalid",
@@ -4275,7 +4707,7 @@ fn asset_map<'a>(
 fn valid_relative_asset_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
-        && (path.ends_with(".sql") || path.ends_with(".rhai"))
+        && (path.ends_with(".sql") || path.ends_with(".rhai") || path.ends_with(".wasm"))
         && !path.starts_with('/')
         && !path.contains('\\')
         && path
@@ -4509,10 +4941,10 @@ fn compile_entities(
             }
             profiles.insert(access.id.clone(), profile);
         }
-        let events = source
-            .events
+        let hooks = source
+            .hooks
             .iter()
-            .map(|event| (event.id.clone(), event.clone()))
+            .map(|hook| (hook.id.clone(), hook.clone()))
             .collect();
         inventory.insert(
             source.id.clone(),
@@ -4562,7 +4994,7 @@ fn compile_entities(
                 indexes,
                 access_profiles: profiles,
                 membership_boundaries: BTreeMap::new(),
-                events,
+                hooks,
             },
         );
     }
