@@ -576,6 +576,103 @@ fn change_request_paths_refuse_encrypted_fields() {
 }
 
 #[test]
+fn change_request_targets_and_value_sources_refuse_encrypted_fields() {
+    // Declarative set on an encrypted patch target: the base effect sets the
+    // target's release-state, so encrypting that field refuses the effect.
+    let mut set_target = change_request_project();
+    set_target["entities"][0]["fields"][3]["encrypted"] = json!(true);
+    expect_request_code(&set_target, "change_request.effect.field_encrypted");
+
+    // Declarative clear on an encrypted patch target: the base plan gains a
+    // clear of an optional field, and encrypting that field refuses it. The
+    // same clear on the plaintext field compiles.
+    let mut clear_base = change_request_project();
+    clear_base["entities"][0]["fields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"notes","type":"string","maxLength":64,"classification":"restricted"
+        }));
+    clear_base["entities"][1]["changeRequest"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"clear-notes","target":{"fromField":"lot"},"operation":"patch","clear":["notes"]
+        }));
+    // The review projection must cover every changed target field.
+    clear_base["accessProfiles"][0]["permissions"][0]["reviewStages"][0]["targets"][0]
+        ["readableFields"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("notes"));
+    compile_request(&clear_base).expect("the plaintext clear compiles");
+    let mut clear_target = clear_base.clone();
+    clear_target["entities"][0]["fields"][4]["encrypted"] = json!(true);
+    expect_request_code(&clear_target, "change_request.effect.field_encrypted");
+
+    // A create target refuses the same way: the create effect sets the
+    // target's release-state, and encrypting it refuses the set.
+    let mut create_base = change_request_project();
+    create_base["entities"][0]["changeControl"]["requiredFor"] = json!(["patch", "create"]);
+    create_base["entities"][1]["changeRequest"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "id":"reserve","target":{"entity":"lot"},"operation":"create",
+            "set":{"release-state":{"fromField":"release-state"}}
+        }));
+    compile_request(&create_base).expect("the plaintext create compiles");
+    let mut create_target = create_base;
+    create_target["entities"][0]["fields"][3]["encrypted"] = json!(true);
+    expect_request_code(&create_target, "change_request.effect.field_encrypted");
+
+    // An encrypted request field cannot flow into an effect through fromField,
+    // even when the target field itself is unencrypted.
+    let mut encrypted_source = change_request_project();
+    encrypted_source["entities"][1]["fields"][3]["encrypted"] = json!(true);
+    expect_request_code(
+        &encrypted_source,
+        "change_request.effect.value_field_encrypted",
+    );
+
+    // A Rhai planner's write ceiling cannot name an encrypted target field,
+    // for patch or create writes.
+    let mut planned_patch = change_request_project();
+    planned_patch["entities"][0]["fields"][3]["encrypted"] = json!(true);
+    planned_patch["entities"][1]["changeRequest"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .clear();
+    planned_patch["entities"][1]["changeRequest"]["planner"] = json!({
+        "kind":"rhai","script":"planners/release.rhai","abi":"registry.change-request-plan/v1",
+        "requestFields":["lot","release-state"],
+        "writes":[{"target":{"fromField":"lot"},"operation":"patch","fields":["release-state"]}]
+    });
+    expect_request_code(
+        &planned_patch,
+        "change_request.planner.write_field_encrypted",
+    );
+
+    let mut planned_create = change_request_project();
+    planned_create["entities"][0]["changeControl"]["requiredFor"] = json!(["patch", "create"]);
+    planned_create["entities"][0]["fields"][3]["encrypted"] = json!(true);
+    planned_create["entities"][1]["changeRequest"]["effects"]
+        .as_array_mut()
+        .unwrap()
+        .clear();
+    planned_create["entities"][1]["changeRequest"]["planner"] = json!({
+        "kind":"rhai","script":"planners/release.rhai","abi":"registry.change-request-plan/v1",
+        "requestFields":["lot","release-state"],
+        "writes":[{"target":{"entity":"lot"},"operation":"create",
+                   "fields":["owner-reference","lot-reference","active","release-state"]}]
+    });
+    expect_request_code(
+        &planned_create,
+        "change_request.planner.write_field_encrypted",
+    );
+}
+
+#[test]
 fn membership_principal_field_cannot_be_encrypted() {
     let mut source = membership_fixture::source("facility");
     source["entities"][1]["fields"][1]["encrypted"] = json!(true);

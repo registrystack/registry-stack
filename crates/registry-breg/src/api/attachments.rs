@@ -198,6 +198,7 @@ async fn mutate(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }

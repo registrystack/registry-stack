@@ -404,6 +404,14 @@ fn compile_planner(
                 ));
                 continue;
             };
+            if field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.write_field_encrypted",
+                    format!("{write_path}.fields[field={field_id}]"),
+                    "a planner write ceiling cannot name an encrypted target field",
+                ));
+                continue;
+            }
             if input_classification > field.classification {
                 errors.push(Diagnostic::error(
                     "change_request.planner.classification_ceiling",
@@ -1671,6 +1679,14 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.effect.field_encrypted",
+                    format!("{path}.set[field={field}]"),
+                    "an encrypted target field cannot be set through a change request",
+                ));
+                continue;
+            }
             if let Some(compiled) = compile_value(
                 source,
                 request_entity,
@@ -1711,6 +1727,14 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.effect.field_encrypted",
+                    format!("{path}.clear[field={field}]"),
+                    "an encrypted target field cannot be cleared through a change request",
+                ));
+                continue;
+            }
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
                     "change_request.effect.clear_on_create",
@@ -1915,6 +1939,14 @@ fn compile_value(
             ));
             return None;
         };
+        if field.encryption.is_some() {
+            errors.push(Diagnostic::error(
+                "change_request.effect.value_field_encrypted",
+                format!("{path}.set[field={target_field}]"),
+                "an encrypted request field cannot flow into a change-request effect",
+            ));
+            return None;
+        }
         if !field.required {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_nullable",

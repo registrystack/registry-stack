@@ -316,7 +316,7 @@ impl FieldEncryptionService {
     }
 
     /// Assemble key state from an already-resolved data key.
-    fn from_data_key(
+    pub(crate) fn from_data_key(
         registry_id: String,
         key_version: u32,
         dek: Zeroizing<[u8; 32]>,
@@ -521,6 +521,47 @@ pub(crate) fn open_member_value(
         _ => return Err(FieldCryptoError::MalformedEnvelope),
     };
     Ok(Some(value))
+}
+
+/// Open every encrypted member of one caller-facing member map.
+///
+/// Members stay tagged until the enumerated response edges call this, so
+/// stored, cached, and frozen maps never depend on decryption; opening at the
+/// edge fails the whole map closed, value-free. A member key names the field's
+/// active API name for row-shaped maps and the field id for retained-snapshot
+/// maps. An entity without encrypted fields returns without touching key
+/// state, and a map that simply omits an encrypted field leaves it omitted.
+pub(crate) fn open_member_map(
+    entity: &crate::model::CompiledEntity,
+    record_id: &str,
+    members: &mut serde_json::Map<String, Value>,
+    service: &FieldEncryptionService,
+    keyed_by_api_name: bool,
+) -> Result<(), FieldCryptoError> {
+    for field in entity
+        .stored_fields
+        .iter()
+        .filter(|field| field.logical.encryption.is_some())
+    {
+        let key = if keyed_by_api_name {
+            field.logical.api_name.as_str()
+        } else {
+            field.logical.id.as_str()
+        };
+        let Some(member) = members.get_mut(key) else {
+            continue;
+        };
+        let opened = open_member_value(
+            service,
+            &entity.id,
+            &field.logical.id,
+            record_id,
+            &field.logical.field_type,
+            member,
+        )?;
+        *member = opened.unwrap_or(Value::Null);
+    }
+    Ok(())
 }
 
 /// Default Transit request timeout, matching the attachment transports.

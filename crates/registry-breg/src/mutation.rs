@@ -43,7 +43,7 @@ use crate::contract::{
 use crate::correlation::RequestCorrelation;
 use crate::data::{validate_field_value, FieldValue};
 use crate::event_destination::ActivatedEventDestinationRegistry;
-use crate::field_encryption::{open_member_value, FieldEncryptionService};
+use crate::field_encryption::FieldEncryptionService;
 use crate::history_commit::{
     allocate_revision_commit, install_history_commit_schema, CommitAllocation, HistoryCommitError,
     RevisionCommitMember,
@@ -1838,10 +1838,8 @@ impl MutationCoordinator {
     ) -> Result<Value, MutationError> {
         let data = response_data(
             &request.plan.entity,
-            &current.record_id,
             &current.data,
             &request.response_fields,
-            self.field_encryption.as_deref(),
         )?;
         let etag = strong_record_etag(
             &self.audit_profile,
@@ -1871,10 +1869,8 @@ impl MutationCoordinator {
     ) -> Result<HeldResponse, MutationError> {
         let mut data = response_data(
             &request.plan.entity,
-            &current.record_id,
             &current.data,
             &request.response_fields,
-            self.field_encryption.as_deref(),
         )?;
         data.extend(current.attachment_metadata.clone());
         let member = record_profile::record_member(
@@ -2959,18 +2955,16 @@ fn field_id_for_api_name<'a>(
     Ok(&field.logical.id)
 }
 
-/// Assemble the response data map, opening encrypted members at this edge.
+/// Assemble the response data map, keeping encrypted members sealed.
 ///
-/// The stored map holds tagged envelope members; a caller-authorized response
-/// decrypts them, and any open failure fails the whole response closed with
-/// the field-encryption problem. Nothing but opened plaintext reaches the
-/// response body.
+/// The stored map holds tagged envelope members, and so does the map that
+/// enters a held response body: the idempotency cache stores ciphertext, and
+/// the single authorized HTTP serve edge opens the members for both fresh and
+/// replayed bodies.
 fn response_data(
     entity: &CompiledEntity,
-    record_id: &str,
     data: &Map<String, Value>,
     response_fields: &BTreeSet<String>,
-    field_encryption: Option<&FieldEncryptionService>,
 ) -> Result<Map<String, Value>, MutationError> {
     let mut response = Map::new();
     for (field_id, value) in data {
@@ -2982,44 +2976,14 @@ fn response_data(
             .iter()
             .find(|field| field.logical.id == *field_id)
             .ok_or(MutationError::Unavailable)?;
-        let value = if field.logical.encryption.is_some() {
-            decrypt_response_member(
-                field_encryption,
-                &entity.id,
-                &field.logical.id,
-                record_id,
-                &field.logical.field_type,
-                value,
-            )?
-        } else {
-            value.clone()
-        };
         if response
-            .insert(field.logical.api_name.clone(), value)
+            .insert(field.logical.api_name.clone(), value.clone())
             .is_some()
         {
             return Err(MutationError::Unavailable);
         }
     }
     Ok(response)
-}
-
-/// Open one encrypted member for a response body. Absent key state and any
-/// open failure both map to the field-encryption problem, value-free.
-fn decrypt_response_member(
-    field_encryption: Option<&FieldEncryptionService>,
-    entity_id: &str,
-    field_id: &str,
-    record_id: &str,
-    field_type: &FieldTypeSource,
-    member: &Value,
-) -> Result<Value, MutationError> {
-    let service = field_encryption.ok_or(MutationError::FieldEncryptionUnavailable)?;
-    match open_member_value(service, entity_id, field_id, record_id, field_type, member) {
-        Ok(Some(value)) => Ok(value),
-        Ok(None) => Ok(Value::Null),
-        Err(_) => Err(MutationError::FieldEncryptionUnavailable),
-    }
 }
 
 fn apply_patch_document(

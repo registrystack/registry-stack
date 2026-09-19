@@ -32,7 +32,7 @@ use crate::cursor::{
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
-use crate::field_encryption::{open_member_value, FieldEncryptionService};
+use crate::field_encryption::FieldEncryptionService;
 use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
@@ -1363,38 +1363,18 @@ fn open_members(
     field_encryption: Option<&FieldEncryptionService>,
     keyed_by_api_name: bool,
 ) -> Result<(), ReadServiceError> {
-    let encrypted_fields = entity
+    let has_encrypted_fields = entity
         .stored_fields
         .iter()
-        .filter(|field| field.logical.encryption.is_some())
-        .collect::<Vec<_>>();
-    if encrypted_fields.is_empty() {
+        .any(|field| field.logical.encryption.is_some());
+    if !has_encrypted_fields {
         return Ok(());
     }
     // Dispatch admission refuses these entities without key state, so members
     // reaching here without it means that boundary was bypassed.
     let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
-    for field in &encrypted_fields {
-        let key = if keyed_by_api_name {
-            field.logical.api_name.as_str()
-        } else {
-            field.logical.id.as_str()
-        };
-        let Some(member) = data.get_mut(key) else {
-            continue;
-        };
-        let opened = open_member_value(
-            service,
-            &entity.id,
-            &field.logical.id,
-            record_id,
-            &field.logical.field_type,
-            member,
-        )
-        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)?;
-        *member = opened.unwrap_or(Value::Null);
-    }
-    Ok(())
+    crate::field_encryption::open_member_map(entity, record_id, data, service, keyed_by_api_name)
+        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)
 }
 
 #[derive(Serialize)]

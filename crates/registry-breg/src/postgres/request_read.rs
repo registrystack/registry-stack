@@ -1167,15 +1167,24 @@ async fn review_snapshot(
             .entities()
             .get(target_entity_id)
             .ok_or(ReadServiceError::Unavailable)?;
-        // The captured target row keeps its sealed members until this
+        // The captured target rows keep their sealed members until this
         // reviewer-facing display edge. Row boundaries never name an
         // encrypted field, so opening them leaves the authorized and
         // unauthorized outcomes unchanged while a stored envelope that does
-        // not open refuses the whole read closed.
+        // not open refuses the whole read closed. Effects never write an
+        // encrypted member, so the after row carries the before's sealed
+        // members forward unchanged and opens the same way.
         let mut before = snapshot.before.clone();
         if let Some(before) = before.as_mut() {
             open_snapshot_members(target_entity, record_id.as_str(), before, field_encryption)?;
         }
+        let mut after = snapshot.after.clone();
+        open_snapshot_members(
+            target_entity,
+            record_id.as_str(),
+            &mut after,
+            field_encryption,
+        )?;
         let fields = effect
             .field_changes()
             .iter()
@@ -1208,7 +1217,7 @@ async fn review_snapshot(
         )
         .map_err(|_| ReadServiceError::Unavailable)?;
         context
-            .authorize_rows(target_entity, before.as_ref(), &snapshot.after, record_uuid)
+            .authorize_rows(target_entity, before.as_ref(), &after, record_uuid)
             .map_err(|_| ReadServiceError::Unavailable)?;
         if effect.operation() == Operation::Patch {
             transaction
@@ -1255,7 +1264,7 @@ async fn review_snapshot(
             "operation": operation_name(effect.operation()),
             "baseRevision": snapshot.expected_revision,
             "before": before.as_ref().map(|before| api_object(target_entity, before, authority.readable_fields())).transpose()?,
-            "after": api_object(target_entity, &snapshot.after, authority.readable_fields())?,
+            "after": api_object(target_entity, &after, authority.readable_fields())?,
         }));
     }
     Ok(Some(json!({ "targets": target_values })))
