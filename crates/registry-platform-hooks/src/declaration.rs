@@ -5,8 +5,8 @@
 //! A hooks document is an ordered list. Nothing registers implicitly, every
 //! hook carries an explicit `id`, and declaration order is the execution order
 //! among hooks on one trigger; that is the answer to import-order signals.
-//! `trigger`, `when`, and `projection` are product vocabulary carried
-//! opaquely: the library never validates them.
+//! `trigger`, `when`, `principal`, and `projection` are product vocabulary
+//! carried opaquely: the library never validates them.
 
 use std::collections::BTreeSet;
 
@@ -62,6 +62,12 @@ pub struct HookDeclaration {
     /// condition shape it already has unchanged on adoption.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<Value>,
+    /// The principal a proposal from this hook is applied under. Product
+    /// vocabulary: the library never resolves or validates it. A hook that
+    /// declares none is complete; what a proposal from such a hook means is
+    /// the product's delivery-time decision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<String>,
     /// Declared field identifiers the product may project into `data`.
     /// Product-validated; carried opaquely.
     pub projection: BTreeSet<String>,
@@ -393,6 +399,55 @@ mod tests {
         let unknown: Result<HookHandlerSource, _> =
             serde_json::from_value(json!({"kind": "lambda", "function": "followup"}));
         assert!(unknown.is_err(), "closed kind set refuses unknown kinds");
+    }
+
+    #[test]
+    fn a_declaration_without_a_principal_round_trips() {
+        // The library half of the proposing-hook contract: a hook that
+        // declares no principal is a complete declaration. Absence is not an
+        // authoring error, parse never refuses it, and the compile-time rules
+        // never demand one; the product decides what a proposal from such a
+        // hook means, at delivery time.
+        let document = json!({"hooks": [declaration_json(wasm_handler())]});
+        let parsed =
+            HooksDocument::from_strict_json(&serde_json::to_vec(&document).expect("serializes"))
+                .expect("a declaration without a principal parses");
+        assert_eq!(parsed.hooks.len(), 1);
+        assert_eq!(parsed.hooks[0].principal, None);
+        parsed
+            .validate()
+            .expect("a missing principal is not a compile-time refusal");
+        let mut expected = declaration_json(wasm_handler());
+        // The projection is a set, so serialization order is sorted.
+        expected["projection"] = json!(["familyName", "givenName"]);
+        assert_eq!(
+            serde_json::to_value(&parsed.hooks[0]).expect("serializes"),
+            expected,
+            "an absent principal is not written back as a member"
+        );
+    }
+
+    #[test]
+    fn a_declaration_carries_its_principal_opaquely() {
+        let mut declaration = declaration_json(wasm_handler());
+        declaration["principal"] = json!("case-operations-service");
+        let parsed: HookDeclaration = serde_json::from_value(declaration).expect("parses");
+        assert_eq!(parsed.principal.as_deref(), Some("case-operations-service"));
+        // The value is product vocabulary: any string is carried unchanged,
+        // never resolved or validated here, exactly as `trigger` is.
+        let mut opaque = declaration_json(wasm_handler());
+        opaque["principal"] = json!("not-a-profile-the-library-knows");
+        let parsed: HookDeclaration = serde_json::from_value(opaque).expect("parses");
+        assert_eq!(
+            parsed.principal.as_deref(),
+            Some("not-a-profile-the-library-knows")
+        );
+        let serialized = serde_json::to_value(&parsed).expect("serializes");
+        assert_eq!(
+            serialized["principal"],
+            json!("not-a-profile-the-library-knows"),
+            "the principal round-trips byte for byte"
+        );
     }
 
     #[test]
