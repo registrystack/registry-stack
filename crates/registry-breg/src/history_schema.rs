@@ -96,11 +96,32 @@ impl HistorySchemaDescriptor {
         requested_fields: &BTreeSet<String>,
         authorizing_fields: &BTreeSet<String>,
     ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
-        self.entity(&active_entity.id)?.compatibility_for_fields(
+        self.compatibility_for_fields_allowing_retained_plaintext(
             active_entity,
             requested_fields,
             authorizing_fields,
+            &BTreeSet::new(),
         )
+    }
+
+    /// The flip-aware form of [`compatibility_for_fields`]: it additionally
+    /// accepts the fields whose field-encryption flip declared
+    /// retain-plaintext-history, letting their plaintext pre-flip recordings
+    /// serve while the active registry field is encrypted.
+    pub fn compatibility_for_fields_allowing_retained_plaintext(
+        &self,
+        active_entity: &CompiledEntity,
+        requested_fields: &BTreeSet<String>,
+        authorizing_fields: &BTreeSet<String>,
+        retained_plaintext_fields: &BTreeSet<String>,
+    ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
+        self.entity(&active_entity.id)?
+            .compatibility_for_fields_allowing_retained_plaintext(
+                active_entity,
+                requested_fields,
+                authorizing_fields,
+                retained_plaintext_fields,
+            )
     }
 
     pub fn required_history_fields<S, R, T, SI, RI, TI>(
@@ -249,11 +270,32 @@ impl HistoryEntityDescriptor {
     /// `authorizing_fields` names the fields that decide which rows a caller may
     /// see. They must be present in the descriptor, because a row cannot be
     /// authorized from a value the revision never recorded.
+    ///
+    /// `retained_plaintext_fields` names the fields whose field-encryption flip
+    /// declared `retain-plaintext-history`: their pre-flip revisions recorded
+    /// plaintext, and only that declared choice lets a plaintext recording
+    /// serve while the active registry field is encrypted. Every other
+    /// recording/active encryption mismatch still refuses.
     pub fn compatibility_for_fields(
         &self,
         active_entity: &CompiledEntity,
         requested_fields: &BTreeSet<String>,
         authorizing_fields: &BTreeSet<String>,
+    ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
+        self.compatibility_for_fields_allowing_retained_plaintext(
+            active_entity,
+            requested_fields,
+            authorizing_fields,
+            &BTreeSet::new(),
+        )
+    }
+
+    pub fn compatibility_for_fields_allowing_retained_plaintext(
+        &self,
+        active_entity: &CompiledEntity,
+        requested_fields: &BTreeSet<String>,
+        authorizing_fields: &BTreeSet<String>,
+        retained_plaintext_fields: &BTreeSet<String>,
     ) -> Result<HistorySchemaCompatibility, HistorySchemaError> {
         self.validate()?;
         if self.id != active_entity.id {
@@ -284,11 +326,15 @@ impl HistoryEntityDescriptor {
                         required: false,
                         nullable: true,
                         encrypted: false,
+                        retained_plaintext: false,
                     },
                 );
                 continue;
             };
-            if !retained.compatible_with(active)? {
+            if !retained.compatible_with(
+                active,
+                active.encrypted && retained_plaintext_fields.contains(field_id),
+            )? {
                 return Err(HistorySchemaError::IncompatibleField);
             }
             fields.insert(
@@ -301,6 +347,7 @@ impl HistoryEntityDescriptor {
                     required: active.required,
                     nullable: !active.required,
                     encrypted: retained.encrypted,
+                    retained_plaintext: !retained.encrypted && active.encrypted,
                 },
             );
         }
@@ -404,7 +451,11 @@ pub struct HistoryFieldDescriptor {
 }
 
 impl HistoryFieldDescriptor {
-    fn compatible_with(&self, active: ActiveField<'_>) -> Result<bool, HistorySchemaError> {
+    fn compatible_with(
+        &self,
+        active: ActiveField<'_>,
+        allow_retained_plaintext: bool,
+    ) -> Result<bool, HistorySchemaError> {
         self.validate()?;
         if self.id != active.id || self.field_type != *active.field_type {
             return Ok(false);
@@ -417,7 +468,12 @@ impl HistoryFieldDescriptor {
         }
         // Recorded plaintext must never surface as an envelope, and recorded
         // envelopes must never surface as plaintext, so either flip refuses.
-        if self.encrypted != active.encrypted {
+        // The one exception is a plaintext recording under a field whose flip
+        // declared retain-plaintext-history: those revisions serve the
+        // plaintext they recorded. The envelope direction never relaxes.
+        if self.encrypted != active.encrypted
+            && !(allow_retained_plaintext && !self.encrypted && active.encrypted)
+        {
             return Ok(false);
         }
         Ok(true)
@@ -550,6 +606,10 @@ pub struct HistoryFieldCompatibility {
     pub required: bool,
     pub nullable: bool,
     pub encrypted: bool,
+    /// Whether this revision's recording is plaintext the field's flip
+    /// declared retain-plaintext-history for: the decoded member serves as-is,
+    /// and the response edge never tries to open it as an envelope.
+    pub retained_plaintext: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

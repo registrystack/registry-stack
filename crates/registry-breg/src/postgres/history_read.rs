@@ -47,7 +47,7 @@ use crate::query_binding::{CursorBindingQuery, CursorBindingReferences};
 use crate::record_profile::{self, RecordRepresentation};
 use crate::stored_bytes;
 
-use super::read::open_row_members;
+use super::read::{load_retained_plaintext_fields, open_history_row_members};
 use super::{
     begin_record_transaction, snapshot_read_error, validate_field_value, ClaimContext,
     ExpectedRegistryIdentity, RegistryLockKey, RowBoundaryContext, RuntimePool,
@@ -292,11 +292,14 @@ impl PostgresSnapshotReadService {
                 effective_binding,
             });
         }
+        let retained_plaintext_fields =
+            load_retained_plaintext_fields(transaction, &request.entity_id).await?;
         let descriptors = load_compatible_descriptors(
             transaction,
             &plan.entity,
             &plan.required_fields,
             &plan.authorizing_fields,
+            &retained_plaintext_fields,
             package_revisions,
         )
         .await?;
@@ -376,13 +379,16 @@ impl PostgresSnapshotReadService {
             .collect::<Result<Vec<_>, _>>()?;
         // The decoded rows keep tagged members until this response edge; the
         // retained snapshot itself stays sealed so journal comparison never
-        // depends on decryption.
+        // depends on decryption. Retained-plaintext members of a declared
+        // retain-plaintext-history flip serve as the plaintext the revision
+        // recorded instead of opening.
         for record in &mut rows {
-            open_row_members(
+            open_history_row_members(
                 &plan.entity,
                 &record.id,
                 &mut record.data,
                 self.field_encryption.as_deref(),
+                &retained_plaintext_fields,
             )?;
         }
         guarded
@@ -797,6 +803,7 @@ async fn load_compatible_descriptors(
     entity: &CompiledEntity,
     required_fields: &BTreeSet<String>,
     authorizing_fields: &BTreeSet<String>,
+    retained_plaintext_fields: &BTreeSet<String>,
     package_revisions: Vec<String>,
 ) -> Result<BTreeMap<String, CompatibleDescriptor>, ReadServiceError> {
     let mut descriptors = BTreeMap::new();
@@ -805,7 +812,12 @@ async fn load_compatible_descriptors(
             .await
             .map_err(|_| ReadServiceError::Unavailable)?;
         let compatibility = descriptor
-            .compatibility_for_fields(entity, required_fields, authorizing_fields)
+            .compatibility_for_fields_allowing_retained_plaintext(
+                entity,
+                required_fields,
+                authorizing_fields,
+                retained_plaintext_fields,
+            )
             .map_err(|_| ReadServiceError::Unavailable)?;
         descriptors.insert(
             package_revision,
@@ -2089,6 +2101,7 @@ mod tests {
                     required: true,
                     nullable: false,
                     encrypted: false,
+                    retained_plaintext: false,
                 },
             )]),
         };

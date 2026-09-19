@@ -411,6 +411,160 @@ async fn audited_erasure_deletes_targeted_history_and_makes_bookmark_unavailable
     database.cleanup().await;
 }
 
+/// A record erasure reaches the change-request copies of that record's stored
+/// values: the applied request's target snapshots and proposal snapshot are
+/// cleared whole and tombstoned, format-agnostic, while a request targeting a
+/// different record keeps every byte. The maintenance audit records counts,
+/// never the scrubbed payloads.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn erasure_scrubs_change_request_target_and_proposal_payloads_whole() {
+    let database = TestDatabase::create(4).await;
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let registry = compiled_registry();
+    let expected = install_ready_history_registry(&database, &mut migration, &registry).await;
+    let lock_key = RegistryLockKey::derive(&expected.package_id).expect("lock key derives");
+    let audit_profile = AuditProfile::production_from_secret_bytes(vec![0x75; 32].into())
+        .expect("test owns a keyed audit profile");
+    let erased_record = Uuid::from_u128(0x11);
+    let kept_record = Uuid::from_u128(0x22);
+
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("migration can begin transaction");
+    insert_revision(&transaction, erased_record, 1, OLD_PACKAGE, "create").await;
+    insert_revision(&transaction, kept_record, 1, CURRENT_PACKAGE, "create").await;
+    let fingerprint = format!("sha256:{}", "7".repeat(64));
+    let request_a = Uuid::from_u128(0xA1);
+    let request_b = Uuid::from_u128(0xB1);
+    for (request_id, target_record, canary) in [
+        (request_a, erased_record, "cr-scrub-canary"),
+        (request_b, kept_record, "cr-kept-canary"),
+    ] {
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_state
+                     (request_entity_id, request_id, owner_reference, state,
+                      proposal_version, workflow_revision, review_completed_at)
+                 VALUES ('membership-request', $1, 'owner:hash', 'applied', 1, 1,
+                         transaction_timestamp())",
+                &[&request_id],
+            )
+            .await
+            .expect("change request state inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_proposals
+                     (request_entity_id, request_id, proposal_version, request_record_revision,
+                      contract_fingerprint, effect_digest, snapshot)
+                 VALUES ('membership-request', $1, 1, 1, $2, $2, $3)",
+                &[
+                    &request_id,
+                    &fingerprint,
+                    &json!({
+                        "reasonText": canary,
+                        "targetCount": 1
+                    }),
+                ],
+            )
+            .await
+            .expect("change request proposal inserts");
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_request_targets
+                     (request_entity_id, request_id, proposal_version, target_entity_id,
+                      target_record_id, operation, expected_revision, base_snapshot,
+                      after_snapshot)
+                 VALUES ('membership-request', $1, 1, $2, $3, 'patch', 1, $4, $5)",
+                &[
+                    &request_id,
+                    &ENTITY,
+                    &target_record,
+                    &json!({"household": format!("{canary}-base")}),
+                    &json!({"household": format!("{canary}-after")}),
+                ],
+            )
+            .await
+            .expect("change request target inserts");
+    }
+    transaction
+        .commit()
+        .await
+        .expect("change request copies commit");
+
+    let outcome = erase_record_history(
+        &mut migration,
+        HistoryErasureRequest {
+            expected: &expected,
+            migration_role: &database.migration_role,
+            lock_key,
+            timeouts: HistoryErasureTimeouts::new(Duration::from_secs(5), Duration::from_secs(5))
+                .unwrap(),
+            audit_profile: &audit_profile,
+            operator_reference: OPERATOR_CANARY,
+            reason: REASON_CANARY,
+            target: RecordHistoryErasureTarget::new(ENTITY, erased_record, 1),
+        },
+    )
+    .await
+    .expect("targeted erasure succeeds");
+
+    assert_eq!(outcome.erased_revision_count, 1);
+    assert_eq!(
+        outcome.scrubbed_request_target_count, 1,
+        "only the request targeting the erased record is scrubbed"
+    );
+    assert_eq!(outcome.scrubbed_request_proposal_count, 1);
+
+    let state = migration
+        .query_one(
+            "SELECT
+                 (SELECT base_snapshot IS NULL AND after_snapshot IS NULL AND erased_at IS NOT NULL
+                    FROM registry_internal.registry_request_targets WHERE request_id = $1),
+                 (SELECT snapshot IS NULL AND erased_at IS NOT NULL
+                    FROM registry_internal.registry_request_proposals WHERE request_id = $1),
+                 (SELECT base_snapshot ? 'household' AND after_snapshot ? 'household'
+                                          AND erased_at IS NULL
+                    FROM registry_internal.registry_request_targets WHERE request_id = $2),
+                 (SELECT snapshot ? 'reasonText' AND erased_at IS NULL
+                    FROM registry_internal.registry_request_proposals WHERE request_id = $2)",
+            &[&request_a, &request_b],
+        )
+        .await
+        .expect("migration can inspect the scrubbed and kept copies");
+    assert!(
+        state.get::<_, bool>(0),
+        "the erased record's target snapshots are cleared whole and tombstoned"
+    );
+    assert!(
+        state.get::<_, bool>(1),
+        "the proposal version of the erased record's request is cleared whole and tombstoned"
+    );
+    assert!(
+        state.get::<_, bool>(2),
+        "a request targeting a kept record keeps its target snapshots"
+    );
+    assert!(
+        state.get::<_, bool>(3),
+        "a request targeting a kept record keeps its proposal snapshot"
+    );
+
+    assert_erasure_audit_is_minimized(&database, &audit_profile).await;
+    let envelopes = database
+        .admin
+        .query("SELECT envelope FROM registry_internal.registry_audit", &[])
+        .await
+        .expect("administrator can inspect audit");
+    for row in &envelopes {
+        let text = String::from_utf8(row.get::<_, Vec<u8>>(0)).expect("audit is utf8");
+        assert!(!text.contains("cr-scrub-canary"));
+        assert!(!text.contains("cr-kept-canary"));
+    }
+
+    migration_task.abort();
+    database.cleanup().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn erasure_uses_migration_authority_without_runtime_journal_mutation_grants() {
     let mut database = TestDatabase::create(4).await;

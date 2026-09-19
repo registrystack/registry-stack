@@ -56,7 +56,8 @@ impl From<PostgresKernelError> for HistoryMaintenanceError {
             PostgresKernelError::RoleInvariant(_) => Self::MigrationAuthority,
             PostgresKernelError::Configuration(_)
             | PostgresKernelError::FieldPatternSyntax { .. }
-            | PostgresKernelError::FieldPatternExistingRows { .. } => Self::InvalidInput,
+            | PostgresKernelError::FieldPatternExistingRows { .. }
+            | PostgresKernelError::FieldEncryptionBlindCollision { .. } => Self::InvalidInput,
             PostgresKernelError::Connection
             | PostgresKernelError::Pool
             | PostgresKernelError::PoolBuild

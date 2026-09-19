@@ -343,6 +343,12 @@ impl ExpectedManagedCatalog {
             std::iter::empty::<&str>(),
             Some((false, false)),
         );
+        catalog.table(
+            "registry_internal.registry_field_encryption_flips",
+            ["INSERT", "SELECT"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
         catalog
     }
 
@@ -697,7 +703,45 @@ pub(crate) async fn install_registry_state_schema(
                      CHECK (activated_package_revision <> ''),
                  created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
              );
-             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM PUBLIC;",
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM PUBLIC;
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_field_encryption_flips (
+                 entity_id text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_entity_nonempty
+                     CHECK (entity_id <> ''),
+                 field_id text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_field_nonempty
+                     CHECK (field_id <> ''),
+                 boundary_package_revision text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_boundary_nonempty
+                     CHECK (boundary_package_revision <> ''),
+                 history_choice text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_choice_closed
+                     CHECK (history_choice IN ('erase-and-rebaseline', 'retain-plaintext-history')),
+                 sealed_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_sealed_rows_nonnegative
+                     CHECK (sealed_row_count >= 0),
+                 sealed_journal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_sealed_journal_nonnegative
+                     CHECK (sealed_journal_row_count >= 0),
+                 accepted_plaintext_journal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_journal_nonnegative
+                     CHECK (accepted_plaintext_journal_row_count >= 0),
+                 accepted_request_target_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_targets_nonnegative
+                     CHECK (accepted_request_target_row_count >= 0),
+                 accepted_request_proposal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_proposals_nonnegative
+                     CHECK (accepted_request_proposal_row_count >= 0),
+                 accepted_idempotency_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_idempotency_nonnegative
+                     CHECK (accepted_idempotency_row_count >= 0),
+                 accepted_outbox_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_outbox_nonnegative
+                     CHECK (accepted_outbox_row_count >= 0),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (entity_id, field_id)
+             );
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM PUBLIC;",
         ))
         .await?;
     install_migration_ledger(migration, runtime_role).await?;
@@ -708,7 +752,11 @@ pub(crate) async fn install_registry_state_schema(
              REVOKE ALL ON TABLE registry_internal.registry_state FROM {};\n\
              GRANT SELECT ON TABLE registry_internal.registry_state TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM {};\n\
-             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_keys TO {};",
+             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM {};\n\
+             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
+            runtime_role.quoted(),
+            runtime_role.quoted(),
             runtime_role.quoted(),
             runtime_role.quoted(),
             runtime_role.quoted(),

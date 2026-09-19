@@ -56,6 +56,8 @@ pub mod evidence_source;
 pub mod example_references;
 #[cfg(feature = "runtime")]
 pub mod field_encryption;
+#[cfg(feature = "runtime")]
+pub mod field_encryption_backfill;
 #[cfg(all(feature = "runtime", feature = "tooling"))]
 pub mod fixtures;
 pub mod generated_ddl;

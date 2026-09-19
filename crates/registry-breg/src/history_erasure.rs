@@ -89,6 +89,8 @@ pub struct HistoryErasureOutcome {
     pub scrubbed_change_context_count: u64,
     pub scrubbed_outbox_payload_count: u64,
     pub scrubbed_cached_response_count: u64,
+    pub scrubbed_request_target_count: u64,
+    pub scrubbed_request_proposal_count: u64,
     pub removed_descriptor_count: u64,
 }
 
@@ -206,6 +208,10 @@ pub async fn erase_record_history(
     .await?;
     let scrubbed_outbox_payload_count =
         scrub_outbox_payloads(&transaction, &request.target).await?;
+    let scrubbed_request_target_count =
+        scrub_request_target_snapshots(&transaction, &request.target).await?;
+    let scrubbed_request_proposal_count =
+        scrub_request_proposal_snapshots(&transaction, &request.target).await?;
     let scrubbed_change_context_count =
         scrub_change_contexts(&transaction, &affected_positions).await?;
     let erased_commit_member_count = delete_commit_members(&transaction, &request.target).await?;
@@ -224,6 +230,8 @@ pub async fn erase_record_history(
         scrubbed_change_context_count,
         scrubbed_outbox_payload_count,
         scrubbed_cached_response_count,
+        scrubbed_request_target_count,
+        scrubbed_request_proposal_count,
         removed_descriptor_count,
     };
     append_history_erasure_audit(&transaction, &request, &outcome).await?;
@@ -324,6 +332,58 @@ async fn scrub_outbox_payloads(
                 &target.record_id,
                 &target.erase_through_revision,
             ],
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)
+}
+
+/// Clear the change-request copies of the erased record's stored values. The
+/// scrub is format-agnostic: both snapshots are cleared whole and the target is
+/// tombstoned, so a member sealed by a field-encryption flip is deleted with
+/// its payload rather than parsed and rewritten.
+async fn scrub_request_target_snapshots(
+    transaction: &tokio_postgres::Transaction<'_>,
+    target: &RecordHistoryErasureTarget<'_>,
+) -> Result<u64, HistoryErasureError> {
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_targets
+                SET base_snapshot = NULL,
+                    after_snapshot = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE target_entity_id = $1
+                AND target_record_id = $2
+                AND erased_at IS NULL
+                AND (base_snapshot IS NOT NULL OR after_snapshot IS NOT NULL)",
+            &[&target.entity_id, &target.record_id],
+        )
+        .await
+        .map_err(|_| HistoryErasureError::Unavailable)
+}
+
+/// Clear the proposal copies of request versions whose targets were scrubbed.
+/// A proposal snapshot is one payload for a whole request version, so it is
+/// cleared whole and tombstoned, never partially rewritten.
+async fn scrub_request_proposal_snapshots(
+    transaction: &tokio_postgres::Transaction<'_>,
+    target: &RecordHistoryErasureTarget<'_>,
+) -> Result<u64, HistoryErasureError> {
+    transaction
+        .execute(
+            "UPDATE registry_internal.registry_request_proposals AS proposal
+                SET snapshot = NULL,
+                    erased_at = transaction_timestamp()
+              WHERE snapshot IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM registry_internal.registry_request_targets AS target
+                     WHERE target.target_entity_id = $1
+                       AND target.target_record_id = $2
+                       AND target.request_entity_id = proposal.request_entity_id
+                       AND target.request_id = proposal.request_id
+                       AND target.proposal_version = proposal.proposal_version
+                )",
+            &[&target.entity_id, &target.record_id],
         )
         .await
         .map_err(|_| HistoryErasureError::Unavailable)
@@ -522,6 +582,8 @@ async fn append_history_erasure_audit(
             "scrubbedChangeContextCount": outcome.scrubbed_change_context_count,
             "scrubbedOutboxPayloadCount": outcome.scrubbed_outbox_payload_count,
             "scrubbedCachedResponseCount": outcome.scrubbed_cached_response_count,
+            "scrubbedRequestTargetCount": outcome.scrubbed_request_target_count,
+            "scrubbedRequestProposalCount": outcome.scrubbed_request_proposal_count,
             "removedDescriptorCount": outcome.removed_descriptor_count,
             "operatorResponsibility": "saved_exports_event_consumers_and_backups",
             "stubPolicy": "commit_position_and_minimized_origin_retained_context_removed",

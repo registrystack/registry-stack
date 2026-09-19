@@ -1356,6 +1356,92 @@ pub(super) fn open_snapshot_members(
     open_members(entity, record_id, data, field_encryption, false)
 }
 
+/// Load the fields of one entity whose field-encryption flip declared
+/// retain-plaintext-history. A database bootstrapped before the flips table
+/// existed has no rows to read, which reads as the empty set; a Registry that
+/// never flipped a field reads the same way.
+pub(super) async fn load_retained_plaintext_fields(
+    transaction: &tokio_postgres::Transaction<'_>,
+    entity_id: &str,
+) -> Result<BTreeSet<String>, ReadServiceError> {
+    let rows = transaction
+        .query(
+            "SELECT field_id
+               FROM registry_internal.registry_field_encryption_flips
+              WHERE entity_id = $1
+                AND history_choice = 'retain-plaintext-history'",
+            &[&entity_id],
+        )
+        .await;
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(error) if error.code() == Some(&tokio_postgres::error::SqlState::UNDEFINED_TABLE) => {
+            return Ok(BTreeSet::new());
+        }
+        Err(_) => return Err(ReadServiceError::Unavailable),
+    };
+    rows.into_iter()
+        .map(|row| {
+            row.try_get::<_, String>(0)
+                .map_err(|_| ReadServiceError::Unavailable)
+        })
+        .collect()
+}
+
+/// Open every encrypted member of one decoded history or revision row map,
+/// honoring the fields whose flip declared retain-plaintext-history.
+///
+/// History and revision rows can span a field's flip boundary: rows at or
+/// after the boundary carry the tagged envelope member, and rows before it
+/// carry the plaintext the revision recorded under the declared choice.
+/// Snapshot decode has already validated each member against its own
+/// revision's descriptor, so for a declared field a tagged member opens and
+/// any other non-null member serves as the recorded plaintext. Fields with
+/// no declared choice keep the strict rule: anything but a tagged envelope
+/// fails the read closed with the field-encryption problem, value-free.
+pub(super) fn open_history_row_members(
+    entity: &CompiledEntity,
+    record_id: &str,
+    data: &mut Map<String, Value>,
+    field_encryption: Option<&FieldEncryptionService>,
+    retained_plaintext_fields: &BTreeSet<String>,
+) -> Result<(), ReadServiceError> {
+    let encrypted_fields = entity
+        .stored_fields
+        .iter()
+        .filter(|field| field.logical.encryption.is_some())
+        .collect::<Vec<_>>();
+    if encrypted_fields.is_empty() {
+        return Ok(());
+    }
+    let service = field_encryption.ok_or(ReadServiceError::FieldEncryptionUnavailable)?;
+    for field in &encrypted_fields {
+        let key = field.logical.api_name.as_str();
+        let Some(member) = data.get_mut(key) else {
+            continue;
+        };
+        if retained_plaintext_fields.contains(field.logical.id.as_str())
+            && !member.is_null()
+            && registry_platform_crypto::field_encryption::parse_envelope_member(member).is_none()
+        {
+            // The plaintext this revision recorded, already validated against
+            // the descriptor that revision was written under.
+            continue;
+        }
+        let opened = open_member_value(
+            service,
+            &entity.id,
+            &field.logical.id,
+            record_id,
+            &field.logical.field_type,
+            member,
+        )
+        .map_err(|_| ReadServiceError::FieldEncryptionUnavailable)?;
+        *member = opened.unwrap_or(Value::Null);
+    }
+    Ok(())
+}
+
 fn open_members(
     entity: &CompiledEntity,
     record_id: &str,
