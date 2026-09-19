@@ -55,7 +55,7 @@ bregctl check ./my-registry --production
 ```
 
 `--deny-findings` makes every finding fail the command, so the first one prints `bregctl check refused.` above the same two findings and exits with status 1 until they are resolved or the profiles are changed.
-`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a webhook for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
+`--production` applies the production closure rules: package identity, a lock entry with a pinned digest for every module, a loaded source for every lock, and a declared handler for every event must all be present, and a project missing one fails with `package.identity.required`, `module.lock.missing`, `module.lock.digest_required`, `module.source.required`, or `event.delivery.required`.
 The project `init` wrote already carries all of them, so `check --production` succeeds on it.
 `explain` and `generate` accept `--production` as well; `--deny-findings` belongs to `check` alone.
 
