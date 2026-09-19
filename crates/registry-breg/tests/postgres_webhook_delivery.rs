@@ -1167,8 +1167,8 @@ const LOCAL_HOOK_SCRIPT: &[u8] = br#"fn handle(ctx) {
 }"#;
 
 /// The canonical message bytes the script above answers with. The worker
-/// records these bytes, so the test states them rather than deriving them
-/// from the same code path under test.
+/// records the digest of these bytes, so the test states them rather than
+/// deriving them from the same code path under test.
 const LOCAL_HOOK_ANSWER: &[u8] =
     br#"{"answer":"refusal","code":"case-observed","summary":"the hook read the change"}"#;
 
@@ -1286,14 +1286,14 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
         .await
         .expect("the delivered row carries its recorded answer");
     assert_eq!(
-        answer.get::<_, Option<Vec<u8>>>(0).as_deref(),
-        Some(LOCAL_HOOK_ANSWER),
-        "the recorded message is the canonical answer the program returned"
+        answer.get::<_, Option<Vec<u8>>>(0),
+        None,
+        "the raw answer is erased at settlement"
     );
     assert_eq!(
         answer.get::<_, Option<Vec<u8>>>(1),
         Some(Sha256::digest(LOCAL_HOOK_ANSWER).to_vec()),
-        "the recorded digest covers the recorded message bytes"
+        "the recorded digest covers the canonical answer the program returned"
     );
     assert_exact_audit_outcome(
         &database,
@@ -1320,12 +1320,12 @@ async fn real_postgres_local_hook_delivery_runs_in_process_and_records_its_answe
 }
 
 /// The canonical message bytes a remote handler answers with. The worker
-/// records these bytes, so the test states them rather than deriving them
-/// from the same code path under test.
+/// records the digest of these bytes, so the test states them rather than
+/// deriving them from the same code path under test.
 const URL_ANSWER: &[u8] =
     br#"{"answer":"refusal","code":"case-observed","summary":"the hook read the change"}"#;
 
-/// The `none` answer the worker records for a 2xx that returns no body.
+/// The `none` answer whose digest the worker records for a bodyless 2xx.
 const URL_NONE_ANSWER: &[u8] = br#"{"answer":"none"}"#;
 
 /// The answer path of the `url` kind: a 2xx body is the handler message, an
@@ -1412,14 +1412,13 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     );
     let recorded = recorded_answer(&database, &answered).await;
     assert_eq!(
-        recorded.message.as_deref(),
-        Some(URL_ANSWER),
-        "the recorded message is the canonical answer the remote handler returned"
+        recorded.message, None,
+        "the raw answer is erased at settlement"
     );
     assert_eq!(
         recorded.digest,
         Some(Sha256::digest(URL_ANSWER).to_vec()),
-        "the recorded digest covers the recorded message bytes"
+        "the recorded digest covers the canonical answer the remote handler returned"
     );
 
     // A remote handler that observes and proposes nothing: a 2xx with no body.
@@ -1445,14 +1444,13 @@ async fn real_postgres_url_hook_delivery_records_its_answer_and_refuses_one_over
     );
     let recorded = recorded_answer(&database, &silent).await;
     assert_eq!(
-        recorded.message.as_deref(),
-        Some(URL_NONE_ANSWER),
-        "an empty body is recorded as the canonical none answer"
+        recorded.message, None,
+        "the none answer's bytes are not retained either"
     );
     assert_eq!(
         recorded.digest,
         Some(Sha256::digest(URL_NONE_ANSWER).to_vec()),
-        "the none answer carries the digest of its own recorded bytes"
+        "an empty body is recorded as the canonical none answer's digest"
     );
 
     // The answer ceiling, at the byte: a body one byte over it is a resource
