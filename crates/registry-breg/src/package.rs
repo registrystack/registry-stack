@@ -25,7 +25,7 @@ use crate::contract::{
 };
 use crate::derived_sql::MAX_DERIVED_SQL_BYTES;
 use crate::generated_ddl::{
-    add_column_statement, drop_spatial_bbox_function_statement,
+    add_blind_index_column_statement, add_column_statement, drop_spatial_bbox_function_statement,
     drop_spatial_candidate_view_statement, generate_ddl_with_actions, quote_identifier,
     set_column_not_null_statement, spatial_bbox_function_statement, spatial_projection_fields,
     spatial_projection_statements, DdlPolicy, DdlPolicyRole, DdlStatement, DdlStatementKind,
@@ -286,6 +286,8 @@ pub enum CompiledRegistryChangeCode {
     FieldPatternAdded,
     FieldPatternChanged,
     FieldPatternRemoved,
+    FieldEncryptionChanged,
+    FieldLookupChanged,
     FieldClassificationChanged,
     FieldTemporalRoleChanged,
     DerivedRelationAdded,
@@ -1088,6 +1090,12 @@ impl CompiledRegistryChangeCode {
             Self::RegistryVersionChanged => Some(
                 "registry.version is bound to the database for its lifetime: an installed database keeps the registry identity it was initialized with, so a package that changes the version can only initialize a new database, never migrate this one",
             ),
+            Self::FieldEncryptionChanged => Some(
+                "turning field encryption on rekeys storage behind a reviewed backfill before the plaintext column retires; turning it off discards the envelope and is destructive",
+            ),
+            Self::FieldLookupChanged => Some(
+                "gaining or rekeying a blind index needs a reviewed backfill of the index column; losing the lookup or its uniqueness retires storage",
+            ),
             _ => None,
         }
     }
@@ -1368,11 +1376,75 @@ fn compare_fields(
             );
             continue;
         };
-        if previous_field.physical_name != candidate_field.physical_name {
+        // Turning encryption on or off renames the storage column: the flip
+        // code carries that rename, and a second physical-name change for the
+        // same field would break the migration plan's exactly-one cover rule.
+        let encryption_presence_changed =
+            previous_field.encryption.is_none() != candidate_field.encryption.is_none();
+        if previous_field.physical_name != candidate_field.physical_name
+            && !encryption_presence_changed
+        {
             push_change(
                 changes,
                 CompiledRegistryChangeClass::DestructiveOrIrreversible,
                 CompiledRegistryChangeCode::FieldPhysicalNameChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        }
+        if encryption_presence_changed {
+            let class = if candidate_field.encryption.is_some() {
+                CompiledRegistryChangeClass::DataBackfillRequired
+            } else {
+                CompiledRegistryChangeClass::DestructiveOrIrreversible
+            };
+            push_change(
+                changes,
+                class,
+                CompiledRegistryChangeCode::FieldEncryptionChanged,
+                target(
+                    CompiledRegistryChangeTargetKind::Field,
+                    Some(entity_id),
+                    Some(field_id.as_str()),
+                ),
+            );
+        }
+        if previous_field.encryption.is_some()
+            && candidate_field.encryption.is_some()
+            && previous_field.encryption != candidate_field.encryption
+        {
+            // A lookup change on an already-encrypted field keeps the envelope
+            // column: gaining or rekeying a blind index needs a backfill of
+            // the index column, losing the lookup or its uniqueness retires
+            // storage the way any non-additive index change does.
+            let previous_blind = previous_field
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref());
+            let candidate_blind = candidate_field
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref());
+            let class = match (previous_blind, candidate_blind) {
+                (None, Some(_)) => CompiledRegistryChangeClass::DataBackfillRequired,
+                (Some(previous), Some(candidate)) => {
+                    if previous.normalization != candidate.normalization
+                        || (!previous.unique && candidate.unique)
+                    {
+                        CompiledRegistryChangeClass::DataBackfillRequired
+                    } else {
+                        CompiledRegistryChangeClass::DestructiveOrIrreversible
+                    }
+                }
+                (_, None) => CompiledRegistryChangeClass::DestructiveOrIrreversible,
+            };
+            push_change(
+                changes,
+                class,
+                CompiledRegistryChangeCode::FieldLookupChanged,
                 target(
                     CompiledRegistryChangeTargetKind::Field,
                     Some(entity_id),
@@ -1958,8 +2030,11 @@ fn additive_migration_plan(
         let previous_entity = &previous.entities[entity_id];
         for (field_id, field) in &candidate_entity.fields {
             // Added checks always scan existing data, including when a previously
-            // unconstrained column is present. Changes/removals require reviewed DDL.
+            // unconstrained column is present. Changes/removals require reviewed
+            // DDL. An encrypted column stores ciphertext, which no authored
+            // pattern can match, so its DDL carries no pattern statement to add.
             if field.pattern.is_some()
+                && field.encryption.is_none()
                 && previous_entity
                     .fields
                     .get(field_id)
@@ -1967,7 +2042,57 @@ fn additive_migration_plan(
             {
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.pattern"));
             }
-            if previous_entity.fields.contains_key(field_id) {
+            if let Some(previous_field) = previous_entity.fields.get(field_id) {
+                // Turning encryption on swaps the field's storage: the envelope
+                // and blind-index columns arrive nullable, a unique lookup
+                // index lands empty ahead of the reviewed backfill that fills
+                // it, and the plaintext column and the rekey itself belong to
+                // the reviewed SQL, never to this additive prefix.
+                if previous_field.encryption.is_none() && field.encryption.is_some() {
+                    let columns = added_columns.entry(entity_id.clone()).or_default();
+                    columns.push(add_column_statement(candidate_entity, field));
+                    columns.extend(set_column_not_null_statement(candidate_entity, field));
+                    if field
+                        .encryption
+                        .as_ref()
+                        .and_then(|encryption| encryption.blind_index.as_ref())
+                        .is_some()
+                    {
+                        columns.push(add_blind_index_column_statement(candidate_entity, field));
+                    }
+                    if field_requires_unique_lookup_index(field) {
+                        new_statement_ids
+                            .insert(format!("entity.{entity_id}.field.{field_id}.lookup-unique"));
+                    }
+                    let source_view_id = format!("entity.{entity_id}.source-view");
+                    replacement_statement_ids.insert(source_view_id.clone());
+                    new_statement_ids.insert(source_view_id);
+                }
+                // A lookup gained or made unique on an already-encrypted field
+                // keeps the envelope column: only the blind-index sibling and
+                // its unique index arrive, empty, ahead of the backfill.
+                if previous_field.encryption.is_some() && field.encryption.is_some() {
+                    let previous_blind = previous_field
+                        .encryption
+                        .as_ref()
+                        .and_then(|encryption| encryption.blind_index.as_ref());
+                    let blind = field
+                        .encryption
+                        .as_ref()
+                        .and_then(|encryption| encryption.blind_index.as_ref());
+                    if previous_blind.is_none() && blind.is_some() {
+                        added_columns
+                            .entry(entity_id.clone())
+                            .or_default()
+                            .push(add_blind_index_column_statement(candidate_entity, field));
+                    }
+                    if blind.is_some_and(|blind| blind.unique)
+                        && !previous_blind.is_some_and(|blind| blind.unique)
+                    {
+                        new_statement_ids
+                            .insert(format!("entity.{entity_id}.field.{field_id}.lookup-unique"));
+                    }
+                }
                 continue;
             }
             // A required field's column arrives nullable and is constrained
@@ -1976,6 +2101,18 @@ fn additive_migration_plan(
             let columns = added_columns.entry(entity_id.clone()).or_default();
             columns.push(add_column_statement(candidate_entity, field));
             columns.extend(set_column_not_null_statement(candidate_entity, field));
+            if field
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref())
+                .is_some()
+            {
+                columns.push(add_blind_index_column_statement(candidate_entity, field));
+            }
+            if field_requires_unique_lookup_index(field) {
+                new_statement_ids
+                    .insert(format!("entity.{entity_id}.field.{field_id}.lookup-unique"));
+            }
             if matches!(field.field_type, FieldTypeSource::Reference { .. }) {
                 new_statement_ids.insert(format!("entity.{entity_id}.field.{field_id}.reference"));
             }
@@ -2124,6 +2261,8 @@ fn reviewed_successor_migration_plan(
                 | CompiledRegistryChangeCode::FieldRemoved
                 | CompiledRegistryChangeCode::FieldTypeChanged
                 | CompiledRegistryChangeCode::FieldPhysicalNameChanged
+                | CompiledRegistryChangeCode::FieldEncryptionChanged
+                | CompiledRegistryChangeCode::FieldLookupChanged
                 | CompiledRegistryChangeCode::DerivedRelationRemoved
                 | CompiledRegistryChangeCode::DerivedRelationChanged
         )
@@ -2255,6 +2394,17 @@ fn table_statement_entity_id(statement_id: &str) -> Option<&str> {
     statement_id
         .strip_prefix("entity.")
         .and_then(|suffix| suffix.strip_suffix(".table"))
+}
+
+/// Whether the field's DDL carries a unique blind-index statement. The unique
+/// lookup index is content-addressed per entity and field, so gaining or
+/// rekeying it is always a new statement id, never a replacement.
+fn field_requires_unique_lookup_index(field: &crate::model::CompiledField) -> bool {
+    field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .is_some_and(|blind| blind.unique)
 }
 
 fn push_change(

@@ -463,6 +463,83 @@ fn reviewed_migration_plan_rejects_uncovered_changes_forbidden_sql_and_unbound_e
     );
 }
 
+#[test]
+fn reviewed_encryption_flip_binds_envelope_blind_index_and_views() {
+    let previous = compile_variant(Variant::EncryptedBase, 1);
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+
+    // The flip is one backfill-classified change, never a physical rename.
+    let change_set = compiled_registry_change_set(&previous, &candidate, PRIOR_REVISION);
+    assert_eq!(change_set.changes.len(), 1);
+    assert_eq!(
+        (change_set.changes[0].code, change_set.changes[0].class),
+        (
+            CompiledRegistryChangeCode::FieldEncryptionChanged,
+            CompiledRegistryChangeClass::DataBackfillRequired
+        )
+    );
+
+    let artifacts = encryption_flip_artifacts("encryption-flip", &previous, &candidate);
+    let prepared =
+        prepare_reviewed_package(Variant::EncryptedFlipOn, previous, vec![artifacts.source()])
+            .expect("reviewed encryption flip prepares");
+
+    assert_eq!(
+        prepared.manifest().migration_plan.reviewed_descriptors,
+        vec!["modules/core/migrations/encryption-flip/descriptor.json"]
+    );
+    let statements = &prepared.manifest().migration_plan.statements;
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["secret"];
+    let envelope = &field.physical_name;
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the flip candidate declares a blind index");
+
+    // The envelope column arrives under the field's own member, the blind
+    // sibling under its lookup member, both nullable bytea ahead of the
+    // reviewed backfill that fills them.
+    let envelope_column = statement(statements, "entity.asset.field.secret.column");
+    assert_eq!(envelope_column.kind, DdlStatementKind::Column);
+    assert!(envelope_column
+        .sql
+        .contains(&format!("ADD COLUMN \"{envelope}\" bytea")));
+    let blind_column = statement(statements, "entity.asset.field.secret.lookup-column");
+    assert_eq!(blind_column.kind, DdlStatementKind::Column);
+    assert_eq!(
+        blind_column.sql,
+        format!(
+            "ALTER TABLE registry_data.\"{}\" ADD COLUMN \"{}\" bytea",
+            entity.physical_table, blind.physical_name
+        )
+    );
+    // The optional flip field defers nothing: no NOT NULL interlock exists.
+    assert!(statements
+        .iter()
+        .all(|statement| statement.id != "entity.asset.field.secret.column.not-null"));
+    let lookup_index = statement(statements, "entity.asset.field.secret.lookup-unique");
+    assert_eq!(lookup_index.kind, DdlStatementKind::Index);
+    assert!(lookup_index.sql.starts_with("CREATE UNIQUE INDEX "));
+
+    // The registry_source view never exposes the envelope or its blind index.
+    let source_view = statement(statements, "entity.asset.source-view");
+    assert_eq!(source_view.kind, DdlStatementKind::View);
+    assert!(!source_view.sql.contains(envelope));
+    assert!(!source_view.sql.contains(&blind.physical_name));
+}
+
+fn statement<'a>(
+    statements: &'a [registry_breg::generated_ddl::DdlStatement],
+    id: &str,
+) -> &'a registry_breg::generated_ddl::DdlStatement {
+    statements
+        .iter()
+        .find(|statement| statement.id == id)
+        .unwrap_or_else(|| panic!("the plan carries the {id} statement"))
+}
+
 #[derive(Clone)]
 struct ReviewedArtifacts {
     descriptor: ReviewedMigrationDescriptor,
@@ -748,6 +825,109 @@ fn destructive_artifacts(
     artifacts
 }
 
+/// A reviewed backfill that rekeys one field's storage: it fills the envelope
+/// and blind-index columns the additive prefix added. The envelope object
+/// binds the field's own member directly; the blind sibling binds through the
+/// implicit `#lookup` member the cover matchers accept.
+fn encryption_flip_artifacts(
+    id: &str,
+    previous: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) -> ReviewedArtifacts {
+    let change_set = compiled_registry_change_set(previous, candidate, PRIOR_REVISION);
+    let change = change_set
+        .changes
+        .iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        .expect("the flip is classified as a field encryption change");
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["secret"];
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the flip declares a blind index");
+    let base = format!("modules/core/migrations/{id}");
+    let step_path = format!("{base}/steps/backfill.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let step_sql = format!(
+        "UPDATE registry_data.{} SET {} = 'envelope-canary', {} = 'digest-canary' WHERE record_id = ANY($1::pg_catalog.uuid[])",
+        entity.physical_table, field.physical_name, blind.physical_name
+    )
+    .into_bytes();
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    )
+    .into_bytes();
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: change.class,
+        covers: vec![ReviewedChangeCover::from(change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 10_000,
+        statement_timeout_ms: 60_000,
+        steps: vec![ReviewedMigrationStepDescriptor::ChunkedBackfill {
+            id: "backfill".to_owned(),
+            entity_id: "asset".to_owned(),
+            sql_path: step_path,
+            objects: vec![
+                ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret".to_owned()),
+                    physical_name: field.physical_name.clone(),
+                },
+                ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret#lookup".to_owned()),
+                    physical_name: blind.physical_name.clone(),
+                },
+            ],
+            cursor: ChunkCursorProtocol::RecordIdUuidArray,
+            chunk_size: 100,
+            max_total_rows: 1_000,
+            lock_timeout_ms: 1_000,
+            statement_timeout_ms: 10_000,
+            exact_affected_rows: true,
+        }],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path,
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path,
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+    };
+    let mut artifacts = ReviewedArtifacts {
+        descriptor,
+        receipt: receipt(
+            false,
+            true,
+            vec![RehearsalRowAssertion {
+                step_id: "backfill".to_owned(),
+                affected_rows: 10,
+            }],
+        ),
+        step_sql,
+        pre_sql: assertion_sql.clone(),
+        post_sql: assertion_sql,
+        backup: None,
+        fixture_bytes: b"{\"fixture\":\"representative\"}\n".to_vec(),
+    };
+    artifacts.rebind();
+    artifacts
+}
+
 fn receipt(
     destructive_resume: bool,
     chunk_resume: bool,
@@ -836,6 +1016,8 @@ enum Variant {
     RequiredField,
     FieldRemoved,
     DifferentRegistry,
+    EncryptedBase,
+    EncryptedFlipOn,
 }
 
 struct SourceFixture {
@@ -876,6 +1058,12 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
         }
         Variant::FieldRemoved => {
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"}"#
+        }
+        Variant::EncryptedBase => {
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted"}"#
+        }
+        Variant::EncryptedFlipOn => {
+            r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"secret","type":"string","maxLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
         }
         Variant::Base | Variant::DifferentRegistry => {
             r#"{"id":"code","type":"string","maxLength":8,"classification":"internal"},{"id":"rank","type":"int64","classification":"internal"}"#

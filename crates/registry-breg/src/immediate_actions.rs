@@ -837,6 +837,14 @@ fn compile_requirements(
             ));
             continue;
         };
+        if field.encryption.is_some() {
+            errors.push(Diagnostic::error(
+                "action.requires.field_encrypted",
+                "actions[].requires[].field",
+                "an action requirement cannot name an encrypted field",
+            ));
+            continue;
+        }
         let choices = usize::from(requirement.equals.is_some())
             + usize::from(requirement.equals_input.is_some());
         let literal_invalid = requirement.equals.as_ref().is_some_and(|equals| {
