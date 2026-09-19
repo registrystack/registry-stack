@@ -32,7 +32,7 @@ use crate::cursor::{
     CursorFilterExpr, CursorFilterOperator, CursorLogicalOp, CursorOrderClause,
     CursorProjectionField, CursorQueryScope, CursorRepresentation, CursorSpatialQuery,
 };
-use crate::field_encryption::FieldEncryptionService;
+use crate::field_encryption::{open_member_value, FieldEncryptionService};
 use crate::model::{
     request_query_field_api_name, request_query_field_type, CompiledEntity, CompiledQueryKind,
     CompiledQueryOperation, CompiledQuerySortDirection, CompiledReadPath, CompiledRegistry,
