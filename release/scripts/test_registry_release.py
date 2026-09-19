@@ -2560,6 +2560,8 @@ class RegistryReleaseTest(TestCase):
         )
         self.assertIn("release/docker/Dockerfile.builder", recipe)
         self.assertIn("20250810T000000Z", builder)
+        self.assertIn("cmake=3.31.6-2", builder)
+        self.assertIn("golang-go=2:1.24~2", builder)
         self.assertIn("libclang-19-dev=1:19.1.7-3+b1", builder)
         self.assertIn("protobuf-compiler=3.21.12-11", builder)
         self.assertIn("snapshot.debian.org/archive/debian/", builder)

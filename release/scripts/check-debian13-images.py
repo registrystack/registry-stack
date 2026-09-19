@@ -16,6 +16,8 @@ RUST_BUILDER = (
     "f49565f188ee00bc2a18dd418183f2c5f23ef7d6e691890517ed341a598f67c3"
 )
 RUST_BUILDER_SNAPSHOT = "20250810T000000Z"
+RUST_BUILDER_CMAKE = "cmake=3.31.6-2"
+RUST_BUILDER_GO = "golang-go=2:1.24~2"
 RUST_BUILDER_LIBCLANG = "libclang-19-dev=1:19.1.7-3+b1"
 RUST_BUILDER_PROTOC = "protobuf-compiler=3.21.12-11"
 RUST_BUILDER_PIP = "python3-pip=25.1.1+dfsg-1"
@@ -413,6 +415,20 @@ def check_repository(root: Path = ROOT) -> list[str]:
             f"snapshot.debian.org/archive/debian/{RUST_BUILDER_SNAPSHOT}",
             relative,
             "dated Debian package snapshot",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_CMAKE,
+            relative,
+            "exact CMake build package",
+            failures,
+        )
+        require(
+            text,
+            RUST_BUILDER_GO,
+            relative,
+            "exact Go build package",
             failures,
         )
         require(

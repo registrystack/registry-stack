@@ -63,12 +63,19 @@ explicitly because the nonce is a stored part of the envelope.
 
 ## Build Impact
 
-Building `aws-lc-fips-sys` requires CMake and, on targets without
-pre-generated bindings, bindgen with libclang. Bindings are pre-generated
-for the workspace's server targets, including `aarch64-apple-darwin` and
-the `x86_64`/`aarch64` `unknown-linux-gnu` and `musl` targets. The release
-builder image must install a pinned CMake; this review accompanies that
-builder change.
+Building `aws-lc-fips-sys` from its bundled source requires CMake and Go and,
+on targets without pre-generated bindings, bindgen with libclang. Bindings are
+pre-generated for the workspace's server targets, including
+`aarch64-apple-darwin` and the `x86_64`/`aarch64` `unknown-linux-gnu` and
+`musl` targets. Hosted artifact and macOS verification workflows install Go
+1.24.4 explicitly, and the release builder installs snapshot-pinned CMake and
+Go packages; the review accompanies those build-input changes.
+
+Linux packages continue to compile and link through the pinned Zig adapter so
+the AWS-LC-FIPS objects share the artifact's documented glibc floor. The
+adapter separates AWS-LC's textual-assembly and dependency-file passes to
+accommodate Zig 0.12.1, and the existing symbol audit retains the published ABI
+boundary.
 
 ## Maintenance and Security Signals
 
