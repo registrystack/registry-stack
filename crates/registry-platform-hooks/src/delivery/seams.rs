@@ -89,7 +89,10 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// so a redelivered answer resolves as the same application rather than
     /// a second one, and a changed answer after the commit surfaces as the
     /// product's stable conflict. The product's own idempotency mechanism
-    /// holds that promise; the worker relies on it.
+    /// holds that promise; the worker relies on it. Because an application
+    /// can outlive its delivery lease, the product must serialize this call
+    /// with [`Self::recover_proposal_receipt`] on that identity until the
+    /// receipt decision is complete.
     ///
     /// Returning [`DeliveryError`] means the outcome is uncertain: the apply
     /// may or may not have committed. The worker fails closed. The delivery
@@ -109,7 +112,9 @@ pub trait DeliverySeams: Send + Sync + 'static {
     /// outcome is recorded instead, so a proposal that committed before a
     /// failed finalize cannot later be hidden by a changed `none` or refusal
     /// answer. The product owns the receipt and the stable conflict outcome;
-    /// the worker supplies only the delivery identity.
+    /// the worker supplies only the delivery identity. This call must use the
+    /// same serialization boundary as [`Self::apply_proposal`], including
+    /// while an expired-lease application is still in flight.
     async fn recover_proposal_receipt(
         &self,
         recovery: ProposalReceiptRecovery<'_>,

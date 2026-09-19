@@ -762,6 +762,35 @@ async fn wait_until_delivery_is_due(
     .expect("the scheduled retry becomes claimable");
 }
 
+async fn wait_for_runtime_advisory_waits(setup: &Setup, minimum: i64) {
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let waiting: i64 = setup
+                .database
+                .admin
+                .query_one(
+                    "SELECT count(*)
+                           FROM pg_locks AS lock
+                           JOIN pg_stat_activity AS activity USING (pid)
+                          WHERE activity.datname = current_database()
+                            AND activity.usename = $1
+                            AND lock.locktype = 'advisory'
+                            AND NOT lock.granted",
+                    &[&setup.database.runtime_role.as_str()],
+                )
+                .await
+                .expect("administrator observes proposal advisory lock waits")
+                .get(0);
+            if waiting >= minimum {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the expected proposal advisory lock waits are reached");
+}
+
 async fn revoke_followup_insert(setup: &Setup) {
     let table = &setup
         .compiled
@@ -1192,6 +1221,127 @@ async fn real_postgres_a_changed_answer_cannot_reapply_one_delivery() {
         2,
         "the first applications stand and neither drifted answer applies again"
     );
+
+    setup.teardown().await;
+    receiver.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn real_postgres_receipt_recovery_waits_for_an_in_flight_application() {
+    const PROPOSAL_WRITE_LOCK: i64 = 819_275;
+
+    let receiver = HttpsReceiver::start().await;
+    let url_registry = compile_proposal_registry(
+        &format!(
+            "[{}]",
+            hook_json(
+                "case-created",
+                true,
+                r#"{"kind":"url","destinationId":"case-operations"}"#,
+            )
+        ),
+        "[]",
+        &[],
+    );
+    let setup = setup(url_registry, &receiver, true).await;
+    let mut mutation_client = setup
+        .pool
+        .get_for_test()
+        .await
+        .expect("runtime mutation connection is available");
+    let event = create_case(&setup, &mut mutation_client, "concurrent-recovery").await;
+    let delivery_id = single_delivery(&event).to_owned();
+    drop(mutation_client);
+
+    let followup_table = &setup
+        .compiled
+        .entities()
+        .get("followup")
+        .expect("the followup entity is compiled")
+        .physical_table;
+    setup
+        .database
+        .admin
+        .batch_execute(&format!(
+            "CREATE FUNCTION registry_internal.pause_hook_proposal_application()
+                 RETURNS trigger LANGUAGE plpgsql AS $$
+                 BEGIN
+                     PERFORM pg_advisory_xact_lock({PROPOSAL_WRITE_LOCK});
+                     RETURN NEW;
+                 END;
+             $$;
+             CREATE TRIGGER pause_hook_proposal_application
+                 BEFORE INSERT ON registry_data.{followup_table}
+                 FOR EACH ROW
+                 EXECUTE FUNCTION registry_internal.pause_hook_proposal_application();"
+        ))
+        .await
+        .expect("administrator installs the proposal-application pause");
+    setup
+        .database
+        .admin
+        .query_one("SELECT pg_advisory_lock($1)", &[&PROPOSAL_WRITE_LOCK])
+        .await
+        .expect("administrator holds the proposal write lock");
+
+    receiver
+        .enqueue(ResponsePlan::Answer {
+            body: HOOK_PROPOSAL_MESSAGE.to_vec(),
+        })
+        .await;
+    let first_service = setup.service.clone();
+    let first = tokio::spawn(async move { first_service.deliver_once().await });
+    wait_for_runtime_advisory_waits(&setup, 1).await;
+
+    // Model the lease expiring while the original application is still in
+    // its mutation transaction. The retry receives `none`; it must wait for
+    // that transaction, then classify the committed receipt as a conflict.
+    let changed = setup
+        .database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_webhook_delivery_state
+                SET state = 'pending', next_attempt_at = transaction_timestamp(),
+                    attempt_started_at = NULL, lease_expires_at = NULL,
+                    lease_token = NULL, updated_at = transaction_timestamp()
+              WHERE event_id = $1 AND compiled_delivery_id = $2
+                AND state = 'leased' AND attempt = 1",
+            &[&event.event_id, &delivery_id],
+        )
+        .await
+        .expect("administrator expires and requeues the in-flight delivery");
+    assert_eq!(changed, 1);
+    receiver
+        .enqueue(ResponsePlan::Answer { body: Vec::new() })
+        .await;
+    let second_service = setup.service.clone();
+    let second = tokio::spawn(async move { second_service.deliver_once().await });
+    wait_for_runtime_advisory_waits(&setup, 2).await;
+
+    let unlocked: bool = setup
+        .database
+        .admin
+        .query_one("SELECT pg_advisory_unlock($1)", &[&PROPOSAL_WRITE_LOCK])
+        .await
+        .expect("administrator releases the proposal write lock")
+        .get(0);
+    assert!(unlocked);
+    assert_eq!(
+        first.await.expect("the first worker joins"),
+        Err(WebhookDeliveryError::Unavailable),
+        "the stale first lease cannot finalize"
+    );
+    assert_eq!(
+        second.await.expect("the recovery worker joins"),
+        Ok(WebhookWorkOutcome::DeadLettered),
+        "the retry observes the committed receipt and records the answer conflict"
+    );
+    let row = delivery_row(&setup, event.event_id, &delivery_id).await;
+    assert_eq!(row.state, "dead_lettered");
+    assert_eq!(row.attempt, 2);
+    assert_eq!(row.disposition.as_deref(), Some("dead_lettered"));
+    assert_eq!(row.code.as_deref(), Some("hook.proposal.answer_conflict"));
+    assert_eq!(record_count(&setup, "followup").await, 1);
 
     setup.teardown().await;
     receiver.stop().await;

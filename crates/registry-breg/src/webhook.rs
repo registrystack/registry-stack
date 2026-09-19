@@ -206,14 +206,16 @@ impl DeliverySeams for BregDeliverySeams {
             self.audit_profile.clone(),
             Some(Arc::clone(&self.destinations)),
         );
-        let mut client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+        let mut application_lock = HookProposalLock::acquire(
+            self.pool.clone(),
+            &coordinator,
+            application.event_id,
+            application.compiled_delivery_id,
+        )
+        .await?;
         let outcome = coordinator
             .apply_hook_proposal(
-                &mut client,
+                application_lock.client(),
                 &self.registry,
                 &HookProposalApplication {
                     event_id: application.event_id,
@@ -224,8 +226,9 @@ impl DeliverySeams for BregDeliverySeams {
                     answer_digest: application.answer_digest,
                 },
             )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+            .await;
+        application_lock.release(&coordinator).await?;
+        let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
         Ok(match outcome {
             HookProposalOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
@@ -252,19 +255,22 @@ impl DeliverySeams for BregDeliverySeams {
             self.audit_profile.clone(),
             Some(Arc::clone(&self.destinations)),
         );
-        let mut client = self
-            .pool
-            .get()
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+        let mut application_lock = HookProposalLock::acquire(
+            self.pool.clone(),
+            &coordinator,
+            recovery.event_id,
+            recovery.compiled_delivery_id,
+        )
+        .await?;
         let outcome = coordinator
             .recover_hook_proposal_receipt(
-                &mut client,
+                application_lock.client(),
                 recovery.event_id,
                 recovery.compiled_delivery_id,
             )
-            .await
-            .map_err(|_| DeliveryError::Unavailable)?;
+            .await;
+        application_lock.release(&coordinator).await?;
+        let outcome = outcome.map_err(|_| DeliveryError::Unavailable)?;
         Ok(outcome.map(|outcome| match outcome {
             HookProposalOutcome::Applied(resulting_revision) => {
                 ProposalOutcome::Applied { resulting_revision }
@@ -382,6 +388,80 @@ impl DeliverySeams for BregDeliverySeams {
             DeliveryOperationalEvent::TransitionFailed(code) => {
                 OperationalEvent::WebhookStateTransitionFailed(transition_code(code)).emit();
             }
+        }
+    }
+}
+
+/// A cancellation-safe session lock over one hook proposal application.
+///
+/// Normal completion explicitly unlocks and returns the connection to the
+/// pool. Cancellation or any early return discards it instead, which closes
+/// the PostgreSQL session and cannot leak an advisory lock into later work.
+struct HookProposalLock {
+    pool: RuntimePool,
+    client: Option<deadpool_postgres::Client>,
+    key_reference: String,
+}
+
+impl HookProposalLock {
+    async fn acquire(
+        pool: RuntimePool,
+        coordinator: &MutationCoordinator,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+    ) -> Result<Self, DeliveryError> {
+        let client = pool.get().await.map_err(|_| DeliveryError::Unavailable)?;
+        let key_reference = coordinator
+            .hook_proposal_key_reference(event_id, compiled_delivery_id)
+            .map_err(|_| DeliveryError::Unavailable)?;
+        let lock = Self {
+            pool,
+            client: Some(client),
+            key_reference,
+        };
+        coordinator
+            .acquire_hook_proposal_lock(
+                lock.client
+                    .as_ref()
+                    .expect("hook proposal lock owns its client while acquiring"),
+                &lock.key_reference,
+            )
+            .await
+            .map_err(|_| DeliveryError::Unavailable)?;
+        Ok(lock)
+    }
+
+    fn client(&mut self) -> &mut deadpool_postgres::Client {
+        self.client
+            .as_mut()
+            .expect("hook proposal lock owns its client until release")
+    }
+
+    async fn release(mut self, coordinator: &MutationCoordinator) -> Result<(), DeliveryError> {
+        let client = self
+            .client
+            .as_ref()
+            .expect("hook proposal lock owns its client until release");
+        if coordinator
+            .release_hook_proposal_lock(client, &self.key_reference)
+            .await
+            .is_err()
+        {
+            return Err(DeliveryError::Unavailable);
+        }
+        let client = self
+            .client
+            .take()
+            .expect("hook proposal lock owns its client after release");
+        drop(client);
+        Ok(())
+    }
+}
+
+impl Drop for HookProposalLock {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            self.pool.discard(client);
         }
     }
 }

@@ -67,6 +67,6 @@ traceability:
   - {id: BREG-SEC-64, state: enforced, negativeId: BREG-NEG-64, negativeTest: {path: crates/registry-breg/tests/postgres_task_grants.rs, name: task_http_to_postgres_preserves_original_authority_and_completed_receipts}}
   - {id: BREG-SEC-65, state: enforced, negativeId: BREG-NEG-65, negativeTest: {path: crates/registry-breg/tests/postgres_change_requests.rs, name: reviewed_evidence_application_releases_postgres_and_replays_the_atomic_receipt}}
   - {id: BREG-SEC-66, state: enforced, negativeId: BREG-NEG-66, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_a_retained_local_delivery_survives_restart_verification}}
-  - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_a_changed_answer_cannot_reapply_one_delivery}}
+  - {id: BREG-SEC-67, state: enforced, negativeId: BREG-NEG-67, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_receipt_recovery_waits_for_an_in_flight_application}}
   - {id: BREG-SEC-68, state: enforced, negativeId: BREG-NEG-68, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_a_hidden_effect_proposal_finalizes_as_applied}}
   - {id: BREG-SEC-69, state: enforced, negativeId: BREG-NEG-69, negativeTest: {path: crates/registry-breg/tests/postgres_hook_proposals.rs, name: real_postgres_redelivered_hook_answer_applies_once}}

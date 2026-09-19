@@ -15,9 +15,9 @@ use crate::api::{ActionTargetConditionsInput, HeldReadResponse, ImmediateActionI
 
 type ActionInputs = Map<String, Value>;
 
-/// The budget one hook-proposal application runs under. It sits inside the
-/// delivery lease that holds the row, so the apply cannot outlive the
-/// attempt it settles.
+/// The budget one hook-proposal application runs under. The delivery-scoped
+/// advisory lock keeps an expired-lease retry serialized even if finalization
+/// does not complete inside the original lease.
 const HOOK_PROPOSAL_APPLY_BUDGET: Duration = Duration::from_secs(5);
 
 /// One accepted hook proposal the delivery worker settled, ready for the
@@ -62,6 +62,63 @@ struct ActionEffectResult {
 }
 
 impl MutationCoordinator {
+    /// Acquire the session lock that serializes every classification for one
+    /// hook delivery. The immediate-action transaction takes the same lock at
+    /// transaction scope, so a recovery cannot observe the receipt until an
+    /// in-flight application has committed or rolled back.
+    ///
+    /// The caller must release the lock before returning the pooled
+    /// connection. If its future is cancelled while holding the lock, it must
+    /// discard the connection so PostgreSQL closes the session and releases
+    /// the lock.
+    pub(crate) fn hook_proposal_key_reference(
+        &self,
+        event_id: Uuid,
+        compiled_delivery_id: &str,
+    ) -> Result<String, UncertainApply> {
+        let idempotency_key = hook_proposal_idempotency_key(event_id, compiled_delivery_id);
+        resolve_key_reference(&self.audit_profile, &idempotency_key).map_err(|_| UncertainApply)
+    }
+
+    pub(crate) async fn acquire_hook_proposal_lock(
+        &self,
+        client: &Client,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        tokio::time::timeout(
+            self.lock_timeout,
+            client.query_one(
+                "SELECT pg_advisory_lock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            ),
+        )
+        .await
+        .map_err(|_| UncertainApply)?
+        .map_err(|_| UncertainApply)?;
+        Ok(())
+    }
+
+    /// Release a lock acquired by [`Self::acquire_hook_proposal_lock`].
+    pub(crate) async fn release_hook_proposal_lock(
+        &self,
+        client: &Client,
+        key_reference: &str,
+    ) -> Result<(), UncertainApply> {
+        let released = client
+            .query_one(
+                "SELECT pg_advisory_unlock(pg_catalog.hashtextextended($1, 0))",
+                &[&key_reference],
+            )
+            .await
+            .map_err(|_| UncertainApply)?
+            .get::<_, bool>(0);
+        if released {
+            Ok(())
+        } else {
+            Err(UncertainApply)
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn execute_immediate_action(
         &self,
