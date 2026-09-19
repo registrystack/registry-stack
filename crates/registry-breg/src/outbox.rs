@@ -636,19 +636,22 @@ mod tests {
     /// The compile-time envelope wrapper proof against the widest envelope the
     /// runtime can build for one hook.
     ///
-    /// Every member is at its own bound: a 64 byte instance id in `source`, a
-    /// caused chain so `causation` carries a parent, the longest audit
-    /// reference prefix and the largest positive revision in `subject`, and a
-    /// capture instant that spells its milliseconds. The wrapper the compiler
-    /// proves must be exactly the bytes the canonical form spends outside
-    /// `data`, so the compile-time refusal and the runtime ceiling measure one
-    /// document.
+    /// Every member is at its own bound: an instance id of exactly
+    /// `MAX_BUILD_ID_BYTES` in `source`, a caused chain so `causation` carries
+    /// a parent, the longest audit reference prefix and the largest positive
+    /// revision in `subject`, and a capture instant that spells its
+    /// milliseconds. The wrapper the compiler proves must be exactly the bytes
+    /// the canonical form spends outside `data`, so the compile-time refusal
+    /// and the runtime ceiling measure one document.
     #[test]
     fn the_compiled_envelope_wrapper_matches_the_widest_canonical_wrapper() {
         const REGISTRY_ID: &str = "widest-registry-identifier";
         const ENTITY_ID: &str = "widest-entity-identifier";
         const EVENT_ID: &str = "widest-event-identifier";
-        let source = crate::webhook::delivery_source(REGISTRY_ID, &"i".repeat(64));
+        let source = crate::webhook::delivery_source(
+            REGISTRY_ID,
+            &"i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize),
+        );
         let data_schema = format!(
             "urn:breg:event-schema:{REGISTRY_ID}:{ENTITY_ID}:{EVENT_ID}:sha256:{}",
             "e".repeat(64)
@@ -691,6 +694,29 @@ mod tests {
             u64::try_from(payload.len() - data_bytes).expect("bound"),
             wrapper
         );
+    }
+
+    /// The wrapper proof budgets `source`'s instance id at its raw byte
+    /// length, `compiler::MAX_BUILD_ID_BYTES`, so the budget only holds while
+    /// `package::valid_build_id` accepts nothing longer and no byte its
+    /// grammar admits needs JSON escaping. The runtime deployment identity
+    /// cannot extend the value either: startup holds it to exact equality
+    /// with the package manifest identity, whose instance id `valid_build_id`
+    /// already bound at package build.
+    #[test]
+    fn the_widest_build_id_fits_the_envelope_source_term_unescaped() {
+        let widest = "i".repeat(crate::compiler::MAX_BUILD_ID_BYTES as usize);
+        assert!(crate::package::valid_build_id(&widest));
+        let past_the_bound = format!("i{widest}");
+        assert!(!crate::package::valid_build_id(&past_the_bound));
+        // Bytes serde_json would escape must stay outside the grammar, or the
+        // serialized spelling would outgrow the raw byte budget.
+        for escaped in ['"', '\\', '\n', '\r', '\t'] {
+            assert!(!crate::package::valid_build_id(&format!("a{escaped}")));
+        }
+        let source = crate::webhook::delivery_source("widest-registry-identifier", &widest);
+        let serialized = serde_json::to_string(&source).expect("serialized source");
+        assert_eq!(serialized.len(), 2 + source.len());
     }
 
     #[test]

@@ -3150,7 +3150,9 @@ fn validate_build_identity(request: &PackageBuildRequest) -> Result<()> {
     validate_signature_policy(&request.environment, &request.signature_policy)
 }
 
-fn valid_build_id(value: &str) -> bool {
+/// The closed grammar the envelope wrapper proof budgets: no byte serde_json
+/// escapes, at most `compiler::MAX_BUILD_ID_BYTES` of them.
+pub(crate) fn valid_build_id(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= crate::compiler::MAX_BUILD_ID_BYTES as usize
         && value
