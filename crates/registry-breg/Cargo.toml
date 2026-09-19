@@ -16,8 +16,8 @@ required-features = ["runtime"]
 
 # Measures the binary, image, and dependency footprint of the platform WASM
 # executor. Nothing but an operator running the measurement ever runs it;
-# `required-features` is what keeps a default build of this crate free of the
-# `wasm` feature it exists to weigh.
+# `required-features` keeps it out of builds that do not carry the `wasm`
+# feature it exists to weigh.
 [[example]]
 name = "wasm-footprint-probe"
 required-features = ["wasm"]
@@ -211,7 +211,7 @@ required-features = ["postgres-test", "tooling"]
 workspace = true
 
 [features]
-default = []
+default = ["wasm"]
 runtime = [
     "dep:async-trait",
     "dep:axum",

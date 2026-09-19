@@ -818,12 +818,13 @@ jobs:
         run: products/breg/quickstart/run.sh --spatial --smoke
 
   breg-wasm:
-    # The WASM action-handler executor runs only under the non-default
-    # `wasm` feature, which the ordinary Rust shards never enable. This lane
-    # turns it on and runs the suites the feature gates: admission, the
-    # process runtime, the Rhai/WASM outcome-parity corpus, the platform
-    # executor's wat suite (both execution backends), and the PostgreSQL
-    # handler journeys against a disposable PostGIS database.
+    # The WASM action-handler executor runs under the `wasm` feature, which
+    # registry-breg and registry-bregctl carry by default. This lane runs
+    # what the ordinary Rust shards do not: the platform executor's wat
+    # suite (both execution backends), the admission, runtime, and parity
+    # suites in one explicit place, the PostgreSQL handler journeys against
+    # a disposable PostGIS database, and the no-default refusal suite that
+    # keeps `action.handler.wasm_build_unsupported` proven.
     name: Base Registry Engine WASM executor
     needs: changes
     if: needs.changes.outputs.breg_contracts == 'true'
@@ -864,6 +865,9 @@ jobs:
 
       - name: Base Registry Engine WASM admission, runtime, and parity suites
         run: cargo test --locked --profile ci -p registry-breg --features runtime,wasm --lib --test wasm_handler_admission
+
+      - name: Base Registry Engine WASM refusal suite
+        run: cargo test --locked --profile ci -p registry-breg --no-default-features --features runtime,tooling --test immediate_action_compiler
 
       - name: Base Registry Engine tooling WASM suites
         run: cargo test --locked --profile ci -p registry-bregctl --features wasm

@@ -103,7 +103,7 @@ class BRegProductCatalogTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual([], breg["features"]["default"])
+        self.assertEqual(["wasm"], breg["features"]["default"])
         self.assertEqual(
             {
                 "dep:async-trait",

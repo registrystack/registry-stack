@@ -503,8 +503,8 @@ pub struct ChangeRequestPlannerSource {
 }
 
 /// The authored action-handler backend. The wasm backend is admitted when
-/// this build of the compiler carries the non-default `wasm` cargo feature,
-/// which validates a declared WASM handler module against the platform guest
+/// this build of the compiler carries the `wasm` cargo feature, which
+/// validates a declared WASM handler module against the platform guest
 /// ABI at compile time; without that feature a declared WASM handler is
 /// refused with the pinned `action.handler.wasm_build_unsupported`
 /// diagnostic.
