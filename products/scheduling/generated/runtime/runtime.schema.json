@@ -64,6 +64,13 @@
       "additionalProperties": false,
       "description": "Where due reminder intents are dispatched. An absent reminders destination\nis a supported deployment: intents are written and stay local, so an\noperator can adopt the product before wiring a notification bus.",
       "properties": {
+        "hooks": {
+          "additionalProperties": {
+            "$ref": "#/$defs/HookDestinationConfig"
+          },
+          "description": "Logical URL hook destinations. The governed policy names only these\nids; URL, signing secret, and retry ceilings stay deployment-owned.",
+          "type": "object"
+        },
         "reminders": {
           "anyOf": [
             {
@@ -91,6 +98,35 @@
       },
       "required": [
         "root"
+      ],
+      "type": "object"
+    },
+    "HookDestinationConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptTimeoutMilliseconds": {
+          "default": 5000,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hmacSha256KeyRef": {
+          "type": "string"
+        },
+        "maximumAttempts": {
+          "default": 8,
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "url",
+        "hmacSha256KeyRef"
       ],
       "type": "object"
     },
@@ -250,6 +286,14 @@
         "attemptReceiptDays": {
           "default": 7,
           "description": "How long a stored idempotency receipt stays replayable.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "hookPayloadDays": {
+          "default": 7,
+          "description": "Lifetime of canonical hook envelopes retained for retry, dead-letter\ninspection, and optional operator replay.",
           "format": "uint16",
           "maximum": 65535,
           "minimum": 0,

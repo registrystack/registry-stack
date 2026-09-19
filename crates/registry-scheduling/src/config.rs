@@ -295,6 +295,10 @@ pub struct AuditConfig {
 pub struct DestinationsConfig {
     #[serde(default)]
     pub reminders: Option<ReminderDestinationConfig>,
+    /// Logical URL hook destinations. The governed policy names only these
+    /// ids; URL, signing secret, and retry ceilings stay deployment-owned.
+    #[serde(default)]
+    pub hooks: BTreeMap<String, HookDestinationConfig>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -304,6 +308,26 @@ pub struct ReminderDestinationConfig {
     pub url: String,
     #[serde(default)]
     pub bearer_token_ref: Option<String>,
+}
+
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HookDestinationConfig {
+    pub url: String,
+    pub hmac_sha256_key_ref: String,
+    #[serde(default = "default_hook_attempt_timeout_milliseconds")]
+    pub attempt_timeout_milliseconds: u32,
+    #[serde(default = "default_hook_maximum_attempts")]
+    pub maximum_attempts: u8,
+}
+
+const fn default_hook_attempt_timeout_milliseconds() -> u32 {
+    5_000
+}
+
+const fn default_hook_maximum_attempts() -> u8 {
+    8
 }
 
 /// Retention periods the retention sweep enforces. Every value is deployment
@@ -316,18 +340,27 @@ pub struct RetentionConfig {
     /// How long a stored idempotency receipt stays replayable.
     #[serde(default = "default_attempt_receipt_days")]
     pub attempt_receipt_days: u16,
+    /// Lifetime of canonical hook envelopes retained for retry and
+    /// dead-letter inspection.
+    #[serde(default = "default_hook_payload_days")]
+    pub hook_payload_days: u16,
 }
 
 impl Default for RetentionConfig {
     fn default() -> Self {
         Self {
             attempt_receipt_days: DEFAULT_ATTEMPT_RECEIPT_DAYS,
+            hook_payload_days: default_hook_payload_days(),
         }
     }
 }
 
 fn default_attempt_receipt_days() -> u16 {
     DEFAULT_ATTEMPT_RECEIPT_DAYS
+}
+
+const fn default_hook_payload_days() -> u16 {
+    7
 }
 
 /// The immutable identity of a packaged policy: the digest of the package
@@ -542,7 +575,9 @@ impl RuntimeConfig {
         if self.audit.hash_key_ref.is_empty() {
             return Err(RuntimeConfigError::InvalidAuditReference);
         }
-        if self.retention.attempt_receipt_days == 0 {
+        if self.retention.attempt_receipt_days == 0
+            || !(1..=30).contains(&self.retention.hook_payload_days)
+        {
             return Err(RuntimeConfigError::InvalidRetention);
         }
         if let Some(reminders) = &self.destinations.reminders {
@@ -550,9 +585,36 @@ impl RuntimeConfig {
                 return Err(RuntimeConfigError::InvalidDestination);
             }
         }
+        if self.destinations.hooks.len() > 128 {
+            return Err(RuntimeConfigError::InvalidHookDestination);
+        }
+        for (id, destination) in &self.destinations.hooks {
+            if !valid_logical_destination_id(id)
+                || !valid_destination_url(&destination.url)
+                || !(100..=10_000).contains(&destination.attempt_timeout_milliseconds)
+                || !(1..=20).contains(&destination.maximum_attempts)
+            {
+                return Err(RuntimeConfigError::InvalidHookDestination);
+            }
+        }
         self.validate_secret_references()?;
 
-        self.load_policy()?;
+        let policy = self.load_policy()?;
+        let declared_hook_destinations = policy
+            .hooks
+            .iter()
+            .filter_map(|hook| match &hook.handler {
+                registry_platform_hooks::HookHandlerSource::Url { destination_id } => {
+                    Some(destination_id.as_str())
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let configured_hook_destinations =
+            self.destinations.hooks.keys().map(String::as_str).collect();
+        if !declared_hook_destinations.is_subset(&configured_hook_destinations) {
+            return Err(RuntimeConfigError::HookDestinationInventoryMismatch);
+        }
         if self.listener.tls_termination == TlsTermination::OperatorControlledUpstream
             && self.policy_package_digest()?.is_none()
         {
@@ -623,6 +685,12 @@ impl RuntimeConfig {
                     reference,
                 ));
             }
+        }
+        for (id, destination) in &self.destinations.hooks {
+            references.push((
+                format!("destinations.hooks.{id}.hmacSha256KeyRef"),
+                &destination.hmac_sha256_key_ref,
+            ));
         }
         for (path, raw) in references {
             let reference = SecretReference::parse(raw.clone())
@@ -724,6 +792,18 @@ fn valid_destination_url(value: &str) -> bool {
     } else {
         false
     }
+}
+
+fn valid_logical_destination_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
 }
 
 fn valid_listener(
@@ -913,6 +993,10 @@ pub enum RuntimeConfigError {
     InvalidRetention,
     #[error("destinations.reminders.url is not a valid destination URL")]
     InvalidDestination,
+    #[error("a destinations.hooks binding is invalid")]
+    InvalidHookDestination,
+    #[error("destinations.hooks must bind every destination declared by the policy")]
+    HookDestinationInventoryMismatch,
     #[error("plaintext PostgreSQL is test-only")]
     PlaintextDatabase,
     #[error("the OIDC issuer could not be initialized")]
@@ -937,8 +1021,11 @@ impl RuntimeConfigError {
             Self::InvalidListener => "listener",
             Self::InvalidDatabaseReference | Self::PlaintextDatabase => "database",
             Self::InvalidAuditReference => "audit.hashKeyRef",
-            Self::InvalidRetention => "retention.attemptReceiptDays",
+            Self::InvalidRetention => "retention",
             Self::InvalidDestination => "destinations.reminders.url",
+            Self::InvalidHookDestination | Self::HookDestinationInventoryMismatch => {
+                "destinations.hooks"
+            }
             Self::PolicyRead(_) | Self::PolicyParse { .. } => "package.root/scheduling.yaml",
             Self::PolicyFindings | Self::PolicyPackage(_) => "package.root",
             Self::ProductionPolicyPackageRequired => "package.root",
@@ -1041,7 +1128,9 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
             "scheduling-explain"
         );
         assert_eq!(config.retention.attempt_receipt_days, 7);
+        assert_eq!(config.retention.hook_payload_days, 7);
         assert!(config.destinations.reminders.is_none());
+        assert!(config.destinations.hooks.is_empty());
         let policy = config.load_policy().expect("policy loads");
         assert_eq!(policy.scheduling.id, "standalone-exact-time");
     }
@@ -1129,24 +1218,30 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
     }
 
     #[test]
-    fn a_policy_that_fails_its_checks_never_reaches_the_runtime() {
+    fn a_hook_policy_requires_and_accepts_its_deployment_binding() {
         let root = tempfile::tempdir().unwrap();
         let package = root.path().join("package");
         write_policy(&package);
-        // A hook is the one authored shape that always fails the check: this
-        // milestone has no engine, so accepting it would be a silent no-op.
         let hooked = format!(
             "{POLICY}hooks:\n  - {{id: h, abi: registry.scheduling-hook/v1, because: test}}\n"
         );
         std::fs::write(package.join(AUTHORED_POLICY_FILE), hooked).unwrap();
-        let operator = write_operator(
-            root.path(),
-            operator_value(&package, "development-loopback"),
-        );
+        let mut document = operator_value(&package, "development-loopback");
+        let operator = write_operator(root.path(), document.clone());
         assert!(matches!(
             RuntimeConfig::load(&operator),
-            Err(RuntimeConfigError::PolicyFindings)
+            Err(RuntimeConfigError::HookDestinationInventoryMismatch)
         ));
+
+        document["destinations"]["hooks"] = serde_json::json!({
+            "appointment-events": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/hook-key"
+            }
+        });
+        let operator = write_operator(root.path(), document);
+        let config = RuntimeConfig::load(&operator).expect("the hook destination is bound");
+        assert!(config.destinations.hooks.contains_key("appointment-events"));
     }
 
     #[test]

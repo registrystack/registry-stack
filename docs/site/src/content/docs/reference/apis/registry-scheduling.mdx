@@ -144,10 +144,16 @@ Every Scheduling problem response carries one `code` from this closed catalogue,
 the HTTP status listed beside it.
 
 Two codes are reserved: `eligibility.unavailable` and `hook.unavailable` are defined, titled, and
-status-pinned because the reserved lifecycle-hook ABI `registry.scheduling-hook/v1` will produce them,
-and no path in this milestone answers them yet.
+status-pinned for future synchronous decision paths, and no path in this milestone answers them yet.
+Scheduling hooks are asynchronous observers, so their delivery failures never become caller problem
+responses. The authored policy accepts only `after` URL handlers for `appointment.confirmed`,
+`appointment.rescheduled`, and `appointment.cancelled`. Confirmed and rescheduled events may project
+the appointment identifier, revision, offering, start, end, state, and policy revision. Cancelled
+events may project only the appointment identifier, revision, and state. Conditions, principals,
+local handlers, and observer proposals are refused.
 
-{/* Evidence: crates/registry-scheduling-core/src/problem.rs, ProblemCode;
+{/* Evidence: crates/registry-scheduling-core/src/{policy,problem}.rs, SchedulingPolicy::check() and ProblemCode;
+    crates/registry-scheduling/src/hooks.rs;
     products/scheduling/generated/registry-scheduling.openapi.json,
     x-registry-scheduling-reserved-problems. */}
 

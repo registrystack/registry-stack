@@ -22,10 +22,13 @@ use registry_platform_audit::{
     AuditEnvelope, AuditHashSecret, AuditKeyHasher, AuditProfile, JsonlFileSink,
 };
 use registry_platform_config::{SecretProvider, SecretResolver};
+use registry_platform_hooks::delivery::DeliveryOutcome;
+use registry_platform_hooks::{EnvelopeLimits, HookEnvelope, HookHandlerSource};
 use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use registry_scheduling::auth::SchedulingAuthenticator;
-use registry_scheduling::config::ReminderDestinationConfig;
 use registry_scheduling::config::{DatabaseConfig, OidcConfig, OidcJwksSource};
+use registry_scheduling::config::{HookDestinationConfig, ReminderDestinationConfig};
+use registry_scheduling::hooks::{ActivatedHooks, HookRuntimeIdentity};
 use registry_scheduling::http::{router, HttpState};
 use registry_scheduling::runtime::{
     dispatch_due_intents, publish_audit_pass, reminder_transport, AuditPublicationState,
@@ -38,7 +41,9 @@ use registry_scheduling_core::{
     LocationRecord, PartyCounts, PoolMember, ResourcePool, SchedulingFacts,
 };
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tower::ServiceExt;
 use uuid::Uuid;
 use wiremock::matchers::{body_string_contains, header, method, path};
@@ -55,6 +60,12 @@ const SECOND_OFFERING: &str = "registry-review-45";
 /// published starts overlap each other. It is the only shape that can move an
 /// appointment inside the interval it already holds.
 const OVERLAPPING_OFFERING: &str = "registry-update-60";
+
+fn observer_policy() -> String {
+    format!(
+        "{POLICY}hooks:\n  - id: confirmed-observer\n    phase: after\n    trigger: appointment.confirmed\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n  - id: rescheduled-observer\n    phase: after\n    trigger: appointment.rescheduled\n    projection: [appointmentId, offering, start, end, revision, policyRevision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n  - id: cancelled-observer\n    phase: after\n    trigger: appointment.cancelled\n    projection: [appointmentId, revision, state]\n    handler: {{kind: url, destinationId: appointment-events}}\n"
+    )
+}
 
 /// One plain booking grid: slots every 30 minutes around the clock, every
 /// day, one hour of lead time, a four-hour cancellation cutoff, and a
@@ -146,6 +157,9 @@ holdPolicy: {ttlMinutes: 10, maxPerCaller: 2, because: test}
 struct Fixture {
     http: Router,
     store: PostgresStore,
+    hooks: ActivatedHooks,
+    hook_secret_ref: String,
+    schema: String,
     /// A session on the test's own schema, for the facts operator tooling
     /// owns and for the rows a test needs to observe or hold directly.
     admin: tokio_postgres::Client,
@@ -258,6 +272,21 @@ async fn fixture_publishing(
     pool_ids: &[String],
     window_ids: &[String],
 ) -> Fixture {
+    fixture_publishing_with_hook_url(
+        policy_yaml,
+        pool_ids,
+        window_ids,
+        "http://127.0.0.1:9/scheduling-hooks",
+    )
+    .await
+}
+
+async fn fixture_publishing_with_hook_url(
+    policy_yaml: &str,
+    pool_ids: &[String],
+    window_ids: &[String],
+    hook_url: &str,
+) -> Fixture {
     let base = std::env::var("SCHEDULING_TEST_DATABASE_URL")
         .expect("SCHEDULING_TEST_DATABASE_URL names a disposable PostgreSQL test server");
     let schema = format!("scheduling_{}", Uuid::new_v4().simple());
@@ -282,7 +311,10 @@ async fn fixture_publishing(
         .expect("the scheduling test schema");
 
     let secret_name = format!("SCHEDULING_SCHEMA_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
+    let hook_secret_name =
+        format!("SCHEDULING_HOOK_{}", Uuid::new_v4().simple()).to_ascii_uppercase();
     std::env::set_var(&secret_name, &scoped);
+    std::env::set_var(&hook_secret_name, "0123456789abcdef0123456789abcdef");
     let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
         .expect("the scheduling test secret resolver");
     let database = DatabaseConfig {
@@ -329,15 +361,46 @@ async fn fixture_publishing(
         .await
         .expect("publish the scheduling policy");
     let keying = AuditHashSecret::new(vec![0x42; 32]).expect("the test audit hash secret");
-    let service = Arc::new(SchedulingService::new(
-        store.clone(),
-        policy,
-        SCHEDULING_ID.to_owned(),
-        revision,
-        digest,
-        AuditKeyHasher::Keyed(keying),
-        7,
-    ));
+    let mut hook_destinations = BTreeMap::new();
+    for destination_id in policy.hooks.iter().filter_map(|hook| match &hook.handler {
+        HookHandlerSource::Url { destination_id } => Some(destination_id),
+        HookHandlerSource::Rhai { .. } | HookHandlerSource::Wasm { .. } => None,
+    }) {
+        hook_destinations.insert(
+            destination_id.clone(),
+            HookDestinationConfig {
+                url: hook_url.to_owned(),
+                hmac_sha256_key_ref: format!("secret:env/{hook_secret_name}"),
+                attempt_timeout_milliseconds: 5_000,
+                maximum_attempts: 1,
+            },
+        );
+    }
+    let hooks = ActivatedHooks::activate(
+        &policy.hooks,
+        &hook_destinations,
+        &secrets,
+        HookRuntimeIdentity {
+            scheduling_id: SCHEDULING_ID.to_owned(),
+            policy_revision: revision,
+            policy_digest: digest.clone(),
+        },
+        schema.clone(),
+        Duration::from_secs(7 * 24 * 60 * 60),
+    )
+    .expect("activate the scheduling test hooks");
+    let service = Arc::new(
+        SchedulingService::new(
+            store.clone(),
+            policy,
+            SCHEDULING_ID.to_owned(),
+            revision,
+            digest,
+            AuditKeyHasher::Keyed(keying),
+            7,
+        )
+        .with_hooks(hooks.clone()),
+    );
     let http = router(HttpState {
         service,
         authenticator: Arc::new(authenticator()),
@@ -346,6 +409,9 @@ async fn fixture_publishing(
     Fixture {
         http,
         store,
+        hooks,
+        hook_secret_ref: format!("secret:env/{hook_secret_name}"),
+        schema,
         admin,
         revision: u64::try_from(revision).expect("a bounded policy revision"),
         reader: reader_token(),
@@ -618,9 +684,486 @@ async fn booked(fx: &Fixture, from_minutes: i64, to_minutes: i64, key: &str) -> 
     )
 }
 
+async fn hook_fixture() -> Fixture {
+    hook_fixture_at("http://127.0.0.1:9/scheduling-hooks").await
+}
+
+async fn hook_fixture_at(hook_url: &str) -> Fixture {
+    let policy = observer_policy();
+    fixture_publishing_with_hook_url(
+        &policy,
+        &["north-counter".to_owned(), "two-counter".to_owned()],
+        &[],
+        hook_url,
+    )
+    .await
+}
+
+async fn captured_hook_envelopes(
+    fx: &Fixture,
+) -> Vec<(String, String, String, i64, HookEnvelope, Vec<u8>)> {
+    fx.admin
+        .query(
+            "SELECT event_type, trigger, record_reference, record_revision, payload
+               FROM registry_outbox ORDER BY outbox_id",
+            &[],
+        )
+        .await
+        .expect("read the captured hook outbox")
+        .into_iter()
+        .map(|row| {
+            let payload = row.get::<_, Vec<u8>>(4);
+            let envelope = HookEnvelope::from_canonical_bytes(
+                &payload,
+                &EnvelopeLimits::tightened_to(16 * 1024),
+            )
+            .expect("the stored hook envelope is canonical");
+            (
+                row.get(0),
+                row.get(1),
+                row.get(2),
+                row.get(3),
+                envelope,
+                payload,
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projection() {
+    let fx = hook_fixture().await;
+    let first = first_slot(&fx, OFFERING, 300, 440).await;
+    let mut create = admission(&fx, OFFERING, first);
+    create["duplicateKey"] = json!("HOOK_DUPLICATE_CANARY");
+    let (status, confirmed) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "hook-confirmed",
+            json!({"hold": null, "admission": create}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "confirmation commits");
+    let appointment_id = confirmed["appointmentId"]
+        .as_str()
+        .expect("an appointment id")
+        .to_owned();
+    let first_revision = confirmed["revision"].as_u64().expect("a revision");
+
+    let second = first_slot(&fx, OFFERING, 480, 620).await;
+    let (status, rescheduled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "hook-rescheduled",
+            json!({
+                "observedRevision": first_revision,
+                "admission": admission(&fx, OFFERING, second),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "reschedule commits");
+    let second_revision = rescheduled["revision"].as_u64().expect("a revision");
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "hook-cancelled",
+            json!({
+                "observedRevision": second_revision,
+                "reason": "HOOK_REASON_CANARY",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "cancellation commits");
+
+    let captured = captured_hook_envelopes(&fx).await;
+    assert_eq!(captured.len(), 3, "one event per matching lifecycle hook");
+    let expected = [
+        (
+            "confirmed-observer",
+            "appointment.confirmed",
+            &confirmed,
+            json!({
+                "appointmentId": appointment_id,
+                "offering": OFFERING,
+                "start": confirmed["start"],
+                "end": confirmed["end"],
+                "revision": confirmed["revision"],
+                "policyRevision": confirmed["policyRevision"],
+                "state": "confirmed",
+            }),
+        ),
+        (
+            "rescheduled-observer",
+            "appointment.rescheduled",
+            &rescheduled,
+            json!({
+                "appointmentId": appointment_id,
+                "offering": OFFERING,
+                "start": rescheduled["start"],
+                "end": rescheduled["end"],
+                "revision": rescheduled["revision"],
+                "policyRevision": rescheduled["policyRevision"],
+                "state": "confirmed",
+            }),
+        ),
+        (
+            "cancelled-observer",
+            "appointment.cancelled",
+            &cancelled,
+            json!({
+                "appointmentId": appointment_id,
+                "revision": cancelled["revision"],
+                "state": "cancelled",
+            }),
+        ),
+    ];
+
+    for ((event_type, trigger, reference, revision, envelope, payload), expected) in
+        captured.iter().zip(expected)
+    {
+        let (expected_type, expected_trigger, response, expected_data) = expected;
+        assert_eq!(event_type, expected_type);
+        assert_eq!(trigger, expected_trigger);
+        assert_eq!(envelope.event_type, expected_type);
+        assert_eq!(reference, &format!("/v1/appointments/{appointment_id}"));
+        assert_eq!(envelope.subject.record_reference, *reference);
+        assert_eq!(envelope.subject.record_revision, *revision);
+        assert_eq!(json!(*revision), response["revision"]);
+        assert_eq!(envelope.data, expected_data);
+        assert_eq!(
+            envelope.source,
+            format!("urn:registrystack:scheduling:{SCHEDULING_ID}")
+        );
+        assert!(envelope
+            .dataschema
+            .starts_with("urn:registrystack:scheduling:hook-data:sha256:"));
+        assert_eq!(envelope.causation.root, envelope.id);
+        assert_eq!(envelope.causation.parent, None);
+        assert_eq!(envelope.causation.hop, 0);
+
+        let spelled = std::str::from_utf8(payload).expect("the envelope is UTF-8 JSON");
+        for canary in [
+            "HOOK_DUPLICATE_CANARY",
+            "HOOK_REASON_CANARY",
+            "principal-agent",
+            "registry_grant_id",
+        ] {
+            assert!(!spelled.contains(canary), "payload leaked {canary}");
+        }
+        for excluded in ["actor", "reason", "duplicateKey", "resource", "channel"] {
+            assert!(
+                envelope.data.get(excluded).is_none(),
+                "projection exposed {excluded}"
+            );
+        }
+    }
+
+    let delivery_count: i64 = fx
+        .admin
+        .query_one("SELECT count(*) FROM registry_webhook_deliveries", &[])
+        .await
+        .expect("read captured platform delivery rows")
+        .get(0);
+    assert_eq!(delivery_count, 3, "every envelope has one delivery row");
+}
+
+#[tokio::test]
+async fn a_hook_capture_failure_rolls_back_the_whole_appointment_transaction() {
+    let fx = hook_fixture().await;
+    fx.admin
+        .batch_execute(
+            "ALTER TABLE registry_outbox
+             ADD CONSTRAINT test_refuse_hook_capture
+             CHECK (event_type <> 'confirmed-observer')",
+        )
+        .await
+        .expect("install the hook capture failure seam");
+
+    let slot = first_slot(&fx, OFFERING, 300, 440).await;
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "hook-rollback",
+            json!({"hold": null, "admission": admission(&fx, OFFERING, slot)}),
+        )
+        .await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(problem["code"], "service.unavailable");
+
+    let row = fx
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT count(*) FROM scheduling_claims),
+                 (SELECT count(*) FROM scheduling_history),
+                 (SELECT count(*) FROM scheduling_attempts),
+                 (SELECT count(*) FROM registry_outbox),
+                 (SELECT count(*) FROM registry_webhook_deliveries)",
+            &[],
+        )
+        .await
+        .expect("read the rolled-back commitment tables");
+    let counts = (0..5)
+        .map(|index| row.get::<_, i64>(index))
+        .collect::<Vec<_>>();
+    assert_eq!(counts, vec![0, 0, 0, 0, 0]);
+    assert!(
+        slot_offered(&fx, OFFERING, 300, 440, slot).await,
+        "the failed hook capture did not consume capacity"
+    );
+}
+
+#[tokio::test]
+async fn hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals() {
+    let destination = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/scheduling-hooks"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(
+                    r#"{"answer":"proposal","document":{"operation":"cancel"}}"#,
+                    "application/json",
+                )
+                .set_delay(Duration::from_secs(2)),
+        )
+        .expect(1)
+        .mount(&destination)
+        .await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let (appointment_id, revision) = booked(&fx, 300, 440, "hook-delivery").await;
+    assert_eq!(revision, 1);
+    let captured = captured_hook_envelopes(&fx).await;
+    assert_eq!(captured.len(), 1);
+    let (_, _, _, _, envelope, payload) = &captured[0];
+
+    let delivery = fx.hooks.delivery_service(fx.store.clone());
+    delivery
+        .verify_retained_bindings()
+        .await
+        .expect("the retained destination binding is exact");
+    let running = tokio::spawn(async move { delivery.deliver_once().await });
+
+    let mut request_seen = false;
+    for _ in 0..100 {
+        if destination
+            .received_requests()
+            .await
+            .expect("read received hook requests")
+            .len()
+            == 1
+        {
+            request_seen = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(request_seen, "the hook request reached the receiver");
+
+    // The receiver is still delaying its answer. The attempt audit therefore
+    // had to commit before egress, while no terminal audit can exist yet.
+    let pre_answer_audit = fx
+        .admin
+        .query(
+            "SELECT audit_record FROM scheduling_audit_outbox
+              WHERE audit_record->>'event' = 'scheduling.hook-delivery'
+              ORDER BY recorded_seq",
+            &[],
+        )
+        .await
+        .expect("read the pre-egress hook audit");
+    assert_eq!(pre_answer_audit.len(), 1);
+    let attempted = pre_answer_audit[0].get::<_, Value>(0);
+    assert_eq!(attempted["phase"], "attempt");
+    assert_eq!(attempted["outcome"], "attempt_started");
+    assert_eq!(attempted["disposition"], "leased");
+
+    let outcome = running
+        .await
+        .expect("the hook worker task completes")
+        .expect("the hook delivery completes");
+    assert_eq!(outcome, DeliveryOutcome::Delivered);
+
+    let requests = destination
+        .received_requests()
+        .await
+        .expect("read the delivered hook request");
+    assert_eq!(requests.len(), 1);
+    let request = &requests[0];
+    assert_eq!(
+        request.body, *payload,
+        "the stored canonical bytes are sent"
+    );
+    let header = |name: &str| {
+        request
+            .headers
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_else(|| panic!("missing valid {name} header"))
+    };
+    assert_eq!(header("ce-specversion"), "1.0");
+    assert_eq!(header("ce-id"), envelope.id);
+    assert_eq!(header("ce-source"), envelope.source);
+    assert_eq!(header("ce-type"), "confirmed-observer");
+    assert_eq!(header("ce-dataschema"), envelope.dataschema);
+    let payload_json: Value = serde_json::from_slice(payload).expect("the canonical envelope JSON");
+    assert_eq!(header("ce-time"), payload_json["time"]);
+    assert_eq!(header("x-registry-event-generation"), "1");
+    assert_eq!(header("x-registry-delivery-attempt"), "1");
+    assert!(!header("x-registry-delivery-time").is_empty());
+    let idempotency_key = header("idempotency-key");
+    assert!(idempotency_key.starts_with("sha256:"));
+    assert_eq!(idempotency_key.len(), 71);
+    let signature = header("x-registry-signature");
+    assert!(signature.starts_with("v1="));
+    assert_eq!(signature.len(), 46, "v1 plus one HMAC-SHA-256 tag");
+
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt, proposal_disposition, proposal_resulting_revision,
+                    proposal_code, proposal_summary
+               FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the settled hook delivery");
+    assert_eq!(state.get::<_, String>(0), "delivered");
+    assert_eq!(state.get::<_, i16>(1), 1);
+    assert_eq!(
+        state.get::<_, Option<String>>(2).as_deref(),
+        Some("refused")
+    );
+    assert_eq!(state.get::<_, Option<i64>>(3), None);
+    assert_eq!(
+        state.get::<_, Option<String>>(4).as_deref(),
+        Some("scheduling.hook.proposal_unsupported")
+    );
+    assert_eq!(
+        state.get::<_, Option<String>>(5).as_deref(),
+        Some("Scheduling appointment observer hooks cannot propose changes")
+    );
+
+    let audit = fx
+        .admin
+        .query(
+            "SELECT audit_record FROM scheduling_audit_outbox
+              WHERE audit_record->>'event' = 'scheduling.hook-delivery'
+              ORDER BY recorded_seq",
+            &[],
+        )
+        .await
+        .expect("read the settled hook audit");
+    assert_eq!(audit.len(), 2);
+    let terminal = audit[1].get::<_, Value>(0);
+    assert_eq!(terminal["phase"], "terminal");
+    assert_eq!(terminal["outcome"], "delivered");
+    assert_eq!(terminal["disposition"], "delivered");
+
+    let (status, unchanged) = fx
+        .get(&format!("/v1/appointments/{appointment_id}"), &fx.agent)
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(unchanged["state"], "confirmed");
+    assert_eq!(unchanged["revision"], 1);
+    let history_count: i64 = fx
+        .admin
+        .query_one(
+            "SELECT count(*) FROM scheduling_history WHERE claim_id=$1",
+            &[&Uuid::parse_str(&appointment_id).expect("an appointment UUID")],
+        )
+        .await
+        .expect("read unchanged appointment history")
+        .get(0);
+    assert_eq!(
+        history_count, 1,
+        "the proposal changed no appointment state"
+    );
+}
+
+#[tokio::test]
+async fn hook_delivery_audit_failure_prevents_egress() {
+    let destination = MockServer::start().await;
+    let fx = hook_fixture_at(&format!("{}/scheduling-hooks", destination.uri())).await;
+    let _ = booked(&fx, 300, 440, "hook-audit-failure").await;
+    fx.admin
+        .batch_execute(
+            "ALTER TABLE scheduling_audit_outbox
+             ADD CONSTRAINT test_refuse_hook_delivery_audit
+             CHECK ((audit_record->>'event') IS DISTINCT FROM 'scheduling.hook-delivery')",
+        )
+        .await
+        .expect("install the delivery audit failure seam");
+
+    let delivery = fx.hooks.delivery_service(fx.store.clone());
+    assert!(delivery.deliver_once().await.is_err());
+    assert!(
+        destination
+            .received_requests()
+            .await
+            .expect("read hook requests")
+            .is_empty(),
+        "a failed pre-egress audit prevents the send"
+    );
+    let state = fx
+        .admin
+        .query_one(
+            "SELECT state, attempt FROM registry_webhook_delivery_state",
+            &[],
+        )
+        .await
+        .expect("read the rolled-back claim state");
+    assert_eq!(state.get::<_, String>(0), "pending");
+    assert_eq!(state.get::<_, i16>(1), 0);
+}
+
+#[tokio::test]
+async fn changed_retained_hook_destination_binding_is_refused() {
+    let fx = hook_fixture().await;
+    let _ = booked(&fx, 300, 440, "hook-binding-change").await;
+    let policy = parse_policy_yaml(&observer_policy()).expect("the scheduling hook policy");
+    let secrets = SecretResolver::new([SecretProvider::Environment], "/private/tmp")
+        .expect("the scheduling hook secret resolver");
+    let destinations = BTreeMap::from([(
+        "appointment-events".to_owned(),
+        HookDestinationConfig {
+            url: "http://127.0.0.1:9/changed-scheduling-hooks".to_owned(),
+            hmac_sha256_key_ref: fx.hook_secret_ref.clone(),
+            attempt_timeout_milliseconds: 5_000,
+            maximum_attempts: 1,
+        },
+    )]);
+    let changed = ActivatedHooks::activate(
+        &policy.hooks,
+        &destinations,
+        &secrets,
+        HookRuntimeIdentity {
+            scheduling_id: SCHEDULING_ID.to_owned(),
+            policy_revision: i64::try_from(fx.revision).expect("a bounded policy revision"),
+            policy_digest: policy.policy_digest(),
+        },
+        fx.schema.clone(),
+        Duration::from_secs(7 * 24 * 60 * 60),
+    )
+    .expect("activate the deliberately changed destination");
+
+    assert!(
+        changed
+            .delivery_service(fx.store.clone())
+            .verify_retained_bindings()
+            .await
+            .is_err(),
+        "retained work cannot be retargeted under the same logical id"
+    );
+}
+
 #[tokio::test]
 async fn a_hold_confirms_into_an_appointment_with_attributable_history() {
-    let fx = fixture().await;
+    let fx = hook_fixture().await;
     let slot = first_slot(&fx, OFFERING, 90, 200).await;
     let (status, hold) = fx
         .post(
@@ -694,6 +1237,16 @@ async fn a_hold_confirms_into_an_appointment_with_attributable_history() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(fetched["appointmentId"], appointment_id);
+
+    let captured = captured_hook_envelopes(&fx).await;
+    assert_eq!(
+        captured.len(),
+        1,
+        "hold confirmation captures one observer event"
+    );
+    assert_eq!(captured[0].0, "confirmed-observer");
+    assert_eq!(captured[0].1, "appointment.confirmed");
+    assert_eq!(captured[0].4.data["appointmentId"], appointment_id);
 }
 
 #[tokio::test]
@@ -3462,6 +4015,7 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
         grant_exp_unix: None,
         audit_event: Uuid::new_v4(),
         audit_record: operator_audit(),
+        hooks: None,
     };
     let outcome = fx
         .store

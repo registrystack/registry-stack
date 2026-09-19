@@ -99,18 +99,25 @@ absent reminders destination is a supported deployment: the intents stay
 readable in the outbox and are marked local, never pretended delivered. The
 README documents the envelope and the event types.
 
-`retention.attemptReceiptDays` is the one retention period the sweep enforces,
-and it covers idempotency attempt receipts and listing cursors and nothing
-else. Appointment, history, outbox, and audit retention are deferred: nothing
-in this milestone sweeps committed scheduling data, and this reference says so
-explicitly rather than implying a sweep that does not run. The default is
-seven days, and it is a floor, not a recommendation: a jurisdiction's
-retention schedule approves the deployed value, and the audit journal records
-it. An idempotency receipt past its period is erased, so an exact retry after
-expiry answers `idempotency.expired` with HTTP 410 instead of replaying the
-first answer; a listing cursor expires after its own fifteen minutes and is
-then forgotten. Both sweeps run in the same retention worker, on a fixed
-cadence that is not operator-tunable configuration.
+`destinations.hooks` binds the logical destination ids named by policy hooks to
+deployment-owned URLs and HMAC-SHA256 keys. Each entry requires `url` and
+`hmacSha256KeyRef`; `attemptTimeoutMilliseconds` defaults to 5000 and is bounded
+from 100 through 10000, while `maximumAttempts` defaults to 8 and is bounded
+from 1 through 20. URLs use the same HTTPS and explicit-loopback rules as the
+reminder destination. A signing key must contain at least 32 bytes. Every
+destination the current policy names must be configured. Explicit extra
+bindings are allowed so retained events captured under an earlier policy can
+finish with their exact original binding. Startup refuses if a retained event's
+binding is no longer available.
+
+`retention.attemptReceiptDays` covers idempotency attempt receipts; listing
+cursors keep their fixed fifteen-minute lifetime. `retention.hookPayloadDays`
+sets the canonical observer payload's retry and dead-letter lifetime from 1
+through 30 days. Both configured values default to seven days, which is not a
+jurisdictional recommendation. Appointment, history, reminder outbox, and
+audit retention remain deferred. An idempotency receipt past its period is
+erased, so an exact retry after expiry answers `idempotency.expired` with HTTP
+410 instead of replaying the first answer.
 
 See the complete maintained
 [`runtime.example.yaml`](examples/standalone-exact-time/runtime.example.yaml),

@@ -31,6 +31,7 @@ entries:
       - {path: crates/registry-scheduling/src/auth.rs, name: the_explain_path_demands_its_own_scope}
       - {path: crates/registry-scheduling/src/config.rs, name: explain_and_read_scopes_must_differ_and_retention_must_be_positive}
       - {path: crates/registry-platform-oidc/src/authorization_claims.rs, name: any_partial_core_grant_set_is_rejected}
+      - {path: crates/registry-casework/src/task_grants/native_exchange_tests.rs, name: approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid, features: [postgres-test]}
   - id: SCHEDULING-SEC-05
     tests:
       - {path: crates/registry-scheduling/src/auth.rs, name: a_grant_naming_another_resource_is_a_profile_refusal}
@@ -77,6 +78,7 @@ entries:
       - {path: crates/registry-scheduling-core/src/admission.rs, name: an_expired_hold_consumes_nothing_and_cannot_be_confirmed}
       - {path: crates/registry-scheduling-core/src/admission.rs, name: a_live_hold_still_consumes}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: an_expired_hold_returns_capacity_and_refuses_confirmation}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_delayed_confirmation_cannot_transfer_rebooked_capacity_after_expiry}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_release_returns_capacity_answers_replay_and_blocks_confirmation}
   - id: SCHEDULING-SEC-12
     tests:
@@ -106,7 +108,7 @@ entries:
   - id: SCHEDULING-SEC-15
     tests:
       - {path: crates/registry-scheduling/src/config.rs, name: production_requires_a_verified_package_while_loopback_accepts_authoring}
-      - {path: crates/registry-scheduling/src/config.rs, name: a_policy_that_fails_its_checks_never_reaches_the_runtime}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_refused_authored_policy_names_the_member_and_the_cause}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: the_policy_digest_is_stable_and_moves_with_content}
       - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: adoption_binds_one_identity_and_refuses_a_second}
   - id: SCHEDULING-SEC-16
@@ -119,7 +121,8 @@ entries:
       - {path: crates/registry-scheduling-core/src/model.rs, name: ledger_and_request_shapes_refuse_unknown_fields}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: unknown_policy_fields_are_refused}
       - {path: crates/registry-scheduling-core/src/policy.rs, name: collection_bounds_are_enforced}
-      - {path: crates/registry-scheduling-core/src/policy.rs, name: declared_hooks_are_refused_because_nothing_can_run_them}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: scheduling_observer_hooks_accept_only_the_closed_runtime_contract}
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: legacy_duplicate_and_mismatched_hook_members_are_refused_by_the_shared_shape}
       - {path: crates/registry-scheduling-client/tests/http_boundary.rs, name: invalid_client_input_never_reaches_the_wire}
   - id: SCHEDULING-SEC-18
     tests:
@@ -145,6 +148,18 @@ entries:
       - {path: crates/registry-scheduling/src/auth.rs, name: an_exchanged_token_is_refused_until_its_authority_is_declared}
       - {path: crates/registry-scheduling/src/config.rs, name: a_declared_assertion_authority_binds_the_client_that_may_exchange_from_it}
       - {path: crates/registry-scheduling/src/config.rs, name: an_assertion_issuer_map_outside_its_bounds_is_refused}
+      - {path: crates/registry-casework/src/task_grants/native_exchange_tests.rs, name: approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid, features: [postgres-test]}
   - id: SCHEDULING-SEC-23
     tests:
       - {path: crates/registry-scheduling/src/auth.rs, name: an_unreadable_clock_refuses_to_judge_an_expiry_rather_than_passing_it}
+  - id: SCHEDULING-SEC-24
+    tests:
+      - {path: crates/registry-scheduling-core/src/policy.rs, name: scheduling_observer_hooks_accept_only_the_closed_runtime_contract}
+      - {path: crates/registry-scheduling/src/config.rs, name: a_hook_policy_requires_and_accepts_its_deployment_binding}
+      - {path: crates/registry-scheduling/src/hooks.rs, name: projections_disclose_only_the_requested_closed_fields}
+      - {path: crates/registry-scheduling/src/hooks.rs, name: cancellation_projection_uses_the_public_terminal_state}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: appointment_hooks_capture_matching_lifecycle_rows_with_bounded_projection}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: a_hook_capture_failure_rolls_back_the_whole_appointment_transaction}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_sends_the_canonical_event_audits_egress_and_refuses_proposals}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: hook_delivery_audit_failure_prevents_egress}
+      - {path: crates/registry-scheduling/tests/postgres_commitments.rs, name: changed_retained_hook_destination_binding_is_refused}

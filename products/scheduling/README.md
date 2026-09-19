@@ -119,11 +119,12 @@ transaction re-reads are documented in
 approve them, and the approval surface stays with the product that holds the
 human relationship.
 
-## Events
+## Events and observers
 
-The runtime speaks to one other system: reminder dispatch. A commitment mints
-the reminder intents its offering declares, each due a fixed number of minutes
-before the appointment, and a worker renders every due intent as one
+The runtime has two outbound integration seams. Reminder dispatch is product
+notification work: a commitment mints the reminder intents its offering
+declares, each due a fixed number of minutes before the appointment, and a
+worker renders every due intent as one
 CloudEvents 1.0 event in canonical JSON and POSTs it to the configured
 reminder destination with `content-type: application/cloudevents+json`,
 exactly once per claim. A transport failure schedules an exponential retry, a
@@ -151,6 +152,32 @@ minted for.
 With no reminder destination configured, the intents stay readable in place:
 they are written to the outbox and marked local, never pretended delivered.
 Adopting the product does not require wiring a notification bus first.
+
+Appointment observers are governed hooks. A policy may declare `phase: after`
+with a URL handler for exactly three triggers:
+
+| Trigger | Allowed projected fields |
+| --- | --- |
+| `appointment.confirmed` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
+| `appointment.rescheduled` | `appointmentId`, `revision`, `offering`, `start`, `end`, `state`, `policyRevision` |
+| `appointment.cancelled` | `appointmentId`, `revision`, `state` |
+
+The runtime refuses conditions, principals, Rhai or Wasm handlers, unknown
+triggers, and fields outside that table. It captures one canonical event and
+its delivery row in the same transaction as the appointment change, then an
+after-commit worker POSTs it to the deployment-bound destination. Delivery is
+at least once, HMAC-SHA256 signed, retried within fixed product ceilings, and
+audited without payload values. A receiver response is observation only:
+Scheduling deterministically refuses every proposal and never turns it into a
+booking, reschedule, or cancellation.
+
+The hook id becomes the event `type`. The source is
+`urn:registrystack:scheduling:<scheduling-id>`, the subject record reference is
+`/v1/appointments/<appointment-id>`, and `data` contains only the requested
+fields. `state` is the public value `confirmed` or `cancelled`; actor identity,
+task grants, resource and channel identifiers, duplicate keys, and cancellation
+reasons cannot be projected. Retained payloads expire after
+`retention.hookPayloadDays`. Operator replay is not exposed in this slice.
 
 ## Phase 1 scope and exclusions
 

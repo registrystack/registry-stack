@@ -31,7 +31,10 @@ const DELIVERY_STATEMENTS: &[&str] = &[
                  outbox_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
                  event_id uuid NOT NULL UNIQUE,
                  event_type text NOT NULL CHECK (event_type <> ''),
-                 trigger text NOT NULL CHECK (trigger IN ('created', 'patched', 'tombstoned', 'request_lifecycle')),
+                 trigger text NOT NULL
+                     CONSTRAINT registry_outbox_trigger_check CHECK (
+                         trigger <> '' AND octet_length(trigger) <= 128
+                     ),
                  entity_id text NOT NULL CHECK (entity_id <> ''),
                  record_reference text NOT NULL CHECK (record_reference <> ''),
                  record_revision bigint NOT NULL CHECK (record_revision > 0),
@@ -245,8 +248,9 @@ const DELIVERY_STATEMENTS: &[&str] = &[
     "             ALTER TABLE {schema}.registry_outbox
                  DROP CONSTRAINT IF EXISTS registry_outbox_trigger_check;",
     "             ALTER TABLE {schema}.registry_outbox
-                 ADD CONSTRAINT registry_outbox_trigger_check
-                     CHECK (trigger IN ('created', 'patched', 'tombstoned', 'request_lifecycle'));",
+                 ADD CONSTRAINT registry_outbox_trigger_check CHECK (
+                     trigger <> '' AND octet_length(trigger) <= 128
+                 );",
     "             UPDATE {schema}.registry_outbox
                 SET payload_expires_at = created_at + interval '7 days'
               WHERE payload_expires_at IS NULL;",
@@ -740,6 +744,18 @@ mod tests {
         // The bound exists both on the fresh creation and in the upgrade
         // block that rebuilds it on databases from earlier engine builds.
         assert_eq!(bounds, 2);
+    }
+
+    #[test]
+    fn the_shared_outbox_bounds_but_does_not_own_product_triggers() {
+        let statements = rendered(KERNEL_SCHEMA).join("\n");
+        assert!(statements.contains("trigger <> '' AND octet_length(trigger) <= 128"));
+        for product_trigger in ["created", "patched", "tombstoned", "request_lifecycle"] {
+            assert!(
+                !statements.contains(&format!("trigger IN ('{product_trigger}'")),
+                "the shared schema must not freeze {product_trigger} as platform vocabulary"
+            );
+        }
     }
 
     #[test]

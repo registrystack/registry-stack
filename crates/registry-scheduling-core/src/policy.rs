@@ -11,6 +11,7 @@
 //! resolves those identifiers.
 
 use chrono::{DateTime, Utc};
+use registry_platform_hooks::{validate_hooks, HookHandlerSource, HookPhase, HookValidationError};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -292,17 +293,25 @@ pub struct HoldPolicy {
     pub because: String,
 }
 
-/// A declared lifecycle hook. This version has no hook engine, so a declared
-/// hook always fails the policy check: refusing what cannot run beats
-/// accepting what would silently not run.
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HookPolicy {
-    pub id: String,
-    /// Must be the one reserved scheduling hook ABI.
-    pub abi: String,
-    pub because: String,
-}
+/// The shared Registry Stack hook declaration shape. Scheduling adds a closed
+/// observer contract: after-commit URL handlers over three appointment
+/// lifecycle triggers, with no condition or proposal principal.
+pub type HookPolicy = registry_platform_hooks::HookDeclaration;
+
+pub const APPOINTMENT_CONFIRMED_TRIGGER: &str = "appointment.confirmed";
+pub const APPOINTMENT_RESCHEDULED_TRIGGER: &str = "appointment.rescheduled";
+pub const APPOINTMENT_CANCELLED_TRIGGER: &str = "appointment.cancelled";
+
+const APPOINTMENT_OBSERVER_FIELDS: &[&str] = &[
+    "appointmentId",
+    "end",
+    "offering",
+    "policyRevision",
+    "revision",
+    "start",
+    "state",
+];
+const CANCELLATION_OBSERVER_FIELDS: &[&str] = &["appointmentId", "revision", "state"];
 
 /// The authored scheduling policy package.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -557,22 +566,13 @@ impl SchedulingPolicy {
             ));
         }
 
-        if !self.hooks.is_empty() {
-            findings.push(SchedulingDiagnostic::new(
-                "hooks",
-                PolicyCheckReason::HooksUnsupported,
-            ));
-        }
+        check_collection_bound(&self.hooks, "hooks", &mut findings);
         for (index, hook) in self.hooks.iter().enumerate() {
-            let path = format!("hooks[{index}]");
-            if hook.abi != crate::naming::SCHEDULING_HOOK_ABI {
-                findings.push(SchedulingDiagnostic::new(
-                    format!("{path}.abi"),
-                    PolicyCheckReason::UnsupportedHookAbi,
-                ));
-            }
-            check_identifier(&hook.id, &format!("{path}.id"), &mut findings);
-            check_because(&hook.because, &format!("{path}.because"), &mut findings);
+            check_identifier(&hook.id, &format!("hooks[{index}].id"), &mut findings);
+            check_scheduling_hook(hook, index, &mut findings);
+        }
+        if let Err(error) = validate_hooks(&self.hooks) {
+            findings.push(hook_validation_diagnostic(&error));
         }
 
         findings
@@ -905,6 +905,75 @@ impl SchedulingPolicy {
     }
 }
 
+fn check_scheduling_hook(
+    hook: &HookPolicy,
+    index: usize,
+    findings: &mut Vec<SchedulingDiagnostic>,
+) {
+    let path = format!("hooks[{index}]");
+    if hook.phase != HookPhase::After || !matches!(hook.handler, HookHandlerSource::Url { .. }) {
+        findings.push(SchedulingDiagnostic::new(
+            format!("{path}.phase"),
+            PolicyCheckReason::UnsupportedHookPhase,
+        ));
+    }
+    if let HookHandlerSource::Url { destination_id } = &hook.handler {
+        if !valid_hook_destination_id(destination_id) {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.handler.destinationId"),
+                PolicyCheckReason::InvalidHookDestination,
+            ));
+        }
+    }
+    let allowed_projection = match hook.trigger.as_str() {
+        APPOINTMENT_CONFIRMED_TRIGGER | APPOINTMENT_RESCHEDULED_TRIGGER => {
+            Some(APPOINTMENT_OBSERVER_FIELDS)
+        }
+        APPOINTMENT_CANCELLED_TRIGGER => Some(CANCELLATION_OBSERVER_FIELDS),
+        _ => None,
+    };
+    let Some(allowed_projection) = allowed_projection else {
+        findings.push(SchedulingDiagnostic::new(
+            format!("{path}.trigger"),
+            PolicyCheckReason::UnsupportedHookTrigger,
+        ));
+        return;
+    };
+    if hook.when.is_some() {
+        findings.push(SchedulingDiagnostic::new(
+            format!("{path}.when"),
+            PolicyCheckReason::UnsupportedHookCondition,
+        ));
+    }
+    if hook.principal.is_some() {
+        findings.push(SchedulingDiagnostic::new(
+            format!("{path}.principal"),
+            PolicyCheckReason::UnsupportedHookPrincipal,
+        ));
+    }
+    for field in &hook.projection {
+        if !allowed_projection.contains(&field.as_str()) {
+            findings.push(SchedulingDiagnostic::new(
+                format!("{path}.projection"),
+                PolicyCheckReason::UnsupportedHookProjection,
+            ));
+            break;
+        }
+    }
+}
+
+fn valid_hook_destination_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
 /// One window, or one channel slice of a window, whose proposed capacity fell
 /// below what is already committed.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1096,6 +1165,29 @@ fn units_committed_outside(
 
 fn service_ids_contains(policy: &SchedulingPolicy, id: &str) -> bool {
     policy.services.iter().any(|service| service.id == id)
+}
+
+fn hook_validation_diagnostic(error: &HookValidationError) -> SchedulingDiagnostic {
+    match error {
+        HookValidationError::EmptyHookId { index } => SchedulingDiagnostic::new(
+            format!("hooks[{index}].id"),
+            PolicyCheckReason::InvalidIdentifier,
+        ),
+        HookValidationError::DuplicateHookId { index, .. } => SchedulingDiagnostic::new(
+            format!("hooks[{index}].id"),
+            PolicyCheckReason::DuplicateIdentifier,
+        ),
+        HookValidationError::BeforePhaseRemoteHandler { index, .. } => SchedulingDiagnostic::new(
+            format!("hooks[{index}].phase"),
+            PolicyCheckReason::UnsupportedHookPhase,
+        ),
+        HookValidationError::AbiMissing { index, .. }
+        | HookValidationError::AbiUnknown { index, .. } => SchedulingDiagnostic::new(
+            format!("hooks[{index}].handler.abi"),
+            PolicyCheckReason::UnsupportedHookAbi,
+        ),
+        _ => SchedulingDiagnostic::new("hooks", PolicyCheckReason::InvalidHookDeclaration),
+    }
 }
 
 fn push_unique(
@@ -1911,21 +2003,135 @@ holdPolicy:
     }
 
     #[test]
-    fn declared_hooks_are_refused_because_nothing_can_run_them() {
+    fn scheduling_observer_hooks_accept_only_the_closed_runtime_contract() {
         let mut policy = minimal_exact_time_policy();
-        policy.hooks = vec![HookPolicy {
-            id: "on-hold".to_owned(),
-            abi: crate::naming::SCHEDULING_HOOK_ABI.to_owned(),
-            because: "A future notification hook.".to_owned(),
-        }];
-        let findings = policy.check();
-        let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"hooks: hooks-unsupported".to_owned()));
+        policy.hooks = vec![serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "after",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "url", "destinationId": "appointment-events"},
+        }))
+        .expect("the shared declaration shape parses")];
+        assert!(policy.check().is_empty());
 
-        policy.hooks[0].abi = "vendor.hook/v9".to_owned();
+        policy.hooks[0] = serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "after",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "wasm", "module": "observer.wasm", "abi": "vendor.hook/v9"},
+        }))
+        .expect("the declaration shape parses before semantic validation");
         let findings = policy.check();
         let rendered: Vec<String> = findings.iter().map(|f| f.to_string()).collect();
-        assert!(rendered.contains(&"hooks[0].abi: unsupported-hook-abi".to_owned()));
+        assert!(rendered.contains(&"hooks[0].handler.abi: unsupported-hook-abi".to_owned()));
+
+        policy.hooks[0] = serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "before",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "url", "destinationId": "appointment-events"},
+        }))
+        .expect("the declaration shape parses before semantic validation");
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(rendered.contains(&"hooks[0].phase: unsupported-hook-phase".to_owned()));
+
+        policy.hooks[0] = serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "after",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "rhai", "script": "observer.rhai"},
+        }))
+        .expect("the declaration shape parses before semantic validation");
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(rendered.contains(&"hooks[0].handler.abi: unsupported-hook-abi".to_owned()));
+
+        policy.hooks[0] = serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "after",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "url", "destinationId": "https://receiver.example"},
+        }))
+        .expect("the declaration shape parses before product validation");
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(rendered
+            .contains(&"hooks[0].handler.destinationId: invalid-hook-destination".to_owned()));
+
+        policy.hooks[0] = serde_json::from_value(serde_json::json!({
+            "id": "appointment-observer",
+            "phase": "after",
+            "trigger": "appointment.confirmed",
+            "projection": [],
+            "handler": {"kind": "url", "destinationId": "appointment-events"},
+        }))
+        .expect("the shared declaration shape parses");
+        policy.hooks.push(policy.hooks[0].clone());
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(rendered.contains(&"hooks[1].id: duplicate-identifier".to_owned()));
+
+        for (member, value, expected) in [
+            (
+                "trigger",
+                serde_json::json!("hold.expired"),
+                "hooks[0].trigger: unsupported-hook-trigger",
+            ),
+            (
+                "when",
+                serde_json::json!({"state": "active"}),
+                "hooks[0].when: unsupported-hook-condition",
+            ),
+            (
+                "principal",
+                serde_json::json!("scheduling-hook"),
+                "hooks[0].principal: unsupported-hook-principal",
+            ),
+            (
+                "projection",
+                serde_json::json!(["actor"]),
+                "hooks[0].projection: unsupported-hook-projection",
+            ),
+        ] {
+            let mut declaration = serde_json::json!({
+                "id": "appointment-observer",
+                "phase": "after",
+                "trigger": "appointment.confirmed",
+                "projection": [],
+                "handler": {"kind": "url", "destinationId": "appointment-events"},
+            });
+            declaration[member] = value;
+            policy.hooks = vec![serde_json::from_value(declaration).expect("the shape parses")];
+            let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+            assert!(rendered.contains(&expected.to_owned()), "{rendered:?}");
+        }
+
+        policy.hooks = vec![serde_json::from_value(serde_json::json!({
+            "id": "cancellation-observer",
+            "phase": "after",
+            "trigger": "appointment.cancelled",
+            "projection": ["reason"],
+            "handler": {"kind": "url", "destinationId": "appointment-events"},
+        }))
+        .expect("the shared declaration shape parses")];
+        let rendered: Vec<String> = policy.check().iter().map(ToString::to_string).collect();
+        assert!(rendered.contains(&"hooks[0].projection: unsupported-hook-projection".to_owned()));
+    }
+
+    #[test]
+    fn legacy_duplicate_and_mismatched_hook_members_are_refused_by_the_shared_shape() {
+        let base =
+            serde_norway::to_string(&minimal_exact_time_policy()).expect("the fixture serializes");
+        for hooks in [
+            "hooks:\n- id: observer\n  abi: registry.scheduling-hook/v1\n  because: legacy",
+            "hooks:\n- id: observer\n  phase: after\n  phase: before\n  trigger: appointment.confirmed\n  projection: []\n  handler:\n    kind: url\n    destinationId: appointment-events",
+            "hooks:\n- id: observer\n  phase: after\n  trigger: appointment.confirmed\n  projection: []\n  handler:\n    kind: wasm\n    script: observer.rhai\n    abi: registry.hook-handler/v1",
+        ] {
+            let yaml = base.replace("hooks: []", hooks);
+            assert!(parse_policy_yaml(&yaml).is_err(), "accepted:\n{hooks}");
+        }
     }
 
     #[test]
