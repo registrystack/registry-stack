@@ -14,6 +14,7 @@ ADD --checksum=sha256:8784eda966b189c777a384dac5ce009e8fc9b52d006926c5a013e7fa8a
 # chain needs a writable persistent directory.
 RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
     --mount=type=bind,source=LICENSE,target=/workspace/LICENSE \
+    --mount=type=bind,source=THIRD_PARTY_NOTICES,target=/workspace/THIRD_PARTY_NOTICES,readonly \
     --mount=type=bind,source=release/scripts/install-runtime-libc6.sh,target=/workspace/install-runtime-libc6.sh,readonly \
     /workspace/install-runtime-libc6.sh /workspace/runtime-root /workspace/runtime-packages \
     && mkdir -p \
@@ -23,6 +24,7 @@ RUN --mount=type=bind,source=dist/image-bin,target=/workspace/image-bin \
         /workspace/runtime-root/var/lib/registry-scheduling/audit \
     && install -m 0755 /workspace/image-bin/scheduling /workspace/runtime-root/usr/local/bin/scheduling \
     && install -m 0644 /workspace/LICENSE /workspace/runtime-root/licenses/scheduling/LICENSE \
+    && install -m 0644 /workspace/THIRD_PARTY_NOTICES /workspace/runtime-root/licenses/scheduling/THIRD_PARTY_NOTICES \
     && chown -R 65532:65532 /workspace/runtime-root/var/lib/registry-scheduling \
     && chmod 0700 /workspace/runtime-root/var/lib/registry-scheduling/audit \
     && find /workspace/runtime-root -exec touch -h --date="@${SOURCE_DATE_EPOCH}" {} +

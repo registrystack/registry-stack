@@ -230,9 +230,12 @@ impl ClaimState {
 /// The caller-side facts every commitment carries. `now` is observed once
 /// per request and used for every decision the caller reads inside it, so
 /// a transaction never mixes two observations of the time it answers with.
-/// Authorization currency is the one deliberate exception: the grant's
-/// expiry is re-checked against a fresh observation taken inside the
-/// transaction, after every wait and immediately before the final write.
+/// Authorization currency and transfer of a hold are the two deliberate
+/// exceptions. The grant's expiry is re-checked against a fresh observation
+/// taken inside the transaction, after every wait and immediately before the
+/// final write. A hold's expiry is re-checked after its supply anchor is
+/// locked, so capacity another transaction reclaimed after expiry cannot also
+/// be transferred into an appointment by an older confirmation request.
 pub struct Commitment<'c> {
     pub now: DateTime<Utc>,
     /// The revision of the policy this process evaluated, not the stored
@@ -1193,9 +1196,13 @@ impl PostgresStore {
             return Err(AdmissionRefusal::HoldReleased.into());
         }
         guard_revisions(&transaction, &commitment).await?;
-        // The expiry check stays here so a hold whose TTL lapsed inside this
-        // very transaction is refused by the same clock the snapshot used.
-        evaluate_hold_state(&hold_ledger_claim(&hold), commitment.now)?;
+        // A confirmation request may have entered while the hold was live but
+        // reached this anchor after its capacity was reclaimed. Re-read the
+        // clock only after taking the anchor: accepting the older request time
+        // here could transfer capacity that a later transaction already
+        // booked. Other caller-visible decisions keep the request's single
+        // clock observation.
+        evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }

@@ -31,6 +31,9 @@
   back on the terminal request. Results and their constraints erase with the display payload at
   `terminalDays`; the accountability record keeps only a sha256 digest of the result until its own
   `accountabilityDays` closes.
+- Allow governed Casework task templates to approve exact Scheduling service,
+  location, and commitment-action bounds. The existing generic ThunderID
+  exchange carries them to Scheduling without a product crate dependency.
 - The inbox, the next-item result, holdings, the item view, history, and clocks
   stay readable while a subject's source binding has moved within its source
   generation but reconciliation has not applied it yet. The retained occurrence

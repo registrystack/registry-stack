@@ -108,12 +108,14 @@ fi
 "$schedulingctl_bin" init "$work/package" --template standalone-exact-time >/dev/null
 "$schedulingctl_bin" package "$work/package" >/dev/null
 
-# The committed example is the starter template's output, so it can never
-# drift from what an adopter initializes.
-example="$repo_root/products/scheduling/examples/standalone-exact-time"
-"$schedulingctl_bin" init "$work/example" --template standalone-exact-time >/dev/null
-diff -r "$work/example" "$example" >/dev/null
-"$schedulingctl_bin" check "$example" >/dev/null
-"$schedulingctl_bin" test "$example" >/dev/null
+# The committed examples are the starter templates' output, so neither can
+# drift from what an adopter initializes, including its live records document.
+for template in standalone-exact-time standalone-arrival-window; do
+  example="$repo_root/products/scheduling/examples/$template"
+  "$schedulingctl_bin" init "$work/example-$template" --template "$template" >/dev/null
+  diff -r "$work/example-$template" "$example" >/dev/null
+  "$schedulingctl_bin" check "$example" >/dev/null
+  "$schedulingctl_bin" test "$example" >/dev/null
+done
 
 echo "Scheduling product contracts and offline authoring journey passed."

@@ -188,8 +188,10 @@ invariants:
       An expired hold keeps consuming capacity, or is confirmed into an
       appointment after its window has passed.
     enforcementPoint: >-
-      Hold lifetime evaluated against the commitment's clock in the ledger,
-      never against a sweeper having already run.
+      Hold lifetime evaluated in the ledger, never against a sweeper having
+      already run. Capacity snapshots use the commitment's clock; confirmation
+      re-checks expiry against a fresh clock observation after it locks the
+      supply anchor, before transferring the reservation into an appointment.
     refusal: >-
       Count an expired hold as consuming nothing and refuse its confirmation;
       the sweeper is housekeeping, not the authority on expiry.

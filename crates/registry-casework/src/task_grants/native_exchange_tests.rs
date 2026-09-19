@@ -1,8 +1,10 @@
-//! Actual Casework approval -> native RFC 8693 exchange -> Evidence and BREG resources.
+//! Actual Casework approval -> native RFC 8693 exchange -> Evidence, BREG, and
+//! Scheduling's real bearer authenticator, without a product crate dependency.
 //! Credentials and protected response bodies stay in memory and never enter logs or argv.
-//! Set the two disposable database variables named by the ignore reason, then run
+//! Set the two disposable database variables and absolute Scheduling probe path
+//! named by the ignore reason, then run
 //! `cargo test --locked -p registry-casework --features postgres-test --lib
-//! approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes -- --ignored`.
+//! approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid -- --ignored`.
 use super::native_resource as resource;
 use super::*;
 use async_trait::async_trait;
@@ -21,8 +23,10 @@ use registry_thunderid_tooling::{container::Session, description::*, local, rend
 use std::{
     collections::BTreeMap,
     fs,
+    io::Write,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::Arc,
 };
 use wiremock::{
@@ -32,10 +36,12 @@ use wiremock::{
 const CASEWORK_RESOURCE: &str = "urn:casework:native-task";
 const BREG_RESOURCE: &str = "urn:breg:task-test";
 const EVIDENCE_RESOURCE: &str = "urn:registry:evidence:fixture";
+const SCHEDULING_RESOURCE: &str = "urn:registry:scheduling:fixture";
 const EVIDENCE_REQUIREMENT: &str = "urn:example:fixture:requirement:adult-status:v1";
 const EVIDENCE_AUDIENCE: &str = "https://relying.invalid/procedure";
 const EVIDENCE_TAG: &str = "fixture-agency";
 const AUTHORITY: &str = "https://casework.example";
+const SCHEDULING_AUTH_PROBE_ENV: &str = "SCHEDULING_AUTH_PROBE_BIN";
 const EVIDENCE_SIGNING_KEY: &str = r#"{"kty":"EC","crv":"P-256","d":"MInq88dvxx-e1-MEfmdes4I6Gt2QbsKoEmYyk2j0Oj4","x":"3kpzAK6fK6xyfqbdp0HvfZCqfgz7MajMviKyM6bsNE4","y":"GkSdSn8xqge52rp9Sv-4qPaw1Q9TJ2eMUyY22flavLU","alg":"ES256","kid":"_QkPweRjMZxmIHnz7v8tj3coTKx-90L2LRsZbkeP_Bo"}"#;
 
 fn binding() -> SourceBinding {
@@ -500,6 +506,23 @@ fn start_issuer(
             }],
         }],
     });
+    description.resource_servers.push(ResourceServer {
+        id: Uuid::new_v4().to_string(),
+        name: "Scheduling task target".into(),
+        identifier: SCHEDULING_RESOURCE.into(),
+        description: "Scheduling booking reached only after task exchange".into(),
+        resources: vec![Resource {
+            name: "Scheduling".into(),
+            handle: "scheduling".into(),
+            parent: None,
+            description: "Scheduling commitment".into(),
+            actions: vec![Action {
+                name: "Commit".into(),
+                handle: "commit".into(),
+                description: "Commit bounded Scheduling capacity".into(),
+            }],
+        }],
+    });
     description
         .machine_clients
         .iter_mut()
@@ -597,6 +620,53 @@ fn payload(token: &str) -> Value {
     )
     .unwrap()
 }
+
+/// Cross the process boundary into Scheduling without introducing a product
+/// crate dependency. The credential and public verifier material travel only
+/// over stdin; the probe returns one non-sensitive verdict on stdout.
+fn prove_scheduling_authentication(token: &str, issuer: &Issuer) {
+    let probe = PathBuf::from(
+        std::env::var_os(SCHEDULING_AUTH_PROBE_ENV)
+            .expect("the absolute Scheduling authentication probe path is required"),
+    );
+    assert!(
+        probe.is_absolute(),
+        "the Scheduling probe path must be absolute"
+    );
+    let input = serde_json::to_vec(&json!({
+        "token": token,
+        "issuer": issuer.url(),
+        "audience": SCHEDULING_RESOURCE,
+        "client": "task-agent",
+        "assertionIssuer": AUTHORITY,
+        "jwks": issuer.jwks,
+        "service": "registry-update",
+        "location": "bangkok-counter",
+        "action": "appointment.create"
+    }))
+    .unwrap();
+    let mut child = Command::new(&probe)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the Scheduling authentication probe starts");
+    child
+        .stdin
+        .take()
+        .expect("the Scheduling authentication probe has stdin")
+        .write_all(&input)
+        .expect("the Scheduling authentication probe reads its bounded input");
+    let output = child
+        .wait_with_output()
+        .expect("the Scheduling authentication probe finishes");
+    assert!(
+        output.status.success(),
+        "the exact exchanged bearer was refused by Scheduling"
+    );
+    assert_eq!(output.stdout, b"allowed\n");
+    assert!(output.stderr.is_empty());
+}
 struct Fixture {
     app: Router,
     item: Uuid,
@@ -661,7 +731,8 @@ async fn fixture(issuer: &Issuer, key: registry_platform_crypto::PrivateJwk) -> 
     let operations = breg["accessProfiles"][1]["permissions"][0]["operations"].clone();
     let template:TaskTemplate=serde_json::from_value(json!({"id":"draft","version":"1","label":"Prepare correction draft","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":BREG_RESOURCE,"purpose":"review","scopes":["records:get"],"bounds":{"type":"breg","permissions":[{"collection":"correction-requests","operations":operations}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
     let evidence_template:TaskTemplate=serde_json::from_value(json!({"id":"evidence-check","version":"1","label":"Check adult status","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":evidence_agent},"client":"evidence-task-agent","resource":EVIDENCE_RESOURCE,"purpose":"fixture-eligibility","scopes":["evidence:invoke"],"bounds":{"type":"evidence","requirement":EVIDENCE_REQUIREMENT},"evidenceContext":{"requesterTags":[EVIDENCE_TAG],"audience":EVIDENCE_AUDIENCE},"subjects":{"birth_date":"birth_date","family_name":"family_name","given_name":"given_name"},"lifetimeSeconds":900})).unwrap();
-    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template]})).unwrap();
+    let scheduling_template:TaskTemplate=serde_json::from_value(json!({"id":"schedule-update","version":"1","label":"Book a registry update","eligibleTeams":["team"],"eligibleProfiles":["staff"],"source":"source","itemKinds":["request"],"itemStates":["claimed"],"agent":{"issuer":issuer.url(),"subject":agent},"client":"task-agent","resource":SCHEDULING_RESOURCE,"purpose":"schedule-registry-update","scopes":["scheduling:commit"],"bounds":{"type":"scheduling","permissions":[{"service":"registry-update","location":"bangkok-counter","actions":["appointment.create"]}]},"subjects":{"tenant_claim":"tenant"},"lifetimeSeconds":900})).unwrap();
+    let project:CaseworkProject=serde_json::from_value(json!({"apiVersion":CASEWORK_API_VERSION,"kind":CASEWORK_KIND,"casework":{"id":"native-tasks","version":"1"},"accessProfiles":[{"id":"staff","principalClaim":"sub","requiredScopes":["casework:staff"],"role":"staff"}],"queues":[{"id":"review","label":"Review"}],"sources":[{"id":"source","adapter":"test","description":"Synthetic source","requests":[{"entity":"request","queue":"review"}]}],"taskTemplates":[template,evidence_template,scheduling_template]})).unwrap();
     store
         .activate_task_templates(&project.task_templates)
         .await
@@ -764,9 +835,9 @@ async fn request(
     )
 }
 
-#[ignore = "requires Docker plus disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL"]
+#[ignore = "requires Docker, disposable CASEWORK_ASSIGNMENT_TEST_DATABASE_URL and BREG_TEST_DATABASE_URL, and absolute SCHEDULING_AUTH_PROBE_BIN"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes() {
+async fn approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid() {
     let root = tempfile::tempdir().unwrap();
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let casework_port = listener.local_addr().unwrap().port();
@@ -969,6 +1040,58 @@ async fn approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_re
             "re-exchange must preserve {name}"
         );
     }
+    let (code, scheduling_grant) = request(
+        &f.app,
+        "POST",
+        &base,
+        &human,
+        true,
+        Some(json!({"templateId":"schedule-update","templateVersion":"1"})),
+        Some("native-scheduling-approval"),
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let scheduling_grant_id = scheduling_grant["id"].as_str().unwrap();
+    let (code, scheduling_assertion) = request(
+        &f.app,
+        "POST",
+        &format!("/v1/task-grants/{scheduling_grant_id}/assertion"),
+        &bootstrap,
+        false,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(code, StatusCode::OK);
+    let scheduling_exchange = provider(
+        &issuer.url(),
+        "task-agent",
+        &agent_key,
+        SCHEDULING_RESOURCE,
+        "scheduling:commit",
+    );
+    let scheduling_token = bearer(
+        &scheduling_exchange
+            .exchange(scheduling_assertion["assertion"].as_str().unwrap())
+            .await
+            .unwrap(),
+    );
+    let scheduling_claims = payload(&scheduling_token);
+    assert_eq!(
+        scheduling_claims["registry_grant_bounds"],
+        json!({"type":"scheduling","permissions":[{
+            "service":"registry-update",
+            "location":"bangkok-counter",
+            "actions":["appointment.create"]
+        }]})
+    );
+    assert_eq!(
+        scheduling_claims["registry_grant_resource"],
+        SCHEDULING_RESOURCE
+    );
+    assert_eq!(scheduling_claims["registry_grant_client"], "task-agent");
+    assert_eq!(scheduling_claims["scope"], "scheduling:commit");
+    prove_scheduling_authentication(&scheduling_token, &issuer);
     let (code, evidence_grant) = request(
         &f.app,
         "POST",

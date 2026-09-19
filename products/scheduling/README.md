@@ -53,8 +53,9 @@ reachability or deployment readiness. Explain publishes what the runtime would
 serve: identity, policy digest, offerings, windows with their subquotas, and
 the hold policy.
 
-`schedulingctl init` writes `runtime.example.yaml` beside the policy: a
-complete, commented operator document. Copy it to `runtime.yaml`, set its
+`schedulingctl init` writes `runtime.example.yaml` and `records.yaml` beside
+the policy. The records document contains every location and resource pool the
+selected starter needs. Copy the runtime example to `runtime.yaml`, set its
 absolute paths and secret references, and read
 [RUNTIME-CONFIG.md](RUNTIME-CONFIG.md) for every block, field, and default.
 Then apply the live environment records and start:
@@ -117,7 +118,8 @@ bounds, the closed action vocabulary, the value limits, and the one fact the
 transaction re-reads are documented in
 [TASK_GRANTS.md](TASK_GRANTS.md). Scheduling verifies grants; it does not
 approve them, and the approval surface stays with the product that holds the
-human relationship.
+human relationship. The maintained Casework template and stock ThunderID
+exchange path is documented there through an actual appointment request.
 
 ## Events and observers
 

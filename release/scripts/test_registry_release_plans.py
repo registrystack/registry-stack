@@ -40,6 +40,9 @@ REGISTRY_RELEASE = _load_registry_release()
 CASEWORK_RELEASE_MINIMUM_VERSION = (
     REGISTRY_RELEASE.CASEWORK_RELEASE_MINIMUM_VERSION
 )
+SCHEDULING_RELEASE_MINIMUM_VERSION = (
+    REGISTRY_RELEASE.SCHEDULING_RELEASE_MINIMUM_VERSION
+)
 MINT_RETIREMENT_VERSION = REGISTRY_RELEASE.release_candidate.MINT_RETIREMENT_VERSION
 FIXTURE_IDENTIFIER_CATALOG = {
     "version": 1,
@@ -149,6 +152,8 @@ def manifest(version: str, release_id: str, source_ref: str, status: str) -> dic
             "caseworkctl",
             "casework-installer",
         )
+    if version_tuple >= SCHEDULING_RELEASE_MINIMUM_VERSION:
+        inventory += ("scheduling",)
     data = {
         "stack": {
             "release": release_id,

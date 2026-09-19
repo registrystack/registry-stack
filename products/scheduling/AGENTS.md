@@ -17,11 +17,10 @@ product.
   through any shared dependency, reaches a Base Registry Engine, Casework, or
   Evidence crate, and none of those products reach a scheduling crate. Run
   `scripts/check_dependency_direction.py` after dependency changes.
-- `examples/standalone-exact-time/` is exactly what
-  `schedulingctl init --template standalone-exact-time` writes, and the
-  checkpoint fails if the two drift apart. When `schedulingctl init` starts
-  emitting or changing a file, copy that output into the committed example in
-  the same commit.
+- Each directory under `examples/` is exactly what `schedulingctl init` writes
+  for the template with the same name, and the checkpoint fails if either pair
+  drifts apart. When `schedulingctl init` starts emitting or changing a file,
+  copy that output into both applicable committed examples in the same commit.
 - Keep authored examples and the checkpoint demo small. Do not add a
   later-wave surface to close a documentation obligation; record the exclusion
   instead.

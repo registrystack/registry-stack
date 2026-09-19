@@ -870,15 +870,18 @@ jobs:
           BREG_POSTGRES_LANE: ${{ matrix.lane }}
         run: products/breg/scripts/test-postgres.sh --lane "$BREG_POSTGRES_LANE"
 
-      - name: Casework task approval through stock issuer and BReg
+      - name: Casework task approval through stock issuer to Evidence, BReg, and Scheduling
         if: matrix.lane == 'postgres'
         shell: bash
         run: |
           set -euo pipefail
+          cargo build --locked --profile ci -p registry-scheduling \
+            --example scheduling-auth-probe
+          SCHEDULING_AUTH_PROBE_BIN="${GITHUB_WORKSPACE}/target/ci/examples/scheduling-auth-probe" \
           CASEWORK_ASSIGNMENT_TEST_DATABASE_URL="${BREG_TEST_DATABASE_URL}" \
             cargo test --locked --profile ci -p registry-casework \
               --features postgres-test --lib \
-              approved_casework_tasks_exchange_on_stock_thunderid_for_evidence_and_revoke_breg_writes \
+              approved_casework_tasks_reach_evidence_breg_and_scheduling_through_stock_thunderid \
               -- --ignored
           cargo build --locked --profile ci -p registry-casework -p registry-caseworkctl
           cargo test --locked --profile ci -p registry-casework \

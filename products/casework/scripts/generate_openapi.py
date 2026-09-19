@@ -107,6 +107,7 @@ SCHEMA_STRUCTS = {
         "TaskTemplatePreview": "TaskTemplatePreview",
         "TaskTemplatePreviews": "TaskTemplatePreviews",
         "TaskPermission": "TaskPermission",
+        "SchedulingTaskPermission": "SchedulingTaskPermission",
         "TaskApprovalRequest": "TaskApprovalRequest",
         "TaskGrantView": "TaskGrantView",
         "TaskGrantList": "TaskGrantList",
@@ -1261,6 +1262,8 @@ def task_schemas() -> dict:
     uuid = {"type":"string", "format":"uuid"}
     subjects = {"type":"object", "maxProperties":32, "additionalProperties":{"type":["string","integer","boolean"]}}
     permission = obj({"collection":text, "operations":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":text}}, ["collection","operations"])
+    grant_identifier = {"type":"string", "minLength":1, "maxLength":512, "x-maximum-utf8-bytes":512, "pattern":r"^[^\s\x00-\x1f\x7f*]+$"}
+    scheduling_permission = obj({"service":grant_identifier, "location":grant_identifier, "actions":{"type":"array", "minItems":1, "maxItems":32, "uniqueItems":True, "items":{"type":"string", "minLength":1, "maxLength":128, "pattern":r"^[a-z][a-z0-9._:-]*$"}}}, ["service","location","actions"])
     common = {"agent":ref("IssuerPrincipal"), "client":text, "resource":text, "scopes":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[\x21\x23-\x29\x2b-\x5b\x5d-\x7e]+$"}}, "purpose":text, "bounds":ref("TaskGrantBounds")}
     evidence_context = obj({"requesterTags":{"type":"array","minItems":1,"maxItems":32,"uniqueItems":True,"items":{"type":"string","minLength":1,"maxLength":128,"pattern":r"^[a-z][a-z0-9._-]*$"}}, "audience":{"type":"string","format":"uri","minLength":1,"maxLength":4096}}, ["requesterTags","audience"])
     preview = {"id":text, "version":text, "label":text, **common, "evidenceContext":ref("EvidenceRequesterContext"), "subjects":subjects, "lifetimeSeconds":{"type":"integer","minimum":1,"maximum":900}}
@@ -1274,7 +1277,8 @@ def task_schemas() -> dict:
         "TaskTemplatePreview":obj(preview,[name for name in preview if name != "evidenceContext"]),
         "TaskTemplatePreviews":obj({"itemRevision":number,"templates":array(ref("TaskTemplatePreview"))},["itemRevision","templates"]),
         "TaskPermission":permission,
-        "TaskGrantBounds":{"oneOf":[obj({"type":{"const":"evidence"},"requirement":text},["type","requirement"]), obj({"type":{"const":"breg"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("TaskPermission")}},["type","permissions"])]},
+        "SchedulingTaskPermission":scheduling_permission,
+        "TaskGrantBounds":{"oneOf":[obj({"type":{"const":"evidence"},"requirement":text},["type","requirement"]), obj({"type":{"const":"breg"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("TaskPermission")}},["type","permissions"]), obj({"type":{"const":"scheduling"},"permissions":{"type":"array","minItems":1,"maxItems":64,"items":ref("SchedulingTaskPermission")}},["type","permissions"])]},
         "TaskApprovalRequest":obj({"templateId":text,"templateVersion":text},["templateId","templateVersion"]),
         "TaskGrantView":obj(view,[name for name in view if name != "evidenceContext"]),
         "TaskGrantList":obj({"grants":{"type":"array","maxItems":128,"items":ref("TaskGrantView")}},["grants"]),

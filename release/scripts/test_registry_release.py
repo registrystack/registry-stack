@@ -2265,13 +2265,14 @@ class RegistryReleaseTest(TestCase):
         for current in (
             "_relay_v2_payload_inventory",
             "payloads: $payloads[0]",
-            "image_names=(relay evidence discovery breg casework)",
+            "image_names=(relay evidence discovery breg casework scheduling)",
             "images: $images[0]",
             "scans: $scans[0]",
             '"discovery-image"',
             '"evidence-image"',
             '"breg-image"',
             '"casework-image"',
+            '"scheduling-image"',
             '"relay-image"',
         ):
             self.assertIn(current, workflow)
@@ -2344,6 +2345,7 @@ class RegistryReleaseTest(TestCase):
                 "evidence",
                 "breg",
                 "casework",
+                "scheduling",
                 "relay",
             )
         }
@@ -2368,6 +2370,7 @@ class RegistryReleaseTest(TestCase):
             "evidence",
             "breg",
             "casework",
+            "scheduling",
             "relay",
         ):
             self.assertIn(
@@ -2379,7 +2382,7 @@ class RegistryReleaseTest(TestCase):
                 f"/workspace/runtime-root/usr/local/bin/{name}",
                 release_dockerfiles[name],
             )
-        for name in ("evidence", "breg", "casework", "relay"):
+        for name in ("evidence", "breg", "casework", "scheduling", "relay"):
             self.assertIn(
                 "--mount=type=bind,source=THIRD_PARTY_NOTICES,"
                 "target=/workspace/THIRD_PARTY_NOTICES,readonly",
@@ -2391,7 +2394,9 @@ class RegistryReleaseTest(TestCase):
                 release_dockerfiles[name],
             )
         self.assertNotIn("THIRD_PARTY_NOTICES", release_dockerfiles["discovery"])
-        self.assertIn("discovery|evidence|breg|casework|relay)", image_recipe)
+        self.assertIn(
+            "discovery|evidence|breg|casework|scheduling|relay)", image_recipe
+        )
         self.assertNotIn("registry-relay)", image_recipe)
 
     def test_breg_release_image_keeps_deployment_inputs_external(self) -> None:
@@ -2643,6 +2648,55 @@ class RegistryReleaseTest(TestCase):
         self.assertIn('"casework-${tag}-linux-amd64"', recipe)
         self.assertIn('"caseworkctl-${tag}-linux-amd64"', recipe)
         self.assertIn("image_bin_binaries+=(casework)", recipe)
+
+    def test_scheduling_image_release_surface_begins_after_published_v0_32(
+        self,
+    ) -> None:
+        module = load_registry_release()
+        published = {
+            name: "0.32.0"
+            for name in (
+                module.RELAY_V2_ARTIFACT_INVENTORY
+                | {
+                    "relay-installer",
+                    "registry-docs",
+                    "discovery",
+                    "breg",
+                    "bregctl",
+                    "breg-installer",
+                    "casework",
+                    "caseworkctl",
+                    "casework-installer",
+                    "registry-client-node",
+                    "registry-client-python",
+                }
+            )
+            if name != "mint"
+            and name
+            not in {
+                "evidence-client-node",
+                "evidence-client-python",
+            }
+        }
+        self.assertEqual([], module.artifact_inventory_errors("0.32.0", published))
+        future = {name: "0.33.0" for name in published}
+        future["scheduling"] = "0.33.0"
+        self.assertEqual([], module.artifact_inventory_errors("0.33.0", future))
+        self.assertNotEqual(
+            [],
+            module.artifact_inventory_errors(
+                "0.32.0", published | {"scheduling": "0.32.0"}
+            ),
+        )
+        del future["scheduling"]
+        self.assertNotEqual([], module.artifact_inventory_errors("0.33.0", future))
+
+        recipe = (ROOT / "release/scripts/build-release-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("-p registry-scheduling --bin scheduling", recipe)
+        self.assertIn('"scheduling-${tag}-linux-amd64"', recipe)
+        self.assertIn("image_bin_binaries+=(scheduling)", recipe)
 
     def test_unified_client_manifest_surface_replaces_individual_clients(self) -> None:
         module = load_registry_release()
@@ -3318,6 +3372,14 @@ class RegistryReleaseTest(TestCase):
                 data["stack"]["release"] = release_id
                 data["stack"].pop("source_ref")
                 data["stack"].pop("status")
+                catalog_bytes = (
+                    ROOT / "products/identifiers/generated/catalog.v1.json"
+                ).read_bytes()
+                data["identifier_catalog"] = {
+                    "path": "products/identifiers/generated/catalog.v1.json",
+                    "sha256": hashlib.sha256(catalog_bytes).hexdigest(),
+                    "entry_count": len(json.loads(catalog_bytes)["entries"]),
+                }
                 manifest.write_text(
                     yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
                 )
@@ -3967,6 +4029,8 @@ def write_manifest(
         artifacts["casework-installer"] = version
     if version_tuple >= (0, 31, 0):
         artifacts.pop("mint")
+    if version_tuple >= (0, 33, 0):
+        artifacts["scheduling"] = version
     manifest = {
         "stack": {
             "release": "beta-6",

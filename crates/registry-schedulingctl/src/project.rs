@@ -63,7 +63,7 @@ pub(super) fn init(project: &Path, template: &str) -> Result<Value> {
         "created": created,
         "next": [
             "Run schedulingctl check PROJECT, then schedulingctl test PROJECT.",
-            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, and run scheduling migrate and scheduling serve with it.",
+            "Copy runtime.example.yaml to runtime.yaml, set its absolute paths, run scheduling migrate, apply records.yaml, then run scheduling serve with it.",
         ],
     }))
 }
@@ -438,12 +438,14 @@ mod tests {
             json!([
                 "scheduling.yaml",
                 "runtime.example.yaml",
+                "records.yaml",
                 "fixtures/household-morning.yaml",
                 "fixtures/household-afternoon.yaml"
             ])
         );
         assert!(project.join(AUTHORED_POLICY_FILE).is_file());
         assert!(project.join("runtime.example.yaml").is_file());
+        assert!(project.join("records.yaml").is_file());
         assert!(project.join("fixtures/household-morning.yaml").is_file());
         assert!(project.join("fixtures/household-afternoon.yaml").is_file());
         let error = init(&project, "standalone-arrival-window").unwrap_err();

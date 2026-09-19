@@ -1,0 +1,107 @@
+apiVersion: registry.registrystack.org/scheduling-policy-package/v1alpha1
+kind: SchedulingPolicyPackage
+scheduling:
+  id: household-days
+  version: 3
+services:
+  - id: household-day
+    label: Household registration day
+offerings:
+  - id: household-morning
+    service: household-day
+    label: Morning household block
+    mode: arrival-window
+    location: civic-hall
+    because: Households arrive in a served morning block.
+    arrival:
+      window: household-morning-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
+  - id: household-afternoon
+    service: household-day
+    label: Afternoon household block
+    mode: arrival-window
+    location: civic-hall
+    because: Larger households arrive in an afternoon block sized by party, not a flat headcount.
+    arrival:
+      window: household-afternoon-window
+      leadTimeMinutes: 60
+      horizonDays: 45
+    cancellationCutoffMinutes: 1440
+    requiresCapabilities: []
+    prerequisites: []
+holidaySets:
+  - id: office-holidays
+    revision: 1
+    because: Public holidays observed by the registry office.
+    dates: []
+openings:
+  - id: hall-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "08:00"
+    endTime: "12:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall opens on Saturday mornings.
+  - id: hall-afternoon-hours
+    location: civic-hall
+    holidaySet: office-holidays
+    weekdays: [sat]
+    startTime: "13:00"
+    endTime: "17:00"
+    effectiveFrom: "2026-10-01"
+    effectiveUntil: "2026-12-31"
+    because: The hall reopens on Saturday afternoons for banded household visits.
+windows:
+  - id: household-morning-window
+    revision: 2
+    offering: household-morning
+    location: civic-hall
+    start: 2026-10-10T01:00:00Z
+    end: 2026-10-10T03:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: perRecipient
+      perRecipient: 1
+      because: Each recipient consumes one serving slot.
+    subquotas:
+      - id: public-quota
+        channel: public
+        units: 2
+        because: Most households book the public channel.
+      - id: assisted-quota
+        channel: assisted
+        units: 1
+        because: Assisted bookings hold a protected unit.
+    because: The Saturday morning household block, sized for two officers.
+  - id: household-afternoon-window
+    revision: 1
+    offering: household-afternoon
+    location: civic-hall
+    start: 2026-10-10T07:00:00Z
+    end: 2026-10-10T09:00:00Z
+    units: 3
+    unitsPolicy:
+      kind: bandedTable
+      input: serviceRecipientCount
+      bands:
+        - upTo: 4
+          units: 1
+          because: A household of up to four shares one officers' block.
+        - upTo: 8
+          units: 2
+          because: A larger household of up to eight needs two officers' blocks.
+      aboveHighestBand:
+        policy: refuse
+      because: A household above eight needs a scheduled outreach visit instead of a walk-in block.
+    subquotas: []
+    because: The Saturday afternoon household block, sized by party rather than a flat headcount.
+holdPolicy:
+  ttlMinutes: 10
+  maxPerCaller: 2
+  because: Households need a few minutes to gather documents.

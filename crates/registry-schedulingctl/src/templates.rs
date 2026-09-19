@@ -262,6 +262,37 @@ cases:
       code: schedule.unpublished
 "#;
 
+/// Live environment records for the exact-time starter. They carry every
+/// location and resource pool its policy references, plus the fold-day closure
+/// the example explains and exercises.
+const EXACT_TIME_RECORDS: &str = r#"locations:
+  - id: bangkok-counter
+    timezone: Asia/Bangkok
+  - id: new-york-hall
+    timezone: America/New_York
+pools:
+  - id: update-stations
+    members:
+      - resourceId: station-1
+        capabilities: []
+        available: true
+      - resourceId: station-2
+        capabilities: []
+        available: true
+  - id: hall-stations
+    members:
+      - resourceId: hall-station-1
+        capabilities: []
+        available: true
+exceptions:
+  - id: hall-prep
+    location: new-york-hall
+    kind: closure
+    date: "2026-11-01"
+    startTime: "00:15"
+    endTime: "00:45"
+"#;
+
 /// The `standalone-arrival-window` policy: a Saturday morning household block
 /// with a public and an assisted subquota over a per-recipient units table,
 /// and a Saturday afternoon block over a banded table that refuses a party
@@ -491,6 +522,15 @@ cases:
       units: 2
 "#;
 
+/// Live environment records for the arrival-window starter. Published windows
+/// carry their own supply, so this project needs only its referenced location.
+const ARRIVAL_WINDOW_RECORDS: &str = r#"locations:
+  - id: civic-hall
+    timezone: Asia/Bangkok
+pools: []
+exceptions: []
+"#;
+
 /// The operator runtime configuration example every template writes beside
 /// the authored policy. It names no project path, so one document serves every
 /// template and the committed example can never drift from what an adopter
@@ -611,6 +651,7 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
         "standalone-exact-time" => Some(vec![
             ("scheduling.yaml", EXACT_TIME_POLICY),
             ("runtime.example.yaml", RUNTIME_EXAMPLE),
+            ("records.yaml", EXACT_TIME_RECORDS),
             ("fixtures/counter-stations.yaml", COUNTER_STATIONS_FIXTURE),
             (
                 "fixtures/fold-day-rebooking.yaml",
@@ -620,6 +661,7 @@ pub(super) fn template_files(template: &str) -> Option<Vec<(&'static str, &'stat
         "standalone-arrival-window" => Some(vec![
             ("scheduling.yaml", ARRIVAL_WINDOW_POLICY),
             ("runtime.example.yaml", RUNTIME_EXAMPLE),
+            ("records.yaml", ARRIVAL_WINDOW_RECORDS),
             ("fixtures/household-morning.yaml", HOUSEHOLD_MORNING_FIXTURE),
             (
                 "fixtures/household-afternoon.yaml",
@@ -635,8 +677,8 @@ mod tests {
     use super::*;
     use registry_scheduling_core::{
         parse_fixture_yaml, parse_policy_yaml, AboveHighestBand, CaseStatus, RequiredUnitsPolicy,
-        AUTHORED_POLICY_FILE, SCHEDULING_FIXTURE_API_VERSION, SCHEDULING_FIXTURE_KIND,
-        SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
+        SchedulingFacts, AUTHORED_POLICY_FILE, SCHEDULING_FIXTURE_API_VERSION,
+        SCHEDULING_FIXTURE_KIND, SCHEDULING_POLICY_API_VERSION, SCHEDULING_POLICY_KIND,
     };
 
     const TEMPLATE_NAMES: [&str; 2] = ["standalone-exact-time", "standalone-arrival-window"];
@@ -648,6 +690,34 @@ mod tests {
         }
         assert!(template_files("standalone-decision").is_none());
         assert!(template_files("").is_none());
+    }
+
+    #[test]
+    fn every_template_carries_parseable_records_for_its_policy_references() {
+        for template in TEMPLATE_NAMES {
+            let files = template_files(template).unwrap();
+            let policy = parse_policy_yaml(files[0].1).expect("the template policy parses");
+            let records = files
+                .iter()
+                .find(|(relative, _)| *relative == "records.yaml")
+                .expect("the template carries live environment records");
+            let facts: SchedulingFacts =
+                serde_norway::from_str(records.1).expect("the template records parse");
+            for offering in &policy.offerings {
+                assert!(
+                    facts.location(&offering.location).is_some(),
+                    "{template}: missing location {}",
+                    offering.location
+                );
+                if let Some(exact_time) = &offering.exact_time {
+                    assert!(
+                        facts.pool(&exact_time.pool).is_some(),
+                        "{template}: missing pool {}",
+                        exact_time.pool
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -778,6 +848,7 @@ mod tests {
             vec![
                 "scheduling.yaml",
                 "runtime.example.yaml",
+                "records.yaml",
                 "fixtures/counter-stations.yaml",
                 "fixtures/fold-day-rebooking.yaml",
             ]

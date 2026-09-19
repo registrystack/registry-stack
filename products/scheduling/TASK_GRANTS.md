@@ -7,15 +7,17 @@ authority, and it never decides eligibility: whether a party may hold a
 service remains with the source system that owns the rule.
 
 The three authority profiles are disjoint. A token carrying a product scope
-does not thereby gain a commitment path, and a task grant does not thereby
-gain a catalogue read. Scopes authorize reads and the separately configured
+does not thereby gain a commitment path, and a task grant does not by itself
+grant a catalogue read. Scopes authorize reads and the separately configured
 explain scope authorizes the diagnostic read; every commitment takes its
-authority from the grant alone.
+authority from the grant alone. One access token may carry both profiles, but
+each operation still checks only its own authority.
 
 ## The claim set
 
-A commitment presents no product scope. Its authority is the grant inside the
-access token: the six `registry_grant_*` members (`registry_grant_id`,
+A commitment requires no product scope. Its authority is the grant inside the
+access token, whether or not that token also carries read scopes: the six
+`registry_grant_*` members (`registry_grant_id`,
 `registry_grant_source_issuer`, `registry_grant_client`,
 `registry_grant_resource`, `registry_grant_exp`, `registry_grant_bounds`),
 plus `registry_purpose` and `registry_approver`. A token carrying none of
@@ -110,10 +112,108 @@ bound value, service, location, or action appears in the journal.
 
 Scheduling verifies grants; it does not approve them. A grant is minted by the
 token-exchange issuer from a template a current human holder approved, and the
-approver's identity travels in the claim. The approval surface, the template
-grammar, the exchange flow, and revocation are documented in
-[`../casework/TASK_GRANTS.md`](../casework/TASK_GRANTS.md); Scheduling is a
+approver's identity travels in the claim. Casework's maintained task authority
+accepts Scheduling bounds directly, and stock ThunderID's institutional grant
+exchange copies those verified bounds into the access token. Scheduling is a
 relying party of that authority and inherits no Casework authorization.
+The maintained native boundary fixture passes that exact stock-issued bearer,
+its public JWKS, and bounded deployment identity over stdin to Scheduling's
+real `SchedulingAuthenticator`; the credential never enters argv or test logs.
+
+The Casework project declares the exact destination in a governed template:
+
+```yaml
+taskTemplates:
+  - id: schedule-registry-update
+    version: "1"
+    label: Book a registry update
+    eligibleTeams: [registry-review]
+    eligibleProfiles: [staff]
+    source: registry-requests
+    itemKinds: [request]
+    itemStates: [claimed]
+    agent:
+      issuer: https://identity.example.test/realms/registry
+      subject: scheduling-agent-service-account
+    client: scheduling-agent
+    resource: urn:example:scheduling
+    scopes: [scheduling-read, scheduling:commit]
+    purpose: schedule-registry-update
+    bounds:
+      type: scheduling
+      permissions:
+        - service: registry-update
+          location: bangkok-counter
+          actions: [appointment.create]
+    subjects:
+      subject_reference: subject-reference
+    lifetimeSeconds: 900
+```
+
+`scheduling:commit` is an explicit scope registered at the exchange issuer. The
+Scheduling runtime derives mutation authority from the grant bounds rather than
+that scope. `scheduling-read` is the starter runtime's default read scope and
+lets the same short-lived token select a currently published free start.
+
+Register `scheduling-agent` as a Casework `taskExchange` service client, and
+register `urn:example:scheduling` plus those scopes at the shared issuer. In the
+Scheduling runtime, use that issuer and audience, admit the client, and bind it
+to the Casework task authority:
+
+```yaml
+authentication:
+  oidc:
+    issuer: https://identity.example.test/realms/registry
+    audience: urn:example:scheduling
+    scopeClaim: scope
+    allowedClients: [scheduling-agent]
+    assertionIssuers:
+      scheduling-agent: [https://casework.example.test/task-authority]
+```
+
+After a current holder previews and approves the template, put the approved
+grant UUID into the existing Casework development exchange path. Its connection
+entry selects the Scheduling destination, not policy fields:
+
+```yaml
+clients:
+  scheduling-agent:
+    assertionKeyFile: /absolute/casework/.casework/dev/credentials/scheduling-agent/assertion-key.jwk
+    resource: urn:example:scheduling
+    scopes: [scheduling-read, scheduling:commit]
+```
+
+```sh
+caseworkctl dev grant scheduling-agent \
+  --grant APPROVED_UUID \
+  --connection /absolute/scheduling-connection.yaml \
+  /absolute/casework
+```
+
+The command reports an owner-only header file and the immutable grant deadline.
+Use that header to read a free start, then book it. Set `START` and
+`POLICY_REVISION` from the availability response:
+
+```sh
+curl --fail-with-body \
+  -H "$(cat "$HEADER_FILE")" \
+  "$SCHEDULING_URL/v1/availability?offering=registry-update-30"
+
+curl --fail-with-body -X POST \
+  -H "$(cat "$HEADER_FILE")" \
+  -H 'content-type: application/json' \
+  -H 'idempotency-key: approved-registry-update-1' \
+  --data @- "$SCHEDULING_URL/v1/appointments" <<JSON
+{"admission":{"offering":"registry-update-30","start":"$START","party":{"recipients":1,"attendees":1},"duplicateKey":"subject:approved-request","policyRevision":$POLICY_REVISION,"capabilities":[],"prerequisites":[]}}
+JSON
+```
+
+The approval surface, full template grammar, exchange setup, and revocation are
+documented in [`../casework/TASK_GRANTS.md`](../casework/TASK_GRANTS.md) and
+[`../casework/DEV-SOURCES.md`](../casework/DEV-SOURCES.md). A standalone
+external authority can issue the same closed claim contract; Casework is the
+maintained in-stack approval path rather than a required Scheduling runtime
+dependency.
 
 Scheduling has no route that books on another party's behalf, and a grant does
 not create one: the Phase 1 scope records guest booking, a holder booking for
