@@ -19,10 +19,11 @@
 //!   bundle fonts sorted by path — mirroring the Typst CLI's book so
 //!   library and CLI renders agree byte for byte. Never filesystem
 //!   iteration order.
-//! - **Path safety is world-enforced**: every resolution canonicalizes and
-//!   must stay under its root (symlink escapes included), behind a lexical
-//!   pre-rejection of `..` and absolute components. Containment is the
-//!   check; the lexical pass only fails faster.
+//! - **Verified bytes are consumed bytes**: bundle files are captured once,
+//!   seals are verified over that immutable snapshot, and the same bytes feed
+//!   label/schema parsing, font loading, and every Typst source/file lookup.
+//! - **Path safety is world-enforced**: every resolution rejects `..` and
+//!   absolute components, then must name an exact immutable snapshot key.
 
 pub mod audit;
 pub mod bundle;

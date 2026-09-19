@@ -244,9 +244,10 @@ fn redact_bundle_root(mut problem: RenderProblem, root: &Path) -> RenderProblem 
 }
 
 fn render_in_worker(request: &WorkerRequest) -> WorkerResponse {
-    // Serve pins the seal per request: the worker loads sealed every time,
-    // so drift (content or a stripped seal) after startup is refused here
-    // with the named problem, not only caught by the parent's hash compare.
+    // Serve pins the seal per request: the worker loads one immutable bundle
+    // snapshot every time, verifies the seal over those exact bytes, and
+    // renders only from that snapshot. Drift present before capture is
+    // refused here; later path changes cannot affect this render.
     let bundle = if request.require_sealed {
         crate::bundle::Bundle::load_sealed(&request.bundle)
     } else {

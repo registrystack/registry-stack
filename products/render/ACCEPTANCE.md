@@ -3,15 +3,15 @@
 Binds each Definition-of-Done area to its executable evidence. Run
 everything with `cargo test --locked -p registry-render` (CI runs the same
 suites on two OSes via `.github/workflows/render-golden.yml`). Updated for
-the PR #1113 review round (2026-09-17); see EVIDENCE.md for the change
-list.
+the PR #1113 review round (2026-09-17) and immutable bundle snapshot
+hardening (2026-09-19); see EVIDENCE.md for the change list.
 
 | DoD area | Executable evidence |
 |---|---|
 | Merge gate (library ≡ CLI) | `EVIDENCE.md` procedure + hashes (2026-09-17, all three bundles, byte-identical); `golden_hashes_match` keeps the library side pinned |
 | Determinism (fresh world/library, canonical injection, ident, evict, font order) | `golden.rs`: `golden_hashes_match`, `rendering_is_deterministic_across_fresh_worlds_and_processes`, `injected_bytes_are_the_hashed_canonical_bytes`, `issued_at_changes_bytes_and_is_the_only_knob` |
-| Bundle format, sealing, tamper/unsealed refusals | `golden.rs`: `tampered_sealed_bundle_is_refused`, `unsealed_bundle_is_refused_for_serving`; unit: `manifest::tests`, `problem::tests` |
-| Path safety (world-enforced; virtual-path diagnostics) | `golden.rs`: `data_paths_cannot_escape_the_bundle`, `unvendored_package_import_fails_without_network`, `compile_diagnostics_report_virtual_paths_only`; unit: `world::tests::resolve_rejects_escape_attempts` (traversal, absolute, symlink escape), manifest schema-path validation tests |
+| Bundle format, sealing, immutable verified-byte consumption, tamper/unsealed refusals | `golden.rs`: `tampered_sealed_bundle_is_refused`, `sealed_template_and_package_bytes_are_bound_to_the_loaded_snapshot`, `unsealed_bundle_is_refused_for_serving`; unit: `bundle::tests::assembly_uses_captured_bytes`, `bundle::tests::accepted_manifest_path_spellings_render_from_snapshot`, `bundle::tests::bundle_root_and_ancestor_symlinks_are_refused_for_every_spelling`, `bundle::tests::sealed_load_checks_the_manifest_before_capturing_descendants`, `manifest::tests`, `problem::tests` |
+| Path safety (world-enforced; virtual-path diagnostics) | `golden.rs`: `data_paths_cannot_escape_the_bundle`, `unvendored_package_import_fails_without_network`, `compile_diagnostics_report_virtual_paths_only`; unit: `world::tests::virtual_paths_reject_escape_attempts`, manifest schema-path validation tests; scaffold symlink-seal refusal |
 | Assets (media type, size caps, virtual namespace) | `golden.rs`: `wrong_media_type_and_oversize_assets_are_refused`; merge gate on the card bundle proves the virtual `assets/` namespace renders byte-identically to a real file |
 | Data validation with JSON pointers | `golden.rs`: `schema_violations_carry_json_pointers`, `bad_locale_is_refused_with_a_pointer` |
 | Labels + script coverage at check time | `registry-render check` on all three bundles (CI smoke via the golden suite's sealed loads); coverage logic in `check.rs::check_script_coverage`, exercised by the sealed Arabic bundles; per-locale label key sets must agree: `scaffold::check_names_a_locale_missing_a_label_key` |
