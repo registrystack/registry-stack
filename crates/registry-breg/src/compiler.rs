@@ -4342,9 +4342,11 @@ pub(crate) fn maximum_envelope_wrapper_bytes(
     // `id` is a quoted UUID.
     total = total.checked_add(38)?;
     // `source` is the quoted deployment URN `crate::webhook::delivery_source`
-    // builds. Its package id is this registry's id; its instance id is
-    // deployment-time and `valid_build_id` holds it to the same closed grammar
-    // within MAX_BUILD_ID_BYTES.
+    // builds. Its package id is this registry's id; its instance id is the
+    // package manifest's, which `valid_build_id` holds to a closed grammar
+    // within MAX_BUILD_ID_BYTES at package build, and startup holds the
+    // runtime deployment identity to exact equality with the manifest value,
+    // so no longer spelling reaches the envelope.
     total = total.checked_add(
         2 + "urn:registrystack:registry:".len() as u64
             + registry_id.len() as u64
