@@ -156,20 +156,21 @@ Encrypted restricted fields carry their own limits, described with the model in
 - Blind indexes leak equality, presence, and cardinality to a database reader, by design; the
   indexed value itself stays sealed.
 
-{/* TODO[evidence]: the field-encryption limits above are Phase 1 behavior of registry-stack
-    issue #1108, whose implementation is not yet in this tree, so no anchor resolves today.
-    When the milestone lands, anchor the change-request refusal against the compiler, the two
-    history values and the preflight report against the migration module, and the blind-index
-    leakage against the blind-index module, and fold those anchors into the Evidence block
-    above. */}
-
 {/* Evidence: crates/registry-breg/src/postgres/roles.rs, verify_postgis;
     crates/registry-breg/src/postgres/catalog.rs, verify_btree_gist;
     crates/registry-breg/src/history_erasure.rs, MAX_ERASURE_REVISIONS;
     crates/registry-breg/src/history_migration.rs, MAX_HISTORY_MIGRATION_COMMIT_MEMBERS;
     crates/registry-breg/src/runtime_config.rs, RUNTIME_CONFIG_API_VERSION and OperationalTimeouts;
     crates/registry-bregctl/src/lib.rs, ApplyArgs; products/breg/loadtest/README.md;
-    products/breg/README.md. */}
+    products/breg/README.md; crates/registry-breg/src/change_request.rs,
+    change_request.effect.field_encrypted; crates/registry-breg/src/request_prepare.rs,
+    refuse_encrypted_participation() and verify_candidate();
+    crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory and
+    validate_descriptor_shape(); crates/registry-breg/src/field_encryption_backfill.rs,
+    FieldEncryptionBackfillPreflightReport and MAX_NAMED_DUPLICATE_RECORDS;
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::blind_index();
+    crates/registry-platform-crypto/src/field_encryption.rs, blind_index_hmac() and
+    derive_field_index_key(). */}
 
 ## Evidence Gateway limits
 

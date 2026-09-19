@@ -135,22 +135,43 @@ whole deployment for one entity's missing key.
 A registry that already holds plaintext for a field must decide what happens to that plaintext
 before the field can be sealed. Encrypting an existing field is a migration that must account for
 the plaintext history the database already retains, and the project authors that choice explicitly.
-The compiler refuses the flip-on migration unless the project declares exactly one of two `history`
-values, with no implicit default; tooling may recommend, but only the authored choice enables the
-migration.
+A reviewed migration that turns field encryption on is refused unless its descriptor declares
+exactly one of the two `history` values, with no implicit default: a descriptor whose changes turn
+field encryption on without a choice is refused, a descriptor that declares a choice for any other
+change is refused the same way, and a descriptor carrying any other value does not parse. Tooling
+may recommend, but only the authored choice enables the migration.
 
 - `history: erase-and-rebaseline` erases the retained history and rebaselines the registry on the
   encrypted present. It is the only choice that satisfies the database-read guarantee, and it can
-  destroy record history beyond the encrypted field, because rebaselining cuts the revision chain
-  the erased history anchored. The preflight report names the affected record and revision counts
-  before anything asks for confirmation, so the choice is made against numbers, not a description.
-- `history: retain-plaintext-history` encrypts going forward and leaves pre-flip revision snapshots
-  as plaintext. It is an explicit risk acceptance: those snapshots stay readable to any database
-  reader the feature exists to defend against, so it does not satisfy the database-read guarantee.
+  destroy record history beyond the encrypted field, because erasure removes a record's retained
+  revisions rather than only the sealed field's past values, and rebaselining cuts the revision
+  chain the erased history anchored. Erasure is operator tooling that runs only after the
+  successor package is active, and the preflight report states the affected record and revision
+  counts first, so the choice is made against numbers, not a description.
+- `history: retain-plaintext-history` encrypts going forward and leaves pre-flip revision
+  snapshots serving as written, scoped by the flip boundary. It is an explicit risk acceptance:
+  those snapshots stay readable to any database reader the feature exists to defend against, so it
+  does not satisfy the database-read guarantee.
 
-{/* TODO[evidence]: anchor the two history values, the no-default refusal, and the preflight
-     report fields against the migration module when it lands. Command examples wait for the
-     milestone that fixes the CLI shape. */}
+The preflight is value-free. Before anything is applied, it reports counts per covered field: the
+live rows still carrying plaintext, the retained journal revisions that carry the field member,
+and the retained change-request snapshots, cached idempotency responses, and event payloads that
+mention it. When a covered field declares a unique blind index, the report also names the records
+whose normalized values would collide on that index, capped at 64 identifiers, and never names a
+value; the apply refuses the same collisions before it seals anything. The operator commands
+around the apply are `bregctl field-encryption preflight` and
+`bregctl field-encryption erase-history`, shown with the rest of the lifecycle in
+[Deploy a registry](../../operate/breg/).
+
+{/* Evidence: crates/registry-breg/src/migration_plan.rs, ReviewedFieldEncryptionHistory,
+    validate_descriptor_shape(), and descriptor_covers_field_encryption_flip();
+    crates/registry-breg/src/field_encryption_backfill.rs,
+    FieldEncryptionBackfillPreflightReport, FieldEncryptionBackfillFieldPreflight,
+    MAX_NAMED_DUPLICATE_RECORDS, pending_erase_targets(), and
+    erase_field_encryption_history(); crates/registry-breg/src/postgres/interlock.rs,
+    field_encryption_duplicate_preflight(); crates/registry-bregctl/src/lib.rs,
+    FieldEncryptionCommand; crates/registry-bregctl/src/field_encryption_lifecycle.rs,
+    run_preflight() and run_erase_history(). */}
 
 ## Retained plaintext backups
 
