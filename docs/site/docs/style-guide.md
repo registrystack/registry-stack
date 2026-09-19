@@ -71,6 +71,8 @@ Each page belongs to exactly one `doc_type`. The pattern is enforced by the type
 
 **Tutorial.** Goal, prerequisites, estimated time, ordered steps, how the reader knows each step worked, what to do when it did not, cleanup, next page. The reader can finish the tutorial in one sitting. "How the reader knows it worked" is a statement about observable state, not a mandatory transcript block: a line the command prints, a file that now exists, a status code, a key the reader can list. Show a transcript only under the rules in "Code, commands, paths".
 
+A tutorial is read with a terminal open, so its shape is what the reader types. Every screen of it holds a command to run or a line to check; a section that runs past about 150 words without one is explanation or reference under a tutorial heading, and it goes to a page of its own with one link back. Headings name the action the reader takes (`Start the registry`, `Get a token`), one action per H2, with H3 for a result or a choice inside it. An inventory (every prompt a wizard asks, every flag a command accepts, every rule a derivation follows) is reference: the tutorial says what the reader answers this time and links to the inventory. Do not reprint a file the reader has just generated and can open; quote the lines they check, and only those. A public tutorial the reader already knows, such as a hosted database's local-development quickstart, is a fair benchmark for shape: one action per heading, a code block on every screen, and no paragraph that explains what the reader is about to see.
+
 **How-to.** When to use it, prerequisites, ordered steps, verification, troubleshooting. Scoped to one task. Verification, output, and recovery follow the same rules as a tutorial.
 
 **Explanation.** Context, model, boundaries, tradeoffs, related docs. No steps. No commands. The reader leaves with a mental model, not a finished artifact.
@@ -145,6 +147,8 @@ do not relabel an existing integration as a different domain.
 - For keyboard shortcuts, use backticks: `Ctrl+C`. Inline HTML, including `<kbd>`, fails the markdownlint gate (MD033).
 - Show output only if you ran the command and read what came back. An unobserved transcript is a claim without evidence, and Principle 2 applies to it exactly as it applies to prose. If you cannot run the command, write a sentence for what happens instead: "the command prints the key ID and exits 0".
 - Never invent a banner, a log line, a progress message, or a version string. If nobody has seen the software print it, it is not output.
+- A request the page shows was sent as written, at that path and with that body, to a running instance that answered with the status the page names. A body inferred from a schema is a guess: the envelope, the field casing, and the query parameters are exactly what a schema does not tell you.
+- When a change alters what a command prints, every page that quotes that command is in scope. Search the docs for the command and recapture each transcript from the changed binary; a transcript that was true at the last review is not evidence for this one.
 - When real output is long, quote the lines the reader checks against and say plainly that the rest is omitted. When it varies per reader, replace the varying parts with `<placeholder>` and name what varies: timestamps, identifiers, host names, absolute paths.
 - Repo paths such as `crates/registry-evidence/` and `products/evidence/` address a contributor with the repository checked out. An adopter has a terminal and a released binary. Keep repo paths out of reader-facing prose in tutorials, how-tos, and start pages: put them in an author-facing MDX comment, in a page whose reader is a contributor, or in a pinned link so a reader without a clone can still open the file.
 - Paths the reader creates, edits, or passes on their own machine are not repo paths. Write those in full and say where they come from.
@@ -190,6 +194,7 @@ This applies to `tutorial` and `how-to` pages, and to any page that asks the rea
 - Link into another page's section when the reader wants that section and not the page: a procedure they were sent to perform, a definition they were sent to check. Link to the page itself when they need its context to make sense of the part. `check-built-links` resolves every fragment against the built page, so a renamed heading fails the build rather than dropping the reader silently at the top.
 - Link to upstream standards bodies first, then to mirrors or summaries.
 - Pin links to code to a release tag (`v0.8.3`) or a commit SHA, never a branch, when the claim depends on the code state.
+- The generated CLI reference under `reference/cli/` is `draft: true` on the unreleased docset and is published from release archives only, so a current page must not link into it: `check-built-links` fails the build. Send the reader to `<command> --help` instead.
 
 ## Tables
 
@@ -326,5 +331,6 @@ Two reviews per change:
    4. Does the page read as written to a person, or assembled against a checklist? Second person through the whole procedure, cause where there is cause, a plain sentence where a fragment would hide the point.
    5. Do the mechanics hold: clear lead, descriptive headings, banned words gone, scannable where scanning is what the reader is doing?
    6. Does the page sit at the altitude of its position? A reader who arrived from the sidebar or the homepage should understand it with nothing else open, a Start page should be shorter than the tutorial it precedes, and no sentence should describe the documentation or its navigation instead of the product.
+   7. Does a tutorial keep the shape of one? Count the words between headings and the prose words before each code block; a section over about 150 words with nothing to type, a list longer than the procedure it interrupts, or a reprint of a file the reader just created is another page's content, and the fix is a link, not a cut.
 
 A page is `current` only after both reviews pass and `last_reviewed` is bumped.
