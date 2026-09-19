@@ -141,3 +141,31 @@
   its own. `bregctl generate evidence-source`, `bregctl dev export-client` run
   directly, and `evidencectl source import` remain the manual path for a
   profile and client already prepared in the registry.
+- A `restricted` string, text, date, decimal, or structured field may declare
+  `encrypted: true`, optionally with a `lookup` block of closed-vocabulary
+  normalization steps and a `unique` flag. Values are sealed in the engine with
+  envelope encryption and stored as ciphertext plus an HMAC blind index;
+  plaintext exists in memory only inside the serving process, and rows,
+  journal revisions, and held response bodies carry the sealed form until one
+  decrypt at an enumerated caller-authorized response edge. The guarantee
+  covers direct database reads (DBA, replica, dump, backup); the serving
+  process, holders of the key-transit credential, and backups retained from
+  before a flip stay outside it and are documented operator risk.
+- Field encryption runs on the AWS-LC FIPS build everywhere the workspace
+  links it; there is no non-FIPS backend selection and no runtime mode switch.
+  A local-file data-key provider exists for local assurance only and the
+  runtime refuses it unless the database initialization environment is local.
+- Change-request flows cannot target an encrypted field, feed one through a
+  Rhai write ceiling, or source one through a declarative `fromField`: the
+  compiler refuses each shape, and a runtime backstop refuses again before any
+  proposal or target snapshot is materialized. Lifting this is future work,
+  not a configuration option.
+- Turning encryption on for a field with existing rows is a reviewed migration
+  step that seals existing values and drops the plaintext column, with the
+  history choice carried explicitly on the reviewed descriptor:
+  `erase-and-rebaseline` destroys the full per-record history after the
+  successor package activates, and `retain-plaintext-history` keeps serving
+  pre-flip revisions as written, scoped by the flip boundary. A plan with no
+  choice refuses, and `retain-plaintext-history` is an accepted-risk option
+  that does not satisfy the database-read guarantee. Preflight and audit
+  report records, revisions, and counts, never values.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{collections::BTreeSet, time::Duration};
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use registry_platform_audit::AuditProfile;
 use serde_json::Value;
@@ -13,19 +14,22 @@ use uuid::Uuid;
 
 use crate::audit::append_envelope;
 use crate::event_destination::EventDestinationCompatibilityInventory;
+use crate::field_encryption::{FieldEncryptionProvider, FieldEncryptionService};
 use crate::generated_ddl::DdlStatementKind;
 use crate::history_commit::{install_empty_history_baseline, install_history_commit_schema};
 use crate::history_migration::{
     ensure_successor_history_ready as ensure_successor_history_ready_state,
-    finish_bounded_history_update, prepare_bounded_history_update,
+    finish_bounded_history_update, finish_field_encryption_page_update,
+    prepare_bounded_history_update, prepare_field_encryption_page_capture,
 };
 use crate::history_schema::HistorySchemaDescriptor;
 use crate::history_store::{install_history_schema_store, retain_descriptor};
 use crate::migration_plan::{
-    AffectedRowBounds, ReviewedMigrationStepDescriptor, ValidatedReviewedMigrationAssertion,
-    ValidatedReviewedMigrationPlan, ValidatedReviewedMigrationStep,
+    AffectedRowBounds, ReviewedFieldEncryptionHistory, ReviewedMigrationStepDescriptor,
+    ValidatedReviewedMigrationAssertion, ValidatedReviewedMigrationPlan,
+    ValidatedReviewedMigrationStep,
 };
-use crate::model::CompiledRegistry;
+use crate::model::{CompiledBlindIndex, CompiledEntity, CompiledField, CompiledRegistry};
 use crate::mutation::install_mutation_schema;
 use crate::package::CompiledRegistryMigrationBaseline;
 
@@ -109,6 +113,14 @@ pub(crate) enum ReviewedExecutionOutcome {
     Interrupted,
 }
 
+/// The borrowed field-encryption key source one field-encryption backfill
+/// resolves its data-encryption key through. It carries no authority beyond
+/// reading the configured provider during this apply.
+pub(crate) struct ReviewedFieldEncryptionContext<'a> {
+    pub provider: &'a FieldEncryptionProvider,
+    pub secrets: &'a registry_platform_config::SecretResolver,
+}
+
 pub(crate) struct ReviewedPackageExecutionRequest<'a> {
     pub registry: &'a CompiledRegistry,
     pub current: &'a ExpectedRegistryIdentity,
@@ -116,6 +128,7 @@ pub(crate) struct ReviewedPackageExecutionRequest<'a> {
     pub plan: &'a ValidatedReviewedMigrationPlan,
     pub predecessor_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
     pub predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
+    pub field_encryption: Option<ReviewedFieldEncryptionContext<'a>>,
     pub runtime_role: &'a SqlIdentifier,
     pub compiler_statements: &'a [PackageDdlStatement<'a>],
     pub ledger: &'a MigrationLedgerEntry,
@@ -124,6 +137,35 @@ pub(crate) struct ReviewedPackageExecutionRequest<'a> {
     pub compiler_lock_timeout: Duration,
     pub compiler_statement_timeout: Duration,
     pub fault_after_committed_chunks: Option<u64>,
+}
+
+/// One covered field of a field-encryption backfill step: the successor field
+/// that owns the envelope and blind-index columns, paired with the predecessor
+/// field that owns the plaintext column being sealed.
+pub(crate) struct FieldEncryptionCoveredField<'a> {
+    pub(crate) entity_id: &'a str,
+    pub(crate) candidate: &'a CompiledField,
+    pub(crate) prior: &'a CompiledField,
+    pub(crate) blind: Option<&'a CompiledBlindIndex>,
+    pub(crate) api_name: &'a str,
+}
+
+/// The per-chunk request one field-encryption backfill execution carries.
+struct FieldEncryptionChunkRequest<'a> {
+    registry: &'a CompiledRegistry,
+    step: &'a ValidatedReviewedMigrationStep,
+    ledger: &'a MigrationLedgerEntry,
+    ledger_step: &'a MigrationLedgerStep,
+    descriptor_path: &'a str,
+    target_package_revision: &'a str,
+    table: &'a str,
+    covered: &'a [FieldEncryptionCoveredField<'a>],
+    service: &'a FieldEncryptionService,
+    history_choice: ReviewedFieldEncryptionHistory,
+    chunk_size: u32,
+    max_total_rows: u64,
+    lock_timeout_ms: u64,
+    statement_timeout_ms: u64,
 }
 
 struct ReviewedChunkExecutionRequest<'a> {
@@ -136,6 +178,10 @@ struct ReviewedChunkExecutionRequest<'a> {
     lock_timeout_ms: u64,
     statement_timeout_ms: u64,
 }
+
+/// One covered field's sealed pair for one row: the envelope bytes and the
+/// recomputed blind index, each absent when the row carries no value.
+type FieldEncryptionSeal = (Option<Vec<u8>>, Option<Vec<u8>>);
 
 /// Stable Registry-scoped PostgreSQL advisory lock key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,6 +374,7 @@ impl DedicatedApplyConnection {
             plan,
             predecessor_baseline,
             predecessor_history_descriptor,
+            field_encryption,
             runtime_role,
             compiler_statements,
             ledger,
@@ -423,6 +470,74 @@ impl DedicatedApplyConnection {
                                     ledger,
                                     ledger_step,
                                     table,
+                                    chunk_size: *chunk_size,
+                                    max_total_rows: *max_total_rows,
+                                    lock_timeout_ms: *lock_timeout_ms,
+                                    statement_timeout_ms: *statement_timeout_ms,
+                                })
+                                .await?;
+                            if !advanced {
+                                break;
+                            }
+                            committed_chunks = committed_chunks
+                                .checked_add(1)
+                                .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                            if fault_after_committed_chunks == Some(committed_chunks) {
+                                return Ok(ReviewedExecutionOutcome::Interrupted);
+                            }
+                        }
+                    }
+                    ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                        entity_id,
+                        chunk_size,
+                        max_total_rows,
+                        lock_timeout_ms,
+                        statement_timeout_ms,
+                        ..
+                    } => {
+                        if ledger_step.kind != MigrationLedgerStepKind::FieldEncryptionBackfill {
+                            return Err(PostgresKernelError::RegistryUnavailable);
+                        }
+                        let context = field_encryption
+                            .as_ref()
+                            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                        let history_choice = migration
+                            .descriptor
+                            .history
+                            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+                        let service = self
+                            .initialize_field_encryption_service(
+                                context,
+                                registry,
+                                target_package_revision,
+                            )
+                            .await?;
+                        let covered = covered_field_encryption_fields(
+                            registry,
+                            predecessor_baseline,
+                            entity_id,
+                            step,
+                        )?;
+                        let table = &registry
+                            .entities()
+                            .get(entity_id)
+                            .ok_or(PostgresKernelError::RegistryUnavailable)?
+                            .physical_table;
+                        self.field_encryption_duplicate_preflight(&service, table, &covered)
+                            .await?;
+                        loop {
+                            let advanced = self
+                                .execute_field_encryption_chunk(FieldEncryptionChunkRequest {
+                                    registry,
+                                    step,
+                                    ledger,
+                                    ledger_step,
+                                    descriptor_path: &migration.descriptor_path,
+                                    target_package_revision,
+                                    table,
+                                    covered: &covered,
+                                    service: &service,
+                                    history_choice,
                                     chunk_size: *chunk_size,
                                     max_total_rows: *max_total_rows,
                                     lock_timeout_ms: *lock_timeout_ms,
@@ -649,7 +764,8 @@ impl DedicatedApplyConnection {
 
         let objects = match &step.descriptor {
             ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
-            | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. } => objects,
+            | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. }
+            | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => objects,
         };
         for object in objects {
             let Some((entity_id, field_id)) =
@@ -780,6 +896,324 @@ impl DedicatedApplyConnection {
         if affected != selected {
             return Err(PostgresKernelError::RegistryUnavailable);
         }
+        let checkpoint = ids
+            .last()
+            .copied()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        record_chunk_progress(&transaction, ledger, ledger_step, checkpoint, total).await?;
+        transaction.commit().await?;
+        Ok(true)
+    }
+
+    /// Resolve the field-encryption data key on the dedicated apply connection.
+    /// First-activation Transit key material lands through the same idempotent
+    /// first-row insert the runtime uses, so a resumed apply and the runtime
+    /// after activation agree on one key version.
+    async fn initialize_field_encryption_service(
+        &self,
+        context: &ReviewedFieldEncryptionContext<'_>,
+        registry: &CompiledRegistry,
+        target_package_revision: &str,
+    ) -> Result<FieldEncryptionService> {
+        FieldEncryptionService::initialize(
+            context.provider,
+            registry.registry_id(),
+            target_package_revision,
+            context.secrets,
+            &self.client,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)
+    }
+
+    /// Refuse the whole step, before any sealing, when normalizing two
+    /// existing records onto one unique blind index would collide. The refusal
+    /// names record ids only, never field values, and caps the named set so a
+    /// bulk collision cannot flood an operator surface.
+    async fn field_encryption_duplicate_preflight(
+        &mut self,
+        service: &FieldEncryptionService,
+        table: &str,
+        covered: &[FieldEncryptionCoveredField<'_>],
+    ) -> Result<()> {
+        if !covered
+            .iter()
+            .any(|field| field.blind.is_some_and(|blind| blind.unique))
+        {
+            return Ok(());
+        }
+        let table = SqlIdentifier::parse(table)?;
+        let projection = covered
+            .iter()
+            .map(|field| prior_plaintext_projection(field.prior))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let select_sql = format!(
+            "SELECT record_id::text, {projection}
+             FROM registry_data.{}
+             ORDER BY record_id",
+            table.quoted()
+        );
+        let transaction = self.client.transaction().await?;
+        // The migration role owns the table, but every prior step leaves FORCE
+        // ROW LEVEL SECURITY on, which would subject this read to the default
+        // deny and hide the rows whose duplicates must refuse the step.
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], false).await?;
+        // Blind indexes are derived from text the projection renders in the
+        // session time zone, so pin it exactly as the runtime read path does.
+        transaction
+            .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
+            .await?;
+        let rows = transaction
+            .query(&select_sql, &[])
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
+        transaction
+            .commit()
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+
+        const MAX_NAMED_DUPLICATES: usize = 64;
+        for (field_index, field) in covered.iter().enumerate() {
+            let Some(blind) = field.blind.filter(|blind| blind.unique) else {
+                continue;
+            };
+            let mut seen = BTreeMap::new();
+            let mut duplicates = Vec::new();
+            for row in &rows {
+                let record_id: String = row
+                    .try_get(0)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let value = row
+                    .try_get::<_, Option<Value>>(field_index + 1)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                    .unwrap_or(Value::Null);
+                let Some(plaintext) = field_plaintext_string(field.prior, &value)? else {
+                    continue;
+                };
+                let index = service.blind_index(
+                    field.entity_id,
+                    field.candidate.id.as_str(),
+                    &FieldEncryptionService::normalize(&blind.normalization, &plaintext),
+                );
+                if let Some(first) = seen.insert(index, record_id.clone()) {
+                    duplicates.push(first);
+                    duplicates.push(record_id);
+                }
+            }
+            if !duplicates.is_empty() {
+                duplicates.sort();
+                duplicates.dedup();
+                duplicates.truncate(MAX_NAMED_DUPLICATES);
+                return Err(PostgresKernelError::FieldEncryptionBlindCollision {
+                    entity_id: field.entity_id.to_owned(),
+                    record_ids: duplicates,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Seal one chunk of rows: select the keyset page under lock, capture its
+    /// pre-change history shape, seal every covered field's plaintext into the
+    /// envelope and blind-index columns, journal the change as first-class
+    /// internal revisions, and advance the durable cursor, all in one
+    /// transaction. The draining chunk, which selects no rows, instead runs the
+    /// pre-drop content verification, records the flip boundary rows, and
+    /// closes the step.
+    async fn execute_field_encryption_chunk(
+        &mut self,
+        request: FieldEncryptionChunkRequest<'_>,
+    ) -> Result<bool> {
+        let FieldEncryptionChunkRequest {
+            registry,
+            step,
+            ledger,
+            ledger_step,
+            descriptor_path,
+            target_package_revision,
+            table,
+            covered,
+            service,
+            history_choice,
+            chunk_size,
+            max_total_rows,
+            lock_timeout_ms,
+            statement_timeout_ms,
+        } = request;
+        if step.sha256 != statement_checksum(&step.sql)
+            || ledger_step.checksum != step.sha256
+            || chunk_size == 0
+            || max_total_rows == 0
+        {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let table = SqlIdentifier::parse(table)?;
+        let transaction = self.client.transaction().await?;
+        set_local_migration_timeouts(&transaction, lock_timeout_ms, statement_timeout_ms).await?;
+        let progress = step_progress(&transaction, ledger, ledger_step).await?;
+        if progress.complete {
+            transaction.commit().await?;
+            return Ok(false);
+        }
+        if progress.affected_rows > max_total_rows {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], false).await?;
+        // Plaintext text, journal projections, and the sealed-value check all
+        // render typed columns through the session time zone; pin it to the
+        // same UTC the runtime read path pins.
+        transaction
+            .execute("SELECT set_config('TimeZone', 'UTC', true)", &[])
+            .await?;
+
+        let prior_projection = covered
+            .iter()
+            .map(|field| prior_plaintext_projection(field.prior))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let limit = i64::from(chunk_size);
+        let select_sql = format!(
+            "SELECT record_id, {prior_projection}
+             FROM registry_data.{}
+             WHERE ($1::pg_catalog.uuid IS NULL OR record_id > $1)
+             ORDER BY record_id
+             LIMIT $2
+             FOR UPDATE",
+            table.quoted()
+        );
+        let rows = transaction
+            .query(&select_sql, &[&progress.checkpoint_record_id, &limit])
+            .await
+            .map_err(|_| PostgresKernelError::Connection)?;
+        if rows.is_empty() {
+            // Draining chunk: verify stored content before any reviewed DROP
+            // COLUMN can run, record the flip boundary, and close the step in
+            // this one transaction so a failure leaves the step resumable.
+            let history_commit_position = transaction
+                .query_one(
+                    "SELECT latest_position
+                       FROM registry_internal.registry_commit_head
+                      WHERE singleton
+                      FOR UPDATE",
+                    &[],
+                )
+                .await
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                .get::<_, i64>(0)
+                .checked_add(1)
+                .ok_or(PostgresKernelError::RegistryUnavailable)?;
+            for field in covered {
+                let verification = verify_field_encryption_content(
+                    &transaction,
+                    service,
+                    field,
+                    &table,
+                    target_package_revision,
+                )
+                .await?;
+                record_field_encryption_flip(
+                    &transaction,
+                    field,
+                    target_package_revision,
+                    history_choice,
+                    history_commit_position,
+                    &verification,
+                )
+                .await?;
+            }
+            set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
+            record_step_complete(&transaction, ledger, ledger_step, progress.affected_rows).await?;
+            transaction.commit().await?;
+            return Ok(false);
+        }
+
+        let ids = rows
+            .iter()
+            .map(|row| row.try_get::<_, Uuid>(0))
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let selected =
+            u64::try_from(ids.len()).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let total = progress
+            .affected_rows
+            .checked_add(selected)
+            .filter(|total| *total <= max_total_rows)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+
+        let capture = prepare_field_encryption_page_capture(
+            &transaction,
+            registry,
+            descriptor_path,
+            step,
+            &ids,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+        let update_sql = field_encryption_update_statement(&table, covered);
+        for (row_index, record_id) in ids.iter().enumerate() {
+            let mut parameters: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = vec![record_id];
+            let mut seals: Vec<FieldEncryptionSeal> = Vec::new();
+            let mut any_value = false;
+            for (field_index, field) in covered.iter().enumerate() {
+                let value = rows[row_index]
+                    .try_get::<_, Option<Value>>(field_index + 1)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+                    .unwrap_or(Value::Null);
+                let Some(plaintext) = field_plaintext_string(field.prior, &value)? else {
+                    seals.push((None, None));
+                    continue;
+                };
+                let envelope = service
+                    .seal(
+                        field.entity_id,
+                        field.candidate.id.as_str(),
+                        &record_id.to_string(),
+                        plaintext.as_bytes(),
+                    )
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+                let blind = field.blind.map(|blind| {
+                    service.blind_index(
+                        field.entity_id,
+                        field.candidate.id.as_str(),
+                        &FieldEncryptionService::normalize(&blind.normalization, &plaintext),
+                    )
+                });
+                seals.push((Some(envelope), blind.map(|index| index.to_vec())));
+                any_value = true;
+            }
+            if !any_value {
+                // Every covered field is null for this row: nothing to seal,
+                // so no revision, no envelope, and no blind index.
+                continue;
+            }
+            for ((envelope, blind), field) in seals.iter().zip(covered) {
+                parameters.push(envelope);
+                if field.blind.is_some() {
+                    parameters.push(blind);
+                }
+            }
+            let changed = transaction
+                .execute(&update_sql, &parameters)
+                .await
+                .map_err(|_| PostgresKernelError::Connection)?;
+            if changed != 1 {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
+        }
+
+        finish_field_encryption_page_update(
+            &transaction,
+            registry,
+            target_package_revision,
+            capture,
+        )
+        .await
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        set_force_row_security(&transaction, &[table.as_str().to_owned()], true).await?;
         let checkpoint = ids
             .last()
             .copied()
@@ -1059,6 +1493,10 @@ impl DedicatedApplyConnection {
             ));
         }
         let transaction = self.client.transaction().await?;
+        // Refuse before maintenance or ledger state can start: otherwise a
+        // successor could add new flip rows while an erase lifecycle is using
+        // the current durable flip manifest for crash-resumable correlation.
+        verify_complete_history_coverage(&transaction).await?;
         verify_retained_webhook_delivery_bindings(
             &transaction,
             event_destination_compatibility_inventory,
@@ -1240,6 +1678,13 @@ impl DedicatedApplyConnection {
             runtime_role,
         )
         .await?;
+        // A field-encryption erase lifecycle marks coverage incomplete before
+        // releasing its first lock transaction. Refusing successor activation
+        // until rebaseline completes freezes the durable flip manifest used to
+        // correlate crash-resumable audit counts.
+        if current.is_some() {
+            verify_complete_history_coverage(&transaction).await?;
+        }
         record_applied(&transaction, ledger).await?;
         let changed = if let Some(current) = current {
             current.validate()?;
@@ -1617,6 +2062,25 @@ impl DedicatedApplyConnection {
     }
 }
 
+async fn verify_complete_history_coverage(
+    client: &impl tokio_postgres::GenericClient,
+) -> Result<()> {
+    let complete = client
+        .query_opt(
+            "SELECT coverage_ready AND unavailable_after_position IS NULL
+               FROM registry_internal.registry_commit_head
+              WHERE singleton
+              FOR UPDATE",
+            &[],
+        )
+        .await?
+        .is_some_and(|row| row.get::<_, bool>(0));
+    if !complete {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
 /// Refuse a successor before changing maintenance state when its activated
 /// non-secret destination bindings cannot finish every retained non-terminal
 /// delivery. The package session's exclusive advisory lock prevents Registry
@@ -1759,7 +2223,10 @@ fn map_reviewed_pattern_error(
             }
             let objects = match &step.descriptor {
                 ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
-                | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. } => objects,
+                | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. }
+                | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => {
+                    objects
+                }
             };
             let mut fields = objects
                 .iter()
@@ -1775,7 +2242,8 @@ fn map_reviewed_pattern_error(
 fn step_tables(step: &ValidatedReviewedMigrationStep) -> Result<Vec<String>> {
     let objects = match &step.descriptor {
         ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. }
-        | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. } => objects,
+        | ReviewedMigrationStepDescriptor::ChunkedBackfill { objects, .. }
+        | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => objects,
     };
     let tables = objects
         .iter()
@@ -1807,6 +2275,461 @@ async fn execute_boolean_assertion(
         .try_get::<_, Option<bool>>(0)
         .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
     if accepted != Some(true) {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(())
+}
+
+/// Resolve the covered fields of one field-encryption backfill step: the
+/// successor fields the step's objects name, each paired with its predecessor
+/// plaintext field from the verified baseline. A predecessor that is already
+/// encrypted names a key rotation, which this engine step does not implement,
+/// so it fails closed.
+pub(crate) fn covered_field_encryption_fields<'a>(
+    registry: &'a CompiledRegistry,
+    predecessor_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
+    entity_id: &'a str,
+    step: &ValidatedReviewedMigrationStep,
+) -> Result<Vec<FieldEncryptionCoveredField<'a>>> {
+    let entity: &CompiledEntity = registry
+        .entities()
+        .get(entity_id)
+        .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    let baseline = predecessor_baseline.ok_or(PostgresKernelError::RegistryUnavailable)?;
+    let prior_entity = baseline
+        .entities
+        .get(entity_id)
+        .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    let objects = match &step.descriptor {
+        ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => objects,
+        _ => return Err(PostgresKernelError::RegistryUnavailable),
+    };
+    let mut covered = Vec::new();
+    for object in objects {
+        let member_id = object
+            .member_id
+            .as_deref()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        if member_id.ends_with("#lookup") {
+            continue;
+        }
+        let candidate = entity
+            .fields
+            .get(member_id)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        if candidate.encryption.is_none() {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let prior = prior_entity
+            .fields
+            .get(member_id)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        if prior.encryption.is_some() {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let api_name = entity
+            .stored_fields
+            .iter()
+            .find(|field| field.logical.id == member_id)
+            .map(|field| field.logical.api_name.as_str())
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+        covered.push(FieldEncryptionCoveredField {
+            entity_id,
+            candidate,
+            prior,
+            blind: candidate
+                .encryption
+                .as_ref()
+                .and_then(|encryption| encryption.blind_index.as_ref()),
+            api_name,
+        });
+    }
+    if covered.is_empty() {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(covered)
+}
+
+/// The JSON projection of one predecessor plaintext column, matching the shape
+/// the mutation read path serves, so sealing derives exactly the canonical
+/// string a re-submitted current value would carry.
+pub(crate) fn prior_plaintext_projection(prior: &CompiledField) -> String {
+    let column = crate::generated_ddl::quote_identifier(&prior.physical_name);
+    match &prior.field_type {
+        crate::contract::FieldTypeSource::Decimal { .. } => format!("to_jsonb({column}::text)"),
+        _ => format!("to_jsonb({column})"),
+    }
+}
+
+/// The canonical plaintext string of one projected column value, or `None` for
+/// null. Validation is the same field-type validation a write passes, so a
+/// stored value that no longer parses fails the apply closed instead of
+/// sealing an unusable string.
+pub(crate) fn field_plaintext_string(
+    prior: &CompiledField,
+    value: &Value,
+) -> Result<Option<String>> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    if !crate::data::validate_field_value(crate::data::FieldValue::Json(value), &prior.field_type) {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    let text = match &prior.field_type {
+        crate::contract::FieldTypeSource::Boolean => value
+            .as_bool()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?
+            .to_string(),
+        crate::contract::FieldTypeSource::Int64 => value
+            .as_i64()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?
+            .to_string(),
+        crate::contract::FieldTypeSource::Crs84Point { .. }
+        | crate::contract::FieldTypeSource::Structured { .. } => String::from_utf8(
+            registry_platform_canonical_json::canonicalize_json(value)
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+        )
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+        _ => value
+            .as_str()
+            .ok_or(PostgresKernelError::RegistryUnavailable)?
+            .to_owned(),
+    };
+    Ok(Some(text))
+}
+
+/// The fixed per-row sealing statement of one step: every covered field's
+/// envelope column and blind-index column are set together with the plaintext
+/// column being nulled, in the same row update.
+fn field_encryption_update_statement(
+    table: &SqlIdentifier,
+    covered: &[FieldEncryptionCoveredField<'_>],
+) -> String {
+    let mut assignments = Vec::new();
+    let mut parameter = 2;
+    for field in covered {
+        let envelope = crate::generated_ddl::quote_identifier(&field.candidate.physical_name);
+        assignments.push(format!("{envelope} = ${parameter}"));
+        parameter += 1;
+        if let Some(blind) = field.blind {
+            let blind_column = crate::generated_ddl::quote_identifier(&blind.physical_name);
+            assignments.push(format!("{blind_column} = ${parameter}"));
+            parameter += 1;
+        }
+        let plaintext = crate::generated_ddl::quote_identifier(&field.prior.physical_name);
+        assignments.push(format!("{plaintext} = NULL"));
+    }
+    format!(
+        "UPDATE registry_data.{}
+            SET {}
+          WHERE record_id = $1",
+        table.quoted(),
+        assignments.join(", ")
+    )
+}
+
+/// The value-free content counts one field's pre-drop verification produced.
+/// Every count names rows, never values.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct FieldEncryptionContentVerification {
+    sealed_rows: u64,
+    sealed_journal_rows: u64,
+    accepted_plaintext_journal_rows: u64,
+    accepted_request_target_rows: u64,
+    accepted_request_proposal_rows: u64,
+    accepted_idempotency_rows: u64,
+    accepted_outbox_rows: u64,
+}
+
+/// Verify one covered field's stored content, by counting every affected row,
+/// before any reviewed DROP COLUMN of the plaintext column can run.
+///
+/// The live table is authoritative: every row either carries no value, or an
+/// envelope that authenticates and whose recomputed blind index matches the
+/// stored one. Any remaining live plaintext fails closed. The journal, change
+/// request targets and proposals, cached responses, and retained outbox
+/// payloads are counted per copy and classified as sealed or as plaintext the
+/// declared history choice explicitly accepts; nothing is decrypted into a
+/// row it did not already seal.
+async fn verify_field_encryption_content(
+    transaction: &tokio_postgres::Transaction<'_>,
+    service: &FieldEncryptionService,
+    field: &FieldEncryptionCoveredField<'_>,
+    table: &SqlIdentifier,
+    target_package_revision: &str,
+) -> Result<FieldEncryptionContentVerification> {
+    let mut verification = FieldEncryptionContentVerification::default();
+    let entity_id = field.entity_id;
+    let field_id = field.candidate.id.as_str();
+
+    let envelope_column = crate::generated_ddl::quote_identifier(&field.candidate.physical_name);
+    let plaintext_projection = prior_plaintext_projection(field.prior);
+    let blind_selection = field
+        .blind
+        .map(|blind| {
+            format!(
+                ", {}",
+                crate::generated_ddl::quote_identifier(&blind.physical_name)
+            )
+        })
+        .unwrap_or_default();
+    let live_sql = format!(
+        "SELECT record_id::text, {envelope_column}{blind_selection}, {plaintext_projection}
+           FROM registry_data.{}
+          ORDER BY record_id",
+        table.quoted()
+    );
+    let live_rows = transaction
+        .query(&live_sql, &[])
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    for row in &live_rows {
+        let record_id: String = row
+            .try_get(0)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let envelope: Option<Vec<u8>> = row
+            .try_get(1)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let blind: Option<Vec<u8>> = if field.blind.is_some() {
+            Some(
+                row.try_get(2)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+            )
+        } else {
+            None
+        };
+        let plaintext_column_index = if field.blind.is_some() { 3 } else { 2 };
+        let plaintext = row
+            .try_get::<_, Option<Value>>(plaintext_column_index)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?
+            .unwrap_or(Value::Null);
+        if !plaintext.is_null() {
+            // The live row still holds plaintext this step was required to seal.
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        let Some(envelope) = envelope else {
+            if blind.is_some() {
+                return Err(PostgresKernelError::RegistryUnavailable);
+            }
+            continue;
+        };
+        let opened = service
+            .open(entity_id, field_id, &record_id, &envelope)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        if let Some(blind_config) = field.blind {
+            let plaintext = String::from_utf8(opened.to_vec())
+                .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+            let expected = service.blind_index(
+                entity_id,
+                field_id,
+                &FieldEncryptionService::normalize(&blind_config.normalization, &plaintext),
+            );
+            match blind {
+                Some(stored) if stored.as_slice() == expected.as_slice() => {}
+                _ => return Err(PostgresKernelError::RegistryUnavailable),
+            }
+        } else if blind.is_some() {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        }
+        verification.sealed_rows = verification
+            .sealed_rows
+            .checked_add(1)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    }
+
+    // Journal rows this apply wrote at the target revision must carry the
+    // tagged envelope member and authenticate; a plaintext member at or after
+    // the boundary is the masquerade direction and fails closed.
+    let journal_sql = "SELECT record_id::text, snapshot
+                         FROM registry_internal.registry_revisions
+                        WHERE entity_id = $1
+                          AND package_revision = $2
+                        ORDER BY record_id";
+    let journal_rows = transaction
+        .query(journal_sql, &[&entity_id, &target_package_revision])
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    for row in &journal_rows {
+        let record_id: String = row
+            .try_get(0)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let snapshot: Option<Vec<u8>> = row
+            .try_get(1)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let Some(snapshot) = snapshot else {
+            continue;
+        };
+        let snapshot: Value = serde_json::from_slice(&snapshot)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        let Some(member) = snapshot.get(field_id) else {
+            continue;
+        };
+        let Some(envelope) =
+            registry_platform_crypto::field_encryption::parse_envelope_member(member)
+        else {
+            return Err(PostgresKernelError::RegistryUnavailable);
+        };
+        service
+            .open(entity_id, field_id, &record_id, &envelope)
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+        verification.sealed_journal_rows = verification
+            .sealed_journal_rows
+            .checked_add(1)
+            .ok_or(PostgresKernelError::RegistryUnavailable)?;
+    }
+
+    let accepted_plaintext_journal = transaction
+        .query_one(
+            "SELECT count(*)::bigint
+               FROM registry_internal.registry_revisions
+              WHERE entity_id = $1
+                AND package_revision <> $2
+                AND convert_from(snapshot, 'UTF8')::jsonb ? $3",
+            &[&entity_id, &target_package_revision, &field_id],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    verification.accepted_plaintext_journal_rows =
+        u64::try_from(accepted_plaintext_journal.get::<_, i64>(0))
+            .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+    // Every target copy present while the flip transaction holds the apply
+    // lock predates the flip. A structured plaintext value can legitimately
+    // have the envelope tag's JSON shape, so value shape cannot subtract it
+    // from the accepted pre-flip count. Proposal copies use their frozen
+    // nested effects and field changes.
+    let request_targets = transaction
+        .query_one(
+            "SELECT count(*) FILTER (
+                        WHERE base_snapshot ? $2 OR after_snapshot ? $2
+                    )::bigint
+               FROM registry_internal.registry_request_targets
+              WHERE target_entity_id = $1",
+            &[&entity_id, &field_id],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    let target_mentions: i64 = request_targets.get(0);
+    verification.accepted_request_target_rows =
+        u64::try_from(target_mentions).map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+    let request_proposals = transaction
+        .query_one(
+            "SELECT count(*)::bigint
+               FROM registry_internal.registry_request_proposals AS proposal
+              WHERE snapshot IS NOT NULL
+                AND EXISTS (
+                    SELECT 1
+                      FROM jsonb_array_elements(
+                               COALESCE(proposal.snapshot -> 'effects', '[]'::jsonb)
+                           ) AS effect
+                      CROSS JOIN LATERAL jsonb_array_elements(
+                          COALESCE(effect -> 'fieldChanges', '[]'::jsonb)
+                      ) AS field_change
+                     WHERE effect -> 'target' ->> 'entityId' = $1
+                       AND field_change ->> 'field' = $2
+                )",
+            &[&entity_id, &field_id],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    verification.accepted_request_proposal_rows = u64::try_from(request_proposals.get::<_, i64>(0))
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+    // The recursive path binds as text and casts in the server: no client
+    // parameter type maps to jsonpath, and the explicit I/O cast is exact.
+    let cached_responses = transaction
+        .query_one(
+            "SELECT count(*)::bigint
+               FROM registry_internal.registry_idempotency
+              WHERE convert_from(response_body, 'UTF8')::jsonb @? ($1::text)::jsonpath",
+            &[&recursive_member_path(field.api_name)?],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    verification.accepted_idempotency_rows = u64::try_from(cached_responses.get::<_, i64>(0))
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+    let retained_payloads = transaction
+        .query_one(
+            "SELECT count(*)::bigint
+               FROM registry_internal.registry_outbox
+              WHERE payload IS NOT NULL
+                AND convert_from(payload, 'UTF8')::jsonb @? ($1::text)::jsonpath",
+            &[&recursive_member_path(field.api_name)?],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    verification.accepted_outbox_rows = u64::try_from(retained_payloads.get::<_, i64>(0))
+        .map_err(|_| PostgresKernelError::RegistryUnavailable)?;
+
+    Ok(verification)
+}
+
+/// The recursive JSONPath that matches one api-named member anywhere in a
+/// response or payload document. Api names are compiler identifiers, so a
+/// quote or backslash refuses rather than escaping.
+pub(crate) fn recursive_member_path(api_name: &str) -> Result<String> {
+    if api_name.is_empty()
+        || api_name
+            .chars()
+            .any(|character| matches!(character, '"' | '\\'))
+    {
+        return Err(PostgresKernelError::RegistryUnavailable);
+    }
+    Ok(format!("$.**.\"{api_name}\""))
+}
+
+/// Record one field's flip boundary and its value-free verification counts.
+/// The row lands in the same transaction as the step's completion, so a
+/// verified step and its boundary are atomic.
+async fn record_field_encryption_flip(
+    transaction: &tokio_postgres::Transaction<'_>,
+    field: &FieldEncryptionCoveredField<'_>,
+    boundary_package_revision: &str,
+    history_choice: ReviewedFieldEncryptionHistory,
+    history_commit_position: i64,
+    verification: &FieldEncryptionContentVerification,
+) -> Result<()> {
+    let history_choice = match history_choice {
+        ReviewedFieldEncryptionHistory::EraseAndRebaseline => "erase-and-rebaseline",
+        ReviewedFieldEncryptionHistory::RetainPlaintextHistory => "retain-plaintext-history",
+    };
+    let changed = transaction
+        .execute(
+            "INSERT INTO registry_internal.registry_field_encryption_flips (
+                 entity_id, field_id, boundary_package_revision, history_choice,
+                 history_commit_position,
+                 sealed_row_count, sealed_journal_row_count,
+                 accepted_plaintext_journal_row_count, accepted_request_target_row_count,
+                 accepted_request_proposal_row_count, accepted_idempotency_row_count,
+                 accepted_outbox_row_count
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+            &[
+                &field.entity_id,
+                &field.candidate.id,
+                &boundary_package_revision,
+                &history_choice,
+                &history_commit_position,
+                &i64::try_from(verification.sealed_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.sealed_journal_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.accepted_plaintext_journal_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.accepted_request_target_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.accepted_request_proposal_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.accepted_idempotency_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+                &i64::try_from(verification.accepted_outbox_rows)
+                    .map_err(|_| PostgresKernelError::RegistryUnavailable)?,
+            ],
+        )
+        .await
+        .map_err(|_| PostgresKernelError::Connection)?;
+    if changed != 1 {
         return Err(PostgresKernelError::RegistryUnavailable);
     }
     Ok(())

@@ -433,6 +433,49 @@ only an out-of-band `evidence verify-audit` pass over the whole directory detect
 audit records hashed principals and correlation identifiers, so operator-side investigation
 depends on retaining the hashing secret and request context.
 
+## Field encryption draws a boundary inside the database
+
+Base Registry Engine field encryption adds one boundary the other products do not have, drawn inside
+the database rather than at a service edge. A restricted field the project declares `encrypted`
+stores its values as AES-256-GCM envelopes under a data-encryption key the process wraps and
+unwraps through Vault or OpenBao Transit, so the value is protected against a reader of the
+database itself: a database administrator account, a replica, a dump, a backup, or a read that SQL
+injection obtains. That reader learns no restricted value. Two readers sit outside the boundary,
+and the feature does not claim otherwise: field encryption does not protect restricted values
+against the running process, or against holders of the Transit credential, because both can ask for
+plaintext.
+
+A reviewer should weigh three consequences. First, the boundary fails closed: when the registry
+cannot unwrap the key, entities with encrypted fields answer with an HTTP `503`
+`runtime.field_encryption.unavailable` problem instead of degrading to plaintext, and entities
+without encrypted fields keep serving. Second, the blind index that equality lookups resolve
+through leaks equality, presence, and cardinality to a database reader by design: it is an
+HMAC-SHA-256 over a normalized value under a key that never leaves the process, so the reader sees
+which rows hold a value and which rows share one without learning the value. Third, the boundary
+has a time condition: plaintext backups taken before a field was encrypted stay inside the stated
+threat model for as long as they are retained, so retiring or encrypting pre-flip backups is a
+precondition of the flip-on migration, not an afterthought.
+[Field encryption for restricted fields](../breg-field-encryption/) carries the migration's history
+choices, and the [hardening checklist](../../security/hardening-checklist/) carries the custody
+items.
+
+The cryptography behind field encryption is the FIPS build of AWS-LC (`aws-lc-rs` with the `fips`
+feature, linking `aws-lc-fips-sys`, which binds AWS-LC-FIPS 3.0.x), always on, with no non-FIPS
+fallback path. Runtime paths, including those the JWT library uses, select the FIPS backend through
+unified features, while the non-FIPS `aws-lc-sys` crate remains an unreferenced but
+supply-chain-relevant build dependency. Upstream documents that the bound module has completed FIPS
+validation testing by an accredited lab and directs consumers to NIST CMVP for certification
+status. Registry Stack does not claim certification of itself.
+
+{/* Evidence: crates/registry-platform-crypto/src/field_encryption.rs, seal_field(),
+    open_field(), FieldAad, and blind_index_hmac();
+    crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize();
+    crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
+    crates/registry-breg/src/problem.rs, RuntimeFieldEncryptionUnavailable;
+    crates/registry-breg/src/api/mod.rs, field_encryption_refusal();
+    crates/registry-platform-crypto/Cargo.toml and Cargo.lock, with
+    release/notes/dependency-vetting-aws-lc-fips.md. */}
+
 ## Residual risks and what is left to the operator
 
 The canonical inventory of every current limit is [Known limitations and
@@ -561,4 +604,6 @@ conformance claim:
 - [RS-ARC-G](../../spec/rs-arc-g/): the two-layer architecture
 - [Evidence Gateway security model](../../security/evidence/): the invariant matrix and its tests
 - [Harden a production deployment](../../security/hardening-checklist/): hardening procedures
+- [Field encryption for restricted fields](../breg-field-encryption/): the sealed-field model and
+  its migration lifecycle
 - [Data minimization and purpose limitation](../data-minimization-and-purpose-limitation/)

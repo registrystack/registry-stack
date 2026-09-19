@@ -260,7 +260,12 @@ pub(super) async fn dispatch(
                 .await;
             match outcome {
                 Ok(outcome) => {
-                    let mut response = exact_mutation(outcome.response(), None, "");
+                    let mut response = exact_mutation(
+                        outcome.response(),
+                        None,
+                        "",
+                        service.field_encryption.as_deref(),
+                    );
                     response
                         .headers_mut()
                         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));

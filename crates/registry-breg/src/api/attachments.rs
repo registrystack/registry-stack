@@ -198,6 +198,7 @@ async fn mutate(
             outcome.response(),
             Some(surface.response_entity),
             public_deployment_prefix(&service),
+            service.field_encryption.as_deref(),
         ),
         Err(error) => mutation_problem(error),
     }
@@ -289,6 +290,7 @@ async fn download(
             .body(Body::from(held.body().to_vec()))
             .unwrap_or_else(|_| unavailable()),
         Ok(None) => concealed(),
+        Err(ReadServiceError::FieldEncryptionUnavailable) => field_encryption_unavailable(),
         Err(_) => unavailable(),
     }
 }

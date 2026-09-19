@@ -5,6 +5,8 @@ use std::{collections::BTreeSet, fmt::Write};
 use sha2::{Digest, Sha256};
 use tokio_postgres::GenericClient;
 
+use registry_platform_crypto::field_encryption::FIELD_ENCRYPTION_ALGORITHM;
+
 use crate::generated_ddl::{DdlObjectOwner, DdlPolicyRole, PolicyCommand, TablePrivilege};
 use crate::model::CompiledRegistry;
 
@@ -332,6 +334,18 @@ impl ExpectedManagedCatalog {
         catalog.table(
             "registry_internal.registry_migration_steps",
             std::iter::empty::<&str>(),
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        catalog.table(
+            "registry_internal.registry_field_encryption_keys",
+            ["INSERT", "SELECT"],
+            std::iter::empty::<&str>(),
+            Some((false, false)),
+        );
+        catalog.table(
+            "registry_internal.registry_field_encryption_flips",
+            ["SELECT"],
             std::iter::empty::<&str>(),
             Some((false, false)),
         );
@@ -666,13 +680,98 @@ pub(crate) async fn install_registry_state_schema(
              REVOKE ALL ON TABLE registry_internal.registry_state FROM PUBLIC;",
         )
         .await?;
+    migration
+        .batch_execute(&format!(
+            "CREATE TABLE IF NOT EXISTS registry_internal.registry_field_encryption_keys (
+                 key_version integer PRIMARY KEY
+                     CONSTRAINT registry_field_encryption_key_version_one
+                     CHECK (key_version = 1),
+                 provider_kind text NOT NULL
+                     CONSTRAINT registry_field_encryption_provider_kind_transit
+                     CHECK (provider_kind = 'transit_datakey'),
+                 algorithm text NOT NULL
+                     CONSTRAINT registry_field_encryption_algorithm_closed
+                     CHECK (algorithm = '{FIELD_ENCRYPTION_ALGORITHM}'),
+                 wrapped_dek text NOT NULL
+                     CONSTRAINT registry_field_encryption_wrapped_nonempty
+                     CHECK (wrapped_dek <> ''),
+                 transit_key_version integer NOT NULL
+                     CONSTRAINT registry_field_encryption_transit_version_positive
+                     CHECK (transit_key_version > 0),
+                 activated_package_revision text NOT NULL
+                     CONSTRAINT registry_field_encryption_revision_nonempty
+                     CHECK (activated_package_revision <> ''),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp()
+             );
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM PUBLIC;
+             CREATE TABLE IF NOT EXISTS registry_internal.registry_field_encryption_flips (
+                 entity_id text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_entity_nonempty
+                     CHECK (entity_id <> ''),
+                 field_id text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_field_nonempty
+                     CHECK (field_id <> ''),
+                 boundary_package_revision text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_boundary_nonempty
+                     CHECK (boundary_package_revision <> ''),
+                 history_choice text NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_choice_closed
+                     CHECK (history_choice IN ('erase-and-rebaseline', 'retain-plaintext-history')),
+                 history_commit_position bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_history_position_positive
+                     CHECK (history_commit_position > 0),
+                 sealed_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_sealed_rows_nonnegative
+                     CHECK (sealed_row_count >= 0),
+                 sealed_journal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_sealed_journal_nonnegative
+                     CHECK (sealed_journal_row_count >= 0),
+                 accepted_plaintext_journal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_journal_nonnegative
+                     CHECK (accepted_plaintext_journal_row_count >= 0),
+                 accepted_request_target_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_targets_nonnegative
+                     CHECK (accepted_request_target_row_count >= 0),
+                 accepted_request_proposal_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_proposals_nonnegative
+                     CHECK (accepted_request_proposal_row_count >= 0),
+                 accepted_idempotency_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_idempotency_nonnegative
+                     CHECK (accepted_idempotency_row_count >= 0),
+                 accepted_outbox_row_count bigint NOT NULL
+                     CONSTRAINT registry_field_encryption_flip_accepted_outbox_nonnegative
+                     CHECK (accepted_outbox_row_count >= 0),
+                 created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+                 PRIMARY KEY (entity_id, field_id)
+             );
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 ADD COLUMN IF NOT EXISTS history_commit_position bigint;
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 DROP CONSTRAINT IF EXISTS registry_field_encryption_flip_history_position_positive;
+             ALTER TABLE registry_internal.registry_field_encryption_flips
+                 ADD CONSTRAINT registry_field_encryption_flip_history_position_positive
+                 CHECK (
+                     history_commit_position IS NULL
+                     OR history_commit_position > 0
+                 );
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM PUBLIC;",
+        ))
+        .await?;
     install_migration_ledger(migration, runtime_role).await?;
     migration
         .batch_execute(&format!(
             "REVOKE ALL ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context FROM PUBLIC, {};\n\
              GRANT USAGE ON SCHEMA registry_internal, registry_data, registry_source, registry_derived, registry_context TO {};\n\
              REVOKE ALL ON TABLE registry_internal.registry_state FROM {};\n\
-             GRANT SELECT ON TABLE registry_internal.registry_state TO {};",
+             GRANT SELECT ON TABLE registry_internal.registry_state TO {};\n\
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_keys FROM {};\n\
+             GRANT SELECT, INSERT ON TABLE registry_internal.registry_field_encryption_keys TO {};\n\
+             REVOKE ALL ON TABLE registry_internal.registry_field_encryption_flips FROM {};\n\
+             GRANT SELECT ON TABLE registry_internal.registry_field_encryption_flips TO {};",
+            runtime_role.quoted(),
+            runtime_role.quoted(),
+            runtime_role.quoted(),
+            runtime_role.quoted(),
             runtime_role.quoted(),
             runtime_role.quoted(),
             runtime_role.quoted(),

@@ -3307,6 +3307,8 @@ mod tests {
                         required: true,
                         classification: Classification::Internal,
                         valid_time_role: None,
+                        encrypted: false,
+                        lookup: None,
                     },
                     FieldSource {
                         pattern: None,
@@ -3319,6 +3321,8 @@ mod tests {
                         required: true,
                         classification: Classification::Internal,
                         valid_time_role: None,
+                        encrypted: false,
+                        lookup: None,
                     },
                 ],
                 constraints: Vec::new(),

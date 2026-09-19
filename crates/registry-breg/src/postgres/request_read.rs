@@ -9,13 +9,14 @@ use serde_json::{json, Map, Value};
 use tokio_postgres::Transaction;
 use uuid::Uuid;
 
-use super::{compiled_api_name, RecordEnvelope};
+use super::{compiled_api_name, open_snapshot_members, RecordEnvelope};
 use crate::api::{
     ReadServiceError, RecordReadRequest, RequestActionTargetAuthority,
     RowBoundaryOperator as ApiRowBoundaryOperator, VerifiedRequestAction, VerifiedRequestPresence,
     VerifiedRequestTargetAuthority, VerifiedRowBoundary,
 };
 use crate::contract::{Operation, RequestMetadataFieldSource};
+use crate::field_encryption::FieldEncryptionService;
 use crate::model::{CompiledEntity, CompiledRegistry, CompiledRoute, HttpMethod};
 use crate::mutation::request_action_etag;
 use crate::postgres::context::ChangeRequestPresenceContext;
@@ -41,6 +42,7 @@ pub(super) async fn annotate_records(
     request: &RecordReadRequest,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     records: &mut [RecordEnvelope],
 ) -> Result<(), ReadServiceError> {
     if records.is_empty() {
@@ -55,6 +57,7 @@ pub(super) async fn annotate_records(
             request,
             claims,
             entity,
+            field_encryption,
             records,
         )
         .await?;
@@ -172,6 +175,7 @@ async fn annotate_request_records(
     request: &RecordReadRequest,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     records: &mut [RecordEnvelope],
 ) -> Result<(), ReadServiceError> {
     let actor_reference = claims
@@ -273,6 +277,7 @@ async fn annotate_request_records(
             request,
             claims,
             entity,
+            field_encryption,
             record,
             &workflow,
             &targets,
@@ -389,6 +394,7 @@ pub(super) async fn attachment_version_is_authorized(
     request: &RecordReadRequest,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     record_id: Uuid,
     proposal_version: i64,
     slot_id: &str,
@@ -485,6 +491,17 @@ pub(super) async fn attachment_version_is_authorized(
                 return Err(ReadServiceError::Unavailable);
             }
             let intake = intake.as_object().ok_or(ReadServiceError::Unavailable)?;
+            // The retained intake keeps its sealed members until this
+            // authorization edge: the boundary comparison reads the opened
+            // row, and a stored envelope that does not open refuses the
+            // disclosure instead of authorizing it.
+            let mut intake = intake.clone();
+            open_snapshot_members(
+                entity,
+                &record_id.to_string(),
+                &mut intake,
+                field_encryption,
+            )?;
             let stage = if action.operation() == Operation::ApplyRequest {
                 None
             } else {
@@ -499,7 +516,7 @@ pub(super) async fn attachment_version_is_authorized(
                 stage,
                 slot_id,
                 &row_boundaries(authority)?,
-                intake,
+                &intake,
                 record_id,
             )
             .is_err()
@@ -520,6 +537,7 @@ pub(super) async fn attachment_version_is_authorized(
             expected,
             claims,
             entity,
+            field_encryption,
             record_id,
             &actor,
             &proposal,
@@ -541,6 +559,7 @@ async fn attachment_targets_are_authorized(
     expected: &ExpectedRegistryIdentity,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     record_id: Uuid,
     actor: &str,
     proposal: &ProposalSnapshot,
@@ -597,6 +616,20 @@ async fn attachment_targets_are_authorized(
             .entities()
             .get(target_entity_id)
             .ok_or(ReadServiceError::Unavailable)?;
+        // The captured target rows keep their sealed members until this
+        // authorization edge. Row boundaries never name an encrypted field,
+        // so opening them preserves the authorized and unauthorized
+        // outcomes, and a stored envelope that does not open refuses the
+        // disclosure closed instead of authorizing it.
+        let mut before = target.before.clone();
+        if let Some(before) = before.as_mut() {
+            open_snapshot_members(
+                target_entity,
+                &target_id.to_string(),
+                before,
+                field_encryption,
+            )?;
+        }
         if ChangeRequestTargetContext::authorize_retained_attachment_rows(
             registry,
             claims,
@@ -604,7 +637,7 @@ async fn attachment_targets_are_authorized(
             row_boundaries(authority)?,
             binding,
             target_entity,
-            target.before.as_ref(),
+            before.as_ref(),
             &target.after,
             target_id,
         )
@@ -650,7 +683,25 @@ async fn attachment_targets_are_authorized(
                 {
                     return Err(ReadServiceError::Unavailable);
                 }
-                let snapshot = snapshot.as_object().ok_or(ReadServiceError::Unavailable)?;
+                let guard_entity = registry
+                    .entities()
+                    .get(&guard.entity_id)
+                    .ok_or(ReadServiceError::Unavailable)?;
+                // The frozen guard compares the stored row against the value
+                // the request captured, so an encrypted member opens before
+                // the comparison: envelope bytes never stand in for the
+                // submitted value, and a stored member that does not open
+                // refuses the disclosure instead of failing it silently.
+                let mut snapshot = snapshot
+                    .as_object()
+                    .ok_or(ReadServiceError::Unavailable)?
+                    .clone();
+                open_snapshot_members(
+                    guard_entity,
+                    &guard_id.to_string(),
+                    &mut snapshot,
+                    field_encryption,
+                )?;
                 if guard
                     .values
                     .iter()
@@ -673,19 +724,15 @@ async fn attachment_targets_are_authorized(
                     fields: guard.values.keys().cloned().collect(),
                     expected_revision: Some(guard.expected_revision),
                 };
-                let target_entity = registry
-                    .entities()
-                    .get(&guard.entity_id)
-                    .ok_or(ReadServiceError::Unavailable)?;
                 if ChangeRequestTargetContext::authorize_retained_attachment_rows(
                     registry,
                     claims,
                     None,
                     row_boundaries(authority)?,
                     binding,
-                    target_entity,
-                    Some(snapshot),
-                    snapshot,
+                    guard_entity,
+                    Some(&snapshot),
+                    &snapshot,
                     guard_id,
                 )
                 .is_err()
@@ -866,6 +913,7 @@ async fn action_links(
     request: &RecordReadRequest,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     record: &RecordEnvelope,
     workflow: &RequestWorkflow,
     targets: &[RequestTargetSnapshot],
@@ -937,6 +985,7 @@ async fn action_links(
                 expected,
                 claims,
                 entity,
+                field_encryption,
                 route,
                 action,
                 workflow,
@@ -1080,6 +1129,7 @@ async fn review_snapshot(
     expected: &ExpectedRegistryIdentity,
     claims: &ClaimContext,
     entity: &CompiledEntity,
+    field_encryption: Option<&FieldEncryptionService>,
     route: &CompiledRoute,
     action: &VerifiedRequestAction,
     workflow: &RequestWorkflow,
@@ -1117,6 +1167,24 @@ async fn review_snapshot(
             .entities()
             .get(target_entity_id)
             .ok_or(ReadServiceError::Unavailable)?;
+        // The captured target rows keep their sealed members until this
+        // reviewer-facing display edge. Row boundaries never name an
+        // encrypted field, so opening them leaves the authorized and
+        // unauthorized outcomes unchanged while a stored envelope that does
+        // not open refuses the whole read closed. Effects never write an
+        // encrypted member, so the after row carries the before's sealed
+        // members forward unchanged and opens the same way.
+        let mut before = snapshot.before.clone();
+        if let Some(before) = before.as_mut() {
+            open_snapshot_members(target_entity, record_id.as_str(), before, field_encryption)?;
+        }
+        let mut after = snapshot.after.clone();
+        open_snapshot_members(
+            target_entity,
+            record_id.as_str(),
+            &mut after,
+            field_encryption,
+        )?;
         let fields = effect
             .field_changes()
             .iter()
@@ -1149,12 +1217,7 @@ async fn review_snapshot(
         )
         .map_err(|_| ReadServiceError::Unavailable)?;
         context
-            .authorize_rows(
-                target_entity,
-                snapshot.before.as_ref(),
-                &snapshot.after,
-                record_uuid,
-            )
+            .authorize_rows(target_entity, before.as_ref(), &after, record_uuid)
             .map_err(|_| ReadServiceError::Unavailable)?;
         if effect.operation() == Operation::Patch {
             transaction
@@ -1200,8 +1263,8 @@ async fn review_snapshot(
             "recordId": record_id.as_str(),
             "operation": operation_name(effect.operation()),
             "baseRevision": snapshot.expected_revision,
-            "before": snapshot.before.as_ref().map(|before| api_object(target_entity, before, authority.readable_fields())).transpose()?,
-            "after": api_object(target_entity, &snapshot.after, authority.readable_fields())?,
+            "before": before.as_ref().map(|before| api_object(target_entity, before, authority.readable_fields())).transpose()?,
+            "after": api_object(target_entity, &after, authority.readable_fields())?,
         }));
     }
     Ok(Some(json!({ "targets": target_values })))

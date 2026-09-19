@@ -239,6 +239,115 @@ async fn runtime_startup_preserves_retained_attachment_and_tombstone_backend_bin
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn production_startup_refuses_local_file_field_encryption_custody() {
+    let database = TestDatabase::create(2).await;
+    let (migration, migration_task) = database.connect_migration().await;
+    let fixture = StartupFixture::new();
+    let signing =
+        generate_private_jwk(GeneratedKeyAlgorithm::Es384).expect("fixture signing key generates");
+    let module_source = module_bytes_with_encrypted_field();
+    let provisional = PackageFixture::build_version_with_module(
+        &fixture.root,
+        fingerprint(1),
+        &signing,
+        1,
+        None,
+        false,
+        module_source.clone(),
+    );
+    let provisional_context = provisional.context(PackageIntent::InitialActivation);
+    let verified_provisional = load_package(&provisional.root, &provisional_context)
+        .expect("provisional encrypted package loads enough to install schema");
+    install_compiled_schema(
+        &migration,
+        verified_provisional.registry(),
+        &database.runtime_role,
+    )
+    .await
+    .expect("compiled encrypted schema installs");
+    let expected_catalog = ExpectedManagedCatalog::compiled(verified_provisional.registry());
+    let schema_fingerprint =
+        managed_schema_fingerprint(&migration, &database.runtime_role, &expected_catalog)
+            .await
+            .expect("compiled encrypted schema fingerprints");
+    drop(provisional);
+
+    let package = PackageFixture::build_version_with_module(
+        &fixture.root,
+        schema_fingerprint,
+        &signing,
+        1,
+        None,
+        false,
+        module_source,
+    );
+    let context = package.context(PackageIntent::InitialActivation);
+    let verified = load_package(&package.root, &context).expect("final encrypted package verifies");
+    initialize_registry_state_for_catalog_test(
+        &migration,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(verified.registry()),
+        RegistryStateTestIdentity {
+            package_id: &verified.manifest().package_id,
+            environment: &verified.manifest().environment,
+            instance_id: &verified.manifest().instance_id,
+            database_id: &verified.manifest().database_id,
+            package_revision: &verified.manifest().package_revision,
+            package_sequence: i64::try_from(verified.manifest().sequence)
+                .expect("fixture sequence fits"),
+        },
+    )
+    .await
+    .expect("Registry state initializes");
+
+    let idp = MockIdp::start().await;
+    let base = fixture.write_static_jwks_config(
+        &package,
+        &database.migration_role,
+        &database.runtime_role,
+        &idp,
+        Some("0123456789abcdef0123456789abcdef"),
+    );
+    // The local data key exists and is readable, so the refusal below names
+    // custody policy, not an unreadable secret.
+    let dek = fixture.secret_root.join("field-dek");
+    fs::write(
+        &dek,
+        format!(
+            "{}\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0x42_u8; 32])
+        ),
+    )
+    .expect("local data key writes");
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&dek, fs::Permissions::from_mode(0o600))
+            .expect("local data key is owner-only");
+    }
+    let local_file_config = fixture
+        .root
+        .join("runtime-field-encryption-local-file.yaml");
+    let raw = fs::read_to_string(&base).expect("base runtime config reads");
+    fs::write(
+        &local_file_config,
+        format!("{raw}\nfieldEncryption:\n  provider:\n    kind: localFile\n    dekRef: secret:file/field-dek\n"),
+    )
+    .expect("local-file runtime config writes");
+    assert_eq!(
+        prepare_with_connection_config_for_test(
+            &local_file_config,
+            database.runtime_config.clone()
+        )
+        .await
+        .err(),
+        Some(StartupError::FieldEncryptionCustody),
+        "a databaseInitializationEnvironment other than local refuses plaintext data-key files"
+    );
+    migration_task.abort();
+    database.cleanup().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn prepared_server_wires_services_and_static_jwks_readiness_tracks_database() {
     let database = TestDatabase::create(4).await;
     let (migration, migration_task) = database.connect_migration().await;
@@ -1315,9 +1424,28 @@ impl PackageFixture {
         prior_revision: Option<&str>,
         successor: bool,
     ) -> Self {
+        Self::build_version_with_module(
+            parent,
+            schema_fingerprint,
+            signing,
+            sequence,
+            prior_revision,
+            successor,
+            module_bytes(successor),
+        )
+    }
+
+    fn build_version_with_module(
+        parent: &Path,
+        schema_fingerprint: String,
+        signing: &PrivateJwk,
+        sequence: u64,
+        prior_revision: Option<&str>,
+        successor: bool,
+        module_source: Vec<u8>,
+    ) -> Self {
         let ordinal = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let root = parent.join(format!("package-{ordinal}"));
-        let module_source = module_bytes(successor);
         let module = parse_module_yaml(&module_source).expect("fixture module parses");
         let project_source = project_bytes(sequence, &module_digest(&module));
         let key_id = signing.public().kid.expect("generated key has kid");
@@ -1431,6 +1559,14 @@ fn module_bytes(successor: bool) -> Vec<u8> {
         r#"{{"id":"core","version":"1","entities":[{{"id":"neutral-record","primaryDataset":"neutral-registry","route":"neutral-records","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["code"]}}]}}{second}]}}"#
     )
     .into_bytes()
+}
+
+/// One module whose `holder` entity carries an encrypted restricted field, so
+/// a production package built from it requires field-encryption key state.
+fn module_bytes_with_encrypted_field() -> Vec<u8> {
+    r#"{"id":"core","version":"1","entities":[{"id":"holder","primaryDataset":"neutral-registry","route":"holders","mutationMode":"mutable","fields":[{"id":"jurisdiction","type":"string","maxLength":32,"required":true,"classification":"public"},{"id":"label","type":"string","maxLength":128,"required":true,"classification":"public"},{"id":"secret","type":"string","maxLength":256,"required":true,"classification":"restricted","encrypted":true,"lookup":{"normalization":["trim","uppercase"],"unique":true}}],"accessProfiles":[{"id":"reader","principalClaim":"principal","operations":["get","list"],"readableFields":["jurisdiction","label","secret"],"rowBoundaries":[]}]}]}"#
+        .to_owned()
+        .into_bytes()
 }
 
 fn write_json(path: &Path, value: &impl Serialize) {

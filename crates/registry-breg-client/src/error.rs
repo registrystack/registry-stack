@@ -128,6 +128,7 @@ pub enum BRegProblemCode {
     RequestPlanRefused(BRegPlanRefusal),
     RequestTimeout,
     ResourceNotFound,
+    RuntimeFieldEncryptionUnavailable,
     RuntimeNotReady,
     ServiceUnavailable,
     SourceUnavailable,
@@ -135,7 +136,7 @@ pub enum BRegProblemCode {
 }
 
 impl BRegProblemCode {
-    pub const ALL: [Self; 25] = [
+    pub const ALL: [Self; 26] = [
         Self::ActionEvidenceFailed,
         Self::ActionHandlerFailed,
         Self::ActionRefused,
@@ -157,6 +158,7 @@ impl BRegProblemCode {
         Self::RequestPlanRefused(BRegPlanRefusal::Resource),
         Self::RequestTimeout,
         Self::ResourceNotFound,
+        Self::RuntimeFieldEncryptionUnavailable,
         Self::RuntimeNotReady,
         Self::ServiceUnavailable,
         Self::SourceUnavailable,
@@ -181,6 +183,7 @@ impl BRegProblemCode {
             Self::RequestPlanRefused(_) => "request.plan_refused",
             Self::RequestTimeout => "request.timeout",
             Self::ResourceNotFound => "resource.not_found",
+            Self::RuntimeFieldEncryptionUnavailable => "runtime.field_encryption.unavailable",
             Self::RuntimeNotReady => "runtime.not_ready",
             Self::ServiceUnavailable => "service.unavailable",
             Self::SourceUnavailable => "source.unavailable",
@@ -204,7 +207,10 @@ impl BRegProblemCode {
             Self::UnsupportedMediaType => 415,
             Self::ActionRefused => 422,
             Self::PreconditionRequired => 428,
-            Self::RuntimeNotReady | Self::ServiceUnavailable | Self::SourceUnavailable => 503,
+            Self::RuntimeFieldEncryptionUnavailable
+            | Self::RuntimeNotReady
+            | Self::ServiceUnavailable
+            | Self::SourceUnavailable => 503,
             Self::RequestTimeout => 504,
         }
     }
@@ -245,6 +251,9 @@ impl BRegProblemCode {
             Self::RequestPlanRefused(refusal) => refusal.detail(),
             Self::RequestTimeout => "The request timed out.",
             Self::ResourceNotFound => "The requested resource was not found.",
+            Self::RuntimeFieldEncryptionUnavailable => {
+                "The Registry field-encryption service is unavailable."
+            }
             Self::RuntimeNotReady => "Registry runtime is not ready.",
             Self::ServiceUnavailable => "The Registry mutation service is unavailable.",
             Self::SourceUnavailable => "The Registry data service is unavailable.",

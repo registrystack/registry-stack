@@ -34,20 +34,20 @@ use crate::model::{
 };
 use crate::model::{
     ChangeRequestOperation, CompiledAccessEntry, CompiledAccessInventory,
-    CompiledBboxQueryCapability, CompiledChangeControl, CompiledDerivedField,
+    CompiledBboxQueryCapability, CompiledBlindIndex, CompiledChangeControl, CompiledDerivedField,
     CompiledDerivedRelation, CompiledEntity, CompiledEventDelivery, CompiledEventDeliveryInventory,
-    CompiledField, CompiledGeoJsonBinding, CompiledHookHandler, CompiledHookHandlerKind,
-    CompiledLogicalField, CompiledManifestAuthority, CompiledManifestDataService,
-    CompiledManifestDataset, CompiledManifestDistribution, CompiledManifestProjection,
-    CompiledManifestPublicService, CompiledMetadataEntity, CompiledMetadataEntry,
-    CompiledMetadataInventory, CompiledModuleIdentity, CompiledQueryFilterField,
-    CompiledQueryFilterOperator, CompiledQueryInventory, CompiledQueryKind, CompiledQueryOperation,
-    CompiledQuerySortDirection, CompiledQuerySortField, CompiledQueryTemporalBinding,
-    CompiledQueryTemporalSemantics, CompiledReadPath, CompiledRegistry, CompiledRevisionKind,
-    CompiledRoute, CompiledRouteInventory, CompiledSelectorProfile, CompiledSourceRelation,
-    CompiledSpatialQueryCapability, CompiledStoredField, CompiledTemporal,
-    CompiledWebhookDeliveryMode, CompiledWebhookRetryProfile, HttpMethod,
-    MAX_REVISION_HISTORY_RECORDS,
+    CompiledField, CompiledFieldEncryption, CompiledGeoJsonBinding, CompiledHookHandler,
+    CompiledHookHandlerKind, CompiledLogicalField, CompiledManifestAuthority,
+    CompiledManifestDataService, CompiledManifestDataset, CompiledManifestDistribution,
+    CompiledManifestProjection, CompiledManifestPublicService, CompiledMetadataEntity,
+    CompiledMetadataEntry, CompiledMetadataInventory, CompiledModuleIdentity,
+    CompiledQueryFilterField, CompiledQueryFilterOperator, CompiledQueryInventory,
+    CompiledQueryKind, CompiledQueryOperation, CompiledQuerySortDirection, CompiledQuerySortField,
+    CompiledQueryTemporalBinding, CompiledQueryTemporalSemantics, CompiledReadPath,
+    CompiledRegistry, CompiledRevisionKind, CompiledRoute, CompiledRouteInventory,
+    CompiledSelectorProfile, CompiledSourceRelation, CompiledSpatialQueryCapability,
+    CompiledStoredField, CompiledTemporal, CompiledWebhookDeliveryMode,
+    CompiledWebhookRetryProfile, HttpMethod, MAX_REVISION_HISTORY_RECORDS,
 };
 use crate::physical_names::{
     hex_prefix, EntityPhysicalNames, PhysicalNameBuilder, PhysicalNameInventory,
@@ -2007,6 +2007,44 @@ fn validate_entity_fields(
                     "PostgreSQL pattern must be at most 4096 UTF-8 bytes and contain no NUL; syntax is validated by PostgreSQL schema-test"));
             }
         }
+        if field.encrypted {
+            let path = format!("entities[{}].fields[{}].encrypted", entity.id, field.id);
+            if field.pattern.is_some() {
+                errors.push(Diagnostic::error(
+                    "field.encrypted.pattern_refused",
+                    format!("entities[{}].fields[{}].pattern", entity.id, field.id),
+                    "an encrypted field cannot declare pattern in Phase 1; remove pattern or store the field as plaintext",
+                ));
+            }
+            if field.classification != Classification::Restricted {
+                errors.push(Diagnostic::error(
+                    "field.encrypted.classification_invalid",
+                    &path,
+                    "an encrypted field must carry the restricted classification",
+                ));
+            }
+            if !matches!(
+                field.field_type,
+                FieldTypeSource::String { .. }
+                    | FieldTypeSource::Text { .. }
+                    | FieldTypeSource::Date
+                    | FieldTypeSource::Decimal { .. }
+                    | FieldTypeSource::Structured { .. }
+            ) {
+                errors.push(Diagnostic::error(
+                    "field.encrypted.type_unsupported",
+                    &path,
+                    "an encrypted field must use a persisted string, text, date, decimal, or structured type",
+                ));
+            }
+            if field.valid_time_role.is_some() {
+                errors.push(Diagnostic::error(
+                    "field.encrypted.valid_time_refused",
+                    "entities[].fields[].validTimeRole",
+                    "an encrypted field cannot carry a valid-time role",
+                ));
+            }
+        }
         match &field.field_type {
             FieldTypeSource::String {
                 min_length,
@@ -2374,6 +2412,16 @@ fn validate_constraints(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             ));
             continue;
         }
+        if referenced
+            .iter()
+            .any(|field| fields[field.as_str()].encrypted)
+        {
+            errors.push(Diagnostic::error(
+                "constraint.field.encrypted",
+                "entities[].constraints[]",
+                "an encrypted field cannot take part in a storage constraint; declare blind-index uniqueness with the field lookup instead",
+            ));
+        }
         if let ConstraintSource::Unique { when, .. } = constraint {
             validate_unique_when(entity, when.as_deref(), errors);
         }
@@ -2735,10 +2783,10 @@ fn valid_relative_sql_path(path: &str) -> bool {
 }
 
 fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
-    let fields: BTreeSet<&str> = entity
+    let fields: BTreeMap<&str, &FieldSource> = entity
         .fields
         .iter()
-        .map(|field| field.id.as_str())
+        .map(|field| (field.id.as_str(), field))
         .collect();
     let mut ids = BTreeSet::new();
     for index in &entity.indexes {
@@ -2755,12 +2803,23 @@ fn validate_indexes(entity: &EntitySource, errors: &mut Vec<Diagnostic>) {
             || index
                 .fields
                 .iter()
-                .any(|field| !fields.contains(field.as_str()))
+                .any(|field| !fields.contains_key(field.as_str()))
         {
             errors.push(Diagnostic::error(
                 "index.fields.invalid",
                 "entities[].indexes[].fields",
                 "an index has an empty, duplicate, or unresolved field set",
+            ));
+        }
+        if index.fields.iter().any(|field| {
+            fields
+                .get(field.as_str())
+                .is_some_and(|field| field.encrypted)
+        }) {
+            errors.push(Diagnostic::error(
+                "index.fields.encrypted",
+                "entities[].indexes[].fields",
+                "an encrypted field cannot back an authored index; declare blind-index lookup on the field instead",
             ));
         }
     }
@@ -2863,6 +2922,29 @@ fn validate_selector_profiles(entity: &EntitySource, errors: &mut Vec<Diagnostic
                 &format!(
                     "selector profile fields must use supported scalar stored types; {} in selector profile `{}` does not qualify",
                     quoted_list(&unsupported),
+                    selector.id
+                ),
+            ));
+        }
+        // An encrypted field can serve direct record lookup only through its
+        // declared blind index; without one there is nothing to select on.
+        let without_lookup: Vec<&str> = selector
+            .fields
+            .iter()
+            .map(String::as_str)
+            .filter(|field| {
+                fields
+                    .get(field)
+                    .is_some_and(|field| field.encrypted && field.lookup.is_none())
+            })
+            .collect();
+        if !without_lookup.is_empty() {
+            errors.push(Diagnostic::error(
+                "selector_profile.encrypted_lookup_required",
+                "entities[].selectorProfiles[].fields",
+                &format!(
+                    "an encrypted selector field requires a declared lookup; {} in selector profile `{}` declares none",
+                    quoted_list(&without_lookup),
                     selector.id
                 ),
             ));
@@ -3151,6 +3233,24 @@ fn validate_profiles(
                 "filterable and sortable fields must be readable",
             ));
         }
+        // Query processing over ciphertext cannot filter or order: an
+        // encrypted field leaves the filterable and sortable sets.
+        if access
+            .filterable_fields
+            .iter()
+            .chain(&access.sortable_fields)
+            .any(|field| {
+                fields
+                    .get(field.as_str())
+                    .is_some_and(|field| field.encrypted)
+            })
+        {
+            errors.push(Diagnostic::error(
+                "access_profile.processing.encrypted",
+                "entities[].accessProfiles[]",
+                "an encrypted field cannot be a filterable or sortable field",
+            ));
+        }
         if access.anonymous {
             let mut causes = Vec::new();
             if entity.classification != Classification::Public {
@@ -3210,6 +3310,16 @@ fn validate_profiles(
                     "access_profile.row_boundary.type_unsupported",
                     "entities[].accessProfiles[].rowBoundaries",
                     "CRS84 point and structured fields cannot be row-boundary fields",
+                ));
+            } else if boundary.field != "id"
+                && fields
+                    .get(boundary.field.as_str())
+                    .is_some_and(|field| field.encrypted)
+            {
+                errors.push(Diagnostic::error(
+                    "access_profile.row_boundary.encrypted",
+                    "entities[].accessProfiles[].rowBoundaries",
+                    "an encrypted field cannot be a row-boundary field",
                 ));
             }
             if boundary.claim.is_empty()
@@ -3679,6 +3789,17 @@ fn validate_hooks(
                 "an event projection refers to an unknown field",
             ));
         }
+        if hook.projection.iter().any(|field| {
+            fields
+                .get(field.as_str())
+                .is_some_and(|field| field.encrypted)
+        }) {
+            errors.push(Diagnostic::error(
+                "event.projection.encrypted",
+                "entities[].hooks[].projection",
+                "an encrypted field cannot be projected into an event",
+            ));
+        }
         let maximum_payload_bytes =
             maximum_event_payload_bytes(registry_id, &entity.id, hook, |field| {
                 fields
@@ -3982,6 +4103,16 @@ fn validate_event_condition(
                         "an event condition refers to an unknown field",
                     ));
                 }
+                if fields
+                    .get(field.as_str())
+                    .is_some_and(|field| field.encrypted)
+                {
+                    errors.push(Diagnostic::error(
+                        "event.when.encrypted",
+                        "entities[].events[].when.changed",
+                        "an event condition cannot name an encrypted field",
+                    ));
+                }
             }
             for (path, predicates) in [
                 ("entities[].hooks[].when.beforeEquals", before_equals),
@@ -3996,6 +4127,13 @@ fn validate_event_condition(
                         ));
                         continue;
                     };
+                    if source.encrypted {
+                        errors.push(Diagnostic::error(
+                            "event.when.encrypted",
+                            path,
+                            "an event condition cannot name an encrypted field",
+                        ));
+                    }
                     if matches!(value, EventScalarValue::Null) {
                         continue;
                     }
@@ -4638,6 +4776,20 @@ fn validate_derived_assets(
         .map(|entity| default_sql_name(&entity.id))
         .collect::<Vec<_>>();
     let known_relations = known_relations.iter().map(String::as_str).collect();
+    // Encrypted fields leave the registry_source layer, so derived SQL can
+    // never resolve them; collect their logical column names per relation.
+    let encrypted_columns = sources
+        .values()
+        .map(|entity| {
+            let columns = entity
+                .fields
+                .iter()
+                .filter(|field| field.encrypted)
+                .map(|field| default_sql_name(&field.id))
+                .collect::<BTreeSet<_>>();
+            (default_sql_name(&entity.id), columns)
+        })
+        .collect::<BTreeMap<_, _>>();
     let assets = asset_map(assets, errors);
     for entity in sources.values() {
         for derived in &entity.derived {
@@ -4654,7 +4806,14 @@ fn validate_derived_assets(
                 ));
                 continue;
             };
-            validate_derived_sql(derived, sql, &known_relations, &path, errors);
+            validate_derived_sql(
+                derived,
+                sql,
+                &known_relations,
+                &encrypted_columns,
+                &path,
+                errors,
+            );
         }
     }
 }
@@ -4748,20 +4907,50 @@ fn compile_entities(
         let mut fields = BTreeMap::new();
         let mut stored_fields = Vec::new();
         for field in source.fields.clone() {
+            // An encrypted field stores an envelope column ("x") instead of
+            // the plaintext column ("f"); the field's physical name always
+            // points at its storage column.
             let physical = builder
                 .derive(
-                    "f",
+                    if field.encrypted { "x" } else { "f" },
                     &format!("{}.{}", source.id, field.id),
                     "entities[].fields[].id",
                 )
                 .map_err(CompileFailure::from_one)?;
+            let encryption = if field.encrypted {
+                let blind_index = match &field.lookup {
+                    Some(lookup) => {
+                        let blind_physical = builder
+                            .derive(
+                                "i",
+                                &format!("{}.{}", source.id, field.id),
+                                "entities[].fields[].lookup",
+                            )
+                            .map_err(CompileFailure::from_one)?;
+                        // Bind the blind-index sibling column for reviewed
+                        // migrations the same way fields bind, under a member
+                        // id that cannot collide with a field id.
+                        field_names.insert(format!("{}#lookup", field.id), blind_physical.clone());
+                        Some(CompiledBlindIndex {
+                            physical_name: blind_physical,
+                            normalization: lookup.normalization.clone(),
+                            unique: lookup.unique,
+                        })
+                    }
+                    None => None,
+                };
+                Some(CompiledFieldEncryption { blind_index })
+            } else {
+                None
+            };
             field_names.insert(field.id.clone(), physical.clone());
-            let logical = logical_field(
+            let mut logical = logical_field(
                 &field.id,
                 field.api_name.as_deref(),
                 field.field_type.clone(),
                 field.classification,
             );
+            logical.encryption = encryption.clone();
             stored_fields.push(CompiledStoredField {
                 logical: logical.clone(),
                 required: field.required,
@@ -4778,6 +4967,7 @@ fn compile_entities(
                     classification: field.classification,
                     valid_time_role: field.valid_time_role,
                     physical_name: physical,
+                    encryption,
                 },
             );
         }
@@ -4830,8 +5020,11 @@ fn compile_entities(
         let source_relation = CompiledSourceRelation {
             entity_id: source.id.clone(),
             sql_name: default_sql_name(&source.id),
+            // Encrypted columns never surface through registry_source views:
+            // the logical source layer exposes plaintext columns only.
             stored_fields: stored_fields
                 .iter()
+                .filter(|field| field.logical.encryption.is_none())
                 .map(|field| field.logical.id.clone())
                 .collect(),
         };
@@ -4913,6 +5106,16 @@ fn compile_entities(
                 .map_err(CompileFailure::from_one)?;
             index_names.insert(index.id.clone(), physical);
             indexes.insert(index.id.clone(), index.fields.clone());
+        }
+        for field in &source.fields {
+            if field.lookup.as_ref().is_some_and(|lookup| lookup.unique) {
+                // The unique blind index carries a content-addressed managed
+                // name, bound like authored indexes for reviewed migrations.
+                index_names.insert(
+                    format!("lookup:{}", field.id),
+                    crate::generated_ddl::field_lookup_index_name(&source.id, &field.id),
+                );
+            }
         }
         let mut profiles = BTreeMap::new();
         let mut policy_names = BTreeMap::new();
@@ -5955,6 +6158,10 @@ fn logical_field(
         sql_name: default_sql_name(id),
         field_type,
         classification,
+        // Only stored fields can be encrypted; derived fields and the canonical
+        // id stay plaintext, and the authoring contract refuses `encrypted` on
+        // derived fields at deserialization.
+        encryption: None,
     }
 }
 
@@ -6499,12 +6706,15 @@ fn validate_projection_text(
 }
 
 fn manifest_projects_field(field: &CompiledField) -> bool {
-    !matches!(
-        &field.field_type,
-        FieldTypeSource::Reference { .. }
-            | FieldTypeSource::Crs84Point { .. }
-            | FieldTypeSource::Structured { .. }
-    )
+    // Encrypted storage has no portable plaintext representation, so the
+    // dataset projection refuses it alongside the non-scalar types.
+    field.encryption.is_none()
+        && !matches!(
+            &field.field_type,
+            FieldTypeSource::Reference { .. }
+                | FieldTypeSource::Crs84Point { .. }
+                | FieldTypeSource::Structured { .. }
+        )
 }
 
 fn nonempty(value: &str, path: &str, code: &str, errors: &mut Vec<Diagnostic>) {

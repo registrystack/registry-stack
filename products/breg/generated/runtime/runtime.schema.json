@@ -693,6 +693,85 @@
       },
       "type": "object"
     },
+    "RawFieldEncryptionConfig": {
+      "additionalProperties": false,
+      "description": "Raw `fieldEncryption` deployment block, absent by default.",
+      "properties": {
+        "provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RawFieldEncryptionProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RawFieldEncryptionProvider": {
+      "description": "Raw provider binding; the `kind` member selects the custodian.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "keyName": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "transit",
+              "type": "string"
+            },
+            "mount": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "timeoutMilliseconds": {
+              "default": 5000,
+              "format": "uint64",
+              "maximum": 30000,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "unixSocketPath": {
+              "maxLength": 4096,
+              "minLength": 2,
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "unixSocketPath",
+            "mount",
+            "keyName"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "dekRef": {
+              "maxLength": 140,
+              "minLength": 1,
+              "type": "string"
+            },
+            "kind": {
+              "const": "localFile",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "dekRef"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "RawFileSecretProviderConfig": {
       "additionalProperties": false,
       "properties": {
@@ -1261,6 +1340,11 @@
       },
       "default": {},
       "type": "object"
+    },
+    "fieldEncryption": {
+      "$ref": "#/$defs/RawFieldEncryptionConfig",
+      "default": {},
+      "description": "Optional field-encryption data-key provider. Absent by default, which\nserves unencrypted entities only."
     },
     "identity": {
       "$ref": "#/$defs/RawDeploymentIdentity"

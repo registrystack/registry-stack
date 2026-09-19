@@ -253,10 +253,45 @@ configured prefix and never derive their authority from request headers.
 | `audit` and `cursor` | The key that chains the audit journal and the secret that signs pagination cursors. Loss of either key invalidates existing chains or cursors. |
 | `eventDestinations` and `eventDelivery` | One binding per webhook destination the package declares, and payload retention; see [Bind webhook receivers](../breg-webhooks/). |
 | `evidenceProviders` | One binding per Evidence provider the package declares, keyed by provider ID: `baseUrl`, `trustBindingId`, `trustedJwksRef`, `revokedKeyIds`, optional `caBundleRef`, and exactly one of `tokenRef` or a refreshing `privateKeyJwt` credential. The script cannot replace these bindings; see [Governed registry actions](../../explanation/governed-registry-actions/). |
+| `fieldEncryption` | Key custody for encrypted fields; declare it when the project encrypts a field. The optional `provider` binding's `kind` member selects the custodian. `kind: transit` requires `unixSocketPath`, `mount`, and `keyName`, with an optional `timeoutMilliseconds` (default 5000, at most 30000). `kind: localFile` requires `dekRef`, a `secret:file/<name>` reference to one base64 data-key file, and is for local assurance only. The model and its limits are in [Field encryption for restricted fields](../../explanation/breg-field-encryption/). |
 | `attachmentStorage` | PostgreSQL by default, or an operator-bound S3-compatible backend for request attachments; see [Attachment storage](../../reference/breg-configuration/#attachment-storage). |
 | `attachmentVerification` | Optional asynchronous HTTP verifier; content stays quarantined until approved. Configure it before the first attachment upload; see [External attachment verification](../../reference/breg-configuration/#external-attachment-verification). |
 | `operationalTimeouts` | Optional HTTP request, record lock, migration lock, migration statement, and shutdown grace bounds. |
 | `metricsListener` | Optional second binding, private to the operator, that serves `GET /metrics`; see [Scrape metrics](#scrape-metrics). |
+
+The `fieldEncryption` block is optional; its `provider` binding names the custodian:
+
+```yaml
+fieldEncryption:
+  provider:
+    kind: transit
+    unixSocketPath: /var/run/vault/transit.sock
+    mount: transit
+    keyName: breg-field-dek
+    timeoutMilliseconds: 5000
+```
+
+An encrypted field moves part of the registry's availability into key custody, so plan the Transit
+binding's custody before the first encrypted field is activated:
+
+:::caution[Losing the Transit key loses the sealed values]
+Fields the project declares `encrypted` are sealed under a data-encryption key that Transit wraps
+and only Transit unwraps. If startup or restart cannot reach Transit or unwrap the key, Base
+Registry Engine stops before serving any entity. After a successful start, an envelope that cannot
+be opened fails the affected encrypted-field read or write with the HTTP `503` problem
+`runtime.field_encryption.unavailable`; sibling entities without encrypted fields keep serving.
+Base Registry Engine stores only the wrapped key and offers no recovery, so escrow the Transit key
+before enabling. The local file provider is development custody: startup refuses it unless the
+runtime file's `identity.databaseInitializationEnvironment` is `local`, and `bregctl doctor
+--runtime-config <absolute-file>` reports the same refusal.
+:::
+
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, RawFieldEncryptionConfig,
+    RawFieldEncryptionProvider, FieldEncryptionConfig::from_raw(), and
+    FieldEncryptionService::initialize(); crates/registry-breg/src/problem.rs,
+    RuntimeFieldEncryptionUnavailable; crates/registry-breg/src/api/mod.rs,
+    field_encryption_refusal(); crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic(). */}
 
 `leewayMilliseconds` must be a whole number of seconds and at most 300000. Static keys load at
 startup; rotate them through a configuration change and restart:
@@ -638,6 +673,86 @@ runtime file for each activation. Store secrets separately.
     doctor_success_output_is_stable_in_human_and_machine_formats();
     crates/registry-breg/src/api/mod.rs;
     crates/registry-breg/src/startup.rs. */}
+
+## Turn encryption on over existing plaintext
+
+A successor package can turn `encrypted: true` on a field the registry already holds in
+plaintext. The apply seals the stored values through the engine-executed backfill the package's
+reviewed migration declares, and the history choice the project authored in that migration
+decides what happens to the plaintext the database retains. The two choices and their trade-offs
+are in
+[Field encryption for restricted fields](../../explanation/breg-field-encryption/); this section
+is the operator path around the apply, which [Change an active registry](../breg-changes/)
+prepares and applies.
+
+Run the preflight before you apply, while the runtime file still names the active package:
+
+```sh
+bregctl field-encryption preflight \
+  --runtime-config /etc/breg/runtime.yaml \
+  --package /srv/registry/build-2/package
+```
+
+The preflight is read-only and value-free. It binds the same predecessor package an apply binds,
+refuses when the active revision is anything else, and reports counts per covered field: the live
+rows still carrying plaintext, the retained journal revisions that carry the field member, and
+the retained change-request snapshots, cached idempotency responses, and event payloads that
+mention the field. When a covered field declares a unique blind index, the preflight refuses when
+two of those plaintext values would normalize onto one index entry, naming the authored record
+identifiers, capped at 64, and never a value. Correct one of the named records and run the
+preflight again; the apply refuses the same collision before it seals anything.
+
+:::danger[Erase-and-rebaseline destroys retained record history]
+When the authored history choice is `erase-and-rebaseline`, the retained history of every record
+still carrying pre-flip plaintext is erased and snapshot coverage is restored with one
+rebaseline. Erasure is whole-record, so retained history beyond the encrypted field is destroyed
+with it, and nothing restores it. The erasure does not run as part of the apply: it waits until
+the flip's package is active, and you run it. Backups taken before the flip stay plaintext until
+you retire or re-encrypt them yourself. When the choice is `retain-plaintext-history`, nothing is
+erased and pre-flip revision snapshots keep serving as written, so the database-read guarantee
+does not hold for them.
+:::
+
+After the successor package is active, write an owner-only JSON request file (mode `0600`)
+carrying the operator reference and the reason alone:
+
+```json
+{
+  "operatorReference": "approved-maintenance-003",
+  "reason": "flip declared erase-and-rebaseline"
+}
+```
+
+Then run the erase-history lifecycle:
+
+```sh
+bregctl field-encryption erase-history \
+  --runtime-config /etc/breg/runtime.yaml \
+  --request-file /srv/registry/private/erase-history.json
+```
+
+The request file names no record, entity, or field: the scope is the recorded
+`erase-and-rebaseline` flips themselves, so a document that names records or fields is refused
+rather than reinterpreted, and a request file that is not owner-only is refused before any
+connection is opened. For every record still holding pre-flip plaintext, the lifecycle erases its
+retained history through the same path
+[`history erase`](../breg-retention/#erase-retained-history) uses and restores snapshot coverage
+with one rebaseline, then writes one audit record that carries counts, not values.
+
+`bregctl field-encryption keygen --output <absolute-file>` writes one fresh base64 data key for
+the local file provider with owner-only permissions, never prints it, and refuses to overwrite an
+existing file.
+
+{/* Evidence: crates/registry-bregctl/src/lib.rs, FieldEncryptionCommand,
+    FieldEncryptionPreflightArgs, FieldEncryptionEraseHistoryArgs, and
+    FieldEncryptionKeygenArgs; crates/registry-bregctl/src/field_encryption_lifecycle.rs,
+    run_preflight(), run_erase_history(), RawFieldEncryptionEraseRequest, and
+    read_owner_only_request_file(); crates/registry-breg/src/field_encryption_backfill.rs,
+    FieldEncryptionBackfillPreflightReport, MAX_NAMED_DUPLICATE_RECORDS, and
+    pending_erase_targets(); crates/registry-breg/src/postgres/interlock.rs,
+    field_encryption_duplicate_preflight(); crates/registry-breg/src/migration_plan.rs,
+    ReviewedFieldEncryptionHistory; crates/registry-bregctl/src/field_encryption.rs,
+    keygen(). */}
 
 ## Serve the container image
 

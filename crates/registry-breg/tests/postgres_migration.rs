@@ -5,22 +5,24 @@
 #[path = "support/postgres_harness.rs"]
 mod postgres_harness;
 
-use std::{fs, os::unix::fs::PermissionsExt as _, time::Duration};
+use std::{collections::BTreeSet, fs, os::unix::fs::PermissionsExt as _, time::Duration};
 
 use postgres_harness::TestDatabase;
 use registry_breg::compiler::{compile_project, module_digest, CompileProfile};
 use registry_breg::contract::{parse_module_yaml, parse_project_yaml};
+use registry_breg::field_encryption::FieldEncryptionProvider;
 use registry_breg::migration::{
-    apply_verified_package, ApplyPrecondition, ApplyRoles, ApplyTimeouts,
-    ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
+    apply_verified_package, AppliedFieldEncryptionKeySource, ApplyPrecondition, ApplyRoles,
+    ApplyTimeouts, ApplyVerifiedPackageRequest, DestructiveBackupEvidence, MigrationError,
     ReviewedMigrationFaultPoint,
 };
 use registry_breg::migration_plan::{
     ArtifactDigestBinding, ChunkCursorProtocol, ExternalBackupBinding, MigrationRehearsalReceipt,
     RehearsalFixture, RehearsalProofs, RehearsalRowAssertion, ReviewedChangeCover,
-    ReviewedMigrationAssertionDescriptor, ReviewedMigrationDescriptor, ReviewedMigrationFile,
-    ReviewedMigrationObject, ReviewedMigrationObjectKind, ReviewedMigrationRecovery,
-    ReviewedMigrationSource, ReviewedMigrationStepDescriptor,
+    ReviewedFieldEncryptionHistory, ReviewedMigrationAssertionDescriptor,
+    ReviewedMigrationDescriptor, ReviewedMigrationFile, ReviewedMigrationObject,
+    ReviewedMigrationObjectKind, ReviewedMigrationRecovery, ReviewedMigrationSource,
+    ReviewedMigrationStepDescriptor,
 };
 use registry_breg::migration_reconcile::{
     reconcile_failed_migration, ReconcileError, ReconcileOutcome, ReconcileReport,
@@ -39,6 +41,8 @@ use registry_breg::postgres::{
 use registry_breg::CompiledRegistry;
 use registry_platform_audit::AuditProfile;
 use registry_platform_canonical_json::canonicalize_json;
+use registry_platform_config::{SecretProvider, SecretReference, SecretResolver};
+use registry_platform_crypto::field_encryption::ENVELOPE_MEMBER_TAG;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -842,6 +846,477 @@ async fn real_postgres_added_required_field_backfills_before_the_column_is_const
     database.cleanup().await;
 }
 
+/// A reviewed field-encryption flip over rows an active registry already
+/// holds: the engine seals each keyset chunk under lock in one transaction
+/// with its journal capture and durable cursor, an injected fault after one
+/// committed chunk leaves the step resumable without double-sealing, the
+/// draining chunk verifies the stored ciphertext and records the flip
+/// boundary, and only after that does the reviewed `DROP COLUMN` remove the
+/// plaintext column.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_field_encryption_flip_seals_resumes_and_drops_the_plaintext_column() {
+    let database = TestDatabase::create(1).await;
+    let _unused_harness_configs = (&database.runtime_config, &database.tls_runtime_config);
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let initial_fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("flip scenario initial package activates");
+    let secrets = (0..5)
+        .map(|index| format!("flip-secret-{index}"))
+        .collect::<Vec<_>>();
+    seed_flip_rows(&database, &prior, &secrets).await;
+
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let statements = flip_compiler_statements(
+        &active,
+        &prior,
+        &candidate,
+        ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+    );
+    let target_fingerprint =
+        encrypted_flip_target_fingerprint(&database, &prior, &candidate, &statements).await;
+    let source = encrypted_flip_source(FlipSourceRequest {
+        id: "encrypt-secret",
+        current: &active,
+        prior: &prior,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        history: ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+        rehearsed_rows: 5,
+    });
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &prior,
+        Variant::EncryptedFlipOn,
+        &target_fingerprint,
+        source,
+    );
+    let keys = flip_key_source();
+
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = false, unavailable_after_position = 0
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test marks history coverage incomplete");
+    let coverage_refusal = apply_flip(&database, &package, &active, &keys, None).await;
+    assert_eq!(
+        coverage_refusal.expect_err("incomplete coverage refuses successor begin"),
+        MigrationError::ApplyFailed
+    );
+    let untouched = database
+        .admin
+        .query_one(
+            "SELECT
+                 (SELECT maintenance_status = 'ready'
+                    AND maintenance_target_revision IS NULL
+                    FROM registry_internal.registry_state WHERE singleton),
+                 NOT EXISTS (
+                     SELECT 1 FROM registry_internal.registry_migrations
+                      WHERE target_package_revision = $1
+                 ),
+                 NOT EXISTS (
+                     SELECT 1 FROM registry_internal.registry_field_encryption_flips
+                      WHERE boundary_package_revision = $1
+                 )",
+            &[&package.manifest().package_revision],
+        )
+        .await
+        .expect("refused successor leaves no durable migration state");
+    assert!(untouched.get::<_, bool>(0));
+    assert!(untouched.get::<_, bool>(1));
+    assert!(untouched.get::<_, bool>(2));
+    database
+        .admin
+        .execute(
+            "UPDATE registry_internal.registry_commit_head
+                SET coverage_ready = true, unavailable_after_position = NULL
+              WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("test restores complete history coverage");
+
+    let interrupted = apply_flip(&database, &package, &active, &keys, Some(1)).await;
+    let error = interrupted.expect_err("the injected fault interrupts the flip after one chunk");
+    assert_eq!(error, MigrationError::ApplyFailed);
+    assert_flip_value_free(&error, &secrets);
+    let checkpoint = step_snapshot(&database, &package, "seal-secret").await;
+    assert_eq!(checkpoint.0, "applying");
+    assert_eq!(checkpoint.1, Some(Uuid::from_u128(2)));
+    assert_eq!(checkpoint.2, 2);
+    assert_non_ready_target(&database, &active, &package, "applying").await;
+    assert_plaintext_column_present(&database, &prior).await;
+
+    let target = apply_flip(&database, &package, &active, &keys, None)
+        .await
+        .expect("the exact interrupted flip target resumes and completes");
+    assert_ready_target(&database, &target).await;
+    assert_eq!(
+        target.schema_fingerprint, target_fingerprint,
+        "the sealed managed schema matches the measured flip target"
+    );
+    let sealed_step = step_snapshot(&database, &package, "seal-secret").await;
+    assert_eq!(sealed_step.0, "completed");
+    assert_eq!(sealed_step.2, 5, "the resume seals every row exactly once");
+    assert_eq!(
+        step_snapshot(&database, &package, "drop-secret-plaintext")
+            .await
+            .0,
+        "completed"
+    );
+    assert_flip_sealed_at_rest(&database, &prior, &candidate).await;
+    assert_flip_journal(&database, &target).await;
+    assert_flip_boundary_row(&database, &target, "erase-and-rebaseline", 5, 5, 5).await;
+    database.cleanup().await;
+}
+
+/// The retain-plaintext-history choice seals and drops exactly like the erase
+/// choice; what changes is that pre-boundary journal revisions keep serving
+/// their plaintext members, and the boundary row records both the choice and
+/// the accepted plaintext count so operator tooling stays value-free.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_field_encryption_flip_retains_pre_boundary_plaintext_history() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let initial_fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("retain scenario initial package activates");
+    let secrets = (0..5)
+        .map(|index| format!("retain-secret-{index}"))
+        .collect::<Vec<_>>();
+    seed_flip_rows(&database, &prior, &secrets).await;
+
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let statements = flip_compiler_statements(
+        &active,
+        &prior,
+        &candidate,
+        ReviewedFieldEncryptionHistory::RetainPlaintextHistory,
+    );
+    let target_fingerprint =
+        encrypted_flip_target_fingerprint(&database, &prior, &candidate, &statements).await;
+    let source = encrypted_flip_source(FlipSourceRequest {
+        id: "retain-secret",
+        current: &active,
+        prior: &prior,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        history: ReviewedFieldEncryptionHistory::RetainPlaintextHistory,
+        rehearsed_rows: 5,
+    });
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &prior,
+        Variant::EncryptedFlipOn,
+        &target_fingerprint,
+        source,
+    );
+    let keys = flip_key_source();
+
+    let target = apply_flip(&database, &package, &active, &keys, None)
+        .await
+        .expect("the retained-history flip applies");
+    assert_ready_target(&database, &target).await;
+    assert_eq!(target.schema_fingerprint, target_fingerprint);
+    assert_flip_sealed_at_rest(&database, &prior, &candidate).await;
+    assert_flip_journal(&database, &target).await;
+    assert_flip_boundary_row(&database, &target, "retain-plaintext-history", 5, 5, 5).await;
+    let retained = database
+        .admin
+        .query_one(
+            "SELECT count(*)::bigint
+             FROM registry_internal.registry_revisions
+             WHERE entity_id = 'asset'
+               AND package_revision = $1
+               AND jsonb_typeof(convert_from(snapshot, 'UTF8')::jsonb -> 'secret') = 'string'",
+            &[&active.package_revision],
+        )
+        .await
+        .expect("pre-boundary journal revisions read");
+    assert_eq!(
+        retained.get::<_, i64>(0),
+        5,
+        "pre-boundary revisions keep serving plaintext under the retain choice"
+    );
+    assert_eq!(
+        step_snapshot(&database, &package, "drop-secret-plaintext")
+            .await
+            .0,
+        "completed"
+    );
+    database.cleanup().await;
+}
+
+/// The normalized-duplicate preflight: two rows whose plaintexts collide only
+/// after the declared blind-index normalization refuse the whole flip before
+/// any chunk seals, naming the duplicate record ids and never the values. The
+/// plaintext column and every value survive untouched, and no flip boundary
+/// is recorded.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_field_encryption_flip_refuses_normalized_duplicates_value_free() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let initial_fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("duplicate scenario initial package activates");
+    let secrets = [
+        "dup-canary".to_owned(),
+        "DUP-CANARY".to_owned(),
+        "unique-secret-2".to_owned(),
+        "unique-secret-3".to_owned(),
+        "unique-secret-4".to_owned(),
+    ];
+    seed_flip_rows(&database, &prior, &secrets).await;
+
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let statements = flip_compiler_statements(
+        &active,
+        &prior,
+        &candidate,
+        ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+    );
+    let target_fingerprint =
+        encrypted_flip_target_fingerprint(&database, &prior, &candidate, &statements).await;
+    let source = encrypted_flip_source(FlipSourceRequest {
+        id: "duplicate-secret",
+        current: &active,
+        prior: &prior,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        history: ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+        rehearsed_rows: 5,
+    });
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &prior,
+        Variant::EncryptedFlipOn,
+        &target_fingerprint,
+        source,
+    );
+    let keys = flip_key_source();
+
+    let refused = apply_flip(&database, &package, &active, &keys, None).await;
+    let error = refused.expect_err("the normalized duplicate refuses the flip");
+    assert_eq!(
+        error,
+        MigrationError::FieldEncryptionLookupCollision {
+            entity_id: "asset".to_owned(),
+            record_ids: vec![
+                Uuid::from_u128(1).to_string(),
+                Uuid::from_u128(2).to_string()
+            ],
+        }
+    );
+    assert_flip_value_free(&error, &secrets);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+    let step = step_snapshot(&database, &package, "seal-secret").await;
+    assert_eq!(step.0, "pending");
+    assert_eq!(step.2, 0);
+    assert_plaintext_column_present(&database, &prior).await;
+
+    let entity = &candidate.entities()["asset"];
+    let envelope = quote(&entity.fields["secret"].physical_name);
+    let table = quote(&entity.physical_table);
+    let unsealed = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FILTER (WHERE {envelope} IS NOT NULL)::bigint,
+                        count(*)::bigint
+                 FROM registry_data.{table}"
+            ),
+            &[],
+        )
+        .await
+        .expect("envelope column state reads");
+    assert_eq!(unsealed.get::<_, i64>(0), 0, "no row was sealed");
+    assert_eq!(
+        unsealed.get::<_, i64>(1),
+        5,
+        "the compiler-added envelope column exists"
+    );
+
+    let plaintext_column = quote(&prior.entities()["asset"].fields["secret"].physical_name);
+    let surviving = database
+        .admin
+        .query(
+            &format!("SELECT {plaintext_column} FROM registry_data.{table} ORDER BY record_id"),
+            &[],
+        )
+        .await
+        .expect("surviving plaintext reads");
+    let surviving = surviving
+        .into_iter()
+        .map(|row| row.get::<_, String>(0))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        surviving, secrets,
+        "every plaintext value survives untouched"
+    );
+    assert_flip_boundary_absent(&database).await;
+    database.cleanup().await;
+}
+
+/// The pre-drop content verification: an administrator who re-introduces
+/// plaintext after the last sealing chunk but before the reviewed `DROP
+/// COLUMN` must fail the resumed apply closed. The step keeps its durable
+/// checkpoint, the plaintext column survives, and the refusal carries no
+/// value.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_postgres_field_encryption_flip_fails_closed_when_plaintext_returns_before_the_drop() {
+    let database = TestDatabase::create(1).await;
+    database
+        .admin
+        .batch_execute("CREATE EXTENSION btree_gist")
+        .await
+        .expect("administrator installs the required extension");
+
+    let prior = compile_variant(Variant::EncryptedBase, 1);
+    let initial_fingerprint = initial_fingerprint(&database, &prior).await;
+    let initial =
+        prepare_and_load_initial_variant(Variant::EncryptedBase, &prior, &initial_fingerprint);
+    let active = apply(&database, &initial, ApplyPrecondition::InitialActivation)
+        .await
+        .expect("pre-drop scenario initial package activates");
+    let secrets = (0..5)
+        .map(|index| format!("predrop-secret-{index}"))
+        .collect::<Vec<_>>();
+    seed_flip_rows(&database, &prior, &secrets).await;
+
+    let candidate = compile_variant(Variant::EncryptedFlipOn, 2);
+    let statements = flip_compiler_statements(
+        &active,
+        &prior,
+        &candidate,
+        ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+    );
+    let target_fingerprint =
+        encrypted_flip_target_fingerprint(&database, &prior, &candidate, &statements).await;
+    let source = encrypted_flip_source(FlipSourceRequest {
+        id: "predrop-secret",
+        current: &active,
+        prior: &prior,
+        candidate: &candidate,
+        final_fingerprint: &target_fingerprint,
+        history: ReviewedFieldEncryptionHistory::EraseAndRebaseline,
+        rehearsed_rows: 5,
+    });
+    let package = prepare_and_load_reviewed(
+        2,
+        &active,
+        &prior,
+        Variant::EncryptedFlipOn,
+        &target_fingerprint,
+        source,
+    );
+    let keys = flip_key_source();
+
+    // Five rows in chunks of two: chunks 1-3 seal every row, and the fourth
+    // chunk is the drain that verifies and would close the step.
+    let interrupted = apply_flip(&database, &package, &active, &keys, Some(3)).await;
+    let error = interrupted.expect_err("the injected fault interrupts after every sealing chunk");
+    assert_eq!(error, MigrationError::ApplyFailed);
+    let checkpoint = step_snapshot(&database, &package, "seal-secret").await;
+    assert_eq!(checkpoint.0, "applying");
+    assert_eq!(checkpoint.1, Some(Uuid::from_u128(5)));
+    assert_eq!(checkpoint.2, 5);
+    assert_non_ready_target(&database, &active, &package, "applying").await;
+
+    let restored = "admin-restore-canary".to_owned();
+    let entity = &prior.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let plaintext = quote(&entity.fields["secret"].physical_name);
+    database
+        .admin
+        .execute(
+            &format!(
+                "UPDATE registry_data.{table} SET {plaintext} = $1
+                 WHERE record_id = $2"
+            ),
+            &[&restored, &Uuid::from_u128(1)],
+        )
+        .await
+        .expect("administrator re-introduces plaintext between chunks");
+
+    let mut canaries = secrets.clone();
+    canaries.push(restored);
+    let refused = apply_flip(&database, &package, &active, &keys, None).await;
+    let error = refused.expect_err("the drain verification refuses the returned plaintext");
+    assert_eq!(error, MigrationError::ApplyFailed);
+    assert_flip_value_free(&error, &canaries);
+    assert_non_ready_target(&database, &active, &package, "failed").await;
+    assert_eq!(
+        step_snapshot(&database, &package, "seal-secret").await,
+        checkpoint,
+        "the failed drain leaves the durable checkpoint resumable"
+    );
+    assert_plaintext_column_present(&database, &prior).await;
+    assert_flip_boundary_absent(&database).await;
+    let envelope = quote(&candidate.entities()["asset"].fields["secret"].physical_name);
+    let sealed = database
+        .admin
+        .query_one(
+            &format!(
+                "SELECT count(*) FILTER (WHERE {envelope} IS NOT NULL)::bigint
+                 FROM registry_data.{table}"
+            ),
+            &[],
+        )
+        .await
+        .expect("sealed envelope state reads");
+    assert_eq!(
+        sealed.get::<_, i64>(0),
+        5,
+        "the sealed envelopes survive the refusal"
+    );
+    database.cleanup().await;
+}
+
+fn assert_flip_value_free(error: &MigrationError, canaries: &[String]) {
+    let diagnostic = format!("{error:?} {error}").to_lowercase();
+    for canary in canaries {
+        assert!(
+            !diagnostic.contains(&canary.to_lowercase()),
+            "the refusal must not echo a sealed value"
+        );
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Variant {
     Base,
@@ -853,6 +1328,8 @@ enum Variant {
     PatternLoosened,
     PatternInvalid,
     PatternQuoted,
+    EncryptedBase,
+    EncryptedFlipOn,
 }
 
 #[derive(Clone, Copy)]
@@ -1086,15 +1563,32 @@ fn module_bytes(variant: Variant) -> Vec<u8> {
     } else {
         legacy.to_owned()
     };
+    let secret = match variant {
+        Variant::EncryptedBase => {
+            r#",{"id":"secret","type":"string","maxLength":256,"classification":"restricted"}"#
+        }
+        Variant::EncryptedFlipOn => {
+            r#",{"id":"secret","type":"string","maxLength":256,"classification":"restricted","encrypted":true,"lookup":{"normalization":["uppercase"],"unique":true}}"#
+        }
+        _ => "",
+    };
     format!(
-        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
+        r#"{{"id":"core","version":"1","entities":[{{"id":"asset","primaryDataset":"migration-registry","route":"assets","mutationMode":"create_only","fields":[{{"id":"code","type":"string","maxLength":8,"classification":"internal"}},{{"id":"rank","type":"int64","classification":"internal"{rank_required}}}{legacy}{batch}{secret}],"accessProfiles":[{{"rowBoundaries": [], "id":"reader","principalClaim":"principal","operations":["create","get","list"],"readableFields":["code"],"writableFields":["code"]}}]}}]}}"#
     )
     .into_bytes()
 }
 
 fn prepare_and_load_initial(registry: &CompiledRegistry, fingerprint: &str) -> VerifiedPackage {
+    prepare_and_load_initial_variant(Variant::Base, registry, fingerprint)
+}
+
+fn prepare_and_load_initial_variant(
+    variant: Variant,
+    registry: &CompiledRegistry,
+    fingerprint: &str,
+) -> VerifiedPackage {
     let prepared = prepare_package(build_request(
-        Variant::Base,
+        variant,
         1,
         None,
         fingerprint,
@@ -1338,6 +1832,7 @@ fn backfill_source(request: BackfillSourceRequest<'_>) -> ReviewedMigrationSourc
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: None,
+        history: None,
     };
     reviewed_source(ReviewedSourceRequest {
         descriptor,
@@ -1421,6 +1916,7 @@ fn added_required_source(
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: None,
+        history: None,
     };
     reviewed_source(ReviewedSourceRequest {
         descriptor,
@@ -1435,6 +1931,528 @@ fn added_required_source(
             affected_rows: rehearsed_rows,
         }],
     })
+}
+
+/// The reviewed flip plan the engine executes: one engine-run
+/// `FieldEncryptionBackfill` step with no authored SQL, an explicit history
+/// choice, and the reviewed `DROP COLUMN` of the sealed plaintext column as a
+/// separate transactional step the pre-drop content verification guards.
+struct FlipSourceRequest<'a> {
+    id: &'a str,
+    current: &'a ExpectedRegistryIdentity,
+    prior: &'a CompiledRegistry,
+    candidate: &'a CompiledRegistry,
+    final_fingerprint: &'a str,
+    history: ReviewedFieldEncryptionHistory,
+    rehearsed_rows: u64,
+}
+
+fn encrypted_flip_source(request: FlipSourceRequest<'_>) -> ReviewedMigrationSource {
+    let FlipSourceRequest {
+        id,
+        current,
+        prior,
+        candidate,
+        final_fingerprint,
+        history,
+        rehearsed_rows,
+    } = request;
+    let change = compiled_registry_change_set(prior, candidate, &current.package_revision)
+        .changes
+        .into_iter()
+        .find(|change| change.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        .expect("the encryption flip is classified");
+    let prior_entity = &prior.entities()["asset"];
+    let prior_secret = &prior_entity.fields["secret"];
+    let entity = &candidate.entities()["asset"];
+    let field = &entity.fields["secret"];
+    let blind = field
+        .encryption
+        .as_ref()
+        .and_then(|encryption| encryption.blind_index.as_ref())
+        .expect("the flip candidate declares a blind index");
+    assert_ne!(
+        field.physical_name, prior_secret.physical_name,
+        "the envelope column replaces the plaintext column under its own physical name"
+    );
+    let base = format!("modules/core/migrations/{id}");
+    let drop_path = format!("{base}/steps/drop-secret-plaintext.sql");
+    let pre_path = format!("{base}/assertions/pre.sql");
+    let post_path = format!("{base}/assertions/post.sql");
+    let drop_sql = format!(
+        "ALTER TABLE registry_data.{} DROP COLUMN {}",
+        entity.physical_table, prior_secret.physical_name
+    );
+    let assertion_sql = format!(
+        "SELECT pg_catalog.count(*) >= 0 FROM registry_data.{}",
+        entity.physical_table
+    );
+    let descriptor = ReviewedMigrationDescriptor {
+        id: id.to_owned(),
+        change_class: change.class,
+        covers: vec![ReviewedChangeCover::from(&change)],
+        recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        lock_timeout_ms: 50,
+        statement_timeout_ms: 5_000,
+        steps: vec![
+            ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                id: "seal-secret".to_owned(),
+                entity_id: "asset".to_owned(),
+                objects: vec![
+                    ReviewedMigrationObject {
+                        schema: "registry_data".to_owned(),
+                        table: entity.physical_table.clone(),
+                        entity_id: "asset".to_owned(),
+                        kind: ReviewedMigrationObjectKind::Field,
+                        member_id: Some("secret".to_owned()),
+                        physical_name: field.physical_name.clone(),
+                    },
+                    ReviewedMigrationObject {
+                        schema: "registry_data".to_owned(),
+                        table: entity.physical_table.clone(),
+                        entity_id: "asset".to_owned(),
+                        kind: ReviewedMigrationObjectKind::Field,
+                        member_id: Some("secret#lookup".to_owned()),
+                        physical_name: blind.physical_name.clone(),
+                    },
+                ],
+                cursor: ChunkCursorProtocol::RecordIdUuidArray,
+                chunk_size: 2,
+                max_total_rows: 10_000,
+                lock_timeout_ms: 50,
+                statement_timeout_ms: 5_000,
+            },
+            ReviewedMigrationStepDescriptor::TransactionalSql {
+                id: "drop-secret-plaintext".to_owned(),
+                sql_path: drop_path.clone(),
+                objects: vec![ReviewedMigrationObject {
+                    schema: "registry_data".to_owned(),
+                    table: entity.physical_table.clone(),
+                    entity_id: "asset".to_owned(),
+                    kind: ReviewedMigrationObjectKind::Field,
+                    member_id: Some("secret".to_owned()),
+                    physical_name: prior_secret.physical_name.clone(),
+                }],
+                affected_rows: None,
+            },
+        ],
+        pre_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "pre".to_owned(),
+            sql_path: pre_path.clone(),
+        }],
+        post_assertions: vec![ReviewedMigrationAssertionDescriptor {
+            id: "post".to_owned(),
+            sql_path: post_path.clone(),
+        }],
+        rehearsal_receipt_path: format!("{base}/rehearsal.json"),
+        backup_binding_path: None,
+        history: Some(history),
+    };
+    reviewed_source(ReviewedSourceRequest {
+        descriptor,
+        current,
+        final_fingerprint,
+        steps: vec![(drop_path, drop_sql)],
+        pre: (pre_path, assertion_sql.clone()),
+        post: (post_path, assertion_sql),
+        backup: None,
+        row_assertions: vec![RehearsalRowAssertion {
+            step_id: "seal-secret".to_owned(),
+            affected_rows: rehearsed_rows,
+        }],
+    })
+}
+
+/// The compiler delta a reviewed flip package carries: the same statement list
+/// the apply executes around its reviewed steps. A probe package prepared
+/// against a placeholder fingerprint is the cheapest way to read it, because
+/// the statements are a pure function of the prior and candidate registries.
+fn flip_compiler_statements(
+    current: &ExpectedRegistryIdentity,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    history: ReviewedFieldEncryptionHistory,
+) -> Vec<(
+    String,
+    String,
+    registry_breg::generated_ddl::DdlStatementKind,
+)> {
+    let placeholder = format!("sha256:{}", "0".repeat(64));
+    let source = encrypted_flip_source(FlipSourceRequest {
+        id: "encrypt-secret-probe",
+        current,
+        prior,
+        candidate,
+        final_fingerprint: &placeholder,
+        history,
+        rehearsed_rows: 5,
+    });
+    let probe = prepare_and_load_reviewed(
+        2,
+        current,
+        prior,
+        Variant::EncryptedFlipOn,
+        &placeholder,
+        source,
+    );
+    probe
+        .manifest()
+        .migration_plan
+        .statements
+        .iter()
+        .map(|statement| (statement.id.clone(), statement.sql.clone(), statement.kind))
+        .collect()
+}
+
+/// Rehearses the flip target the way the apply reaches it: the compiler's
+/// non-view statements (envelope column, blind-index column, unique index)
+/// arrive first, the managed read views drop, the sealed plaintext column
+/// leaves, and the candidate read views are rebuilt.
+async fn encrypted_flip_target_fingerprint(
+    database: &TestDatabase,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+    statements: &[(
+        String,
+        String,
+        registry_breg::generated_ddl::DdlStatementKind,
+    )],
+) -> String {
+    use registry_breg::generated_ddl::DdlStatementKind;
+    let entity = &candidate.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let plaintext = quote(&prior.entities()["asset"].fields["secret"].physical_name);
+    let (mut migration, task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("flip target fingerprint transaction starts");
+    for (id, sql, _kind) in statements
+        .iter()
+        .filter(|(_, _, kind)| *kind != DdlStatementKind::View)
+    {
+        transaction
+            .batch_execute(sql)
+            .await
+            .unwrap_or_else(|error| panic!("flip target rehearses {id}: {error}"));
+    }
+    drop_managed_views_for_fingerprint(&transaction).await;
+    transaction
+        .batch_execute(&format!(
+            "ALTER TABLE registry_data.{table} DROP COLUMN {plaintext}"
+        ))
+        .await
+        .expect("flip target rehearses the sealed plaintext column drop");
+    create_candidate_views_for_fingerprint(&transaction, candidate, database.runtime_role.as_str())
+        .await;
+    let fingerprint = managed_schema_fingerprint(
+        &transaction,
+        &database.runtime_role,
+        &ExpectedManagedCatalog::compiled(candidate),
+    )
+    .await
+    .expect("flip target fingerprint computes");
+    transaction
+        .rollback()
+        .await
+        .expect("flip target rehearsal rolls back");
+    task.abort();
+    fingerprint
+}
+
+/// The local-file data-key fixture one flip apply resolves its key through,
+/// mirroring the owner-only deployment shape the runtime documents.
+struct FlipKeySource {
+    provider: FieldEncryptionProvider,
+    secrets: SecretResolver,
+    _root: tempfile::TempDir,
+}
+
+fn flip_key_source() -> FlipKeySource {
+    let root = tempfile::Builder::new()
+        .prefix("registry-flip-dek-")
+        .tempdir_in(
+            std::env::temp_dir()
+                .canonicalize()
+                .expect("canonical temporary root"),
+        )
+        .expect("DEK temporary directory creates");
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))
+        .expect("DEK root is owner-only");
+    let dek_path = root.path().join("breg-field-dek");
+    fs::write(&dek_path, b"Xl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl5eXl4=\n")
+        .expect("DEK file writes");
+    fs::set_permissions(&dek_path, fs::Permissions::from_mode(0o600))
+        .expect("DEK file is owner-only");
+    let dek_ref =
+        SecretReference::parse("secret:file/breg-field-dek").expect("DEK reference parses");
+    FlipKeySource {
+        provider: FieldEncryptionProvider::LocalFile { dek_ref },
+        secrets: SecretResolver::new([SecretProvider::File], root.path())
+            .expect("DEK resolver builds"),
+        _root: root,
+    }
+}
+
+async fn apply_flip(
+    database: &TestDatabase,
+    package: &VerifiedPackage,
+    current: &ExpectedRegistryIdentity,
+    keys: &FlipKeySource,
+    fault_after_chunks: Option<u64>,
+) -> registry_breg::migration::Result<ExpectedRegistryIdentity> {
+    let mut request = request(database, package, ApplyPrecondition::Successor { current })
+        .with_field_encryption_key_source(AppliedFieldEncryptionKeySource::new(
+            &keys.provider,
+            &keys.secrets,
+        ));
+    if let Some(chunks) = fault_after_chunks {
+        request =
+            request.with_fault_for_test(ReviewedMigrationFaultPoint::AfterCommittedChunk(chunks));
+    }
+    apply_verified_package(request).await
+}
+
+/// Seeds plaintext rows the flip must seal, each with the journal revision a
+/// live registry would already hold for it, so the sealing journals a real
+/// pre-boundary binding instead of fabricating one mid-apply.
+async fn seed_flip_rows(database: &TestDatabase, registry: &CompiledRegistry, secrets: &[String]) {
+    let entity = &registry.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let code = quote(&entity.fields["code"].physical_name);
+    let secret = quote(&entity.fields["secret"].physical_name);
+    let active_revision: String = database
+        .admin
+        .query_one(
+            "SELECT active_package_revision
+             FROM registry_internal.registry_state
+             WHERE singleton",
+            &[],
+        )
+        .await
+        .expect("active revision reads for flip seed rows")
+        .get(0);
+    for (index, value) in secrets.iter().enumerate() {
+        database
+            .admin
+            .execute(
+                &format!(
+                    "INSERT INTO registry_data.{table}
+                         (record_id, active_package_revision, {code}, {secret})
+                     VALUES ($1, $2, $3, $4)"
+                ),
+                &[
+                    &Uuid::from_u128(index as u128 + 1),
+                    &active_revision,
+                    &format!("c{index}"),
+                    value,
+                ],
+            )
+            .await
+            .expect("administrator seeds a flip row");
+    }
+    let (mut migration, migration_task) = database.connect_migration().await;
+    let transaction = migration
+        .transaction()
+        .await
+        .expect("flip seed journal transaction starts");
+    for (index, value) in secrets.iter().enumerate() {
+        let record_id = Uuid::from_u128(index as u128 + 1);
+        let snapshot = canonical(&serde_json::json!({
+            "code": format!("c{index}"),
+            "secret": value,
+        }));
+        transaction
+            .execute(
+                "INSERT INTO registry_internal.registry_revisions
+                     (entity_id, record_id, record_reference, record_revision,
+                      predecessor_revision, record_lifecycle, package_revision, operation_id,
+                      mutation_kind, principal_reference, request_reference, snapshot)
+                 VALUES ('asset', $1, $2, 1, NULL, 'active', $3, 'op-1',
+                         'create', 'actor:hash', 'request:hash', $4)",
+                &[
+                    &record_id,
+                    &format!("asset:{record_id}"),
+                    &active_revision,
+                    &snapshot,
+                ],
+            )
+            .await
+            .expect("flip seed revision inserts");
+    }
+    transaction
+        .commit()
+        .await
+        .expect("flip seed revisions commit");
+    migration_task.abort();
+}
+
+async fn assert_plaintext_column_present(database: &TestDatabase, prior: &CompiledRegistry) {
+    let entity = &prior.entities()["asset"];
+    let row = database
+        .admin
+        .query_one(
+            "SELECT count(*)
+             FROM information_schema.columns
+             WHERE table_schema = 'registry_data'
+               AND table_name = $1
+               AND column_name = $2",
+            &[
+                &entity.physical_table,
+                &entity.fields["secret"].physical_name,
+            ],
+        )
+        .await
+        .expect("plaintext column presence reads");
+    assert_eq!(row.get::<_, i64>(0), 1);
+}
+
+/// Ciphertext at rest: every row carries a versioned envelope and a 32-byte
+/// blind index, blind indexes stay pairwise distinct, and the plaintext column
+/// is gone.
+async fn assert_flip_sealed_at_rest(
+    database: &TestDatabase,
+    prior: &CompiledRegistry,
+    candidate: &CompiledRegistry,
+) {
+    let entity = &candidate.entities()["asset"];
+    let table = quote(&entity.physical_table);
+    let envelope = quote(&entity.fields["secret"].physical_name);
+    let blind = quote(
+        &entity.fields["secret"]
+            .encryption
+            .as_ref()
+            .and_then(|encryption| encryption.blind_index.as_ref())
+            .expect("the candidate declares a blind index")
+            .physical_name,
+    );
+    let rows = database
+        .admin
+        .query(
+            &format!("SELECT {envelope}, {blind} FROM registry_data.{table} ORDER BY record_id"),
+            &[],
+        )
+        .await
+        .expect("sealed rows read");
+    assert!(!rows.is_empty());
+    let mut blind_indexes = BTreeSet::new();
+    for row in &rows {
+        let envelope: Vec<u8> = row.get(0);
+        let blind: Vec<u8> = row.get(1);
+        assert_eq!(
+            envelope.first(),
+            Some(&1),
+            "the envelope carries its version byte"
+        );
+        let key_version = u32::from_be_bytes(
+            envelope[1..5]
+                .try_into()
+                .expect("the envelope header carries the key version"),
+        );
+        assert_eq!(key_version, 1);
+        assert_eq!(
+            blind.len(),
+            32,
+            "the blind index is one HMAC-SHA-256 output"
+        );
+        assert!(
+            blind_indexes.insert(blind),
+            "distinct plaintexts keep distinct blind indexes"
+        );
+    }
+    let prior_entity = &prior.entities()["asset"];
+    let dropped = database
+        .admin
+        .query_one(
+            "SELECT count(*)
+             FROM information_schema.columns
+             WHERE table_schema = 'registry_data'
+               AND table_name = $1
+               AND column_name = $2",
+            &[
+                &prior_entity.physical_table,
+                &prior_entity.fields["secret"].physical_name,
+            ],
+        )
+        .await
+        .expect("plaintext column absence reads");
+    assert_eq!(dropped.get::<_, i64>(0), 0);
+}
+
+/// The boundary journal holds exactly one sealed revision per record, every
+/// one of them a tagged envelope member rather than plaintext.
+async fn assert_flip_journal(database: &TestDatabase, target: &ExpectedRegistryIdentity) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT count(DISTINCT record_id)::bigint,
+                    count(*)::bigint,
+                    count(*) FILTER (
+                        WHERE convert_from(snapshot, 'UTF8')::jsonb
+                                  -> 'secret' ->> $2 IS NOT NULL
+                    )::bigint
+             FROM registry_internal.registry_revisions
+             WHERE entity_id = 'asset'
+               AND package_revision = $1
+               AND convert_from(snapshot, 'UTF8')::jsonb ? 'secret'",
+            &[&target.package_revision, &ENVELOPE_MEMBER_TAG],
+        )
+        .await
+        .expect("flip journal reads");
+    assert_eq!(row.get::<_, i64>(0), 5, "every sealed record is journalled");
+    assert_eq!(
+        row.get::<_, i64>(1),
+        5,
+        "no record is journalled twice across the resume"
+    );
+    assert_eq!(
+        row.get::<_, i64>(2),
+        5,
+        "every boundary journal member is a tagged envelope"
+    );
+}
+
+async fn assert_flip_boundary_row(
+    database: &TestDatabase,
+    target: &ExpectedRegistryIdentity,
+    history_choice: &str,
+    sealed_rows: i64,
+    sealed_journal_rows: i64,
+    accepted_plaintext_journal_rows: i64,
+) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT boundary_package_revision, history_choice, sealed_row_count,
+                    sealed_journal_row_count, accepted_plaintext_journal_row_count,
+                    history_commit_position
+             FROM registry_internal.registry_field_encryption_flips
+             WHERE entity_id = 'asset' AND field_id = 'secret'",
+            &[],
+        )
+        .await
+        .expect("the flip boundary row exists");
+    assert_eq!(row.get::<_, String>(0), target.package_revision);
+    assert_eq!(row.get::<_, String>(1), history_choice);
+    assert_eq!(row.get::<_, i64>(2), sealed_rows);
+    assert_eq!(row.get::<_, i64>(3), sealed_journal_rows);
+    assert_eq!(row.get::<_, i64>(4), accepted_plaintext_journal_rows);
+    assert!(
+        row.get::<_, i64>(5) > 0,
+        "the flip records a positive exclusive history cutoff"
+    );
+}
+
+async fn assert_flip_boundary_absent(database: &TestDatabase) {
+    let row = database
+        .admin
+        .query_one(
+            "SELECT count(*) FROM registry_internal.registry_field_encryption_flips",
+            &[],
+        )
+        .await
+        .expect("flip boundary absence reads");
+    assert_eq!(row.get::<_, i64>(0), 0);
 }
 
 fn destructive_source(
@@ -1554,6 +2572,7 @@ fn destructive_source_with_recovery_fault(
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: Some(format!("{base}/backup.json")),
+        history: None,
     };
     reviewed_source(ReviewedSourceRequest {
         descriptor,
@@ -1632,6 +2651,7 @@ fn reviewed_source(request: ReviewedSourceRequest<'_>) -> ReviewedMigrationSourc
                 matches!(
                     step,
                     ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
+                        | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
                 )
             }),
             destructive_resume: backup.is_some(),
@@ -2714,6 +3734,7 @@ fn pattern_reviewed_source(
         }],
         rehearsal_receipt_path: format!("{base}/rehearsal.json"),
         backup_binding_path: Some(format!("{base}/backup.json")),
+        history: None,
     };
     reviewed_source(ReviewedSourceRequest {
         descriptor,

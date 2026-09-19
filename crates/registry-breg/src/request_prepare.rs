@@ -453,12 +453,61 @@ pub(crate) fn prepare(
     })
 }
 
+/// Runtime backstop behind the compiler refusals: no encrypted field may be
+/// mutated by a candidate effect, and no encrypted request field may source a
+/// candidate value. The refusal is value-free and precedes target resolution,
+/// so no proposal or target snapshot is materialized for such a candidate.
+fn refuse_encrypted_participation(
+    registry: &CompiledRegistry,
+    request_entity: &CompiledEntity,
+    candidate: &CompiledEffectPlanCandidate,
+) -> Result<(), MutationError> {
+    for effect in &candidate.effects {
+        let target_entity = registry
+            .entities()
+            .get(&effect.target.entity_id)
+            .ok_or(MutationError::InvalidRequest)?;
+        for mutation in &effect.mutations {
+            let field = match mutation {
+                CandidateChangeRequestMutation::Set { field, .. }
+                | CandidateChangeRequestMutation::Clear { field } => field,
+            };
+            if target_entity
+                .fields
+                .get(field)
+                .is_some_and(|field| field.encryption.is_some())
+            {
+                return Err(MutationError::InvalidRequest);
+            }
+            if let CandidateChangeRequestMutation::Set {
+                value: CandidateChangeRequestValue::FromRequestField { field: source },
+                ..
+            } = mutation
+            {
+                if request_entity
+                    .fields
+                    .get(source)
+                    .is_some_and(|field| field.encryption.is_some())
+                {
+                    return Err(MutationError::InvalidRequest);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn verify_candidate(
     registry: &CompiledRegistry,
     request_entity: &CompiledEntity,
     intake: &Map<String, Value>,
     candidate: &CompiledEffectPlanCandidate,
 ) -> Result<(), MutationError> {
+    // Encrypted fields cannot participate in change requests: the compiler
+    // refuses them as effect targets, planner ceilings, and value sources, so
+    // a candidate naming one here means that boundary was bypassed. Refusing
+    // first keeps every later step, including target snapshots, from running.
+    refuse_encrypted_participation(registry, request_entity, candidate)?;
     let plan = request_entity
         .change_request
         .as_ref()

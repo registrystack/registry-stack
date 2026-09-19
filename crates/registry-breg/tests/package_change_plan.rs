@@ -1950,6 +1950,7 @@ fn metadata_only_source_between(
         change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers,
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: Vec::new(),
@@ -2037,6 +2038,7 @@ fn reference_target_source(candidate: &CompiledRegistry) -> ReviewedMigrationSou
         change_class: change.class,
         covers: vec![ReviewedChangeCover::from(change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: vec![
@@ -2211,6 +2213,7 @@ fn reviewed_source_with_canaries(
         change_class: change.class,
         covers: vec![ReviewedChangeCover::from(change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 10_000,
         statement_timeout_ms: 60_000,
         steps: vec![ReviewedMigrationStepDescriptor::ChunkedBackfill {

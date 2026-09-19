@@ -1012,9 +1012,13 @@ impl<'de> Deserialize<'de> for ActionInputSource {
         D: Deserializer<'de>,
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
-        if raw.valid_time_role.is_some() || raw.pattern.is_some() {
+        if raw.valid_time_role.is_some()
+            || raw.pattern.is_some()
+            || raw.encrypted.is_some()
+            || raw.lookup.is_some()
+        {
             return Err(D::Error::custom(
-                "action inputs cannot declare validTimeRole or pattern",
+                "action inputs cannot declare validTimeRole, pattern, encrypted, or lookup",
             ));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
@@ -1109,6 +1113,33 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// A normalization step applied to the canonical string form of an encrypted
+/// value before its blind index is derived. The vocabulary is closed.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum NormalizationStep {
+    Trim,
+    Uppercase,
+    Lowercase,
+    CollapseWhitespace,
+    /// Strips spaces, hyphens, slashes, and dots from the canonical form.
+    RemoveSeparators,
+}
+
+/// The authored blind-index declaration for an encrypted field. Normalization
+/// composes in declared order over the canonical string form of the value;
+/// `unique` requests a unique index over the derived blind-index column.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct FieldLookupSource {
+    #[serde(default)]
+    pub normalization: Vec<NormalizationStep>,
+    #[serde(default)]
+    pub unique: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct FieldSource {
@@ -1125,6 +1156,11 @@ pub struct FieldSource {
     pub classification: Classification,
     #[serde(default)]
     pub valid_time_role: Option<ValidTimeRole>,
+    /// Persist the value as an encrypted envelope instead of plaintext.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub encrypted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1198,6 +1234,10 @@ struct StringFieldSourceSchema {
     max_length: u32,
     #[serde(default)]
     pattern: Option<String>,
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1218,6 +1258,10 @@ struct TextFieldSourceSchema {
     max_length: u32,
     #[serde(default)]
     pattern: Option<String>,
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1258,6 +1302,10 @@ struct DecimalFieldSourceSchema {
     minimum: Option<String>,
     #[serde(default)]
     maximum: Option<String>,
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1275,6 +1323,10 @@ struct DateFieldSourceSchema {
     classification: Classification,
     #[serde(default)]
     valid_time_role: Option<ValidTimeRole>,
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1388,6 +1440,10 @@ struct StructuredFieldSourceSchema {
     valid_time_role: Option<ValidTimeRole>,
     max_bytes: u32,
     schema: Value,
+    #[serde(default)]
+    encrypted: bool,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg(feature = "schema")]
@@ -1503,6 +1559,25 @@ impl<'de> Deserialize<'de> for FieldSource {
                 "pattern requires a persisted string or text field",
             ));
         }
+        let encrypted = raw.encrypted.unwrap_or_default();
+        if encrypted
+            && (raw.classification != Classification::Restricted
+                || !matches!(
+                    field_type,
+                    FieldTypeSource::String { .. }
+                        | FieldTypeSource::Text { .. }
+                        | FieldTypeSource::Date
+                        | FieldTypeSource::Decimal { .. }
+                        | FieldTypeSource::Structured { .. }
+                ))
+        {
+            return Err(D::Error::custom(
+                "encrypted requires a restricted string, text, date, decimal, or structured field",
+            ));
+        }
+        if raw.lookup.is_some() && !encrypted {
+            return Err(D::Error::custom("lookup requires an encrypted field"));
+        }
         Ok(Self {
             id: raw.id,
             api_name: raw.api_name,
@@ -1511,6 +1586,8 @@ impl<'de> Deserialize<'de> for FieldSource {
             pattern: raw.pattern,
             classification: raw.classification,
             valid_time_role: raw.valid_time_role,
+            encrypted,
+            lookup: raw.lookup,
         })
     }
 }
@@ -1533,9 +1610,14 @@ impl<'de> Deserialize<'de> for DerivedFieldSource {
         D: Deserializer<'de>,
     {
         let raw = RawFieldSource::deserialize(deserializer)?;
-        if raw.required || raw.valid_time_role.is_some() || raw.pattern.is_some() {
+        if raw.required
+            || raw.valid_time_role.is_some()
+            || raw.pattern.is_some()
+            || raw.encrypted.is_some()
+            || raw.lookup.is_some()
+        {
             return Err(D::Error::custom(
-                "derived fields cannot declare required, validTimeRole or pattern",
+                "derived fields cannot declare required, validTimeRole, pattern, encrypted, or lookup",
             ));
         }
         let field_type = parse_field_type::<D::Error>(&raw)?;
@@ -1686,6 +1768,10 @@ struct RawFieldSource {
     on_delete: Option<ReferenceDelete>,
     #[serde(default)]
     pattern: Option<String>,
+    #[serde(default)]
+    encrypted: Option<bool>,
+    #[serde(default)]
+    lookup: Option<FieldLookupSource>,
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

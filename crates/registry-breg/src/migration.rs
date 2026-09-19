@@ -26,8 +26,8 @@ use crate::postgres::{
     statement_checksum, ConnectionConfig, ExpectedManagedCatalog, ExpectedRegistryIdentity,
     MaintenanceTransition, MigrationArtifactBinding, MigrationLedgerEntry, MigrationLedgerStep,
     MigrationLedgerStepKind, MigrationPlanKind, PackageDdlStatement, RegistryLockKey,
-    ReviewedExecutionOutcome, ReviewedPackageExecutionRequest, SqlIdentifier,
-    VerifiedPackageApplyConnection,
+    ReviewedExecutionOutcome, ReviewedFieldEncryptionContext, ReviewedPackageExecutionRequest,
+    SqlIdentifier, VerifiedPackageApplyConnection,
 };
 
 const MAX_LOCK_TIMEOUT: Duration = Duration::from_secs(300);
@@ -47,6 +47,12 @@ pub enum MigrationError {
     FieldPatternSyntax { entity_id: String, field_id: String },
     #[error("existing rows do not conform to a persisted field pattern")]
     FieldPatternExistingRows { entity_id: String, field_id: String },
+    /// Authored record identifiers only; field values never cross this boundary.
+    #[error("field-encryption backfill would collide blind indexes of existing records")]
+    FieldEncryptionLookupCollision {
+        entity_id: String,
+        record_ids: Vec<String>,
+    },
     #[error("active request proposals require rebase or cancellation before this package can be activated")]
     ActiveRequestProposals,
     #[error("destructive backup evidence is invalid")]
@@ -231,7 +237,26 @@ pub struct ApplyVerifiedPackageRequest<'a> {
     predecessor_history_descriptor: Option<&'a HistorySchemaDescriptor>,
     predecessor_migration_baseline: Option<&'a CompiledRegistryMigrationBaseline>,
     event_destination_compatibility_inventory: Option<&'a EventDestinationCompatibilityInventory>,
+    field_encryption: Option<AppliedFieldEncryptionKeySource<'a>>,
     fault_after_committed_chunks: Option<u64>,
+}
+
+/// The key source one apply resolves field-encryption data keys through. It
+/// borrows the already-configured provider and secret resolver; it opens no
+/// connection and carries no authority beyond the apply it is bound to.
+pub struct AppliedFieldEncryptionKeySource<'a> {
+    provider: &'a crate::field_encryption::FieldEncryptionProvider,
+    secrets: &'a registry_platform_config::SecretResolver,
+}
+
+impl<'a> AppliedFieldEncryptionKeySource<'a> {
+    #[must_use]
+    pub fn new(
+        provider: &'a crate::field_encryption::FieldEncryptionProvider,
+        secrets: &'a registry_platform_config::SecretResolver,
+    ) -> Self {
+        Self { provider, secrets }
+    }
 }
 
 impl<'a> ApplyVerifiedPackageRequest<'a> {
@@ -253,6 +278,7 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
             predecessor_history_descriptor: None,
             predecessor_migration_baseline: None,
             event_destination_compatibility_inventory: None,
+            field_encryption: None,
             fault_after_committed_chunks: None,
         }
     }
@@ -302,6 +328,19 @@ impl<'a> ApplyVerifiedPackageRequest<'a> {
         inventory: &'a EventDestinationCompatibilityInventory,
     ) -> Self {
         self.event_destination_compatibility_inventory = Some(inventory);
+        self
+    }
+
+    /// Bind the field-encryption key source a reviewed field-encryption
+    /// backfill resolves its data-encryption key through. The key source never
+    /// grants SQL or package authority; a plan that needs it and does not get
+    /// it fails closed.
+    #[must_use]
+    pub fn with_field_encryption_key_source(
+        mut self,
+        key_source: AppliedFieldEncryptionKeySource<'a>,
+    ) -> Self {
+        self.field_encryption = Some(key_source);
         self
     }
 
@@ -517,6 +556,12 @@ pub async fn apply_verified_package(
                 predecessor_baseline: successor_history.and_then(|(baseline, _)| baseline),
                 predecessor_history_descriptor: successor_history
                     .and_then(|(_, descriptor)| descriptor),
+                field_encryption: request.field_encryption.as_ref().map(|key_source| {
+                    ReviewedFieldEncryptionContext {
+                        provider: key_source.provider,
+                        secrets: key_source.secrets,
+                    }
+                }),
                 runtime_role: request.roles.runtime,
                 compiler_statements: &statements,
                 ledger: &ledger,
@@ -681,6 +726,13 @@ async fn fail_with_error_and_release(
             entity_id,
             field_id,
         },
+        crate::postgres::PostgresKernelError::FieldEncryptionBlindCollision {
+            entity_id,
+            record_ids,
+        } => MigrationError::FieldEncryptionLookupCollision {
+            entity_id,
+            record_ids,
+        },
         _ => MigrationError::ApplyFailed,
     })
 }
@@ -772,6 +824,9 @@ fn reviewed_ledger(
                 }
                 ReviewedMigrationStepDescriptor::ChunkedBackfill { id, .. } => {
                     (id.clone(), MigrationLedgerStepKind::ChunkedBackfill)
+                }
+                ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { id, .. } => {
+                    (id.clone(), MigrationLedgerStepKind::FieldEncryptionBackfill)
                 }
             };
             steps.push(MigrationLedgerStep {

@@ -242,8 +242,19 @@ fn compile_planner(
         if !request_entity.fields.contains_key(field_id) {
             errors.push(Diagnostic::error(
                 "change_request.planner.request_field_unknown",
-                request_field_path,
+                request_field_path.as_str(),
                 "a planner request field is not declared on the request entity",
+            ));
+        }
+        if request_entity
+            .fields
+            .get(field_id)
+            .is_some_and(|field| field.encryption.is_some())
+        {
+            errors.push(Diagnostic::error(
+                "change_request.planner.request_field_encrypted",
+                request_field_path,
+                "a planner request field cannot be encrypted",
             ));
         }
     }
@@ -393,6 +404,14 @@ fn compile_planner(
                 ));
                 continue;
             };
+            if field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.planner.write_field_encrypted",
+                    format!("{write_path}.fields[field={field_id}]"),
+                    "a planner write ceiling cannot name an encrypted target field",
+                ));
+                continue;
+            }
             if input_classification > field.classification {
                 errors.push(Diagnostic::error(
                     "change_request.planner.classification_ceiling",
@@ -981,6 +1000,16 @@ fn compile_preconditions(
                         ));
                         return None;
                     }
+                    if registry_field.is_some_and(|field| field.encryption.is_some()) {
+                        errors.push(Diagnostic::error(
+                            "change_request.preconditions.selector_field_encrypted",
+                            format!(
+                                "{path}.subjects[{role}].selectors[{selector_field_id}]"
+                            ),
+                            "an Evidence selector field cannot bind an encrypted field",
+                        ));
+                        return None;
+                    }
                     Some((selector_field_id.clone(), compiled))
                 })
                 .collect();
@@ -998,6 +1027,20 @@ fn compile_preconditions(
                 .requires
                 .iter()
                 .filter_map(|requirement| {
+                    if let Some(field) = &requirement.equals_from_request_field {
+                        if request_entity
+                            .fields
+                            .get(field)
+                            .is_some_and(|candidate| candidate.encryption.is_some())
+                        {
+                            errors.push(Diagnostic::error(
+                                "change_request.preconditions.evidence_requirement_encrypted",
+                                format!("{path}.requires[output={}]", requirement.output),
+                                "an Evidence requirement cannot compare an encrypted request field",
+                            ));
+                            return None;
+                        }
+                    }
                     let expected = match (
                         requirement.equals.as_ref(),
                         requirement.equals_from_request_field.as_ref(),
@@ -1118,6 +1161,14 @@ fn compile_predicates(
             ));
             continue;
         }
+        if target_field.encryption.is_some() {
+            errors.push(Diagnostic::error(
+                "change_request.preconditions.predicate_field_encrypted",
+                format!("{path}.field"),
+                "a precondition predicate cannot name an encrypted field",
+            ));
+            continue;
+        }
         let choices = usize::from(source.equals.is_some())
             + usize::from(source.equals_from_request_field.is_some())
             + usize::from(source.current_date.is_some())
@@ -1143,6 +1194,18 @@ fn compile_predicates(
                 value: value.clone(),
             }
         } else if let Some(field) = &source.equals_from_request_field {
+            if request_entity
+                .fields
+                .get(field)
+                .is_some_and(|request_field| request_field.encryption.is_some())
+            {
+                errors.push(Diagnostic::error(
+                    "change_request.preconditions.predicate_request_field_encrypted",
+                    format!("{path}.equalsFromRequestField"),
+                    "a request-field equality cannot name an encrypted request field",
+                ));
+                continue;
+            }
             if !request_entity
                 .fields
                 .get(field)
@@ -1616,6 +1679,14 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.effect.field_encrypted",
+                    format!("{path}.set[field={field}]"),
+                    "an encrypted target field cannot be set through a change request",
+                ));
+                continue;
+            }
             if let Some(compiled) = compile_value(
                 source,
                 request_entity,
@@ -1656,6 +1727,14 @@ fn compile_effects(
                 ));
                 continue;
             };
+            if target_field.encryption.is_some() {
+                errors.push(Diagnostic::error(
+                    "change_request.effect.field_encrypted",
+                    format!("{path}.clear[field={field}]"),
+                    "an encrypted target field cannot be cleared through a change request",
+                ));
+                continue;
+            }
             if effect.operation == Operation::Create {
                 errors.push(Diagnostic::error(
                     "change_request.effect.clear_on_create",
@@ -1860,6 +1939,14 @@ fn compile_value(
             ));
             return None;
         };
+        if field.encryption.is_some() {
+            errors.push(Diagnostic::error(
+                "change_request.effect.value_field_encrypted",
+                format!("{path}.set[field={target_field}]"),
+                "an encrypted request field cannot flow into a change-request effect",
+            ));
+            return None;
+        }
         if !field.required {
             errors.push(Diagnostic::error(
                 "change_request.effect.value_nullable",

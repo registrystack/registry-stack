@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 LATEST_RELEASE_HELPER = ROOT / "release/scripts/verify_latest_published_release.py"
 LINUX_NODE_BUILD_HELPER = ROOT / "release/scripts/build-linux-node-client"
+SETUP_GO_ACTION = "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16"
 
 
 def workflow(name: str) -> tuple[str, dict]:
@@ -29,6 +30,16 @@ def step_run(document: dict, job: str, name: str) -> str:
         for step in document["jobs"][job]["steps"]
         if step.get("name") == name
     )
+
+
+def assert_pinned_go(test: unittest.TestCase, document: dict, job: str) -> None:
+    step = next(
+        item
+        for item in document["jobs"][job]["steps"]
+        if item.get("name") == "Install Go for the AWS-LC-FIPS source build"
+    )
+    test.assertEqual(step["uses"], SETUP_GO_ACTION)
+    test.assertEqual(step["with"], {"go-version": "1.24.4", "cache": False})
 
 
 def verify_latest_release_fixture(
@@ -57,6 +68,17 @@ def verify_latest_release_fixture(
 
 
 class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
+    def test_pins_go_for_every_native_build_and_cache_identity(self) -> None:
+        _, document = workflow("evidence-dev.yml")
+        for job in ("build", "clients"):
+            assert_pinned_go(self, document, job)
+            cache = next(
+                step
+                for step in document["jobs"][job]["steps"]
+                if "Cargo cache" in step.get("name", "")
+            )
+            self.assertIn("go-1.24.4", cache["with"]["key"])
+
     def test_is_manual_main_only_with_one_narrow_publication_job(self) -> None:
         text, document = workflow("evidence-dev.yml")
         trigger = text.split("permissions:", 1)[0]
@@ -286,6 +308,11 @@ class EvidenceDevelopmentWorkflowStructureTest(unittest.TestCase):
 
 
 class CandidateWorkflowStructureTest(unittest.TestCase):
+    def test_pins_go_for_every_host_native_artifact_build(self) -> None:
+        _, document = workflow("release-candidate.yml")
+        for job in ("build-platforms", "build-macos-platforms", "clients"):
+            assert_pinned_go(self, document, job)
+
     def test_current_release_pipeline_has_no_pre_v0_19_surface(self) -> None:
         paths = (
             WORKFLOWS / "release-candidate.yml",
@@ -775,6 +802,9 @@ class CandidateWorkflowStructureTest(unittest.TestCase):
             if step.get("name") == "Restore native client Cargo cache"
         )
         cache_key = cargo_cache["with"]["key"]
+        restore_key = cargo_cache["with"]["restore-keys"]
+        self.assertIn("go-1.24.4", cache_key)
+        self.assertIn("go-1.24.4", restore_key)
         self.assertIn("zig-0.12.1-glibc-2.17", cache_key)
         self.assertIn("release/requirements/maturin-1.9.6.txt", cache_key)
         self.assertIn("release/scripts/zig-glibc-compiler", cache_key)
@@ -1172,6 +1202,7 @@ class NativeBenchmarkWorkflowStructureTest(unittest.TestCase):
         self.assertIn('test "$(git rev-parse HEAD)" = "${SOURCE_SHA}"', validation)
         self.assertIn('["workspace"]["package"]["version"]', validation)
         build = document["jobs"]["build"]
+        assert_pinned_go(self, document, "build")
         self.assertEqual("macos-14", build["runs-on"])
         self.assertFalse(build["strategy"]["fail-fast"])
         self.assertEqual(
@@ -1880,6 +1911,16 @@ class MirrorBuildkitWorkflowStructureTest(unittest.TestCase):
 
 
 class SupportingWorkflowStructureTest(unittest.TestCase):
+    def test_render_golden_pins_go_and_scopes_its_native_cache(self) -> None:
+        _, document = workflow("render-golden.yml")
+        assert_pinned_go(self, document, "golden")
+        cache = next(
+            step
+            for step in document["jobs"]["golden"]["steps"]
+            if step.get("name") == "Cache Cargo registry and build artifacts"
+        )
+        self.assertIn("go-1.24.4", cache["with"]["key"])
+
     def test_public_verification_selects_the_versioned_image_roster(self) -> None:
         verify = (ROOT / "release/VERIFY.md").read_text(encoding="utf-8")
         jq_filter = verify.split('jq -e --arg tag "${tag}" \'\n', 1)[1].split(

@@ -3478,6 +3478,7 @@ fn metadata_only_review_source(
         change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers,
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 1000,
         statement_timeout_ms: 5000,
         steps: Vec::new(),

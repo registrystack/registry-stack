@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use pg_query::protobuf::{
     node::Node as PgNode, AExpr, Node as PgNodeWrapper, SelectStmt, SetOperation,
@@ -17,6 +17,7 @@ pub(crate) fn validate_derived_sql(
     derived: &DerivedSource,
     sql: &[u8],
     known_relations: &BTreeSet<&str>,
+    encrypted_columns: &BTreeMap<String, BTreeSet<String>>,
     path: &str,
     errors: &mut Vec<Diagnostic>,
 ) {
@@ -46,6 +47,58 @@ pub(crate) fn validate_derived_sql(
     }
     if !valid_ast(&parsed, known_relations) {
         errors.push(sql_error(path));
+    }
+    refuse_encrypted_columns(&parsed, encrypted_columns, path, errors);
+}
+
+/// Refuse any column reference that resolves to an encrypted field. The
+/// registry_source layer never exposes encrypted columns, so such a reference
+/// could only fail at runtime; refusing it at compile keeps the derived layer
+/// honest. Map keys are relation sql names and values are the logical column
+/// names of each entity's encrypted fields.
+fn refuse_encrypted_columns(
+    parsed: &pg_query::ParseResult,
+    encrypted_columns: &BTreeMap<String, BTreeSet<String>>,
+    path: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    if encrypted_columns.is_empty() {
+        return;
+    }
+    for (node, _, _, _) in parsed.protobuf.nodes() {
+        let NodeRef::ColumnRef(column) = node else {
+            continue;
+        };
+        let names: Vec<String> = column
+            .fields
+            .iter()
+            .filter_map(|field| match field.node.as_ref() {
+                Some(PgNode::String(value)) => Some(value.sval.clone()),
+                _ => None,
+            })
+            .collect();
+        let Some(last) = names.last() else {
+            continue;
+        };
+        let matches = match names.as_slice() {
+            [schema, relation, _column] if schema == "registry_source" => encrypted_columns
+                .get(relation.as_str())
+                .is_some_and(|columns| columns.contains(last)),
+            // Unqualified and table-qualified references cannot be resolved
+            // without scope analysis, so refuse conservatively against every
+            // known relation's encrypted columns.
+            _ => encrypted_columns
+                .values()
+                .any(|columns| columns.contains(last)),
+        };
+        if matches {
+            errors.push(Diagnostic::error(
+                "derived.sql.encrypted_column",
+                path,
+                "derived SQL cannot reference an encrypted column; registry_source views never expose it",
+            ));
+            return;
+        }
     }
 }
 

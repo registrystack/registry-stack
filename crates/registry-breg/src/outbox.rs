@@ -18,6 +18,7 @@ use crate::contract::{
     WebhookAuthenticationProfile, WebhookDeadLetterMode,
 };
 use crate::event_destination::ActivatedEventDestinationRegistry;
+use crate::history_schema::tagged_envelope_member;
 use crate::model::{CompiledEntity, CompiledEventDelivery, CompiledWebhookDeliveryMode};
 use crate::webhook::DELIVERY_SCHEMA;
 
@@ -209,11 +210,7 @@ pub(crate) async fn insert_configured_events(
             EventTrigger::RequestLifecycle => return Err(OutboxError::InvalidProjection),
         }
         .ok_or(OutboxError::InvalidProjection)?;
-        let mut values = Map::new();
-        for field in projection_fields {
-            let value = snapshot.get(field).ok_or(OutboxError::InvalidProjection)?;
-            values.insert(field.to_owned(), value.clone());
-        }
+        let values = projected_event_values(&projection_fields, snapshot)?;
         let data = json!({
             "entity": mutation.entity_id,
             "recordId": mutation.record_id,
@@ -299,6 +296,27 @@ pub(crate) async fn insert_configured_events(
         }
     }
     Ok(())
+}
+
+/// Project the event's fields out of the trigger snapshot.
+///
+/// A missing field and a tagged envelope member both refuse the projection:
+/// the compiler refuses event projections naming encrypted fields, so an
+/// envelope member reaching here means that boundary was bypassed, and a
+/// sealed value must never enter an outbox payload.
+fn projected_event_values(
+    projection_fields: &[&str],
+    snapshot: &Map<String, Value>,
+) -> Result<Map<String, Value>, OutboxError> {
+    let mut values = Map::new();
+    for field in projection_fields {
+        let value = snapshot
+            .get(*field)
+            .filter(|value| !tagged_envelope_member(value))
+            .ok_or(OutboxError::InvalidProjection)?;
+        values.insert((*field).to_owned(), value.clone());
+    }
+    Ok(values)
 }
 
 fn condition_matches(
@@ -734,5 +752,23 @@ mod tests {
         let envelope = capture_envelope(&binding, captured(projection())).expect("envelope");
         assert_eq!(envelope.causation, caused);
         assert_eq!(envelope.causation.hop, 1);
+    }
+
+    #[test]
+    fn event_projection_refuses_envelope_members_and_missing_fields() {
+        let mut snapshot = Map::new();
+        snapshot.insert("label".to_owned(), json!("visible"));
+        snapshot.insert(
+            "secret".to_owned(),
+            json!({ crate::history_schema::ENVELOPE_MEMBER_TAG: "c2VhbGVk"}),
+        );
+        let projected =
+            projected_event_values(&["label"], &snapshot).expect("plaintext fields project");
+        assert_eq!(projected.get("label"), Some(&json!("visible")));
+        assert!(projected_event_values(&["missing"], &snapshot).is_err());
+        assert!(
+            projected_event_values(&["secret"], &snapshot).is_err(),
+            "a sealed member must never enter an outbox payload"
+        );
     }
 }

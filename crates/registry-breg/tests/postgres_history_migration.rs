@@ -489,6 +489,7 @@ fn reviewed_update_source(
         change_class: CompiledRegistryChangeClass::AccessOrDisclosureChange,
         covers: vec![ReviewedChangeCover::from(&change)],
         recovery: ReviewedMigrationRecovery::ExactTargetResume,
+        history: None,
         lock_timeout_ms: 50,
         statement_timeout_ms: 5_000,
         steps: vec![ReviewedMigrationStepDescriptor::TransactionalSql {

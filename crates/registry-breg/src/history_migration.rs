@@ -92,6 +92,14 @@ pub(crate) struct BoundedHistoryUpdateCapture {
     rows: BTreeMap<Uuid, CapturedEntityRow>,
 }
 
+/// The page-scoped capture one field-encryption chunk journals: exactly the
+/// rows the chunk selected, locked, sealed, and rewrote in this transaction.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FieldEncryptionPageCapture {
+    step: SupportedHistoryMigrationStep,
+    rows: BTreeMap<Uuid, CapturedEntityRow>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CapturedEntityRow {
     record_revision: i64,
@@ -193,13 +201,86 @@ pub(crate) async fn finish_bounded_history_update(
     }
     let entity = entity_for_step(registry, &capture.step)?;
     let post_rows = capture_entity_rows(transaction, entity, false).await?;
-    if capture.rows.keys().ne(post_rows.keys()) {
+    journal_captured_changes(
+        transaction,
+        &capture.step,
+        capture.rows,
+        post_rows,
+        package_revision,
+    )
+    .await
+}
+
+/// Capture the pre-change rows of one field-encryption chunk page. The step's
+/// classified entity is the successor registry's entity, so encrypted fields
+/// project their envelope column and the capture is already in journal shape.
+#[cfg(feature = "runtime")]
+pub(crate) async fn prepare_field_encryption_page_capture(
+    transaction: &Transaction<'_>,
+    registry: &CompiledRegistry,
+    descriptor_path: &str,
+    step: &ValidatedReviewedMigrationStep,
+    page: &[Uuid],
+) -> Result<FieldEncryptionPageCapture> {
+    let supported = classify_reviewed_history_step(descriptor_path, step)?;
+    let page_len =
+        u64::try_from(page.len()).map_err(|_| HistoryMigrationError::InvalidAffectedRows)?;
+    if page_len > supported.affected_rows.max {
+        return Err(HistoryMigrationError::InvalidAffectedRows);
+    }
+    let entity = entity_for_step(registry, &supported)?;
+    let rows = capture_entity_rows_page(transaction, entity, page).await?;
+    Ok(FieldEncryptionPageCapture {
+        step: supported,
+        rows,
+    })
+}
+
+#[cfg(feature = "runtime")]
+pub(crate) async fn finish_field_encryption_page_update(
+    transaction: &Transaction<'_>,
+    registry: &CompiledRegistry,
+    package_revision: &str,
+    capture: FieldEncryptionPageCapture,
+) -> Result<u64> {
+    if package_revision.is_empty() {
+        return Err(HistoryMigrationError::RevisionUnavailable);
+    }
+    let entity = entity_for_step(registry, &capture.step)?;
+    let post_rows = capture_entity_rows_page(
+        transaction,
+        entity,
+        &capture.rows.keys().copied().collect::<Vec<_>>(),
+    )
+    .await?;
+    journal_captured_changes(
+        transaction,
+        &capture.step,
+        capture.rows,
+        post_rows,
+        package_revision,
+    )
+    .await
+}
+
+/// Diff captured before rows against their post-change rows and record the
+/// change as first-class internal revisions: one revision per changed row,
+/// metadata bump per changed row, then one migration commit for the whole set.
+#[cfg(feature = "runtime")]
+async fn journal_captured_changes(
+    transaction: &Transaction<'_>,
+    step: &SupportedHistoryMigrationStep,
+    before_rows: BTreeMap<Uuid, CapturedEntityRow>,
+    post_rows: BTreeMap<Uuid, CapturedEntityRow>,
+    package_revision: &str,
+) -> Result<u64> {
+    if before_rows.keys().ne(post_rows.keys()) {
         return Err(HistoryMigrationError::UnexpectedRowShape);
     }
 
-    let migration_reference = capture.step.migration_reference();
+    let migration_reference = step.migration_reference();
     let mut changed = Vec::new();
-    for (record_id, before) in &capture.rows {
+    for (record_id, before) in &before_rows {
         let after = post_rows
             .get(record_id)
             .ok_or(HistoryMigrationError::UnexpectedRowShape)?;
@@ -216,8 +297,7 @@ pub(crate) async fn finish_bounded_history_update(
             .record_revision
             .checked_add(1)
             .ok_or(HistoryMigrationError::RevisionUnavailable)?;
-        let latest =
-            load_latest_revision_binding(transaction, &capture.step.entity_id, *record_id).await?;
+        let latest = load_latest_revision_binding(transaction, &step.entity_id, *record_id).await?;
         if latest.record_revision != before.record_revision
             || latest.record_lifecycle != before.record_lifecycle
         {
@@ -225,7 +305,7 @@ pub(crate) async fn finish_bounded_history_update(
         }
         update_history_migrated_row_metadata(
             transaction,
-            &capture.step.physical_table,
+            &step.physical_table,
             *record_id,
             before.record_revision,
             &before.record_lifecycle,
@@ -239,7 +319,7 @@ pub(crate) async fn finish_bounded_history_update(
         insert_internal_migration_revision(
             transaction,
             InternalMigrationRevisionInsert {
-                entity_id: &capture.step.entity_id,
+                entity_id: &step.entity_id,
                 record_id: *record_id,
                 record_reference: &latest.record_reference,
                 record_revision: next_revision,
@@ -262,7 +342,7 @@ pub(crate) async fn finish_bounded_history_update(
     let members = changed
         .iter()
         .map(|(record_id, record_revision)| RevisionCommitMember {
-            entity_id: capture.step.entity_id.as_str(),
+            entity_id: step.entity_id.as_str(),
             record_id: *record_id,
             record_revision: *record_revision,
         })
@@ -572,6 +652,30 @@ fn classify_reviewed_history_step(
         ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {
             Err(HistoryMigrationError::ChunkedBackfillUnsupported)
         }
+        ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+            id,
+            objects,
+            chunk_size,
+            ..
+        } => {
+            let chunk_size = u64::from(*chunk_size);
+            // One chunk's page is one commit's member set, so the page bound is
+            // the chunk size and the commit-member budget bounds it again.
+            if chunk_size == 0 || chunk_size > MAX_HISTORY_MIGRATION_COMMIT_MEMBERS {
+                return Err(HistoryMigrationError::InvalidAffectedRows);
+            }
+            let (entity_id, physical_table) = classify_step_objects(objects)?;
+            Ok(SupportedHistoryMigrationStep {
+                descriptor_path: descriptor_path.to_owned(),
+                step_id: id.clone(),
+                entity_id,
+                physical_table,
+                affected_rows: AffectedRowBounds {
+                    min: 0,
+                    max: chunk_size,
+                },
+            })
+        }
     }
 }
 
@@ -685,6 +789,46 @@ async fn capture_entity_rows(
         )
         .await
         .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+    decode_captured_rows(rows, entity)
+}
+
+/// Capture exactly the rows one field-encryption chunk selected and locked in
+/// this transaction. The caller holds the page's row locks, so no table lock
+/// or re-lock is needed here.
+#[cfg(feature = "runtime")]
+async fn capture_entity_rows_page(
+    transaction: &Transaction<'_>,
+    entity: &CompiledEntity,
+    page: &[Uuid],
+) -> Result<BTreeMap<Uuid, CapturedEntityRow>> {
+    let table_name = SqlIdentifier::parse(&entity.physical_table)
+        .map_err(|_| HistoryMigrationError::UnsupportedObject)?;
+    let projection = history_returning_projection(entity);
+    let rows = transaction
+        .query(
+            &format!(
+                "SELECT {projection}
+                   FROM registry_data.{}
+                  WHERE record_id = ANY($1)
+                  ORDER BY record_id",
+                table_name.quoted()
+            ),
+            &[&page],
+        )
+        .await
+        .map_err(|_| HistoryMigrationError::RevisionUnavailable)?;
+    let captured = decode_captured_rows(rows, entity)?;
+    if captured.len() != page.len() {
+        return Err(HistoryMigrationError::UnexpectedRowShape);
+    }
+    Ok(captured)
+}
+
+#[cfg(feature = "runtime")]
+fn decode_captured_rows(
+    rows: Vec<tokio_postgres::Row>,
+    entity: &CompiledEntity,
+) -> Result<BTreeMap<Uuid, CapturedEntityRow>> {
     let mut captured = BTreeMap::new();
     for row in rows {
         let record_id = row
@@ -715,6 +859,15 @@ async fn capture_entity_rows(
                 .try_get::<_, Option<Value>>(index + 4)
                 .map_err(|_| HistoryMigrationError::RevisionUnavailable)?
                 .unwrap_or(Value::Null);
+            // Encrypted columns project base64; the captured row keeps the
+            // tagged member, unopened, so journal snapshots canonicalize
+            // byte-identically with the mutation row path.
+            let value = if field.encryption.is_some() {
+                crate::mutation::envelope_member_from_projection(value)
+                    .map_err(|_| HistoryMigrationError::RevisionUnavailable)?
+            } else {
+                value
+            };
             data.insert(field.id.clone(), value);
         }
         if captured
@@ -748,6 +901,11 @@ fn history_returning_projection(entity: &CompiledEntity) -> String {
 
 fn field_json_projection(field: &CompiledField) -> String {
     let column = quote_identifier(&field.physical_name);
+    if field.encryption.is_some() {
+        // The envelope column projects as base64 text; row decode turns it into
+        // the tagged JSON member, byte-identically with the mutation row path.
+        return format!("to_jsonb(encode({column}, 'base64'))");
+    }
     match &field.field_type {
         FieldTypeSource::Decimal { .. } => format!("to_jsonb({column}::text)"),
         _ => format!("to_jsonb({column})"),

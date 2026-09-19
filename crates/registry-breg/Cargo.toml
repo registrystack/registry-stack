@@ -231,6 +231,7 @@ runtime = [
     "dep:registry-platform-buildinfo",
     "dep:registry-platform-config",
     "dep:registry-platform-crypto",
+    "registry-platform-crypto/transit",
     "registry-platform-hooks/postgres",
     "dep:registry-platform-httpsec",
     "dep:registry-platform-httputil",
@@ -336,4 +337,9 @@ required-features = ["postgres-test", "tooling", "wasm"]
 [[test]]
 name = "postgres_action_evidence"
 path = "tests/postgres_action_evidence.rs"
+required-features = ["postgres-test", "tooling"]
+
+[[test]]
+name = "postgres_field_encryption"
+path = "tests/postgres_field_encryption.rs"
 required-features = ["postgres-test", "tooling"]

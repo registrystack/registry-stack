@@ -7,6 +7,7 @@ source_repos:
   - registry-relay
   - registry-evidence
   - registry-platform
+  - registry-stack
 last_reviewed: "2026-08-22"
 doc_type: how-to
 locale: en
@@ -25,8 +26,8 @@ production-ready.
 ## When to use this
 
 Use this checklist before a deployment serving real data goes live, and again after any change to
-signing keys, audit sinks, network placement, the governed Evidence Gateway bundle, or the sealed
-Relay package. It assumes you have already configured your services per
+signing keys, field-encryption keys, audit sinks, network placement, the governed Evidence Gateway
+bundle, or the sealed Relay package. It assumes you have already configured your services per
 [Configure Relay](../../configure/relay/) and, for Evidence Gateway,
 [Configure Evidence Gateway](../../configure/evidence/).
 
@@ -71,6 +72,22 @@ Relay package. It assumes you have already configured your services per
   material, plaintext backup disabled, and an exact governed public-key match. Local JWK signing is
   for local assurance only. See
   [Configure Transit signing for Evidence Gateway](../../tutorials/move-evidence-to-production-signing/).
+- Base Registry Engine: escrow the Transit key before the first encrypted field goes live. The
+  registry's data-encryption key is wrapped by Vault or OpenBao Transit through the deployment's
+  `fieldEncryption` binding, and losing the Transit key loses every value the registry has sealed,
+  irrecoverably: the runtime stores only the wrapped key and offers no recovery path. A health
+  check does not certify that escrow happened, and after enabling there is no second moment at
+  which the key is cheap to protect.
+- Base Registry Engine: keep the base64 local-file DEK out of production. It exists for local
+  assurance only: startup refuses a `fieldEncryption` binding that names it unless the runtime
+  file's `identity.databaseInitializationEnvironment` is `local`, and
+  `bregctl doctor --runtime-config <absolute-file>` reports the same refusal.
+- Base Registry Engine: retire or encrypt every backup taken before a field was encrypted before
+  you rely on the encryption. A pre-flip backup holds plaintext and stays inside the threat model
+  for as long as it is retained, and no tooling ships for the retirement, so the backup inventory
+  is your procedure. The [threat model](../../explanation/threat-model/) states the precondition
+  and [Field encryption for restricted fields](../../explanation/breg-field-encryption/) carries
+  the migration's history choices.
 - Relay: supply every secret through one of the two reference grammars its runtime file accepts,
   `secret:env/<NAME>` or `secret:file/<name>`, and never as a literal value. `<NAME>` is uppercase
   ASCII, digits, and underscores starting with a letter; `<name>` is a single flat lowercase
@@ -98,6 +115,11 @@ Relay package. It assumes you have already configured your services per
 - Relay: it holds no signing key of its own, because it signs nothing. If your review process
   expects a signature over a Relay response or a Relay package, that expectation is not met by this
   product.
+
+{/* Evidence: crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::initialize()
+    and insert_first_field_key(); crates/registry-platform-crypto/src/transit_datakey.rs,
+    TransitDataKeyClient; crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-bregctl/src/doctor.rs, startup_diagnostic() and CHECKED_DEPENDENCIES. */}
 
 ## Freeze the Evidence Gateway deployment project
 

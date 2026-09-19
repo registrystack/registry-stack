@@ -54,6 +54,11 @@ const MAX_STATEMENT_TIMEOUT_MS: u64 = 3_600_000;
 #[cfg(feature = "tooling")]
 const MAX_CHUNK_SIZE: u32 = 10_000;
 #[cfg(feature = "tooling")]
+/// Every field-encryption backfill chunk journals one commit whose member
+/// budget the history machinery caps, so its chunk size shares that cap.
+const MAX_FIELD_ENCRYPTION_CHUNK_SIZE: u32 =
+    crate::history_migration::MAX_HISTORY_MIGRATION_COMMIT_MEMBERS as u32;
+#[cfg(feature = "tooling")]
 const MAX_TOTAL_ROWS: u64 = 100_000_000;
 #[cfg(feature = "tooling")]
 const MAX_BACKUP_AGE_SECONDS: u64 = 31 * 24 * 60 * 60;
@@ -86,6 +91,23 @@ pub struct ReviewedMigrationDescriptor {
     pub rehearsal_receipt_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup_binding_path: Option<String>,
+    /// The reviewed choice for pre-flip plaintext history. Required exactly
+    /// when a cover turns field encryption on; carried with no default so a
+    /// missing or silently assumed choice can never reach a plan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<ReviewedFieldEncryptionHistory>,
+}
+
+/// What the reviewed plan does with the plaintext history that exists before
+/// a field-encryption flip activates. `EraseAndRebaseline` destroys the full
+/// per-record history after activation through the operator lifecycle;
+/// `RetainPlaintextHistory` keeps serving pre-flip revisions as they were
+/// written, scoped by the flip boundary.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewedFieldEncryptionHistory {
+    EraseAndRebaseline,
+    RetainPlaintextHistory,
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -132,31 +154,50 @@ pub enum ReviewedMigrationStepDescriptor {
         statement_timeout_ms: u64,
         exact_affected_rows: bool,
     },
+    /// The engine-executed field-encryption backfill: it seals the plaintext
+    /// column of every covered field into envelopes and blind indexes, chunk
+    /// by chunk, with the journal and cursor effects each chunk commits. It
+    /// carries no authored SQL; its bound statement content is the canonical
+    /// JSON of this descriptor step, so the ledger checksum pins it without a
+    /// SQL artifact.
+    FieldEncryptionBackfill {
+        id: String,
+        entity_id: String,
+        objects: Vec<ReviewedMigrationObject>,
+        cursor: ChunkCursorProtocol,
+        chunk_size: u32,
+        max_total_rows: u64,
+        lock_timeout_ms: u64,
+        statement_timeout_ms: u64,
+    },
 }
 
 impl ReviewedMigrationStepDescriptor {
     #[cfg(feature = "tooling")]
     fn id(&self) -> &str {
         match self {
-            Self::TransactionalSql { id, .. } | Self::ChunkedBackfill { id, .. } => id,
+            Self::TransactionalSql { id, .. }
+            | Self::ChunkedBackfill { id, .. }
+            | Self::FieldEncryptionBackfill { id, .. } => id,
         }
     }
 
     #[cfg(feature = "tooling")]
-    fn sql_path(&self) -> &str {
+    fn sql_path(&self) -> Option<&str> {
         match self {
             Self::TransactionalSql { sql_path, .. } | Self::ChunkedBackfill { sql_path, .. } => {
-                sql_path
+                Some(sql_path)
             }
+            Self::FieldEncryptionBackfill { .. } => None,
         }
     }
 
     #[cfg(feature = "tooling")]
     fn objects(&self) -> &[ReviewedMigrationObject] {
         match self {
-            Self::TransactionalSql { objects, .. } | Self::ChunkedBackfill { objects, .. } => {
-                objects
-            }
+            Self::TransactionalSql { objects, .. }
+            | Self::ChunkedBackfill { objects, .. }
+            | Self::FieldEncryptionBackfill { objects, .. } => objects,
         }
     }
 }
@@ -456,19 +497,45 @@ pub(crate) fn validate_reviewed_migration_plan(
         let mut steps = Vec::with_capacity(descriptor.steps.len());
         let mut object_covers = BTreeSet::new();
         for step in &descriptor.steps {
-            let path = step.sql_path();
-            referenced_paths.insert(path.to_owned());
-            let sql = read_sql(files, path)?;
-            validate_step_sql(step, sql, &descriptor, bindings, &declared_tables)?;
-            for object in step.objects() {
-                object_covers.insert(object_cover(object, &descriptor.covers)?);
+            match step.sql_path() {
+                Some(path) => {
+                    referenced_paths.insert(path.to_owned());
+                    let sql = read_sql(files, path)?;
+                    validate_step_sql(step, sql, &descriptor, bindings, &declared_tables)?;
+                    for object in step.objects() {
+                        object_covers.insert(object_cover(object, &descriptor.covers)?);
+                    }
+                    steps.push(ValidatedReviewedMigrationStep {
+                        descriptor: step.clone(),
+                        sql: sql.to_owned(),
+                        sha256: digest(sql.as_bytes()),
+                    });
+                }
+                None => {
+                    // The engine-executed backfill binds no SQL artifact. Its
+                    // ledger checksum covers the canonical JSON of the step
+                    // descriptor itself, so any field of the step is pinned
+                    // exactly the way authored SQL would be.
+                    validate_step_sql(step, "", &descriptor, bindings, &declared_tables)?;
+                    for object in step.objects() {
+                        object_covers.insert(object_cover(object, &descriptor.covers)?);
+                    }
+                    let canonical_step = canonicalize_json(
+                        &serde_json::to_value(step)
+                            .map_err(|_| ReviewedMigrationError::Descriptor)?,
+                    )
+                    .map_err(|_| ReviewedMigrationError::Descriptor)?;
+                    let sql = String::from_utf8(canonical_step)
+                        .map_err(|_| ReviewedMigrationError::Descriptor)?;
+                    steps.push(ValidatedReviewedMigrationStep {
+                        descriptor: step.clone(),
+                        sha256: digest(sql.as_bytes()),
+                        sql,
+                    });
+                }
             }
-            steps.push(ValidatedReviewedMigrationStep {
-                descriptor: step.clone(),
-                sql: sql.to_owned(),
-                sha256: digest(sql.as_bytes()),
-            });
         }
+        validate_field_encryption_drop_order(&descriptor, &steps)?;
         let descriptor_covers = descriptor.covers.iter().cloned().collect::<BTreeSet<_>>();
         if descriptor.steps.is_empty() && covers_are_metadata_only(&descriptor.covers) {
             object_covers = descriptor_covers.clone();
@@ -543,6 +610,78 @@ pub(crate) fn validate_reviewed_migration_plan(
         return Err(ReviewedMigrationError::Coverage);
     }
     Ok(ValidatedReviewedMigrationPlan { migrations })
+}
+
+/// A plaintext column covered by a field-encryption flip must remain available
+/// until the engine-executed backfill has sealed it. The reviewed descriptor
+/// already binds both the logical member and each physical SQL object, so this
+/// ordering check needs no inferred catalog state.
+#[cfg(feature = "tooling")]
+fn validate_field_encryption_drop_order(
+    descriptor: &ReviewedMigrationDescriptor,
+    steps: &[ValidatedReviewedMigrationStep],
+) -> Result<(), ReviewedMigrationError> {
+    let flipped_fields = descriptor
+        .covers
+        .iter()
+        .filter(|cover| cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        .filter_map(|cover| {
+            Some((
+                cover.target.entity_id.as_ref()?.clone(),
+                cover.target.member_id.as_ref()?.clone(),
+            ))
+        })
+        .collect::<BTreeSet<_>>();
+    if flipped_fields.is_empty() {
+        return Ok(());
+    }
+
+    let mut sealed_fields = BTreeSet::new();
+    for step in steps {
+        match &step.descriptor {
+            ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { objects, .. } => {
+                sealed_fields.extend(objects.iter().filter_map(|object| {
+                    let member_id = object.member_id.as_deref()?;
+                    if member_id.ends_with("#lookup") {
+                        return None;
+                    }
+                    let field = (object.entity_id.clone(), member_id.to_owned());
+                    flipped_fields.contains(&field).then_some(field)
+                }));
+            }
+            ReviewedMigrationStepDescriptor::TransactionalSql { objects, .. } => {
+                let parsed = parse_one(&step.sql)?;
+                let PgNode::AlterTableStmt(alter) = root_node(&parsed)? else {
+                    continue;
+                };
+                for command in &alter.cmds {
+                    let Some(PgNode::AlterTableCmd(command)) = command.node.as_ref() else {
+                        return Err(ReviewedMigrationError::Sql);
+                    };
+                    if AlterTableType::try_from(command.subtype).ok()
+                        != Some(AlterTableType::AtDropColumn)
+                    {
+                        continue;
+                    }
+                    let Some(object) = objects.iter().find(|object| {
+                        object.kind == ReviewedMigrationObjectKind::Field
+                            && object.physical_name == command.name
+                    }) else {
+                        return Err(ReviewedMigrationError::Sql);
+                    };
+                    let Some(member_id) = object.member_id.as_ref() else {
+                        return Err(ReviewedMigrationError::Descriptor);
+                    };
+                    let field = (object.entity_id.clone(), member_id.clone());
+                    if flipped_fields.contains(&field) && !sealed_fields.contains(&field) {
+                        return Err(ReviewedMigrationError::Descriptor);
+                    }
+                }
+            }
+            ReviewedMigrationStepDescriptor::ChunkedBackfill { .. } => {}
+        }
+    }
+    Ok(())
 }
 
 /// Classify a permitted package-relative reviewed artifact path before reading it.
@@ -620,11 +759,19 @@ fn validate_descriptor_shape(
     {
         return Err(ReviewedMigrationError::Descriptor);
     }
+    // The history choice is explicit or absent, never assumed: a plan that
+    // turns field encryption on refuses without one, and any other plan
+    // refuses with one.
+    if descriptor_covers_field_encryption_flip(descriptor) != descriptor.history.is_some() {
+        return Err(ReviewedMigrationError::Descriptor);
+    }
     let mut ids = BTreeSet::new();
     for step in &descriptor.steps {
         if !valid_id(step.id())
             || !ids.insert(step.id())
-            || step.sql_path() != format!("{base}/steps/{}.sql", step.id())
+            || step
+                .sql_path()
+                .is_some_and(|path| path != format!("{base}/steps/{}.sql", step.id()).as_str())
             || step.objects().is_empty()
             || !strictly_sorted(step.objects().iter())
         {
@@ -656,6 +803,23 @@ fn validate_descriptor_shape(
             {
                 return Err(ReviewedMigrationError::Descriptor);
             }
+            ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+                entity_id,
+                chunk_size,
+                max_total_rows,
+                lock_timeout_ms,
+                statement_timeout_ms,
+                ..
+            } if !valid_id(entity_id)
+                || *chunk_size == 0
+                || *chunk_size > MAX_FIELD_ENCRYPTION_CHUNK_SIZE
+                || *max_total_rows == 0
+                || *max_total_rows > MAX_TOTAL_ROWS
+                || !valid_timeout(*lock_timeout_ms, descriptor.lock_timeout_ms)
+                || !valid_timeout(*statement_timeout_ms, descriptor.statement_timeout_ms) =>
+            {
+                return Err(ReviewedMigrationError::Descriptor);
+            }
             _ => {}
         }
     }
@@ -682,6 +846,9 @@ fn validate_step_sql(
     bindings: &ReviewedPlanBindings<'_>,
     declared_tables: &BTreeSet<&str>,
 ) -> Result<(), ReviewedMigrationError> {
+    if let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } = step {
+        return validate_field_encryption_backfill_step(step, descriptor, bindings);
+    }
     let parsed = parse_one(sql)?;
     validate_ast_objects(&parsed, declared_tables, false)?;
     let root = root_node(&parsed)?;
@@ -739,11 +906,95 @@ fn validate_step_sql(
             validate_chunked_update(update, &entity.physical_table, declared_tables, &parsed)?;
             update_objects(update, bindings)?
         }
+        ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. } => {
+            unreachable!("the engine-executed backfill is handled before SQL parsing")
+        }
     };
     if parsed_objects != step.objects() {
         return Err(ReviewedMigrationError::Sql);
     }
     Ok(())
+}
+
+/// The engine-executed backfill is declared, not authored: its objects must
+/// name the envelope column of a covered field the candidate compiles as
+/// encrypted, plus that field's blind-index sibling under the implicit
+/// `#lookup` member, and its cursor protocol must be the record-id keyset the
+/// engine walks.
+#[cfg(feature = "tooling")]
+fn validate_field_encryption_backfill_step(
+    step: &ReviewedMigrationStepDescriptor,
+    descriptor: &ReviewedMigrationDescriptor,
+    bindings: &ReviewedPlanBindings<'_>,
+) -> Result<(), ReviewedMigrationError> {
+    let ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
+        entity_id,
+        objects,
+        cursor,
+        ..
+    } = step
+    else {
+        return Err(ReviewedMigrationError::Descriptor);
+    };
+    if descriptor.change_class != CompiledRegistryChangeClass::DataBackfillRequired {
+        return Err(ReviewedMigrationError::Descriptor);
+    }
+    if !descriptor.covers.iter().any(|cover| {
+        cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged
+            && cover.target.entity_id.as_deref() == Some(entity_id.as_str())
+    }) {
+        return Err(ReviewedMigrationError::Coverage);
+    }
+    let entity = bindings
+        .candidate_entities
+        .get(entity_id)
+        .ok_or(ReviewedMigrationError::Descriptor)?;
+    if *cursor != ChunkCursorProtocol::RecordIdUuidArray {
+        return Err(ReviewedMigrationError::Descriptor);
+    }
+    for object in objects {
+        let Some(member_id) = object.member_id.as_deref() else {
+            return Err(ReviewedMigrationError::Descriptor);
+        };
+        let field_id = member_id.strip_suffix("#lookup").unwrap_or(member_id);
+        let field = entity
+            .fields
+            .get(field_id)
+            .ok_or(ReviewedMigrationError::Descriptor)?;
+        let encryption = field
+            .encryption
+            .as_ref()
+            .ok_or(ReviewedMigrationError::Descriptor)?;
+        if member_id.ends_with("#lookup") {
+            let blind = encryption
+                .blind_index
+                .as_ref()
+                .ok_or(ReviewedMigrationError::Descriptor)?;
+            if object.physical_name != blind.physical_name {
+                return Err(ReviewedMigrationError::Descriptor);
+            }
+        } else if object.physical_name != field.physical_name {
+            return Err(ReviewedMigrationError::Descriptor);
+        }
+    }
+    Ok(())
+}
+
+/// Whether this descriptor covers turning field encryption on: the change
+/// code the compiler emits for a flip, or the engine-executed backfill step
+/// that seals it.
+#[cfg(feature = "tooling")]
+fn descriptor_covers_field_encryption_flip(descriptor: &ReviewedMigrationDescriptor) -> bool {
+    descriptor
+        .covers
+        .iter()
+        .any(|cover| cover.code == CompiledRegistryChangeCode::FieldEncryptionChanged)
+        || descriptor.steps.iter().any(|step| {
+            matches!(
+                step,
+                ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
+            )
+        })
 }
 
 #[cfg(feature = "tooling")]
@@ -821,10 +1072,15 @@ fn validate_receipt(
         files,
         referenced_paths,
     } = context;
+    // The engine-executed backfill carries no SQL artifact, so the receipt
+    // binds no digest for it: its canonical-JSON checksum is pinned through
+    // plan_sha256 over the whole descriptor, and row assertions carry its
+    // rehearsal row count.
     let expected_sql = steps
         .iter()
+        .filter(|step| step.descriptor.sql_path().is_some())
         .map(|step| ArtifactDigestBinding {
-            path: step.descriptor.sql_path().to_owned(),
+            path: step.descriptor.sql_path().unwrap_or_default().to_owned(),
             sha256: step.sha256.clone(),
         })
         .collect::<Vec<_>>();
@@ -879,6 +1135,7 @@ fn validate_receipt(
         matches!(
             step.descriptor,
             ReviewedMigrationStepDescriptor::ChunkedBackfill { .. }
+                | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill { .. }
         )
     });
     let destructive =
@@ -896,6 +1153,9 @@ fn validate_receipt(
                 ..
             } => Some((id.as_str(), bounds.min, bounds.max)),
             ReviewedMigrationStepDescriptor::ChunkedBackfill {
+                id, max_total_rows, ..
+            }
+            | ReviewedMigrationStepDescriptor::FieldEncryptionBackfill {
                 id, max_total_rows, ..
             } => Some((id.as_str(), 0, *max_total_rows)),
             _ => None,
@@ -1556,6 +1816,8 @@ fn object_cover(
             cover.target == target
                 || reference_target_cover_matches_implicit_constraint(cover, object)
                 || pattern_cover_matches_implicit_constraint(cover, object)
+                || encryption_cover_matches_implicit_lookup_column(cover, object)
+                || encryption_cover_matches_implicit_lookup_index(cover, object)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -1597,6 +1859,51 @@ fn pattern_cover_matches_implicit_constraint(
             .member_id
             .as_deref()
             .and_then(|member| member.strip_prefix("pattern:"))
+            == cover.target.member_id.as_deref()
+}
+
+/// The blind-index sibling column carries no change code of its own: the
+/// encryption and lookup change codes reach it through the physical-name
+/// inventory member `"{field}#lookup"`, the way a reference or pattern change
+/// reaches its implicit constraint.
+#[cfg(feature = "tooling")]
+fn encryption_cover_matches_implicit_lookup_column(
+    cover: &ReviewedChangeCover,
+    object: &ReviewedMigrationObject,
+) -> bool {
+    matches!(
+        cover.code,
+        CompiledRegistryChangeCode::FieldEncryptionChanged
+            | CompiledRegistryChangeCode::FieldLookupChanged
+    ) && object.kind == ReviewedMigrationObjectKind::Field
+        && cover.target.kind == CompiledRegistryChangeTargetKind::Field
+        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_suffix("#lookup"))
+            == cover.target.member_id.as_deref()
+}
+
+/// The unique blind-index lookup index is compiler-owned but bound to the
+/// field's lookup, registered as the inventory member `"lookup:{field}"`, so
+/// an encryption or lookup change covers the SQL that creates or retires it.
+#[cfg(feature = "tooling")]
+fn encryption_cover_matches_implicit_lookup_index(
+    cover: &ReviewedChangeCover,
+    object: &ReviewedMigrationObject,
+) -> bool {
+    matches!(
+        cover.code,
+        CompiledRegistryChangeCode::FieldEncryptionChanged
+            | CompiledRegistryChangeCode::FieldLookupChanged
+    ) && object.kind == ReviewedMigrationObjectKind::Index
+        && cover.target.kind == CompiledRegistryChangeTargetKind::Field
+        && cover.target.entity_id.as_deref() == Some(object.entity_id.as_str())
+        && object
+            .member_id
+            .as_deref()
+            .and_then(|member| member.strip_prefix("lookup:"))
             == cover.target.member_id.as_deref()
 }
 

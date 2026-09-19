@@ -4251,3 +4251,219 @@ async fn attachment_query_metadata_matches_readable_slots_without_scalar_sql_pro
     }
     assert_eq!(harness.records.calls(), 0);
 }
+
+const FIELD_ENCRYPTION_PROJECT: &str = r#"
+apiVersion: registry.registrystack.org/v1alpha1
+kind: RegistryProject
+registry:
+  id: field-encryption-surface
+  version: 0.1.0
+  defaultLanguage: en
+  canonicalBaseIri: https://authoring.example.test
+entities:
+  - id: holder
+    primaryDataset: test-dataset
+    route: holders
+    mutationMode: mutable
+    tombstone: true
+    classification: restricted
+    fields:
+      - {id: label, type: string, required: true, maxLength: 100, classification: internal}
+      - {id: secret, type: string, required: true, maxLength: 256, classification: restricted, encrypted: true,
+         lookup: {normalization: [trim, uppercase], unique: true}}
+  - id: note
+    primaryDataset: test-dataset
+    route: notes
+    mutationMode: create_only
+    classification: restricted
+    fields:
+      - {id: text, type: string, required: true, maxLength: 200, classification: restricted}
+accessProfiles:
+  - id: caseworker
+    default: true
+    principalClaim: registry_principal
+    permissions:
+      - entity: holder
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [label, secret]
+        filterableFields: [label]
+        sortableFields: [label]
+      - entity: note
+        rowBoundaries: []
+        operations: [get, list]
+        readableFields: [text]
+        filterableFields: [text]
+        sortableFields: [text]
+"#;
+
+#[tokio::test]
+async fn encrypted_entities_fail_closed_without_key_state_while_others_serve() {
+    let harness = Harness::from_project(FIELD_ENCRYPTION_PROJECT, true);
+    let claims = registry_principal_claims("case-management");
+
+    // The encrypted entity's list and get routes answer the field-encryption
+    // problem code, because the service holds no usable key state.
+    for uri in [
+        "/v1/records/holders",
+        "/v1/records/holders/00000000-0000-4000-8000-000000000001",
+    ] {
+        let response = harness.send(Method::GET, uri, Some(claims.clone())).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+        let problem = problem_shape(response).await;
+        assert_eq!(
+            problem["code"], "runtime.field_encryption.unavailable",
+            "{uri}"
+        );
+        assert_eq!(problem["status"], 503, "{uri}");
+    }
+
+    // An entity without encrypted fields keeps serving on the same service.
+    let served = harness
+        .send(
+            Method::GET,
+            "/v1/records/notes/00000000-0000-4000-8000-000000000001",
+            Some(claims),
+        )
+        .await;
+    assert_eq!(served.status(), StatusCode::OK);
+
+    // Every read that reached the source belongs to the unencrypted entity:
+    // the encrypted entity was refused before record IO.
+    let requests = harness.records.requests.lock().unwrap();
+    assert!(!requests.is_empty());
+    for request in requests.iter() {
+        assert_eq!(request.entity_id, "note");
+    }
+}
+
+#[tokio::test]
+async fn encrypted_entities_serve_once_key_state_is_active() {
+    // One owner-only local data-key file, resolved exactly the way the
+    // localFile provider resolves it during startup.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = tempfile::tempdir().expect("secret root creates");
+    let dek_path = root.path().join("field-dek");
+    std::fs::write(
+        &dek_path,
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0x42_u8; 32]),
+    )
+    .expect("data key file writes");
+    std::fs::set_permissions(&dek_path, std::fs::Permissions::from_mode(0o600))
+        .expect("data key file is owner-only");
+    let dek_ref = registry_platform_config::SecretReference::parse("secret:file/field-dek")
+        .expect("fixture reference parses");
+    let secrets = registry_platform_config::SecretResolver::new(
+        [registry_platform_config::SecretProvider::File],
+        root.path(),
+    )
+    .expect("fixture resolver builds");
+    let field_encryption = Arc::new(
+        registry_breg::field_encryption::FieldEncryptionService::initialize(
+            &registry_breg::field_encryption::FieldEncryptionProvider::LocalFile { dek_ref },
+            "field-encryption-surface",
+            "package-read-test",
+            &secrets,
+            &EmptyFieldKeyStore,
+        )
+        .await
+        .expect("local file key state activates"),
+    );
+
+    let project = parse_project_yaml(FIELD_ENCRYPTION_PROJECT.as_bytes()).expect("project parses");
+    let registry = Arc::new(
+        compile_project(&project, &[], CompileProfile::Authoring).expect("project compiles"),
+    );
+    let records = Arc::new(RecordingReadService::default());
+    let service = HttpService::new(
+        registry,
+        read_identity(),
+        records.clone(),
+        Arc::new(ControlledReadiness(AtomicBool::new(true))),
+        cursor_codec(),
+    )
+    .with_field_encryption(field_encryption);
+    let app = router(Arc::new(service));
+
+    let response = send_to(
+        &app,
+        Method::GET,
+        "/v1/records/holders/00000000-0000-4000-8000-000000000001",
+        Some(registry_principal_claims("case-management")),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(records.calls(), 1);
+    assert_eq!(
+        records.requests.lock().unwrap()[0].entity_id,
+        "holder",
+        "the encrypted entity reaches the read source once key state is active"
+    );
+}
+
+/// A key store with no rows, standing in for the empty key table a first
+/// local-file activation starts from. The manual future boxing matches the
+/// `async_trait` desugaring without taking the macro as a test dependency.
+struct EmptyFieldKeyStore;
+
+impl registry_breg::field_encryption::FieldKeyStore for EmptyFieldKeyStore {
+    fn latest_field_key<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        Option<registry_breg::field_encryption::StoredFieldKey>,
+                        registry_breg::field_encryption::FieldEncryptionError,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+    {
+        Box::pin(std::future::ready(Ok(None)))
+    }
+
+    fn field_key_row_count<'life0, 'async_trait>(
+        &'life0 self,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        u32,
+                        registry_breg::field_encryption::FieldEncryptionError,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+    {
+        Box::pin(std::future::ready(Ok(0)))
+    }
+
+    fn insert_first_field_key<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        _key: &'life1 registry_breg::field_encryption::NewFieldKey,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = std::result::Result<
+                        bool,
+                        registry_breg::field_encryption::FieldEncryptionError,
+                    >,
+                > + Send
+                + 'async_trait,
+        >,
+    >
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+    {
+        Box::pin(std::future::ready(Ok(true)))
+    }
+}
